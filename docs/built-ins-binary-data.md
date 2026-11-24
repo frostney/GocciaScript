@@ -11,7 +11,9 @@
 - **TypedArrays** — array-like views over buffer data with 12 element types (Int8 through Float64, BigInt64, BigUint64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
 
-## ArrayBuffer (`Goccia.Builtins.GlobalArrayBuffer.pas`, `Goccia.Values.ArrayBufferValue.pas`)
+ArrayBuffer, the typed arrays and DataView are implemented in `G2.TypedArrays` over the storage in `G2.Typed`; SharedArrayBuffer and Atomics in `G2.Atomics` over `G2.Shared`; the Uint8Array encoding methods in `source/g2/prelude/builtins5.js`.
+
+## ArrayBuffer
 
 Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer). See [MDN ArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer) for the full API.
 
@@ -19,9 +21,9 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, `DataView` setters, and `TextEncoder.prototype.encodeInto` throw `TypeError`. `slice`, `map`, `filter`, `TypedArray.from`, and `TypedArray.of` also throw `TypeError` when the species or `this` constructor returns a view of an immutable buffer, including the source's own buffer; `subarray` only reads, so its result may view one. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
 
-Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas)).
+Its bytes live in one zero-filled bytes cell on the engine's heap (`G2.Typed`); a resizable buffer's cell holds `maxByteLength` bytes. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors)).
 
-## SharedArrayBuffer (`Goccia.Values.SharedArrayBufferValue.pas`)
+## SharedArrayBuffer
 
 Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer). See [MDN SharedArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) for the full API.
 
@@ -29,7 +31,7 @@ Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-U
 
 **Growing.** A growable buffer keeps one data block from construction to collection, so every agent that holds it sees every other agent's writes, `Atomics` included, before and after a grow. The block is allocated at `maxByteLength` bytes when the buffer is constructed, all zero, and `grow` only makes more of it visible. It never allocates or moves the bytes. **Memory accounting:** a growable buffer is charged `maxByteLength` bytes against the memory limit when it is constructed, because that is what it allocates, and a fixed-length buffer is charged its byte length. A `maxByteLength` larger than the limit allows is a `RangeError` at construction, as ECMA-262's AllocateSharedArrayBuffer allows ("if it is impossible to create a new Shared Data Block value consisting of allocLength bytes").
 
-## Atomics (`Goccia.Builtins.Atomics.pas`)
+## Atomics
 
 Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for integer TypedArray views.
 
@@ -41,13 +43,13 @@ Every waiter has one result, and `notify`'s count agrees with it. Inside the wai
 
 A view that is detached or past the end of its shrunk resizable buffer is a `TypeError` before the index is converted. `load`, `store`, `compareExchange` and the read-modify-write operations convert every argument first, then check the access again (RevalidateAtomicAccess) before they touch the element, because a `valueOf` can resize or detach the buffer: a view that is now detached or out of bounds is a `TypeError`, and an element past the end of a shrunk length-tracking view is a `RangeError`, so nothing is read or written. V8 throws a `TypeError` in that last case too; ECMA-262 specifies the `RangeError`.
 
-## DataView (`Goccia.Values.DataViewValue.pas`)
+## DataView
 
 Implements the [ECMAScript DataView](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DataView). DataView instances provide endian-aware typed reads and writes over `ArrayBuffer` and `SharedArrayBuffer` storage.
 
 **Full standard compliance** — includes integer, BigInt, Float16, Float32, and Float64 getters and setters, `buffer`, `byteLength`, `byteOffset`, and detached/out-of-bounds buffer checks. Auto-length views over resizable `ArrayBuffer` instances track the current buffer length.
 
-## TypedArrays (`Goccia.Values.TypedArrayValue.pas`)
+## TypedArrays
 
 Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray). See [MDN TypedArray reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray) for the full API.
 
@@ -72,7 +74,7 @@ Implements the [ECMAScript TypedArray](https://developer.mozilla.org/en-US/docs/
 
 **Value encoding:** Integer types use fixed-width truncation (overflow wraps). `Uint8ClampedArray` clamps to [0, 255] with half-to-even rounding. `Float16Array` rounds to IEEE 754 half precision (max finite ±65504, epsilon 2⁻¹⁰ at 1.0). `Float32Array` rounds to IEEE 754 single precision. `Float64Array` preserves full double precision. NaN is stored as 0 in integer types and as NaN in float types.
 
-### Uint8Array Base64/Hex encoding (`Goccia.Values.Uint8ArrayEncoding.pas`)
+### Uint8Array Base64/Hex encoding
 
 [Uint8Array Base64/Hex encoding](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array#base64_and_hex). These methods are available only on `Uint8Array`, not on other TypedArray types.
 

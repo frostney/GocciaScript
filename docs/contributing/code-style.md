@@ -20,23 +20,26 @@
 
 ### Compiler Directives
 
-All units include the shared compiler directives file:
+Every unit outside `source/g2` includes the shared compiler directives file:
 
 ```pascal
 {$I Goccia.inc}
 ```
 
-Which sets:
+Which includes `Shared.inc` and so sets:
 
 ```pascal
-{$mode delphi}           // Delphi-compatible mode
+{$mode delphiunicode}    // Delphi-compatible mode, UnicodeString by default
 {$H+}                     // Long strings by default
-{$overflowchecks on}     // Runtime overflow checking
-{$rangechecks on}        // Runtime range checking
+{$overflowchecks on}     // Runtime overflow checking (off with -dPRODUCTION)
+{$rangechecks on}        // Runtime range checking (off with -dPRODUCTION)
 {$modeswitch advancedrecords}   // Records with methods
 ```
 
-Overflow and range checks are **enabled** — correctness is prioritized over raw performance.
+Overflow and range checks are **enabled** in a development build of the Pascal test programs, so they catch an
+out-of-range index or a wrapped integer there. The applications always build with `-dPRODUCTION`
+([Build System — Build Mode Flags](../build-system.md#build-mode-flags)), which turns them off, and the engine's
+own units in `source/g2` turn them off in every build (`G2.Checks.inc`).
 
 Keep the entire compiler-conditional routine directive sequence on the
 declaration's final line:
@@ -49,31 +52,34 @@ function NormalizeValue(const AValue: Double): Double; {$IFDEF FPC}inline;{$ENDI
 
 | Element | Convention | Example |
 |---------|-----------|---------|
-| Units | `Goccia.<Category>.<Name>.pas` | `Goccia.Values.Primitives.pas` |
-| Classes | `TGoccia<Name>` prefix | `TGocciaObjectValue` |
-| Interfaces | `I<Name>` prefix | `IGocciaSerializable` |
-| Private fields | `F` prefix | `FValue`, `FPrototype` |
-| Functions/Procedures | PascalCase | `Evaluate`, `EvaluateBinary` |
-| Methods | PascalCase | `GetProperty`, `ToStringLiteral` |
-| Constants | PascalCase or UPPER_CASE | `DefaultPreprocessors`, `NaN` |
+| Units | `Goccia.<Category>.<Name>.pas` | `Goccia.Modules.Resolver.pas` |
+| Classes | `TGoccia<Name>` prefix | `TGocciaProfiler` |
+| Interfaces | `I<Name>` prefix | `IGocciaHostClock` |
+| Private fields | `F` prefix | `FSource`, `FMode` |
+| Functions/Procedures | PascalCase | `NumberToUint32`, `NumberToString` |
+| Methods | PascalCase | `RegisterTemplate`, `BeginEntry` |
+| Constants | PascalCase or UPPER_CASE | `ModuleImportExtensions`, `EXT_JSON` |
 | Parameters | `A` prefix (multi-letter only) | `AScope`, `AValue`, `AFileName` |
 | Local variables | PascalCase; **no** underscores; **no** trailing digit suffixes (`Value1`, `temp2`) | `CandidateScope`, `ResolvedName` |
-| Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaScopeKind`, `skGlobal` |
+| Enums | `TGoccia<Name>` for type, lowercase prefix for values | `TGocciaProfileModeItem`, `pmOpcodes` |
 
 ### Source Directory Layout and Namespacing
 
-Source files live in four directories under `source/`, each with different naming rules:
+Source files live in five directories under `source/`, each with different naming rules:
 
 | Directory | Purpose | Unit prefix | Include file | Example |
 |-----------|---------|-------------|-------------|---------|
-| `source/units/` | Engine internals — the GocciaScript runtime | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Values.Primitives.pas` |
+| `source/g2/` | The engine: compiler, bytecode, VM, object model, collector and built-ins, plus its JavaScript preludes in `source/g2/prelude/` | `G2.*` | `{$I G2.Checks.inc}` after the unit's own mode directives | `G2.VM.pas` |
+| `source/units/` | GocciaScript-specific units the engine and the applications share: lexer, parser and AST, the RegExp compiler, modules and packages, coverage and profiling, error text | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Parser.pas` |
 | `source/shared/` | Reusable infrastructure — not GocciaScript-specific | No prefix | `{$I Shared.inc}` | `HashMap.pas`, `StringBuffer.pas`, `CLI.Options.pas` |
 | `source/generated/` | Generated source and resources consumed by the runtime; do not edit by hand | No required prefix | Generator-defined | `Generated.TimeZoneData.pas`, `Generated.TimeZoneData.res` |
 | `source/app/` | CLI application entrypoints and app-level wiring | `Goccia.*` for units, `Goccia` prefix (no dot) for programs | `{$I Goccia.inc}` | `GocciaTestRunner.dpr`, `Goccia.CLI.Application.pas` |
 
 Generated units should contain generated data, generated resource links, and the minimum schema needed to describe that data. Hand-authored lookup, decoding, validation, and other behavior belongs in `source/units/` or `source/shared/`, depending on ownership.
 
-**When to use `Goccia.*`:** Any unit that depends on or extends the GocciaScript engine (runtime values, compiler, VM, modules, etc.).
+**When to use `Goccia.*`:** Any GocciaScript-specific unit outside the engine (parser, modules, CLI wiring, reports, etc.). The engine's own units live in `source/g2/` and use `G2.*`.
+
+**`source/g2/` is outside these Pascal rules.** `./format.pas` covers `source/app`, `source/units` and `source/shared`, and the pre-commit format hook skips `source/g2`. G2's units keep their own style (parameters without the `A` prefix, short type names such as `TValue` and `PObj`, threadvars for engine state) and follow G2's own [working rules](../g2/README.md#working-rules).
 
 **When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
 
@@ -119,7 +125,7 @@ Trivial literals that are self-explanatory in context (`0`, `1`, `-1`, `''`, `Tr
 
 Never use bare `FloatToStr` or `FormatFloat` without an explicit `TFormatSettings` argument — these use the system decimal separator which varies by locale and breaks deterministic output.
 
-Use `FormatDouble` (from `Goccia.Values.Primitives`) for any float-to-string conversion that must produce ECMAScript-compliant output (property keys, error messages, serialization). For formatted output that needs a specific pattern (e.g., `toFixed`, `toExponential`, timing), pass `InvariantFormatSettings` (same unit) to `FormatFloat`:
+Use `NumberToString` (from `NumericText`, in `source/shared/`) for any float-to-string conversion that must produce ECMAScript-compliant output (property keys, error messages, serialization). For formatted output that needs a specific pattern (e.g., timing, report columns), pass the settings `CreateInvariantFormatSettings` (same unit) returns to `FormatFloat`:
 
 ```pascal
 // Wrong — locale-dependent, breaks on systems with comma decimal separator
@@ -127,18 +133,11 @@ Result := FloatToStr(AValue);
 Result := FormatFloat('0.###', AValue);
 
 // Correct — ES2026 §6.1.6.1.20 Number::toString, always uses '.'
-Result := FormatDouble(AValue);
+Result := NumberToString(AValue);
 
 // Correct — formatted output with invariant decimal separator
-Result := FormatFloat('0.###', AValue, InvariantFormatSettings);
-```
-
-For `source/shared/` units that cannot import `Goccia.Values.Primitives`, use explicit inline format settings:
-
-```pascal
-FS := DefaultFormatSettings;
-FS.DecimalSeparator := '.';
-Result := FloatToStr(AValue, FS);
+FormatSettings := CreateInvariantFormatSettings;
+Result := FormatFloat('0.###', AValue, FormatSettings);
 ```
 
 ### ECMAScript Spec Annotations
@@ -146,24 +145,27 @@ Result := FloatToStr(AValue, FS);
 When implementing ECMAScript-specified behavior, annotate each function or method with a comment referencing the relevant specification section. Place the annotation immediately above the function body in the `implementation` section. For multi-step spec algorithms, also annotate individual steps inline within the function body:
 
 ```pascal
-// ES2026 §23.1.3.18 Array.prototype.map(callbackfn [, thisArg])
-function TGocciaArrayValue.Map(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+// ES2026 §7.1.8 ToUint32(argument)
+function NumberToUint32(const AValue: Double): UInt32;
 var
-  Arr: TGocciaArrayValue;
-  ResultArray: TGocciaArrayValue;
+  IntegerValue, WrappedValue: Double;
 begin
-  Arr := TGocciaArrayValue(AThisValue);
-  // ES2026 §23.1.3.18 step 4: ArraySpeciesCreate(O, len)
-  ResultArray := ArraySpeciesCreate(Arr, Arr.Elements.Count);
+  // ES2026 §7.1.8 step 2: non-finite values and either zero become +0.
+  if IsNan(AValue) or IsInfinite(AValue) or (AValue = 0.0) then
+    Exit(0);
+
+  // ES2026 §7.1.8 steps 3-4: truncate, then reduce modulo 2^32.
   // ...
 end;
 ```
+
+This is `Goccia.NumberConversion`. G2's units in `source/g2` usually cite the clause number in a brace comment instead (`{ 20.2.1.1.1 CreateDynamicFunction: ... }`).
 
 **Format:** `// ESYYYY §X.Y.Z SpecMethodName(specParams)`
 
 - `YYYY` is the current edition year of the ECMA-262 specification (e.g., `ES2026` for 2026, `ES2027` for 2027). Use the year matching the current year.
 - The section numbers reference [ECMA-262](https://tc39.es/ecma262/), the living standard.
-- **The method name and parameter list must match the spec's pseudo-code exactly** — use `Array.prototype.map(callbackfn [, thisArg])`, not the Pascal implementation name `TGocciaArrayValue.Map(AArgs, AThisValue)`. The annotation is a spec cross-reference, not a Pascal signature.
+- **The method name and parameter list must match the spec's pseudo-code exactly** — use `ToUint32(argument)`, not the Pascal implementation name `NumberToUint32(AValue)`. The annotation is a spec cross-reference, not a Pascal signature.
 - Use the full qualified name as it appears in the spec (e.g., `Array.prototype.map`, `Object.keys`, `Number.parseInt`).
 - For abstract operations, use the spec's operation name and parameters (e.g., `Await(value)`, `ToPrimitive(input [, preferredType])`, `IteratorNext(iteratorRecord [, value])`).
 - For individual algorithm steps within a function body, use `// ESYYYY §X.Y.Z step N: description`.
@@ -187,7 +189,7 @@ end;
 // TC39 Set Methods §2.1 Set.prototype.union(other)
 ```
 
-**What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., `EvaluateStatements`, `SpreadIterableInto`, Pascal-specific utilities).
+**What not to annotate:** Internal GocciaScript helpers that don't correspond to a spec algorithm (e.g., report writers, CLI option parsing, Pascal-specific utilities).
 
 ### Documentation — Edition Year vs Proposal Stage
 
@@ -214,16 +216,16 @@ Class names, function names, method names, and type names must use **full words*
 
 ```pascal
 // Correct
-TGarbageCollector
-MarkReferences
-IsExternalDeclaration
-DateTimeAdd
+TGocciaCoverageTracker
+RegisterTemplate
+IsScriptExtension
+NumberToUint32
 
 // Wrong — abbreviated
-TGocciaGC
-GCMarkReferences
-IsExternalDecl
-DTAdd
+TGocciaCovTracker
+RegTemplate
+IsScriptExt
+NumToU32
 ```
 
 **Exceptions:** Industry-standard abbreviations are kept as-is: `AST`, `JSON`, `GocciaREPL`, `ISO`, `Utils`.
@@ -235,26 +237,26 @@ Prefer `TObjectList<T>` over `TList<T>` when `T` is a class. `TObjectList` makes
 **Named type aliases:** When a generic specialization like `TObjectList<TSomeClass>` is used across multiple compilation units, define a **single named type alias** in the unit that declares `TSomeClass`. This ensures FPC produces one VMT for the specialization, avoiding "Invalid type cast" failures when `{$OBJECTCHECKS ON}` performs cross-unit type checks.
 
 ```pascal
-// In Goccia.Values.Primitives.pas (where TGocciaValue is declared)
-TGocciaValueList = TObjectList<TGocciaValue>;
+// In Goccia.TOML.pas (where TGocciaTOMLNode is declared)
+TGocciaTOMLNodeList = TObjectList<TGocciaTOMLNode>;
 
-// In Goccia.Scope.pas (where TGocciaScope is declared)
-TGocciaScopeList = TObjectList<TGocciaScope>;
+// In Goccia.Packages.Lockfile.pas (where TGocciaLockedPackage is declared)
+TGocciaLockedPackageList = TObjectList<TGocciaLockedPackage>;
 ```
 
-All consumers import the alias from the declaring unit — never re-specialize `TObjectList<TGocciaValue>` or `TObjectList<TGocciaScope>` locally:
+All consumers import the alias from the declaring unit — never re-specialize `TObjectList<TGocciaTOMLNode>` or `TObjectList<TGocciaLockedPackage>` locally:
 
 ```pascal
 // Correct — uses the shared alias
-FElements: TGocciaValueList;
-FManagedScopes: TGocciaScopeList;
+FNodes: TGocciaTOMLNodeList;
+FPackages: TGocciaLockedPackageList;
 
 // Wrong — local re-specialization creates a separate VMT
-FElements: TObjectList<TGocciaValue>;
-FManagedScopes: TObjectList<TGocciaScope>;
+FNodes: TObjectList<TGocciaTOMLNode>;
+FPackages: TObjectList<TGocciaLockedPackage>;
 ```
 
-**Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements (e.g., the GC's managed scopes list, which uses manual mark-and-sweep), using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures. See [spikes/fpc-generics-performance.md](../spikes/fpc-generics-performance.md) for the benchmark analysis confirming generics have zero runtime cost.
+**Why `TObjectList(False)` instead of `TList`?** Even when the collection does not own its elements, using `TObjectList<T>.Create(False)` with a named alias keeps the VMT consistent. `TList<T>` and `TObjectList<T>` produce incompatible VMTs, so mixing them across units reintroduces the same cross-unit type check failures. See [spikes/fpc-generics-performance.md](../spikes/fpc-generics-performance.md) for the benchmark analysis confirming generics have zero runtime cost.
 
 ### Hash Map Selection
 
@@ -265,14 +267,13 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 | String keys, insertion order | `TOrderedStringMap<V>` | 4-6x faster inserts than `TDictionary` at N=20-100; `static inline` DJB2 hash/equality; tracks deleted buckets and compacts after delete-heavy phases to bound probe chains |
 | Generic keys, insertion order | `TOrderedMap<K,V>` | Virtual `HashKey`/`KeysEqual`; default: DJB2 over raw key bytes |
 | Any key, unordered | `THashMap<K,V>` | Backshift deletion (no tombstones); `static inline` hash/equality; 2x faster inserts for pointer keys |
-| Scope bindings | `TOrderedStringMap<V>` | Hash-based O(1) lookup per scope level; chain walking in `TGocciaScope` |
 | Cold-path / diagnostic | `TDictionary<K,V>` | Acceptable where performance is not critical |
 
 **Never use** `TFPDataHashTable` — it has catastrophic insert performance (400,000 ns/insert vs 50 ns for `TOrderedStringMap` at N=20). See [spikes/fpc-hashmap-performance.md](../spikes/fpc-hashmap-performance.md) for the full benchmark analysis.
 
 **API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. The `Keys`, `Values`, and `ToArray` accessors return dynamic arrays, so index those with a `for` loop rather than `for...in`.
 
-**Sequential iteration:** `TOrderedStringMap` and `TOrderedMap` also expose a key/value-pair enumerator — prefer `for Pair in Map do`, which yields entries in declaration order at O(1) amortized per step (this is how the class, scope, and module code iterate these maps). Do **not** iterate by driving the random-access `EntryAt(Index)` from a `for Index := 0 to Count - 1` loop: `EntryAt` scans active entries from the start (O(Index)), so the loop is O(N²). The enumerator copies each key; on a `TOrderedStringMap`, a hot loop that needs only the values, such as a destructor, walks `for Index := 0 to Map.EntryCount - 1` with `TryGetValueAtEntry`, which skips removed entries and copies no key.
+**Sequential iteration:** `TOrderedStringMap` and `TOrderedMap` also expose a key/value-pair enumerator — prefer `for Pair in Map do`, which yields entries in declaration order at O(1) amortized per step (this is how the parser and the module code iterate these maps). Do **not** iterate by driving the random-access `EntryAt(Index)` from a `for Index := 0 to Count - 1` loop: `EntryAt` scans active entries from the start (O(Index)), so the loop is O(N²). The enumerator copies each key; on a `TOrderedStringMap`, a hot loop that needs only the values, such as a destructor, walks `for Index := 0 to Map.EntryCount - 1` with `TryGetValueAtEntry`, which skips removed entries and copies no key.
 
 ### Function and Method Names
 
@@ -280,13 +281,13 @@ All `function`, `procedure`, `constructor`, and `destructor` names must be **Pas
 
 ```pascal
 // Correct
-function EvaluateBinary(const AExpr: TGocciaBinaryExpression): TGocciaValue;
-procedure RegisterBuiltin(const AName: string; const AValue: TGocciaValue);
-class function CreateFromPairs(const APairs: TGocciaArrayValue): TGocciaMapValue;
+function NumberToUint32(const AValue: Double): UInt32;
+procedure BeginEntry;
+function RegisterTemplate(const AName, ASourceFile: string; const ALine: Integer): Integer;
 
 // Wrong — camelCase or snake_case
-function evaluateBinary(const AExpr: TGocciaBinaryExpression): TGocciaValue;
-procedure register_builtin(const AName: string; const AValue: TGocciaValue);
+function numberToUint32(const AValue: Double): UInt32;
+procedure begin_entry;
 ```
 
 **Exception:** External C function bindings (declared with `external`) retain their original C naming (e.g., `clock_gettime`).
@@ -310,8 +311,8 @@ uses
 
   TimingUtils,
 
-  Goccia.Scope,
-  Goccia.Values.Primitives,
+  Goccia.AST.Node,
+  Goccia.Parser,
 
   FileUtils in 'source/shared/FileUtils.pas';
 ```
@@ -322,21 +323,20 @@ This ordering is enforced automatically by `./format.pas` via Lefthook pre-commi
 
 All function and procedure parameters must follow these rules:
 
-1. **`A` prefix** — Every parameter name with two or more characters starts with `A` (e.g., `AScope`, `AValue`, `AFileName`). This distinguishes parameters from fields (`F` prefix) and local variables. **Single-letter names** (e.g., `A`, `B`, `E`, `T`) are left as-is — the `A` prefix is not applied to them.
+1. **`A` prefix** — Every parameter name with two or more characters starts with `A` (e.g., `ASource`, `AValue`, `AFileName`). This distinguishes parameters from fields (`F` prefix) and local variables. **Single-letter names** (e.g., `A`, `B`, `E`, `T`) are left as-is — the `A` prefix is not applied to them.
 
 2. **`const` where possible** — Use `const` for parameters that are not modified within the function body. This applies to all types: objects, strings, integers, records, etc. For records, `const` prevents field modification, so only omit it when the function needs to mutate the record locally.
 
 ```pascal
 // Correct — multi-letter parameters get A prefix + const
-procedure ProcessValue(const AValue: TGocciaValue; const AName: string);
-function CreateChild(const AKind: TGocciaScopeKind): TGocciaScope;
+procedure ProcessValue(const AValue: Double; const AName: string);
+function RegisterTemplate(const AName, ASourceFile: string; const ALine: Integer): Integer;
 
 // Correct — single-letter parameters keep their name
-function DefaultCompare(constref A, B: TGocciaValue): Integer;
 function DoSubtract(const A, B: Double): Double;
 
 // Wrong — missing A prefix on multi-letter name, missing const
-procedure ProcessValue(Value: TGocciaValue; Name: string);
+procedure ProcessValue(Value: Double; Name: string);
 ```
 
 Exceptions to `const`:
@@ -361,8 +361,8 @@ uses
   Generics.Collections,
   SysUtils,
 
-  Goccia.Scope,
-  Goccia.Values.Primitives;
+  Goccia.AST.Node,
+  Goccia.SourceSpan;
 
 type
   // Type declarations (classes, interfaces, records, enums)
@@ -372,7 +372,7 @@ type
 implementation
 
 uses
-  Goccia.Values.ErrorHelper;
+  Goccia.Error.Messages;
 
 // Implementation
 
@@ -387,12 +387,14 @@ Units are organized by category using dot-separated names:
 
 | Category | Purpose | Examples |
 |----------|---------|---------|
-| `Goccia.Values.*` | Value type hierarchy | `Primitives`, `ObjectValue`, `ArrayValue`, `ClassValue` |
-| `Goccia.Builtins.*` | Built-in object implementations | `Console`, `Math`, `JSON`, `GlobalObject` |
-| `Goccia.Compiler.*` | Bytecode compiler sub-modules | `Expressions`, `Statements`, `Scope`, `ConstantFolding` |
-| `Goccia.VM.*` | Bytecode VM sub-modules | `Registers`, `Closure`, `Upvalue`, `Exception` |
-| `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements` |
-| `Goccia.Arguments.*` | Function argument handling | `Collection`, `Converter`, `Validator` |
+| `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements`, `BindingPatterns` |
+| `Goccia.RegExp.*` | Regular expression compiler and matcher | `Compiler`, `VM`, `Engine`, `UnicodeData` |
+| `Goccia.Modules.*` | Module resolution and loading configuration | `Resolver`, `Configuration`, `NodeResolution`, `Phases` |
+| `Goccia.Packages.*` | Package installation | `Install`, `Lockfile`, `Store`, `Crawl` |
+| `Goccia.Profiler.*` | Profile reports | `Compile`, `Report` |
+| `Goccia.Temporal.*` | Temporal calendar and time zone data | `Calendar`, `TimeZone`, `TimeZoneData`, `Utils` |
+
+The engine's units in `source/g2/` take a flat `G2.<Name>` instead (`G2.Core`, `G2.Compiler`, `G2.VM`, `G2.ObjModel`).
 
 ### Collection Return Types
 
@@ -406,8 +408,8 @@ When a method only needs to expose elements for iteration, an indexed getter wit
 
 2. **OOP over everything** — Rely on type safety of specialized classes. Each concept gets its own class rather than using generic data structures.
 
-3. **Separation of concerns** — Each unit has a single, clear responsibility. The parser doesn't know about built-ins; the engine doesn't know about AST structure.
+3. **Separation of concerns** — Each unit has a single, clear responsibility. The parser doesn't know about built-ins; the VM (`G2.VM`) runs the bytecode `G2.Compiler` makes from the AST, never the AST itself.
 
 4. **Minimal public API** — Units expose only what's needed. Implementation details stay in the `implementation` section.
 
-5. **No global mutable state** — State flows through parameters (evaluation context, scope) rather than global variables. The only globals are immutable singletons.
+5. **No global mutable state** — In `source/units`, `source/shared` and `source/app`, state flows through parameters and objects rather than global variables; per-thread state (a profiler, a coverage tracker) is a threadvar instance. The engine is the exception by design: every piece of its state is a threadvar, one engine per thread (`G2.Engine`).

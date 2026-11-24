@@ -490,7 +490,7 @@ In sandbox mode `GocciaRunner` runs one entry inside an isolated in-memory
 virtual filesystem instead of against the host. `--sandbox`, any `--copy` or
 `--copy-rw` input, or a trusted `sandbox` section in the root config turns it
 on. The guest sees only that filesystem and may import `"fs"` and `"goccia"`
-([Sandbox Modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)).
+([Sandbox Modules](built-ins.md#sandbox-modules)).
 [Permissions — Sandbox mode](permissions.md#sandbox-mode) specifies what it may
 reach, how inputs are copied in and written back, and the config section.
 
@@ -579,7 +579,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Crash harness that drives one input through the lexer, parser, compiler, and VM |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
-| `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
+| `build/HashMap.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.or`, `.ppu`, generated resource lists) go to `build/compiled/` to keep the source tree clean. Each executable target compiles into an isolated `build/compiled/targets/<target>/` unit cache, and Pascal unit test programs compile into isolated `build/compiled/tests/<test-program>/` subdirectories so one program's FPC unit cache cannot poison the next.
 

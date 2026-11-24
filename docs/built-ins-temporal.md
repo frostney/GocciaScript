@@ -14,17 +14,16 @@ Implements the [ECMAScript Temporal API](https://developer.mozilla.org/en-US/doc
 - **Timezone support** — `ZonedDateTime` and `Temporal.Now` handle IANA timezone identifiers and DST transitions
 - **Arithmetic and comparison** — Every type supports `add`, `subtract`, `until`, `since`, `equals`, and static `compare`
 
-## Overview (`Goccia.Builtins.Temporal.pas`)
+## Overview
 
 An implementation of the ECMAScript Temporal API providing modern date/time handling. ISO 8601 calendar by default; non-ISO calendars are supported. All Temporal types are immutable — operations return new instances.
 
-`Goccia.Builtins.Temporal` registers constructors and static methods. Shared
-specification behavior lives behind the Temporal modules:
-`Goccia.Temporal.AbstractOperations` owns calendar coercion/defaulting,
-`Goccia.Temporal.Options` owns option validation and rounding,
-`Goccia.Temporal.Utils` owns ISO 8601 / RFC 9557 parsing, and
-`Goccia.Temporal.TimeZone` owns time-zone resolution and offset formatting.
-Value types delegate to those modules so observable semantics stay consistent.
+The Temporal objects, their abstract operations, option handling, ISO 8601 /
+RFC 9557 parsing and time-zone resolution are written in JavaScript in
+`source/g2/prelude/temporal.js`, compiled into the engine's prelude snapshot.
+`G2.Temporal` gives the prelude what JavaScript cannot reach: the clock, the
+TZif files of the time zone database, and the system time zone. The non-ISO
+calendars' arithmetic goes through `Goccia.Temporal.Calendar`, over ICU.
 
 **Namespace structure:**
 
@@ -45,13 +44,14 @@ Temporal.ZonedDateTime  // Date + time + timezone
 `Temporal.ZonedDateTime` loads IANA timezone data from TZif zoneinfo data. Lookup order is:
 
 1. `GOCCIA_TZDIR` when set
-2. system zoneinfo directories on Unix-like platforms (`/usr/share/zoneinfo`, `/usr/share/zoneinfo.default`)
-3. Windows ICU on Windows 10 and newer
-4. embedded generated TZif resource data
+2. the system zoneinfo directory on Unix-like platforms (`/usr/share/zoneinfo`)
+3. embedded generated TZif resource data
 
-A TZif file lists a zone's transitions up to a point. From version 2 on it can end with a footer TZ string, such as `PST8PDT,M3.2.0,M11.1.0`, that gives the zone's current rule. The embedded data and fat system zoneinfo list transitions through 2037 for most zones; slim zoneinfo, which current `zic` writes by default, stops once the rule can produce them (2007 for `America/Los_Angeles`). When the file has such a rule, offsets, `getTimeZoneTransition()` and wall-clock resolution follow it for every instant after the last listed transition, or for every instant when the file lists none, through the end of the Temporal range, as RFC 9636 §3.2 specifies. A version 1 file, an empty or malformed footer, or a footer that names daylight saving time without its change dates gives no rule: the zone keeps its last listed offset. Zones loaded from Windows ICU are read as transitions from 1800 to 2200 with no rule, so they keep their last offset before 2200 from then on.
+The list of zone and link names comes from `tzdata.zi` in the same order of directories, else from the embedded data.
 
-The embedded data is generated from the upstream IANA timezone data distribution and linked as a FreePascal `.res` resource. This keeps named IANA zones and DST transitions available in single-binary builds even when neither system zoneinfo nor Windows ICU can provide the requested zone. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` at compile time to omit the embedded fallback.
+A TZif file lists a zone's transitions up to a point. From version 2 on it can end with a footer TZ string, such as `PST8PDT,M3.2.0,M11.1.0`, that gives the zone's current rule. The embedded data and fat system zoneinfo list transitions through 2037 for most zones; slim zoneinfo, which current `zic` writes by default, stops once the rule can produce them (2007 for `America/Los_Angeles`). When the file has such a rule, offsets, `getTimeZoneTransition()` and wall-clock resolution follow it for every instant after the last listed transition, or for every instant when the file lists none, through the end of the Temporal range, as RFC 9636 §3.2 specifies. A version 1 file or an empty or malformed footer gives no rule: the zone keeps its last listed offset. A footer that names daylight saving time without its change dates keeps its standard offset.
+
+The embedded data is generated from the upstream IANA timezone data distribution and linked as a FreePascal `.res` resource. This keeps named IANA zones and DST transitions available in single-binary builds even when the system has no zoneinfo for the requested zone, as on Windows. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` at compile time to omit the embedded fallback.
 
 ## Temporal.Duration
 

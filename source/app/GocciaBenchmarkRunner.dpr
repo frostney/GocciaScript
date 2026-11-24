@@ -6,9 +6,7 @@ program GocciaBenchmarkRunner;
   (G2.Embed BenchMode, goccia:microbench from prelude/microbench.js) on a
   thread of its own, its benchmarks measured by G2.HostAPI
   RunBenchmarkSuites and reported by Goccia.Benchmark.Reporter.
-  `./build.pas g2benchrunner` builds it as build/g2/GocciaBenchmarkRunner;
-  once it covers GocciaBenchmarkRunner it replaces
-  GocciaBenchmarkRunner.dpr.
+  `./build.pas benchmarkrunner` builds it as build/GocciaBenchmarkRunner.
 
   Not yet on G2: bytecode files. }
 

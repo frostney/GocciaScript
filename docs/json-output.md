@@ -12,14 +12,14 @@
 
 When running with `--output=json`, GocciaScript wraps every execution result in a structured JSON envelope. This is useful for programmatic consumers and embedding scenarios.
 
-Parse warnings (such as the JSX-in-`.js` notice) are not printed in these modes, for the entry file or for any module it imports, so they never come ahead of the envelope. An embedder that prints to the same stream mutes the warnings with `TGocciaEngine.SuppressWarnings`, which reaches the module loader. The setting reaches the loaders the engine creates for a modules manifest, an isolated config module and a `ShadowRealm` when each is built, so a `ShadowRealm` created before the setting changes keeps the value it was created with.
+Parse warnings (such as the JSX-in-`.js` notice) are not printed in these modes, for the entry file or for any module it imports, so they never come ahead of the envelope. An embedder decides the same for itself: `TG2Engine` prints no warning, and hands the entry's parse warnings to its `OnWarning` handler and an imported module's to its `OnModuleWarning` handler, so a host that prints to the same stream as its report leaves them unset or holds the warnings back.
 
 The `memory` block has two different scopes:
 
-- `memory.gc` reports the GocciaScript GC's approximate managed-object accounting. It tracks `TGCManagedObject.InstanceSize`, not all memory held by strings, dynamic arrays, or the FreePascal runtime. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`.
+- `memory.gc` reports the engine's collected heap (`TG2Engine.Memory`): `liveBytes` are the heap's bytes, garbage included until a collection frees it, and `limitBytes` the heap ceiling. Shapes, bytecode, atoms and other memory outside the collected heap are not counted. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`. G2 does not count objects, so `startObjectCount`, `endObjectCount` and `collectedObjects` are 0.
 - `memory.heap` reports coarse FreePascal process heap-manager counters from `GetHeapStatus`. These are allocator diagnostics, not JavaScript heap size. `deltaFreeBytes` may be negative when the process heap has less reusable free space at the end of the run.
 
-For parallel runs, the top-level `memory.gc` block combines one measurement per worker thread plus the main thread. It does not sum per-file live snapshots, because each worker can process many files with the same thread-local GC. Per-file `files[].memory` is only populated by hosts that can measure a file independently.
+Each file runs on an engine of its own, freed when the file is done. For a run of several files, the top-level `memory.gc` block sums the files' allocations and collections. Run one after another, its peak is the largest file's and its live bytes the last file's; run in parallel, the live bytes add up and the peak is the sum of the largest peaks, as many as there are workers. Per-file `files[].memory` is populated only for a parallel run.
 
 ### Success
 
@@ -38,9 +38,9 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
   "output": ["hello"],
   "error": null,
   "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
-    "compile_ns": 0,
+    "lex_ns": 0,
+    "parse_ns": 0,
+    "compile_ns": 1700000,
     "exec_ns": 3100000,
     "total_ns": 4800000
   },
@@ -54,7 +54,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
       "allocatedDuringRunBytes": 4096,
       "limitBytes": 536870912,
       "startObjectCount": 0,
-      "endObjectCount": 24,
+      "endObjectCount": 0,
       "collections": 0,
       "collectedObjects": 0
     },
@@ -77,9 +77,9 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
       "output": ["hello"],
       "error": null,
       "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
-        "compile_ns": 0,
+        "lex_ns": 0,
+        "parse_ns": 0,
+        "compile_ns": 1700000,
         "exec_ns": 3100000,
         "total_ns": 4800000
       },
@@ -113,10 +113,10 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
     "fileName": "script.js"
   },
   "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
+    "lex_ns": 0,
+    "parse_ns": 0,
     "compile_ns": 0,
-    "exec_ns": 100000,
+    "exec_ns": 1800000,
     "total_ns": 1800000
   },
   "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
@@ -136,10 +136,10 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
         "fileName": "script.js"
       },
       "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
+        "lex_ns": 0,
+        "parse_ns": 0,
         "compile_ns": 0,
-        "exec_ns": 100000,
+        "exec_ns": 1800000,
         "total_ns": 1800000
       },
       "memory": null,
@@ -157,12 +157,12 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
 | `output` | `string[]` | Formatted console output split into lines: one element per line, empty lines included |
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
-| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, `"RunAbortedError"`, etc.) |
+| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
 | `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. For a parse error, where parsing failed. For a thrown error, where the engine recorded the error was created, the location the human-readable `-->` line shows. A thrown value that is not an engine-created error has no location |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable, as for `error.line` |
 | `error.fileName` | `string \| null` | Source file path, or `null` if unavailable. For a thrown error with a recorded location, the file that location is in, which can be a module the input imported |
-| `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |
+| `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`). The engine lexes, parses and compiles in one step, so `compile_ns` includes lexing and parsing and `lex_ns` and `parse_ns` are 0; a failed run reports its whole time as `exec_ns` |
 | `memory` | `object \| null` | GC and application heap measurements for the run |
 | `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |
 | `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
@@ -185,9 +185,9 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
   "output": ["hello", "Error: oops"],
   "error": null,
   "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
-    "compile_ns": 0,
+    "lex_ns": 0,
+    "parse_ns": 0,
+    "compile_ns": 1700000,
     "exec_ns": 3100000,
     "total_ns": 4800000
   },
@@ -199,9 +199,9 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
       "output": ["hello", "Error: oops"],
       "error": null,
       "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
-        "compile_ns": 0,
+        "lex_ns": 0,
+        "parse_ns": 0,
+        "compile_ns": 1700000,
         "exec_ns": 3100000,
         "total_ns": 4800000
       },
@@ -229,7 +229,7 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
     "column": null,
     "fileName": "<stdin>"
   },
-  "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
+  "timing": { "lex_ns": 0, "parse_ns": 0, "compile_ns": 0, "exec_ns": 100300000, "total_ns": 100300000 },
   "memory": {
     "gc": {
       "liveBytes": 8192,
@@ -240,7 +240,7 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
       "allocatedDuringRunBytes": 16384,
       "limitBytes": 536870912,
       "startObjectCount": 0,
-      "endObjectCount": 80,
+      "endObjectCount": 0,
       "collections": 0,
       "collectedObjects": 0
     },
@@ -268,7 +268,7 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
         "column": null,
         "fileName": "<stdin>"
       },
-      "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
+      "timing": { "lex_ns": 0, "parse_ns": 0, "compile_ns": 0, "exec_ns": 100300000, "total_ns": 100300000 },
       "memory": null,
       "result": null
     }

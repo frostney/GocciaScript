@@ -4,762 +4,316 @@
 
 ## Executive Summary
 
-- **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
-- **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
-- **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `TraceReferences` to mark owned references
-- **Shared prototype singletons** — String, Number, Array, Set, Map, WeakSet, WeakMap, WeakRef, FinalizationRegistry, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
+- **One 64-bit `TValue`** — Every JavaScript value is a NaN-boxed `QWord` (`G2.Core`): doubles as themselves, int32s, five special constants and heap pointers under their own tags. Numbers never allocate.
+- **Heap cells, not classes** — Strings, symbols, BigInts, accessors, value arrays, upvalues and objects are cells with an 8-byte header (`TCellHeader`). There is no class hierarchy: an object is one record, `TObj`, and its `OKind` byte says which exotic or built-in behaviour applies.
+- **Shapes** — An object's property keys, attributes and prototype live in its shape (`TShape`), shared through a transition tree; values live in the object's slots. Inline caches key on the shape.
+- **Spec operations as routines** — Property access (`GetV`, `SetV`, `GetFromObject`), conversions (`ToPrimitiveHint`, `ToNumberV`, `ToStringV`, `ToPropKey`) and the descriptor-level internal methods (`G2.ObjModel`) are plain functions that return `False` with the exception in `Pending`.
+- **Per-realm intrinsics** — Built-in prototypes are threadvars of the running realm (`ObjectProto`, `ArrayProto`, ...), swapped by `SwitchRealm`; one engine per thread owns them.
 
-The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
+The value system is the foundation of GocciaScript's runtime. [G2 design](g2/design.md) gives the short version; this page is the contributor's reference for how values, objects and conversions work in `source/g2`.
 
-## Type Hierarchy
+## Value Representation
 
-```mermaid
-classDiagram
-    TGocciaValue <|-- TGocciaNullLiteralValue
-    TGocciaValue <|-- TGocciaUndefinedLiteralValue
-    TGocciaValue <|-- TGocciaBooleanLiteralValue
-    TGocciaValue <|-- TGocciaNumberLiteralValue
-    TGocciaValue <|-- TGocciaStringLiteralValue
-    TGocciaValue <|-- TGocciaSymbolValue
-    TGocciaValue <|-- TGocciaObjectValue
-    TGocciaObjectValue <|-- TGocciaClassValue
+`TValue` is a `QWord` (`G2.Core`). Values below `DOUBLE_LIMIT` (`$FFF9 0000 0000 0000`) are IEEE 754 doubles stored as their bits. Above it the top 16 bits are a tag:
 
-    TGocciaObjectValue <|-- TGocciaFunctionBase
-    TGocciaFunctionBase <|-- TGocciaBytecodeFunctionValue
-    TGocciaFunctionBase <|-- TGocciaNativeFunctionValue
-    TGocciaFunctionBase <|-- TGocciaBoundFunctionValue
-    TGocciaInstanceValue <|-- TGocciaArrayValue
-    TGocciaInstanceValue <|-- TGocciaSetValue
-    TGocciaInstanceValue <|-- TGocciaMapValue
-    TGocciaObjectValue <|-- TGocciaPromiseValue
-    TGocciaObjectValue <|-- TGocciaInstanceValue
-    TGocciaInstanceValue <|-- TGocciaWeakSetValue
-    TGocciaInstanceValue <|-- TGocciaWeakMapValue
-    TGocciaInstanceValue <|-- TGocciaWeakRefValue
-    TGocciaInstanceValue <|-- TGocciaFinalizationRegistryValue
-    TGocciaObjectValue <|-- TGocciaEnumValue
-    TGocciaObjectValue <|-- TGocciaIteratorValue
-    TGocciaIteratorValue <|-- TGocciaArrayIteratorValue
-    TGocciaIteratorValue <|-- TGocciaStringIteratorValue
-    TGocciaIteratorValue <|-- TGocciaMapIteratorValue
-    TGocciaIteratorValue <|-- TGocciaSetIteratorValue
-    TGocciaIteratorValue <|-- TGocciaGenericIteratorValue
-    TGocciaIteratorValue <|-- TGocciaIteratorHelperValue
-    TGocciaIteratorHelperValue <|-- TGocciaLazyMapIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaLazyFilterIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaLazyTakeIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaLazyDropIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaLazyFlatMapIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaConcatIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaZipIteratorValue
-    TGocciaIteratorHelperValue <|-- TGocciaZipKeyedIteratorValue
-    TGocciaInstanceValue <|-- TGocciaArrayBufferValue
-    TGocciaInstanceValue <|-- TGocciaSharedArrayBufferValue
-    TGocciaInstanceValue <|-- TGocciaDataViewValue
-    TGocciaInstanceValue <|-- TGocciaTypedArrayValue
-    TGocciaInstanceValue <|-- TGocciaNumberObjectValue
-    TGocciaInstanceValue <|-- TGocciaStringObjectValue
-    TGocciaInstanceValue <|-- TGocciaBooleanObjectValue
-    TGocciaObjectValue <|-- TGocciaSymbolObjectValue
+| Tag (top 16 bits) | Constant | Payload | Holds |
+|-------------------|----------|---------|-------|
+| below `$FFF9` | — | the double's bits | Numbers that are not small integers, NaN (canonical), `-0` |
+| `$FFF9` | `TAG_INT` | low 32 bits | Numbers that are int32 values |
+| `$FFFA` | `TAG_SPECIAL` | 0 to 4 | `VUndefined`, `VNull`, `VFalse`, `VTrue`, `VHole` |
+| `$FFFB` | `TAG_PTR` | 48-bit address | a heap cell |
 
-    class TGocciaValue {
-        <<abstract>>
-    }
-    class TGocciaNullLiteralValue {
-        null
-    }
-    class TGocciaUndefinedLiteralValue {
-        undefined
-    }
-    class TGocciaBooleanLiteralValue {
-        true / false
-    }
-    class TGocciaNumberLiteralValue {
-        42, 3.14, NaN, Infinity
-    }
-    class TGocciaStringLiteralValue {
-        "hello"
-    }
-    class TGocciaObjectValue {
-        key: value
-    }
-    class TGocciaArrayValue {
-        [1, 2, 3]
-    }
-    class TGocciaPromiseValue {
-        Promise (pending/fulfilled/rejected)
-    }
-    class TGocciaBytecodeFunctionValue {
-        (x) => x + 1, methods, generators
-    }
-    class TGocciaClassValue {
-        class Foo { }
-    }
-    class TGocciaInstanceValue {
-        new Foo()
-    }
-    class TGocciaNativeFunctionValue {
-        Built-in Pascal functions
-    }
-    class TGocciaArrayBufferValue {
-        Fixed-length or resizable binary data buffer
-    }
-    class TGocciaSharedArrayBufferValue {
-        Shared-memory binary data buffer
-    }
-    class TGocciaDataViewValue {
-        Endian-aware view over binary data
-    }
-    class TGocciaTypedArrayValue {
-        Typed view over ArrayBuffer
-    }
-```
+`VHole` is the array hole: it never reaches script code. Reads of a hole see `undefined` or continue on the prototype chain.
 
-## GC Integration
+The helpers in `G2.Core` test and build values without allocating: `IsDouble`, `IsInt`, `IsNumber`, `IsPtr`, `IsString`, `IsObject`, `IsNullish`, `IsCallable`, `MkInt`, `MkDouble`, `MkNumber`, `MkBool`, `MkPtr`, `NumOf`, `IntOf`, `ObjOf`, `StrOf`. `G2.BigIntV` adds `IsBigInt`.
 
-Every `TGocciaValue` participates in the unified mark-and-sweep garbage collector. Values auto-register via `AfterConstruction`; subclasses override `TraceReferences` to mark owned references. See [Garbage Collector](garbage-collector.md) for the full GC architecture, contributor rules, and design rationale.
+### Number Representation
 
-## Type Discrimination via Virtual Dispatch
+A Number (ES2026 §6.1.6.1) is either an int32 tag or a double. `MkNumber` picks the int32 form for any integral value in int32 range except `-0`, which keeps its sign bit as a double, so `Object.is(-0, 0)` compares different bits. Arithmetic results go through `MkArith`, and `MkDouble` canonicalizes every NaN to `CANON_NAN` (`$7FF8 0000 0000 0000`): the negative NaN space above `$FFF9` belongs to the tags, so no other NaN bit pattern may appear as a value. `NumOf` reads either form as a `Double`.
 
-The base `TGocciaValue` class provides two virtual methods for runtime type discrimination, replacing multi-`is` type check chains with single VMT calls:
+Rules that follow:
 
-```pascal
-TGocciaValue = class(TGCManagedObject)
-  function IsPrimitive: Boolean; virtual;  // Returns False by default
-  function IsCallable: Boolean; virtual;   // Returns False by default
-  function IsConstructable: Boolean; virtual; // Returns False by default
-end;
-```
+- **Compare numbers by value, not bits.** `1` may be an int32 or a double `1.0` depending on how it was made. `StrictEquals` and `SameValueV` compare through `NumOf`; only the dispatch loop's fast path compares raw bits first.
+- **Negative zero is a double.** Test for it on the double's sign bit, not with `= 0`, which is true for both zeros.
+- **NaN is one value.** Since every NaN is canonical, `V = CANON_NAN` is a valid NaN test for a value; for a computed `Double` use `Math.IsNaN`.
 
-### `IsPrimitive`
+The old engine's number designs are recorded in [ADR 0001](adr/0001-number-dual-representation.md) and [ADR 0016](adr/0016-ieee-754-number-representation.md).
 
-Returns `True` for primitive value types. Overridden by:
+### Undefined, Null, Booleans
 
-| Type | Returns |
-|------|---------|
-| `TGocciaNullLiteralValue` | `True` |
-| `TGocciaUndefinedLiteralValue` | `True` |
-| `TGocciaBooleanLiteralValue` | `True` |
-| `TGocciaNumberLiteralValue` | `True` |
-| `TGocciaStringLiteralValue` | `True` |
-| `TGocciaSymbolValue` | `True` |
-| `TGocciaBigIntValue` | `True` |
-| All others (objects, arrays, functions, classes) | `False` (inherited default) |
+`VUndefined`, `VNull`, `VFalse` and `VTrue` are constants: identity is equality. `MkBool` maps a Pascal `Boolean`.
 
-Used by `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) to skip conversion for values that are already primitive.
+### Strings and Atoms
 
-### `IsCallable`
+A string is a `ckString` cell (`TStr`): length, a cached hash and UTF-16 code units, so `length` and indexing follow ECMAScript's code-unit semantics. Concatenations of 256 or more characters build views on a growable `ckStrBuf` buffer (`ConcatStrings`), so a loop of `s += x` appends in place; a substring of 32 or more characters shares its parent's characters (`SubString`, `cfSlice`). `NewString`, `StrFromUnicode` and `StrToUnicode` convert to and from Pascal strings.
 
-Returns `True` for values that can be invoked as functions. Overridden by:
-
-| Type | Returns |
-|------|---------|
-| `TGocciaFunctionBase` (and all subclasses: `TGocciaBytecodeFunctionValue`, `TGocciaBoundFunctionValue`, `TGocciaNativeFunctionValue`) | `True` |
-| `TGocciaClassValue` | `True` (callable via `new`) |
-| `TGocciaProxyValue` | Delegates to the proxy target |
-| All others | `False` (inherited default) |
-
-Used by:
-
-- `ToPrimitive` — to check whether `valueOf()` and `toString()` results are callable before invoking them.
-- `Function.prototype.call/apply/bind` — to validate that the receiver is callable.
-- Array method callbacks (`map`, `filter`, `reduce`, `sort`, etc.) — to validate user-provided callbacks.
-- `Set.prototype.forEach` and `Map.prototype.forEach` — to validate the callback argument.
-- `IsDeepEqual` — to reject callable objects from deep structural comparison when TypeNames differ.
-
-**Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaObjectValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
-
-### `IsConstructable`
-
-Returns `True` for values that can be used as constructors. This is intentionally narrower than `IsCallable`, because callable values such as arrow functions, generator functions, and explicitly non-constructable native functions must be rejected by `new`, `extends`, and `super()` construction paths.
-
-Overridden by:
-
-| Type | Returns |
-|------|---------|
-| `TGocciaFunctionBase` | `True` when the function owns a `prototype` property, or for bound functions when the target is constructable |
-| `TGocciaNativeFunctionValue` | `True` unless marked `NotConstructable`; native functions created without a prototype are non-constructable by default |
-| `TGocciaClassValue` | `True` |
-| `TGocciaProxyValue` | Delegates to the proxy target |
-| Generator functions and non-constructor bytecode functions | `False` |
-| All others | `False` (inherited default) |
-
-Use `IsConstructable` instead of `IsCallable` when validating class heritage or constructor dispatch. Continue to use the concrete value type when the next step requires a specific construct API.
-
-## Virtual Property Access
-
-Property access is unified through virtual methods on the `TGocciaValue` base class:
-
-```pascal
-TGocciaValue = class(TGCManagedObject)
-  function GetProperty(const AName: string): TGocciaValue; virtual;
-  procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
-end;
-```
-
-The base `TGocciaValue` provides default implementations: `GetProperty` returns `nil` and `SetProperty` is a no-op. Subclasses override these to implement property semantics:
-
-| Value Type | GetProperty | SetProperty |
-|-----------|-------------|-------------|
-| `TGocciaObjectValue` | Looks up own properties, walks prototype chain | Creates/updates property descriptor |
-| `TGocciaArrayValue` | Handles `length` and numeric indices, delegates to object | Handles numeric index and `length`, delegates to object |
-| `TGocciaClassValue` | Checks static properties | Sets static properties |
-| `TGocciaInstanceValue` | Checks instance, then prototype (invokes getters) | Checks for setters, then sets directly |
-| Primitives (including `TGocciaStringLiteralValue`) | Returns `nil` — property access on a primitive boxes it to its wrapper object first | No-op |
-
-The VM and the built-ins access properties uniformly via `Value.GetProperty(Name)` and `Value.SetProperty(Name, NewValue)` — no type checking or interface querying needed at the call site.
-
-## Primitives
-
-### Null and Undefined
-
-Both are singletons — only one instance exists in the runtime:
-
-```pascal
-class function TGocciaNullLiteralValue.NullValue: TGocciaNullLiteralValue;
-class function TGocciaUndefinedLiteralValue.UndefinedValue: TGocciaUndefinedLiteralValue;
-```
-
-This enables fast identity checks: `if Value = TGocciaUndefinedLiteralValue.UndefinedValue then ...`
-
-### Booleans
-
-`true` and `false` are cached singletons via `TrueValue` and `FalseValue`. Boolean creation goes through a factory:
-
-```pascal
-class function TGocciaBooleanLiteralValue.FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue;
-// Returns TrueValue or FalseValue
-```
-
-`ToNumberLiteral` returns `OneValue` or `ZeroValue` singletons rather than allocating a new `TGocciaNumberLiteralValue`, avoiding an allocation on every boolean-to-number coercion.
-
-### Numbers
-
-Simple wrapper around a `Double`:
-
-```pascal
-TGocciaNumberLiteralValue = class(TGocciaValue)
-  FValue: Double;
-end;
-```
-
-Special number singletons (class functions on `TGocciaNumberLiteralValue`): `NaNValue`, `InfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`, plus `ZeroValue` and `OneValue`.
-
-**Checking for special values:** Use the property accessors (`IsNaN`, `IsInfinity` / `IsNegativeInfinity` / `IsInfinite`, `IsNegativeZero`). `IsNaN` and the infinity checks delegate to `Math.IsNaN` and `Math.IsInfinite`; `IsNegativeZero` calls `NumberBits.IsNegativeZero`, which compares the double's 64-bit pattern with the sign bit alone.
-
-### Number Prototype (`TGocciaNumberObjectValue`)
-
-When methods are called on number primitives (e.g., `(42).toFixed(2)`), the number is auto-boxed into a `TGocciaNumberObjectValue`. All number object instances within an engine share a single per-engine prototype singleton, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and following the same pattern as strings, arrays, sets, and maps.
-
-| Method | Description |
-|--------|-------------|
-| `toFixed(digits?)` | Format with fixed-point notation. Returns `"NaN"`, `"Infinity"`, `"-Infinity"` for special values. |
-| `toString(radix?)` | String representation in radix 2–36 (default 10); other radixes throw `RangeError`. Special values return their default string. |
-| `valueOf()` | Return the primitive number value. |
-| `toPrecision(precision?)` | Format to specified precision. Special values return their default string. |
-| `toExponential(digits?)` | Format in exponential notation. |
-| `toLocaleString(locales?, options?)` | Locale-aware formatting through `Intl.NumberFormat`; installed by the `numberArrayToLocaleString` shim (`Goccia.Shims.pas`). |
-
-### Strings
-
-Simple wrapper around a Pascal `string`:
-
-```pascal
-TGocciaStringLiteralValue = class(TGocciaValue)
-  FValue: string;
-end;
-```
-
-String primitives get `.length`, `.charAt()`, `.includes()` and the other methods from the realm's single `String.prototype`, as a `TGocciaStringObjectValue` boxed from them would (the class `new String()` also produces). A named read does not create that box: `TryGetStringPrimitiveProperty` answers from the string's own characters and length, then from `String.prototype` with the primitive as the receiver. Computed reads still box. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
-
-- **Owned slot with `TGocciaSharedPrototype`** — `Set`, `Map`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `TypedArray` and the weak collections. The helper creates the prototype and pins it and its method host in its constructor; the realm frees the helper on tear-down, which unpins both.
-- **Raw slots** — `Array`, `Number`, `Symbol` and `Iterator` keep the prototype in one slot and the method host in another (`GArrayMethodHostSlot`, `GNumberMethodHostSlot`, `GSymbolMethodHostSlot`, …); for `Array` and `Number` both slots hold the same instance. `String.prototype` (`GStringPrototypeSlot`) and `Function.prototype` (`GFunctionPrototypeSlot`, a `TGocciaFunctionSharedPrototype`) are their own method hosts in a single slot. `SetSlot` pins; realm tear-down unpins.
-
-In all cases mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread.
+Property keys are atoms: interned `TStr` records outside the collected heap, compared by pointer. `AtomOf` interns Pascal text, `Atomize` a string cell, `IntAtom` an integer's decimal text. Keys no source text can name are key atoms (`NewKeyAtom`) told apart by `Hdr.Extra`: `kfSymbol` for a symbol's key, `kfPrivate` for a class's private name, `kfInternal` for an engine slot.
 
 ### Symbols
 
-Unique, immutable primitive values used as property keys (`Goccia.Values.SymbolValue.pas`):
+A symbol is a `ckSymbol` cell allocated as a permanent cell (`cfPermanent`): it never moves, so collections hash it by address. It holds its description and its key atom; `SymKey` returns that key, under which objects store symbol-keyed properties in the same shape as string keys. The well-known symbols are made once and shared by every realm. `Symbol.for` keeps its registry in a plain object (`G2.Builtins3`), so the collector sees the registered symbols.
 
-```pascal
-TGocciaSymbolValue = class(TGocciaValue)
-  FDescription: string;
-  FId: Integer;           // Auto-incrementing unique ID
-end;
-```
+Coercion follows ECMA-262: `ToBool` is `true`; `ToNumberV` throws `TypeError` ("Cannot convert a Symbol value to a number"); `ToStringV` throws `TypeError` ("Cannot convert a Symbol value to a string"), so template literals, `+` with a string and other implicit conversions throw. `String(symbol)` and `symbol.toString()` return `"Symbol(description)"`; `typeof` is `"symbol"`. `Object(symbol)` makes an `okSymbolObj` wrapper whose `Aux1` is the symbol.
 
-Each symbol has a globally unique `Id` assigned at creation. Type coercion follows ECMAScript strict mode semantics:
+A registered symbol (`Symbol.for`) cannot be held weakly (ES2026 §9.13 CanBeHeldWeakly); other symbols can be WeakMap keys and WeakRef targets.
 
-| Conversion | Result |
-|------------|--------|
-| `ToBoolean` | `true` |
-| `ToNumber` | Throws `TypeError` ("Cannot convert a Symbol value to a number") |
-| `ToString` | `"Symbol(description)"` (used by `String(symbol)` and internal display) |
+### BigInt
 
-**Implicit coercion restrictions:** Symbols cannot be implicitly converted to strings or numbers. Any operation that triggers implicit coercion throws a `TypeError`:
+A BigInt is a `ckBigInt` cell (`TBigCell` in `G2.BigIntV`): a sign and 32-bit limbs. Arithmetic converts to Goccia's `TBigInteger` and back (`BigToValue`, `ValueToBig`). Map and Set keys compare BigInts by value. `Object(1n)` is an `okPlain` object with the BigInt in `Aux1` and `BigInt.prototype` as its prototype.
 
-- **String coercion** — Template literals (`` `${symbol}` ``), string concatenation (`"" + symbol`), `String.prototype.concat`
-- **Number coercion** — Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`), bitwise operators (`|`, `&`, `^`, `~`, `<<`, `>>`, `>>>`), relational comparisons (`<`, `>`, `<=`, `>=`)
+## Heap Cells
 
-**Explicit conversions that work:**
+Every heap value starts with a `TCellHeader`: size, kind, flags and a kind-specific `Extra` word.
 
-- `String(symbol)` — Returns the descriptive string (e.g., `"Symbol(foo)")`. Uses `ToStringLiteral` internally.
-- `symbol.toString()` — Same result as `String(symbol)`.
-- `Boolean(symbol)` — Returns `true`.
-- `typeof symbol` — Returns `"symbol"`.
+| Kind | Record | Used for |
+|------|--------|----------|
+| `ckString` | `TStr` | strings, atoms |
+| `ckStrBuf` | `TStrBuf` | the growable buffer behind concatenation views |
+| `ckValueArray` | `TValueArray` | array elements, overflow slots, internal lists |
+| `ckUpval` | `TUpval` | a captured variable (open on the stack or closed) |
+| `ckAccessor` | `TAccessor` | the getter and setter pair of an accessor property |
+| `ckObject` | `TObj` | every object |
+| `ckSymbol` | — | symbols (permanent) |
+| `ckBigInt` | `TBigCell` | BigInts (`G2.BigIntV`) |
+| `ckBytes` | `TBytesCell` | an ArrayBuffer's bytes (`G2.Typed`) |
 
-**Explicit conversions that throw:**
+How cells are allocated, moved and freed is in [Garbage Collector](garbage-collector.md) and [G2 design § Heap and GC](g2/design.md#heap-and-gc). The rules that matter to code that handles values are in [GC Integration](#gc-integration).
 
-- `Number(symbol)` — Throws `TypeError`. Internally, `ToNumberLiteral` raises the error.
-- Unary `+symbol` / `-symbol` — Throws `TypeError` (these trigger `ToNumberLiteral`).
+## Objects
 
-The implicit coercion checks for symbols are implemented at the operator level (primarily in `Goccia.Arithmetic.pas`, with string built-in behavior in `Goccia.Values.StringObjectValue.pas`) so that operators reach Symbol-rejection cleanly without first invoking `ToStringLiteral` on a non-symbol path.
+An object is a `TObj`:
 
-**Symbol wrapper objects:** `Object(symbol)` boxes a symbol primitive into a `TGocciaSymbolObjectValue`, a plain `TGocciaObjectValue` subclass whose prototype is `Symbol.prototype` and whose `SymbolData` property holds the underlying `TGocciaSymbolValue`. Symbol.prototype methods use `thisSymbolValue` to accept either the primitive or the wrapper. `ToObject` (via `Box`) also produces the wrapper when other spec operations need an object from a symbol.
+| Field | Meaning |
+|-------|---------|
+| `Shape` | keys, attributes and prototype (`TShape`) |
+| `Elements` | dense indexed storage (`TValueArray`), or nil |
+| `Overflow` | property slots past the inline ones |
+| `Native` | a pointer the collector does not trace: a function template, a native routine, a SharedArrayBuffer block |
+| `Aux1`, `Aux2` | two traced values for the kind's internal slots |
+| `InlineCap` | the number of inline slots |
+| `OKind` | the object kind |
+| `OFlags` | flags; bit 8 means not extensible for every kind, the others depend on the kind |
+| `Pad` | 32 untraced bits (a function's realm and native data, a typed array's byte offset, a promise's state) |
+| `Slots` | the inline property slots |
 
-**Shared prototype singleton:** Like strings and numbers, symbols use a per-engine shared prototype object stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). It is initialized via `InitializePrototype`; the realm pins it on `SetSlot` and releases it on `Destroy`. The `description` getter and `toString()` method are registered on this shared prototype, and `TGocciaSymbolValue.GetProperty` delegates to the prototype via `GetPropertyWithContext` so that accessor getters receive the correct symbol instance as `this`. `Symbol.prototype` is exposed on the Symbol constructor function, matching ECMAScript semantics. Symbol is an always-registered standard built-in; special-purpose surfaces like test assertions, benchmarking, and FFI are installed through runtime extension classes. Symbol type checks at the operator level use standard RTTI (`is TGocciaSymbolValue`) rather than VMT methods purely for implementation simplicity.
+### Object Kinds
 
-**Weak eligibility:** `TGocciaSymbolValue.Registered` distinguishes symbols returned by `Symbol.for()` from local/well-known symbols. Non-registered symbols can be held weakly by WeakMap/WeakSet; registered symbols are pinned by the global symbol registry and rejected by `CanBeHeldWeakly`.
+`OKind` selects the exotic and built-in behaviour. `G2.Core` declares the core kinds; units that own a built-in declare theirs.
 
-Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolPropertyInChain`, without converting them to strings (see `TGocciaVM.HasPropertyValue` in `Goccia.VM.pas`).
+| Kind | Declared in | Internal slots |
+|------|-------------|----------------|
+| `okPlain` | `G2.Core` | ordinary object (also a BigInt wrapper: `Aux1` the BigInt) |
+| `okArray` | `G2.Core` | `Elements`; with `ofBigLen`, `Aux2` is the length |
+| `okFunction` | `G2.Core` | bytecode closure: `Native` the `PFuncTemplate`, `Aux1` the home object, `Aux2` the upvalues |
+| `okNative` | `G2.Core` | native function: `Native` the `TNativeFn`, `Pad` its realm and data |
+| `okBound` | `G2.Core` | bound function: `Aux1` the target, `Aux2` `[this, args...]` |
+| `okError` | `G2.Core` | an Error instance |
+| `okBoolean`, `okNumber`, `okStringObj`, `okSymbolObj` | `G2.Core` | primitive wrappers: `Aux1` the primitive |
+| `okArguments`, `okArgumentsOrd` | `G2.Core` | an arguments object, and one turned ordinary (`DemoteArguments`) |
+| `okMap`, `okSet` | `G2.Core` | `Aux1` the entries, `Aux2` the hash index |
+| `okIterator` | `G2.Core` | array and string iterators |
+| `okGenerator` | `G2.Core` | a generator object |
+| `okProxy` | `G2.Core` | `Aux1` the target, `Aux2` the handler |
+| `okModuleNS` | `G2.Core` | module namespace: `Aux1` the sorted export cells |
+| `okTypedArray`, `okArrayBuffer`, `okDataView` | `G2.Typed` | see [Binary Data](#binary-data) |
+| `okRegExp` | `G2.RegExpV` | a RegExp |
+| `okDate` | `G2.Date` | `Aux1` the time value |
+| `okPromise` | `G2.Promise` | `Aux1` the result, `Aux2` the reactions, `Pad` the state |
+| `okAsyncGen` | `G2.VM` | an async generator object |
+| `okAsyncFromSync` | `G2.Promise` | an async-from-sync iterator |
+| `okRawJSON` | `G2.JSON` | a `JSON.rawJSON` object |
+
+Built-ins written as JavaScript preludes (WeakMap, WeakRef, Temporal, Intl, ...) have no kind of their own: their instances are ordinary objects whose internal slots are private fields.
+
+### Shapes and Property Storage
+
+A shape (`TShape`) maps each key to a slot index and attribute byte and names the object's prototype. Adding a property moves the object along a transition edge to a child shape (`ShapeAdd`, `AddProperty`); objects built the same way share shapes, which is what the inline caches key on. A shape with more than 8 transitions hashes them. An object that reaches 64 properties gets a private dictionary shape (`IsDict`), changed in place. Deleting a property (`DeleteProperty`) or changing its attributes (`ChangeFlags`) rebuilds the object's shape from its prototype's root shape (`RootShapeFor`).
+
+Attribute bits (`G2.Core`):
+
+| Flag | Meaning |
+|------|---------|
+| `pfWritable` | `[[Writable]]` |
+| `pfEnumerable` | `[[Enumerable]]` |
+| `pfConfigurable` | `[[Configurable]]` |
+| `pfAccessor` | the slot holds a `ckAccessor` cell with the getter and setter |
+| `pfDefault` | writable, enumerable, configurable: an assignment's new property |
+| `pfHidden` | writable, configurable, not enumerable: built-in methods |
+
+`GetSlot`, `SetSlot`, `GetOwnSlot` and `ShapeLookup` read the storage directly. `DefineOwn` defines or redefines a data property with given flags; it skips validation and is meant for building intrinsics.
+
+### Arrays and Elements
+
+An array (`okArray`) keeps its indexed values in `Elements`, up to `ArrayDenseMax` elements; holes are `VHole`. An index property that is not a default-attribute data property (an accessor, a read-only element) lives in the shape under its string key, with a hole in the elements, and the object gets the element guard (`ofElemGuard`) so element writes take the checked path. A length past the dense elements sets `ofBigLen` and keeps the length in `Aux2` (`ArrayLength`, `ArraySetLengthSparse`). A non-writable length sets `ofLenReadOnly`. This models the array exotic object of ES2026 §10.4.2.
+
+### Property Order
+
+`OwnPropertyKeysV` (`G2.ObjModel`) returns array-index keys in ascending order, then string keys in creation order, then symbols in creation order (ES2026 §10.1.11.1 OrdinaryOwnPropertyKeys). Shapes keep creation order; elements supply the indices.
+
+### Prototype Chain and Property Lookup
+
+The prototype is part of the shape: `ProtoOf` reads `Shape^.Proto`, and `SetProto` moves the object to a shape under the new prototype's root shape. `GetFromObject` implements `[[Get]]` (ES2026 §10.1.8.1 OrdinaryGet) as a loop over the chain, so a long chain uses no native stack. At each object it:
+
+1. hands a proxy to its `get` trap, a module namespace to its export lookup and a mapped arguments object to its parameter map;
+2. answers a typed array's integer index from its elements (§10.4.5.4);
+3. looks the key up in the shape and calls an accessor's getter with the original receiver;
+4. answers the virtual properties (`length` of arrays, arguments objects and String objects, String indices) and dense elements;
+5. continues at `Shape^.Proto`.
+
+`GetV` adds the primitive receivers: a string answers `length` and indices itself, and every primitive continues at its wrapper prototype without allocating a wrapper. `GetElemV`, `SetV`, `SetElemV` and the strict forms (`SetVS`, `SetVT`) are the computed-key and `[[Set]]` counterparts; `HasPropertyV` is `[[HasProperty]]`. Compiled code reaches the same semantics through inline caches that record (shape, slot) for own properties and (receiver shape, holder, holder shape) for prototype hits ([G2 design § Objects](g2/design.md#objects)).
+
+### Property Descriptors
+
+`G2.ObjModel` implements the descriptor-level internal methods for ordinary objects and the exotic objects G2 models (arrays, String objects, typed arrays, proxies through their traps):
+
+| Routine | Spec |
+|---------|------|
+| `GetOwnPropertyV` | `[[GetOwnProperty]]` |
+| `DefineOwnPropertyV` | `[[DefineOwnProperty]]` with ValidateAndApplyPropertyDescriptor (ES2026 §10.1.6.3) |
+| `DefinePropertyOrThrow` | DefinePropertyOrThrow |
+| `ToPropertyDescriptor` | ES2026 §6.2.6.5 |
+| `FromPropertyDescriptor` | ES2026 §6.2.6.4 |
+| `SetIntegrityLevel`, `TestIntegrityLevel` | ES2026 §7.3.15, §7.3.16 |
+| `PreventExtensionsV` | `[[PreventExtensions]]` |
+| `OwnPropertyKeysV` | `[[OwnPropertyKeys]]` |
+
+A descriptor is a `TPropDesc` record with a `Has*` flag per field, so "absent" and "false" stay distinct, and redefining an existing property keeps the attributes the new descriptor leaves out. `Object.defineProperty` and `Reflect.defineProperty` share this path. The descriptor's values are rooted by the caller.
+
+`Object.freeze` and `Object.seal` call `SetIntegrityLevel`; `Object.isFrozen` and `Object.isSealed` call `TestIntegrityLevel`, which checks the object's actual state, so an object made non-extensible with only non-writable, non-configurable properties is frozen without `freeze`.
+
+### Failed Writes and Deletes
+
+`DeleteIfConfigurable` returns `False` for a non-configurable property. In strict code a `delete` that returns `false` throws `TypeError` (ES2026 §13.5.1.2), and a failed `[[Set]]` (a read-only property, a setter-less accessor, a non-extensible object) throws `TypeError` ("Cannot assign to read only property ..."). All code is strict unless script source enables `--compat-non-strict-mode`; then non-strict functions keep the `false` result and silent write. Module code is always strict.
 
 ## Type Conversion
 
-### ToPrimitive (`Goccia.Values.ToPrimitive.pas`)
+The conversions that may run JavaScript are in `G2.VM`; those that cannot are in `G2.Core`.
 
-The ECMAScript abstract operation `ToPrimitive` converts any value to a primitive. For primitives, it's a no-op. For objects, it first probes the `@@toPrimitive` well-known symbol via `GetMethod` (ES2026 §7.1.1 step 2.a + §7.3.10): if present and callable, it is invoked with the hint as a string argument (`"string"`, `"number"`, or `"default"`), and the result must be a primitive or a `TypeError` is thrown; if present but not callable, a `TypeError` is thrown immediately. If `@@toPrimitive` is absent (undefined or null), `OrdinaryToPrimitive` runs: with `tphString` it tries `toString()` first, then `valueOf()`; with `tphDefault` or `tphNumber` it tries `valueOf()` first, then `toString()`. Returns the first result that is a primitive, or throws `TypeError` if neither method returns one. Used by `+`, comparison operators, and the spec coercion methods.
+| Routine | Spec | Notes |
+|---------|------|-------|
+| `ToPrimitiveHint` | ES2026 §7.1.1 ToPrimitive | `TPrimHint` is `phDefault`, `phNumber` or `phString`; reads `Symbol.toPrimitive` first |
+| `ToPrimitiveV` | ES2026 §7.1.1 | the string or number hint as a `Boolean` |
+| `OrdinaryToPrimitive` | ES2026 §7.1.1.1 | `toString` then `valueOf` for the string hint, the reverse otherwise |
+| `ToBool` | ES2026 §7.1.2 ToBoolean | never calls JavaScript |
+| `ToNumberV` | ES2026 §7.1.4 ToNumber | throws for BigInt and Symbol |
+| `PrimitiveToNumber` | ES2026 §7.1.4 | primitives only |
+| `ToStringV` | ES2026 §7.1.17 ToString | throws for Symbol |
+| `NumberToStr` | Number::toString | through the shared `NumericText` unit |
+| `ToObjectV` | ES2026 §7.1.18 ToObject | makes a wrapper; throws for `undefined` and `null` |
+| `ToPropKey` | ES2026 §7.1.19 ToPropertyKey | returns the atom, or the symbol's key atom |
+| `ToBigIntV` | ToBigInt | |
 
-### `ToPropertyKey` helper
+`ToPrimitiveHint` probes `@@toPrimitive` with GetMethod: a callable one is called with the hint string and must return a primitive, a present non-callable one throws `TypeError`, and an absent one falls through to `OrdinaryToPrimitive`. Binary `+` and `==` pass `phDefault`.
 
-`Goccia.Values.ToPrimitive` also exposes `ToPropertyKey` (ES2026 §7.1.19) — coerces a value to a property key. Symbols pass through unchanged so the caller can dispatch to symbol-keyed property storage; non-symbols are coerced via `ToPrimitive(string)` and then `ToStringLiteral`. Property-access call sites check the returned type and route to either the string or symbol property table.
-
-### Coercion Methods
-
-Every value implements three conversion methods, following JavaScript coercion rules:
-
-| Method | Returns | Example (`undefined`) |
-|--------|---------|----------------------|
-| `ToBooleanLiteral` | `TGocciaBooleanLiteralValue` | `false` |
-| `ToNumberLiteral` | `TGocciaNumberLiteralValue` | `NaN` |
-| `ToStringLiteral` | `TGocciaStringLiteralValue` | `"undefined"` |
-
-For objects and class instances, `ToStringLiteral` and `ToNumberLiteral` go through `ToPrimitive` — they may invoke user-defined `toString()` / `valueOf()` and can therefore throw or trigger arbitrary side effects. Callers in error-boundary contexts (the bytecode throw constructor, the top-level throw formatter) avoid invoking them on objects entirely — they read primitive `name`/`message` properties or render a static `[object <Tag>]` placeholder instead, since post-VM-unwind re-entry is unsafe.
-
-**Do not override `ToNumberLiteral` in `TGocciaObjectValue` subclasses.** The base-class implementation delegates to `ToPrimitive(number)`, which looks up `valueOf()` / `toString()` on the object at runtime. Subclasses that hardcode conversion results bypass ToPrimitive and silently ignore user-overridden methods. If a subclass needs custom numeric coercion, register the appropriate `valueOf` prototype method instead — ToPrimitive will find and invoke it. `ToStringLiteral` may be overridden when a subclass (a) directly implements the same `join()`-style logic that `ToPrimitive` would reach through the prototype, and (b) must work on internally-created instances that may lack a full prototype chain (e.g. arrays during early bootstrap).
-
-Conversion follows ECMAScript specification semantics:
+Results of the common conversions:
 
 | Value | ToBoolean | ToNumber | ToString |
 |-------|-----------|----------|----------|
 | `undefined` | `false` | `NaN` | `"undefined"` |
 | `null` | `false` | `0` | `"null"` |
-| `true` | `true` | `1` | `"true"` |
-| `false` | `false` | `0` | `"false"` |
+| `true` / `false` | — | `1` / `0` | `"true"` / `"false"` |
 | `0`, `-0`, `NaN` | `false` | — | `"0"`, `"0"`, `"NaN"` |
-| `""` (empty) | `false` | `0` | — |
-| Objects | `true` | `ToPrimitive(number)` | `ToPrimitive(string)` |
+| `""` | `false` | `0` | — |
+| Symbol | `true` | `TypeError` | `TypeError` |
+| BigInt | `false` for `0n` | `TypeError` | decimal digits |
+| Object | `true` | ToPrimitive(number) | ToPrimitive(string) |
 
-## Objects
+### Equality and `typeof`
 
-### Property Descriptors
+- `StrictEquals` — ES2026 §7.2.14 IsStrictlyEqual: numbers by value (so `NaN !== NaN`, `0 === -0`), strings by content, BigInts by value, everything else by identity.
+- `LooseEquals` — ES2026 §7.2.13 IsLooselyEqual, with conversions that may call JavaScript.
+- `SameValueV` — ES2026 §7.2.9 SameValue (`Object.is`).
+- SameValueZero (ES2026 §7.2.10) is what Map, Set and `includes` use.
+- `TypeOfStr` — ES2026 §13.5.3 `typeof`: `"function"` for anything callable (bytecode, native and bound functions, callable proxies).
 
-Objects use ECMAScript-compliant property descriptors:
-
-**Data descriptors:**
-
-```pascal
-TGocciaPropertyDescriptorData = class
-  Value: TGocciaValue;
-  Writable: Boolean;      // Can the value be changed?
-  Enumerable: Boolean;    // Visible in for...in / Object.keys()?
-  Configurable: Boolean;  // Can the descriptor be modified/deleted?
-end;
-```
-
-**Accessor descriptors:**
-
-```pascal
-TGocciaPropertyDescriptorAccessor = class
-  Getter: TGocciaValue;   // Get function
-  Setter: TGocciaValue;   // Set function
-  Enumerable: Boolean;
-  Configurable: Boolean;
-end;
-```
-
-**Who frees a descriptor.** `GetOwnPropertyDescriptor`, `GetOwnSymbolPropertyDescriptor` and `OwnPropertyDescriptorForKey` ([[GetOwnProperty]]) return either the descriptor the object stores, which the object owns, or one built for a property the object does not store: an array element or `length`, a function's `length` and `name`, a class's `prototype`, a String object's index, a typed-array element, a module namespace export, a Proxy trap's result. A built descriptor is `CallerOwned`. The caller releases whatever it got with `ReleaseDescriptor`, which frees only a caller-owned one, and reads what it needs before it defines or deletes on the same object or runs guest code (a getter, a setter, a proxy trap), since any of those may free a stored descriptor. A caller that keeps a descriptor clones it or calls `TakeOwnership`. `HasOwnPropertyDescriptor` and `OwnPropertyIsEnumerable` answer the common questions without handing a descriptor out ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)).
-
-**A definition takes its descriptor.** `DefineProperty`, `DefineSymbolProperty` and their `Try` forms ([[DefineOwnProperty]]) store or free the descriptor they are given on every exit: when they succeed, when they refuse, and when anything inside them raises, a `TypeError`, guest code in a Proxy trap or a `valueOf`, the memory limit, a deadline, an instruction budget or a host's abort at any value allocation. A caller never frees a descriptor it passed, so `Obj.DefineProperty(Name, TGocciaPropertyDescriptorData.Create(...))` cannot leak. An override frees the descriptor itself before anything it does ahead of the inherited call raises; a refused growth of the property map frees what the `Add` was storing in the map's growth gate. An `EOutOfMemory` from FPC's own allocator is outside the contract ([ADR 0184](adr/0184-a-definition-takes-its-descriptor-on-every-exit.md)).
-
-### Property Deletion
-
-`DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With script source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.
-
-### ToPropertyDescriptor
-
-The `ToPropertyDescriptor` helper (`Goccia.Values.ObjectPropertyDescriptor.pas`) implements ES2026 §6.2.5.5. It is the single entry point for parsing a JavaScript descriptor object into a `TGocciaPropertyDescriptorData` or `TGocciaPropertyDescriptorAccessor`. Both `Object.defineProperty` and `Reflect.defineProperty` delegate to this helper, ensuring identical semantics:
-
-- Inherits unspecified attributes from an existing descriptor (if any)
-- Validates that `get`/`set` values are callable or `undefined` (throws `TypeError`)
-- Rejects mixed data+accessor descriptors — a descriptor with both (`value` or `writable`) and (`get` or `set`) throws `TypeError`
-- Constructs the appropriate descriptor type based on which fields are present
-
-### FromPropertyDescriptor
-
-The reverse direction, `FromPropertyDescriptor` in the same unit, implements ES2026 §6.2.6.4: it turns a descriptor into the JavaScript object that `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors` and `Reflect.getOwnPropertyDescriptor` return and that a Proxy `defineProperty` trap receives (`undefined` for no descriptor). Each field is made with `CreateDataPropertyOrThrow`, so it is an own data property and a setter inherited from `Object.prototype` never runs. No guest code runs while it reads the descriptor, so a caller may pass a descriptor still stored on the object it describes.
-
-### Property Definition Merging
-
-When `Object.defineProperty` is called on an existing property, unspecified descriptor attributes are inherited from the existing descriptor rather than defaulting to `false`. For example, calling `Object.defineProperty(obj, "x", { enumerable: false })` on a property that is `configurable: true, writable: true` preserves those attributes. New properties use `false` as the default for all unspecified attributes, matching ECMAScript specification behavior.
-
-### Property Order
-
-String-keyed properties live in `FProperties`, a `TGocciaPropertyMap` (`TOrderedStringMap<TGocciaPropertyDescriptor>`) that keeps creation order; symbol-keyed properties use `FSymbolDescriptors` plus `FSymbolInsertionOrder`. `GetOwnPropertyKeys` returns array-index keys in ascending numeric order first, then other strings in creation order, so `Object.keys({ b: 1, 2: 1, a: 1, 1: 1 })` is `["1", "2", "b", "a"]` as in JavaScript.
-
-### Prototype Chain
-
-Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property lookup walks the chain:
-
-1. Check own property descriptors (invoking getters if present).
-2. If not found, check `FPrototype`.
-3. Repeat until `nil` prototype.
-
-ES2026 §10.1.8.1 OrdinaryGet, §10.1.7.1 OrdinaryHasProperty and §10.1.9.2 OrdinarySetWithOwnDescriptor continue at the parent by calling the parent's own internal method. While the parent's class keeps `TGocciaObjectValue`'s `GetPropertyWithContext`, `HasProperty` or `AssignPropertyWithReceiver`, that call is the same procedure, so the walk steps to the parent in a loop and a chain of any length takes no native stack. A parent whose class overrides the lookup, such as a Proxy, is asked through its own method instead. The walk recognizes such a class by the method it resolves to, so a new override needs no registration. Calls into a Proxy are counted against `MAX_PROPERTY_DELEGATION_DEPTH`, calls into other such objects against `MAX_OBJECT_DELEGATION_DEPTH`; see [Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
-
-`GetProperty(Name)` delegates to `GetPropertyWithContext(Name, Self)`. The `WithContext` variant carries a `this` reference through the prototype chain so that inherited getter functions execute with the correct receiver (the original object, not the prototype where the getter was found).
-
-### Object Freezing
-
-`Object.freeze()` calls `TGocciaObjectValue.Freeze`:
-
-- **Freeze** — Makes the object non-extensible, then redefines every own property as non-configurable (data properties also non-writable), and sets the `FFrozen` and `FSealed` markers.
-- **Writes** — Rejected by the property descriptors and the extensibility check, not by the marker; a failed write throws `TypeError` by default (see [Property Descriptor System](#property-descriptor-system)).
-- **`Object.isFrozen(obj)`** — Runs `TestIntegrityFrozen` (TestIntegrityLevel(O, frozen), ES2026 §7.3.16): the object must be non-extensible and every own property non-configurable, with data properties non-writable. So an object made non-extensible with only non-writable, non-configurable properties reports `true` without ever calling `freeze`. Non-objects return `true`.
-
-### Error Helpers (`Goccia.Values.ErrorHelper.pas`)
-
-A utility unit that centralizes JavaScript [error](errors.md) object construction. Instead of manually building error objects at every throw site, code uses:
-
-```pascal
-ThrowTypeError('Cannot set property on non-object');
-ThrowRangeError('Invalid range in Math.clamp');
-ThrowReferenceError('x is not defined');
-ThrowError('Something went wrong');
-```
-
-Each helper creates a `TGocciaObjectValue` with `name` and `message` properties and raises it as a `TGocciaThrowValue`. The `CreateErrorObject(Name, Message)` function is also available for cases where the error should be returned rather than thrown (e.g., error constructors).
-
-## Arrays
-
-`TGocciaArrayValue` extends `TGocciaInstanceValue`.
-
-- **Sparse arrays** — Holes are the `TGocciaHoleValue.HoleValue` sentinel in the internal `FElements` list, never `nil`.
-- **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
-- **Shared prototype singleton** — All array instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods are registered once on this shared prototype during `InitializePrototype` (guarded by checking the realm slot) and pinned automatically by `TGocciaRealm.SetSlot`. The constructor assigns `FPrototype` from the realm slot instead of creating a per-instance prototype.
-- **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all operate through `ThisValue` (not `Self`) to access instance data, since the method pointers are bound to a single method host instance.
-- **String conversion** — An array has no `ToStringLiteral` of its own: a template literal, `String()` or `+` reaches `Array.prototype.toString` through `ToPrimitive`, and so `join`. `join` converts each element once, in order. Up to 16 elements it appends, which for so few costs least; above that it hands the strings to `TStringJoinBuffer` (`StringJoin.pas`), which keeps a reference to each non-empty one and writes the result once at its exact size, so the work is O(n) where repeated appending took O(n^2). Separators and empty elements take no memory before the result. Its reference table, and converted strings that nothing else holds, are reserved against the memory budget while it holds them; a result past the budget is refused with a catchable `RangeError` before it is allocated, and the final copy polls the deadline and a host's abort. The typed-array `join` and `toLocaleString` work the same way. `Array.prototype.toLocaleString` is a JavaScript shim that still joins by appending, in O(n^2).
-
-## Sets
-
-`TGocciaSetValue` extends `TGocciaInstanceValue` (`Goccia.Values.SetValue.pas`). A collection of unique values with insertion-order iteration.
-
-- **Uniqueness** — Uses `IsSameValueZero` (same as `===` except `NaN === NaN` is true) to test for duplicates.
-- **Shared prototype singleton** — All set instances within an engine share a single per-engine prototype, held by a `TGocciaSharedPrototype` in a realm-owned slot ([Owned-slot pattern](core-patterns.md#owned-slot-pattern-a-tgocciasharedprototype-helper)). Methods are registered once during `InitializePrototype`. Each method operates through `ThisValue` to access instance data.
-- **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values`, `keys`, `entries`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` — all registered on the shared prototype.
-- **Set-like operations** — Set operation methods accept either a `Set` or an object with `size`, `has(value)`, and `keys()` properties. Runtime validation follows the Set Record shape used by the ECMAScript algorithms.
-- **Internal storage** — `FStore: TGocciaOrderedValueMap`, an insertion-ordered map keyed by SameValueZero (members map to themselves).
-- **`size`** — A `get size` accessor on the prototype.
-- **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` for spread syntax support.
-
-## Maps
-
-`TGocciaMapValue` extends `TGocciaInstanceValue` (`Goccia.Values.MapValue.pas`). A collection of key-value pairs with insertion-order iteration where any value can be a key.
-
-- **Key equality** — Uses `IsSameValueZero` for key lookup.
-- **Internal storage** — `FStore: TGocciaOrderedValueMap`, the same SameValueZero-keyed, insertion-ordered map that backs `Set`.
-- Maps follow the same implementation pattern as Sets (see [Sets](#sets) above): prototype-registered methods, a `get size` prototype accessor, and `ToArray` spreadability.
-- **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
-
-## Weak Collections
-
-`TGocciaWeakMapValue`, `TGocciaWeakSetValue`, `TGocciaWeakRefValue`, and `TGocciaFinalizationRegistryValue` extend `TGocciaInstanceValue` (`Goccia.Values.WeakMapValue.pas`, `Goccia.Values.WeakSetValue.pas`, `Goccia.Values.WeakRefValue.pas`, `Goccia.Values.FinalizationRegistryValue.pas`). They are class-backed native instances so subclassing and constructor semantics match other built-in native classes.
-
-- **Weak eligibility** — `Goccia.Values.WeakReferenceSupport.CanBeHeldWeakly` accepts objects and non-registered symbols. Primitives and `Symbol.for()` registry symbols are rejected by mutators and constructors.
-- **Internal storage** — WeakMap stores entries in `THashMap<TGocciaValue,TGocciaValue>`; WeakSet stores membership in `THashMap<TGocciaValue,Boolean>`. Allowed keys are object/symbol identity values, so pointer identity matches the required `SameValue` behavior for this domain.
-- **No enumeration surface** — WeakMap/WeakSet intentionally do not expose `size`, `clear`, `forEach`, iterators, `keys`, `values`, or `entries`.
-- **Shared prototype singleton** — Each weak collection has a per-engine shared prototype stored in a realm-owned slot. Prototype methods operate through `ThisValue`, matching the built-in method-host pattern.
-- **WeakRef kept objects** — WeakRef construction and `deref()` add the target to the GC kept-objects set. The set is cleared at host job checkpoints so repeated `deref()` calls in the same job are stable without making the target strongly reachable forever.
-- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping visits the cells newest first; it empties each dead cell's target, moves the cell to the registry's pending cells and queues one cleanup job for it through the microtask queue's finalization lane. A pending cell is still a cell of the registry (ES2026 §9.9.3), so `unregister` removes it too. Each cleanup job takes the oldest pending cell left, if any, and calls the callback with its held value, so the callbacks for one collection run from the newest registration to the oldest. Taking a cell advances a head index instead of shifting the list, so draining n cleanup jobs costs O(n). The registry marks the held values of pending cells, and a queued job roots the registry through the job function's captured root until it runs.
-- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `TraceReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members. WeakRef clears an unmarked target. FinalizationRegistry removes unmarked-target cells and schedules cleanup.
-
-## Promises
-
-`TGocciaPromiseValue` extends `TGocciaObjectValue` (`Goccia.Values.PromiseValue.pas`). Represents an ECMAScript Promise with three possible states.
-
-- **State machine** — Each Promise has a `TGocciaPromiseState`: `gpsPending`, `gpsFulfilled`, or `gpsRejected`. Once settled, the state and result are immutable (double-resolve/reject is a no-op).
-- **Result** — `PromiseResult: TGocciaValue` holds the fulfillment value or rejection reason after settlement.
-- **Reactions** — `FReactions: TList<TGocciaPromiseReaction>` stores pending `.then()` reactions. When the Promise settles, all reactions are enqueued as microtasks. When `.then()` is called on an already-settled Promise, the reaction is enqueued immediately.
-- **Thenable adoption** — If a Promise is resolved with another Promise, `SubscribeTo` defers settlement via a microtask (per the spec's PromiseResolveThenableJob) rather than resolving synchronously. For already-settled inner Promises, the settlement is enqueued as a microtask; for pending inner Promises, a reaction is added to the inner's reaction list.
-- **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
-- **Shared prototype singleton** — All Promise instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` on a `TGocciaSharedPrototype` held in a realm-owned slot.
-- **GC integration** — `TraceReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
+An object flagged `cfEmulatesUndefined` is the `[[IsHTMLDDA]]` object of ES2026 §B.3.6 (the conformance host's `$262.IsHTMLDDA`): `typeof` gives `"undefined"`, ToBoolean gives `false`, and it is loosely equal to `undefined` and `null`.
 
 ## Functions
 
-### User-Defined Functions (`TGocciaBytecodeFunctionValue`)
+| Kind | Made by | Call |
+|------|---------|------|
+| `okFunction` | the compiler's closures (functions, arrows, methods, generators, async functions, classes) | a bytecode frame; the `PFuncTemplate` flags (`IsArrow`, `IsClassCtor`, `IsDerived`, `IsMethod`, `IsGenerator`, `IsAsync`, `IsStrict`) select the behaviour |
+| `okNative` | `NewNativeFunction`, `NewNativeFunctionData` | a Pascal `TNativeFn` |
+| `okBound` | `Function.prototype.bind` | the target with the bound `this` and arguments prepended |
 
-Every source-defined function — ordinary function, arrow, method, async function, generator, and async generator — is a `TGocciaBytecodeFunctionValue` (`Goccia.VM`), a sealed `TGocciaFunctionBase` subclass. It wraps a `TGocciaBytecodeClosure` (`Goccia.VM.Closure`): the compiled `TGocciaFunctionTemplate`, the upvalue cells the function captured, and, for methods, `HomeObject`, `HomeClass` and `PrivateClass`. The template's `IsArrow`, `IsAsync` and `IsGenerator` flags select the call behaviour; there is no subclass per function form. See [Bytecode VM](bytecode-vm.md) for compilation and calls.
+`length` and `name` are ordinary configurable shape properties (`FnShapeFor`). A function's `prototype` object is made on first use (`FunctionPrototypeOf`). A native function given a `prototype` property while the intrinsics are built is a built-in constructor.
 
-- **Async functions** — `Call` creates a `TGocciaPromiseValue`, runs the closure, resolves the promise with the completion value, and rejects it with a thrown value.
-- **Generators** — `Call` returns a generator object instead of running the body (see [Generator Values](#generator-values-gocciavaluesgeneratorvaluepas)).
+### Native Functions
 
-### Arrow Functions
+```pascal
+TNativeFn = function(Args: PValue; Argc: Integer; var Result: TValue): Boolean;
+```
 
-An arrow's template has `IsArrow` set. An arrow has no `this` binding of its own: the compiler resolves `this` in its body to the enclosing function's `this` through an upvalue, so the call-site receiver is ignored. An arrow also takes `new.target` from its closure.
-
-### Generator Values (`Goccia.Values.GeneratorValue.pas`)
-
-`Goccia.Values.GeneratorValue` holds the generator object base classes (`TGocciaGeneratorBaseValue`, `TGocciaAsyncGeneratorBaseValue`) and the `next`/`return`/`throw` methods on the generator prototypes. The VM's generator objects, `TGocciaBytecodeGeneratorObjectValue` and `TGocciaBytecodeAsyncGeneratorObjectValue`, live in `Goccia.VM`.
-
-Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
+`Args[0]` is `this` and `Args[1..Argc]` are the arguments; the slots live on the value stack, so they are rooted. The function writes `Result` and returns `True`, or returns `False` with the exception in `Pending` (see [Error Values](#error-values)). Under `new`, `CurNewTarget` holds new.target; otherwise it is `undefined`. `NewNativeFunctionData` stores a small integer in the function's `Pad`, which the native reads from `NativeData`, so one routine can serve several methods.
 
 ### `this` Binding
 
-`this` binding follows the function form:
+| Function form | `this` |
+|---------------|--------|
+| Ordinary function, method, class method | the call's receiver |
+| Arrow function | the enclosing function's `this`, read through the upvalue `%this` |
+| Async and generator forms | as the non-async, non-generator form |
 
-| Function form | `this` binding |
-|---------------|---------------|
-| Ordinary function, shorthand method, class method | Call-site (receiver) |
-| Arrow function | Lexical (the enclosing function's `this`, captured as an upvalue) |
-| Async and generator variants | Same as the non-async, non-generator form |
+Strict functions receive `undefined` for a call without a receiver. A non-strict function (script source with `--compat-non-strict-mode`) gets the global object for an `undefined` or `null` receiver and a wrapper for a primitive one (ES2026 §10.2.1.2 OrdinaryCallBindThis).
 
-Standalone calls to ordinary, method, async, and generator functions receive `undefined` as `this` by default (strict mode, no implicit global). Arrow functions ignore the call-site receiver and keep their lexical `this` from the closure scope walk. With script source `--compat-non-strict-mode`, ordinary non-arrow functions coerce nullish `this` to `globalThis`; module source remains strict.
+### Classes and Private Names
 
-### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
+A class constructor is an `okFunction` whose template has `IsClassCtor` (and `IsDerived` for `extends`). Methods are closures whose `Aux1` holds their home object (`opSetHome`), which `super` property lookups start from. The constructor's field initializer adds the private methods, then the fields in source order (public and private together); a base class runs it at construction, a derived class after `super()` returns. A public field is defined, not assigned (ES2026 §7.3.32 DefineField), so it never calls a setter of the same name.
 
-Compatibility `arguments` objects are created by `Goccia.Values.ArgumentsObjectValue`. Unmapped objects are ordinary `TGocciaObjectValue` instances. Sloppy simple-parameter functions use a mapped arguments-object subclass that keeps an internal parameter map and overrides get/set/define/delete so indexed properties alias parameter bindings until deletion, accessor conversion, or non-writable descriptor changes break the mapping. Mapped objects store the parameter cells.
+A private name is a key atom with `kfPrivate`, made fresh each time the class is evaluated. Private fields, methods and accessors are stored in the instance's shape under that key, so two classes' `#x` never collide and no string key reaches them. `PrivateGet` and `PrivateSet` (ES2026 §7.3.30, §7.3.31) look the key up and throw `TypeError` when the object lacks it; `#x in o` is a shape lookup.
 
-### Array Method Callbacks
+### Enums
 
-When array prototype methods (`map`, `filter`, `reduce`, `forEach`, etc.) invoke user-provided callbacks, they pass `undefined` as `ThisValue`. This means:
+An `enum` declaration (TC39 proposal-enum, as GocciaScript has it) compiles to an object whose members are set in order, then finalized by the `enumFinalize` helper of the builtins5 prelude (`INTRINSIC_ENUM_FINALIZE`): a non-extensible object with a null prototype, each member enumerable, non-writable and non-configurable, members restricted to Number, String and Symbol values (`TypeError` otherwise), a `Symbol.iterator` that yields `[name, value]` entries and `Symbol.toStringTag` set to the enum's name.
 
-- Arrow function callbacks inherit `this` from their lexical scope (e.g., the enclosing class method), which is the correct ECMAScript behavior.
-- Shorthand method references passed as callbacks receive `undefined` as `this` (matching strict mode semantics for unbound method extraction).
+## Collections
 
-### Methods
+### Map and Set
 
-A method is a `TGocciaBytecodeFunctionValue` whose closure carries `HomeObject` (the `[[HomeObject]]` that `super` property lookups start from), `HomeClass` (the class that declared the method), and `PrivateClass` (the innermost class body the function was created in, used for private-name resolution).
+`okMap` and `okSet` objects (`G2.Builtins`) keep their entries in insertion order in a value array in `Aux1`, as key and value pairs; a deleted entry's key becomes `VHole`, so iteration that is under way skips it. `Aux2` is an open-addressing hash index over the entries. Keys compare by SameValueZero. Numbers and strings hash by value, BigInts share one bucket, symbols hash by their permanent address, and other objects by their address: since a minor collection can move a young object, an index that holds address-hashed keys is rebuilt after one, and until then a lookup scans the entries without allocating.
 
-### Function Prototype (`TGocciaFunctionSharedPrototype`)
+### Weak Collections
 
-All functions share a prototype that provides `call`, `apply`, and `bind`:
+`WeakMap`, `WeakSet`, `WeakRef` and `FinalizationRegistry` are classes in the builtins5 prelude (`source/g2/prelude/builtins5.js`) over natives from `G2.Weak`. WeakMap and WeakSet keep their entries in an ephemeron table outside the heap: an entry's value is reachable only while its key is. A WeakRef or FinalizationRegistry cell keeps its target in an untraced box; after each collection `G2.Weak` clears the boxes whose targets died and queues the registries' cleanup, which the event loop runs one job at a time. WeakRef targets returned by the constructor or `deref()` stay alive until the current job ends. Keys and targets must satisfy ES2026 §9.13 CanBeHeldWeakly: objects and unregistered symbols.
 
-| Method | Description |
-|--------|-------------|
-| `fn.call(thisArg, ...args)` | Call with explicit `this` and individual arguments |
-| `fn.apply(thisArg, argsArray)` | Call with explicit `this` and argument array. Fast path: when `argsArray` is a `TGocciaArrayValue`, elements are accessed directly via `Elements[I]` instead of `IntToStr(I)` + `GetProperty`, avoiding per-element string allocation and property lookup. Falls back to the generic array-like object path otherwise. |
-| `fn.bind(thisArg, ...args)` | Return a new function with bound `this` and pre-filled arguments |
+### Promises
 
-`bind` returns a `TGocciaBoundFunctionValue` that combines bound arguments with call-time arguments. Bound functions compute `length` as `max(0, original.length - boundArgs.length)` and `name` as `"bound " + original.name` per ECMAScript spec.
+A promise is an `okPromise` object (`G2.Promise`): `Aux1` the result, `Aux2` its reactions (none, one, or an array), `Pad` the state, and an `OFlags` bit for `[[PromiseIsHandled]]`. Jobs are queued in one ring buffer, so queueing a job allocates nothing. An `await` reaction holds the suspended async function and resumes it directly.
 
-### Native Functions (`TGocciaNativeFunctionValue`)
+## Binary Data
 
-Wraps a Pascal callback exposed to GocciaScript. Native functions may back core language built-ins, runtime globals, or host-provided embedding APIs:
+`G2.Typed` holds the storage; `G2.TypedArrays` implements the constructors and prototypes (ES2026 §25.1, §23.2, §25.3).
 
-```pascal
-TGocciaNativeFunctionCallback = function(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue
-): TGocciaValue of object;
-```
+- **ArrayBuffer** (`okArrayBuffer`) — `Aux1` is the bytes cell (`ckBytes`), whose length is the capacity (`maxByteLength` for a resizable buffer); `Aux2` is the current byte length. `OFlags` carries `bfResizable`, `bfDetached` and `bfImmutable`. Detaching (`DetachBuffer`) drops the bytes, and every view then sees length 0.
+- **SharedArrayBuffer** — an `okArrayBuffer` with `bfShared`, whose `Native` is a reference-counted block outside every heap (`G2.Shared`). The block never moves; a growable buffer reserves its maximum length up front. The block can be handed to another engine's thread, which wraps it in an object of its own.
+- **Typed arrays** (`okTypedArray`) — `Aux1` the buffer, `Aux2` the fixed length or -1 for a length-tracking view, `Pad` the byte offset, `OFlags` the element kind (`TAKind`). The twelve kinds include `Float16Array`, `BigInt64Array` and `BigUint64Array`. `TALength` follows TypedArrayLength, so a view out of bounds or over a detached buffer has length 0. Integer-index reads and writes never reach the prototype chain (ES2026 §10.4.5).
+- **DataView** (`okDataView`) — a view with endian-aware reads and writes over either buffer type.
 
-## Classes
+## Realms
 
-### Class Values (`TGocciaClassValue`)
+A realm's intrinsics and global object live in threadvars while it runs: `ObjectProto`, `FunctionProto`, `ArrayProto`, `ErrorProto` and the rest in `G2.Core` and `G2.VM`, plus each built-in unit's own. `SwitchRealm` saves the running realm's values and loads another's; a function carries its realm in `Pad`, and a call to another realm's function switches to it for the call. `CreateRealm` reruns the built-ins' Init procedures for a new realm (ShadowRealm, `$262.createRealm`). Each threadvar that holds realm state is registered with `RealmVals` (or `RealmPtrs`, `RealmInts`) so the switch covers it. See [Adding a New Built-in Type](adding-built-in-types.md) for the registration a new built-in needs.
 
-Represent class constructors. Store:
+## GC Integration
 
-- Constructor method
-- Instance methods (on prototype)
-- Static methods
-- Static symbol-keyed properties (the `FSymbolDescriptors` map inherited from `TGocciaObjectValue`) — supports `static get [Symbol.species]()` and similar computed symbol accessors. Use `DefineSymbolProperty` to register and `GetSymbolPropertyWithReceiver` to look up (preserves receiver for getter `this` context across superclass chain)
-- Public getters and setters (on prototype via accessor descriptors)
-- Static private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
-- Private instance and static fields/methods
-- Instance field declaration order (`FFieldOrder`, one entry per public or private instance field, alongside the `FInstancePropertyDefs` / `FPrivateInstancePropertyDefs` maps)
-- Superclass reference for inheritance
+The collector is precise and moves young cells ([Garbage Collector](garbage-collector.md)). Code that handles `TValue`s follows these rules:
 
-### Instance Values (`TGocciaInstanceValue`)
+- **Any allocation can move young cells.** A `TValue` in a Pascal local is stale after anything that may allocate or run JavaScript. Keep it on the temporary root stack (`PushRoot`, `RootAt`, `PopRoots`) and read it back from there, or re-read it from a rooted place (`Args`, a rooted threadvar).
+- **Threadvars that hold values are roots.** Register them once with `AddRoot` (`AddRootRange` for an array).
+- **Traced fields.** The collector traces an object's slots, `Elements`, `Overflow`, `Aux1`, `Aux2` and its shape's prototype. `Native` and `Pad` are not traced: never keep a heap value there.
+- **Write barrier.** Storing a pointer into an object that may be old needs `WriteBarrier` on its header. `SetSlot`, `AddProperty` and `DefineOwn` do it; a direct store into `Aux1` or `Aux2` must do it itself.
+- **Outside the heap.** Atoms, shapes, function templates and symbols are not collected cells. Memory a cell owns outside the heap is released from a hook such as `GCFinalizeHook` (`G2.Shared` releases SharedArrayBuffer blocks that way).
 
-Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
-
-- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes call the setter of an own or inherited accessor, and fail when that accessor has none, before falling back to direct property creation.
-- **Private property storage** keyed by each class's own brand token — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
-- **Class reference** for `instanceof` checks
-
-### Instantiation Flow
-
-```mermaid
-flowchart TD
-    New["new Foo(args)"]
-    New --> Create["Create TGocciaInstanceValue"]
-    Create --> Proto["Set prototype = Foo.prototype"]
-    Proto --> Init["Create TGocciaClassInitScope\nthis = instance\nowningClass = Foo"]
-    Init --> Derived{"Foo extends\nanother class?"}
-    Derived -- no --> Fields["Initialize Foo's public and private\ninstance fields (one declaration order)"]
-    Fields --> Body["Run Foo's constructor body"]
-    Derived -- yes --> BodyStart["Run Foo's constructor body\nup to super(...)"]
-    BodyStart --> Super["super(...): superclass fields,\nthen superclass constructor body"]
-    Super --> DerivedFields["Initialize Foo's public and private\ninstance fields (one declaration order)"]
-    DerivedFields --> Rest["Run the rest of Foo's constructor body"]
-    Body --> Return["Return instance"]
-    Rest --> Return
-```
-
-Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields. A public field is defined on the instance rather than assigned (ES2026 §7.3.32 DefineField), so it never calls a setter of the same name and replaces a configurable accessor the instance already has.
-
-## Enums
-
-### Enum Values (`TGocciaEnumValue`)
-
-Created by `enum` declarations (TC39 proposal-enum). Extend `TGocciaObjectValue` with:
-
-- **Null prototype** — `Object.create(null)` semantics
-- **Non-extensible** — `Object.preventExtensions` applied after construction
-- **Non-writable, non-configurable members** — defined via `TGocciaPropertyDescriptorData` with `[pfEnumerable]` flags only
-- **Ordered entries** (`FEntries: TGocciaArrayValue`) — array of `[key, value]` pair arrays preserving declaration order
-- **`Symbol.iterator`** — native function returning an array iterator over `FEntries`
-- **`Symbol.toStringTag`** — set to the enum name
-- **Value type restriction** — member values must be Number, String, or Symbol; other types throw `TypeError` during evaluation
-
-Self-references in initializers are supported via a child scope that binds each member name as it is evaluated, plus the enum object itself under the enum name.
-
-## ArrayBuffer
-
-`TGocciaArrayBufferValue` extends `TGocciaInstanceValue` (`Goccia.Values.ArrayBufferValue.pas`). A raw binary data buffer backed by a zero-initialized `TBytes` array. It is fixed-length by default, resizable when constructed with `{ maxByteLength }`, and can be detached (by `transfer`) or made immutable.
-
-- **Internal storage** — `FData: TBytes` holds the raw bytes, and its length is the byte length. `FMaxByteLength` is set only for resizable buffers (`NO_MAX_BYTE_LENGTH` otherwise); `FDetached` and `FImmutable` record the other two states.
-- **Shared prototype singleton** — All ArrayBuffer instances within an engine share a single per-engine prototype, held by a `TGocciaSharedPrototype` in a [realm-owned slot](core-patterns.md#realm-ownership--slot-registration). Members are registered once during `InitializePrototype`.
-- **Prototype members** — Methods `slice`, `resize`, `transfer`, `transferToFixedLength`, `transferToImmutable` and `sliceToImmutable`; accessors `byteLength`, `maxByteLength`, `resizable`, `detached` and `immutable`. `Symbol.toStringTag` is `"ArrayBuffer"`.
-- **Accessor reads** — The five accessors are found only through the prototype chain, so a `null` or replaced prototype, an own property, or a getter defined by a subclass or a program is observed. `GetPropertyWithContext` walks the chain with `ResolvePropertyWithoutCall` (`Goccia.Values.NativeFunction.pas`); when the buffer is the receiver and the walk, through plain objects only, reaches a getter carrying the `TGocciaNativeIntrinsicKind` that `InitializePrototype` stamps with `MarkIntrinsicGetter`, the result is computed from the slots instead of calling the getter; a data property found that way is returned, and a name the walk does not find is `undefined`. Anything else, including another class's built-in getter, takes the full lookup and the call.
-- **`slice(begin?, end?)`** — Returns a new ArrayBuffer containing a byte range copy. Supports negative indices (resolved relative to `byteLength`), out-of-range clamping, and defaults (`begin` = 0, `end` = `byteLength`).
-- **Detached and immutable buffers** — After `transfer`, the source is detached: `byteLength` is 0 and methods such as `slice` throw `TypeError`. `resize` on an immutable buffer throws `TypeError`.
-- **`GCMarked` integration** — `TraceReferences` calls `inherited` (no `TGocciaValue` references to mark — only holds `TBytes`).
-- **structuredClone** — Byte contents are copied into a new buffer.
-
-## SharedArrayBuffer
-
-`TGocciaSharedArrayBufferValue` extends `TGocciaInstanceValue` (`Goccia.Values.SharedArrayBufferValue.pas`). A distinct type from ArrayBuffer — `SharedArrayBuffer` instances are not instances of `ArrayBuffer` and vice versa.
-
-- **Internal storage** — One zero-initialized `TBytes` block for the buffer's whole life. Every agent that holds the buffer reads and writes that block. A buffer constructed with `{ maxByteLength }` is growable. Its block is allocated at `maxByteLength` bytes, the way ECMA-262's AllocateSharedArrayBuffer allocates it, and the separate `FByteLength` records how many of those bytes the buffer exposes. `grow` raises `FByteLength` with a compare-and-exchange, so concurrent grows are ordered and none is lost. It never allocates or moves bytes. The public `Data` property is the whole block: callers measure the buffer with `ByteLength`, never with `Length(Data)`.
-- **Shared prototype singleton** — All SharedArrayBuffer instances within an engine share a single per-engine prototype, held by its own `TGocciaSharedPrototype` in a realm-owned slot, separate from ArrayBuffer's. `Symbol.toStringTag` is `"SharedArrayBuffer"`.
-- **Prototype members** — `slice` and `grow`; accessors `byteLength`, `maxByteLength` and `growable`.
-- **Accessor reads** — As for ArrayBuffer: found only through the prototype chain, with the same slot shortcut for the built-in getters when the buffer is the receiver.
-- **`slice(begin?, end?)`** — Returns a new SharedArrayBuffer (not ArrayBuffer).
-- **structuredClone** — Byte contents are copied into a new buffer.
-
-## DataView
-
-`TGocciaDataViewValue` extends `TGocciaInstanceValue` (`Goccia.Values.DataViewValue.pas`). It provides endian-aware typed reads and writes over `ArrayBuffer` or `SharedArrayBuffer` storage.
-
-- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for a view created without a byte length over a resizable ArrayBuffer or a growable SharedArrayBuffer.
-- **Shared prototype singleton** — All DataView instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a realm slot. Prototype methods are registered once during `InitializePrototype`.
-- **Element access** — DataView and TypedArray raw byte encoding use `Goccia.BinaryData`, which centralizes endian-aware integer, BigInt, Float16, Float32, and Float64 serialization.
-- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views compute their byte length from the buffer's current byte length (ArrayBufferByteLength), never from the backing array's length.
-- **GC integration** — `TraceReferences` marks `FBufferValue`, preserving the viewed ArrayBuffer or SharedArrayBuffer.
-
-## TypedArray
-
-`TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Ten non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`. `Float16Array` uses IEEE 754 half-precision (binary16) with conversion helpers in `Goccia.Float16.pas`.
-
-- **Internal storage** — `FBufferValue: TGocciaValue` (the underlying buffer — either `TGocciaArrayBufferValue` or `TGocciaSharedArrayBufferValue`, returned by `.buffer`), `FBufferData: TBytes` (shared reference to the buffer's byte array for element access), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
-- **Shared prototype singleton** — All TypedArray instances (regardless of kind) within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Prototype methods are registered once during `InitializePrototype`; the `TGocciaSharedPrototype` pins the prototype and method host until the realm frees it.
-- **Named property reads** — Only a canonical numeric string is answered from the elements; every other name is an ordinary lookup, so `length`, `byteLength`, `byteOffset` and `buffer` come from the accessors on `%TypedArray%.prototype` and `BYTES_PER_ELEMENT` from the constructor's prototype. A replaced or `null` prototype, an own property, or a getter defined by a subclass or a program is observed. `TryGetNamedPropertyWithoutCall` walks the chain while every level is a plain object (the walk of `ResolvePropertyWithoutCall`, written out); when the property it reaches is a data property it returns the value, and when it is an accessor whose getter carries the `TGocciaNativeIntrinsicKind` that `InitializePrototype` stamps on the four built-in getters with `MarkIntrinsicGetter`, it computes the getter's result from the internal slots instead of calling it. Anything else takes the full lookup. A name that cannot be a canonical numeric string is recognised by its first character, so it never reaches the String-to-Number round trip of `CanonicalNumericIndexString`.
-- **Reads with a receiver** — `GetPropertyWithContext` answers a canonical numeric string from the elements too, whatever the receiver, so `Reflect.get(ta, "0", receiver)`, a Proxy without a `get` trap and an array, class instance or other exotic object whose prototype is a typed array all read the element (ES2026 §10.4.5.5). Any other name is the ordinary lookup with that receiver; the slot shortcut of `TryGetNamedPropertyWithoutCall` applies only when the typed array is the receiver, because the built-in getters read the receiver's slots.
-- **Element access** — `ReadElement(index): Double` and `WriteElement(index, value)` delegate raw byte encoding to `Goccia.BinaryData`, using the same endian-aware helpers as DataView. Integer types wrap, `Uint8ClampedArray` clamps, and float types preserve IEEE 754 encodings.
-- **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types through `Goccia.BinaryData`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
-- **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying. Bounds come from `BufferByteLength` (ArrayBufferByteLength), never from the block's length, because a growable SharedArrayBuffer's block is longer than its contents. `FBufferData` is a cache: `ArrayBuffer.prototype.resize` and detaching give an ArrayBuffer a new byte array (a SharedArrayBuffer never gets one), and `SyncBufferData` refreshes the cache before the unit's own reads. Code outside the unit reads the public `BufferData` property, which syncs on every read, so `BufferData` and `Length` describe the same block while no script code runs between the two reads; a per-byte loop reads `BufferData` once before the loop rather than once per byte.
-- **SharedArrayBuffer support** — TypedArrays can be constructed from both `TGocciaArrayBufferValue` and `TGocciaSharedArrayBufferValue`. The `.buffer` property returns the original buffer object (preserving its type). `subarray` creates a new view sharing the same buffer; `slice` always creates a new `TGocciaArrayBufferValue` copy.
-- **Prototype methods** — `at`, `fill`, `copyWithin`, `slice`, `subarray`, `set`, `reverse`, `sort`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `values`, `keys`, `entries`, `[Symbol.iterator]`.
-- **Static methods** — `TypedArray.from(source [, mapFn])`, `TypedArray.of(...items)`.
-- **GC integration** — `TraceReferences` marks `FBufferValue` (the underlying buffer, whether ArrayBuffer or SharedArrayBuffer).
-- **Class values** — `TGocciaTypedArrayClassValue` (one per kind) handles `new TypedArray(...)` construction. `TGocciaTypedArrayStaticFrom` provides `from` and `of` static methods.
-
-**Search semantics:** `indexOf` and `lastIndexOf` use strict equality (`NaN !== NaN` — always returns -1 for NaN). `includes` uses SameValueZero (`NaN === NaN` — finds NaN in float arrays via `Math.IsNaN`). All three handle Infinity/-Infinity by comparing actual IEEE 754 doubles for float arrays (where Infinity is stored as-is) and returning -1/false for integer arrays (where Infinity truncates to 0, losing identity).
-
-## Design Rationale
-
-### Number Representation
-
-Numbers are represented by a single `Double` payload (`FValue`) using standard IEEE 754 bit patterns. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are detected via property accessors (`IsNaN`, `IsInfinity`, `IsNegativeInfinity`, `IsNegativeZero`) that delegate to `Math.IsNaN`, `Math.IsInfinite`, and `NumberBits.IsNegativeZero` — the same helpers described in the [Numbers](#numbers) section above.
-
-This replaced an earlier enum-based design. See [ADR 0001](adr/0001-number-dual-representation.md) and [ADR 0016](adr/0016-ieee-754-number-representation.md) for the history of this change.
-
-**Why property accessors matter:**
-
-- **NaN identity** — IEEE 754 `NaN ≠ NaN`, but JavaScript operations need reliable classification. Always use `IsNaN` rather than raw numeric comparison.
-- **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
-- **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
-
-**Pitfall: raw `Value = 0` checks.** `Value = 0` is true for both `+0` and `-0` (and false for `NaN`). That is right where the spec treats the zeros alike — `NumberExponentiation` (`Goccia.NumberExponentiation.pas`) returns `1` for any zero exponent, so `(-0) ** 0 === 1`. Where the sign matters, follow the zero test with an explicit `IsNegativeZero` check, as `NumberExponentiation` does for a zero base and as `Object.is` requires. Array `sort` does not compare doubles itself: `CallCompareFunc` in `Goccia.Values.ArrayValue.pas` normalises the comparator's result (`NaN` → 0, `+Infinity` → 1, `-Infinity` → -1).
-
-### `this` Binding Design
-
-GocciaScript distinguishes two function forms — arrow functions and shorthand methods — with distinct `this` semantics that match ECMAScript strict mode.
-
-**The problem:** By default (the recommended profile) there is no `function` keyword; it is off unless `--compat-function` is enabled. Arrow functions and shorthand methods have fundamentally different `this` semantics, but they need distinct representation at both the AST and runtime levels.
-
-**The solution:** Separate AST nodes, compiled into function templates the VM tells apart:
-
-| Syntax | AST Node | `this` binding |
-|--------|----------|---------------|
-| `(x) => x + 1` | `TGocciaArrowFunctionExpression` | Lexical (enclosing function's `this`) |
-| `method() { ... }` | `TGocciaObjectMethodDefinition` | Call-site (receiver) |
-| `class { method() {} }` | `TGocciaClassMethod` | Call-site (receiver) |
-
-All three become a `TGocciaBytecodeFunctionValue`. An arrow's template has `IsArrow` set and its body reads `this` from the enclosing function through an upvalue; the other forms bind the call-site receiver.
-
-**Why this design?**
-
-- **ECMAScript fidelity** — Arrow functions always capture `this` from their defining scope; methods receive `this` from their call site. This matches the spec exactly.
-- **Strict mode by default** — Standalone calls to either form receive `undefined` as `this`, matching strict mode. There is no implicit global `this` unless script source enables `--compat-non-strict-mode`.
-- **Callback correctness** — Array prototype methods (`map`, `filter`, `reduce`) pass `undefined` as `ThisValue` to callbacks. Arrow function callbacks correctly inherit their enclosing method's `this`; extracted method references receive `undefined`, preventing accidental `this` leakage.
-
-### Property Descriptor System
-
-Object properties follow ECMAScript's property descriptor model:
-
-- **Data descriptors** — `{ value, writable, enumerable, configurable }`
-- **Accessor descriptors** — `{ get, set, enumerable, configurable }`
-- **Insertion order** — Properties maintain their creation order, matching JavaScript's `Object.keys()` ordering guarantee.
-- **Descriptor merging** — `Object.defineProperty` merges the new descriptor with the existing one when the property already exists. Unspecified attributes retain their current values rather than resetting to defaults. This matches ECMAScript specification behavior (e.g., `Object.defineProperty(obj, "x", { enumerable: false })` only changes `enumerable`, preserving `writable`, `configurable`, and `value`).
-- **Strict mode `delete`** — Deleting a non-configurable property throws `TypeError` by default, matching ECMAScript strict mode semantics. `DeleteProperty` returns `False` for non-configurable properties, and delete call sites convert this into a `TypeError` unless script source `--compat-non-strict-mode` is enabled. Deleting a non-existent property returns `true` (no error).
-- **Strict mode assignment** — Failed object `[[Set]]` results, such as writes to non-writable data properties, setter-less accessors, or non-extensible objects, become `TypeError` by default. With script source `--compat-non-strict-mode`, the failed write stays silent while the assignment expression returns the assigned value.
-
-This is more complex than a simple key-value map, but it's necessary for `Object.defineProperty`, getters/setters, and non-enumerable properties like prototype methods.
-
-Class getters and setters are stored as accessor descriptors on the class prototype. `TGocciaObjectValue.GetProperty` and `AssignProperty` are `virtual`, and `TGocciaInstanceValue` overrides both to intercept property access — checking the prototype for accessor descriptors and invoking getter/setter functions with the instance as `this` context.
-
-### Private Field Storage
-
-A private name is stored under a key that includes the brand token of the class that declares it (`#slot:<token>:x`). This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
-
-- **Storage** — A class instance keeps its private fields and brands in `TGocciaInstanceValue.FPrivateProperties`, and a class keeps its static private elements in its own tables. Private methods and instance accessors, and the private elements of an object that is not a class instance (a constructor's return value), are kept in `TGocciaObjectValue.PrivateElements`, never among the object's properties.
-- **Private names are not property keys** — The compiler puts a private name's storage key in the constant pool as a `bckPrivateName` constant, and the VM takes the private path only for an instruction that names one (or for the `TGocciaPrivateNameKeyValue` that `OP_LOAD_CONST` loads from it), never because of a key's text. A property named `"#slot:0$x"` is an ordinary property: it enumerates, serializes and answers `in` like any other, and no property key reaches a private element.
-- **Access resolution** — When a method accesses `this.#x`, the VM resolves the class body that declares the name, starting from the running closure's `PrivateClass` and walking outward through enclosing class bodies (`TGocciaVM.LexicalBytecodePrivateClass`), and builds the key from that class (`TGocciaVM.ResolveBytecodePrivateRuntimeKey`).
-- **Private getters/setters** — Static ones are stored on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`; instance ones are accessor descriptors among the prototype's `PrivateElements`.
-- **Declaration order** — Instance property initializers run in source declaration order, recorded in the class value's `FFieldOrder`.
-
-### Garbage Collector
-
-The GC design rationale (why mark-and-sweep, why not reference counting, AST literal ownership) lives in [Garbage Collector](garbage-collector.md).
+`scripts/g2/gcstress-tests.py` runs the test suite with a small nursery and heap verification to find missed roots and barriers.
 
 ## Error Values
 
-See [Errors](errors.md) for the complete list of error types and user-facing display format, and [JSON Output](json-output.md) for the JSON output envelope.
+See [Errors](errors.md) for the error types and their display, and [JSON Output](json-output.md) for the JSON envelope.
 
-JavaScript error objects are represented as `TGocciaObjectValue` instances with `name`, `message`, and `stack` string properties. Error constructors (`new TypeError(...)`, `new RangeError(...)`, etc.) create these objects via `CreateErrorObject` in `Goccia.Values.ErrorHelper.pas`.
+An Error instance is an `okError` object with a `message` property and, under GocciaScript's hosts, a `stack` property (`AttachStack`). Native code makes one with `MakeError(Proto, Msg)` and throws through `ThrowError(Kind, Msg)` or `ThrowTypeError(Msg)`, which set `Pending` and return `False`:
 
-Throwing is implemented via `TGocciaThrowValue`, a Pascal `Exception` subclass that wraps any `TGocciaValue` (the thrown value). The VM catches `TGocciaThrowValue` and hands the wrapped value to the `catch` handler ([Architecture § Error Handling Strategy](architecture.md#error-handling-strategy)).
+```pascal
+if not IsObject(Args[0]) then
+  Exit(ThrowTypeError('this is not a Foo object'));
+```
 
-`TGocciaError` is a separate Pascal `Exception` subclass (not a `TGocciaValue`) used for internal Pascal-side exceptions: early parser/lexer errors (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`) and runtime engine errors (`TGocciaRuntimeError`). These are internal Pascal exceptions, not JavaScript error objects. The subclass relationship mirrors the ES spec: all early errors (lexer and parser) are `SyntaxError`.
+There is no Pascal exception for a JavaScript throw. A native that gets `False` from a routine it called returns `False` itself, leaving `Pending` as it is; the VM unwinds through its own handler records, and the dispatch loop has no Pascal `try`. Pascal exceptions are for engine set-up failures, such as a prelude that does not compile, and for the shared front end: the parser and lexer raise `TGocciaSyntaxError` and `TGocciaLexerError` (subclasses of `TGocciaError` in `Goccia.Error`), which `G2.Eval` turns into a `SyntaxError`, or a `ReferenceError` for `TGocciaReferenceError`, with the source position.

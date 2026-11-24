@@ -59,21 +59,27 @@ Before implementation, use [DEFINITION_OF_READY.md](DEFINITION_OF_READY.md) to c
 
 These rules **must** be followed when modifying the codebase:
 
-### 1. Explicit State and Virtual Dispatch
+### 1. One Engine per Thread
 
-Runtime state flows through explicit parameters (the `TGocciaEvaluationContext` record, the scope chain, and value objects), never through global mutable state. Value behavior such as property access and type discrimination uses virtual methods on `TGocciaValue` rather than `is` check chains. See [Architecture § Evaluation Context](docs/architecture.md#evaluation-context) and [Core patterns § Virtual Dispatch Value System](docs/core-patterns.md#virtual-dispatch-value-system).
+The engine's state (heap, atoms, shapes, stacks, built-ins, the job queue) lives in thread variables (`G2.Engine`): a thread that creates an engine (`TG2Engine`) has one of its own and shares nothing with any other, so a value never crosses threads. Code outside `source/g2` keeps its state in explicit parameters and objects rather than in global mutable state. See [Architecture](docs/architecture.md) and [G2 design](docs/g2/design.md).
 
-### 2. Scope Creation
+### 2. Root Values Across Allocations
 
-`TGocciaScope` must **never** be instantiated directly. Always use the `CreateChild` factory method on an existing scope:
+The collector moves young cells, so a `TValue` held only in a Pascal local is stale after any allocation. Root it on the temporary root stack (`PushRoot`, read back with `RootAt`, released with `PopRoots`) or re-read it from a rooted place:
 
 ```pascal
 // Correct
-ChildScope := ParentScope.CreateChild(skBlock);
+PushRoot(Value);
+Other := StrFromUnicode('text');   // may collect
+Value := RootAt(TempTop - 1);
+PopRoots(1);
 
-// WRONG — do not do this
-ChildScope := TGocciaScope.Create(ParentScope, skBlock);
+// WRONG — Value may point at a moved or freed cell
+Other := StrFromUnicode('text');
+UseValue(Value);
 ```
+
+`scripts/g2/gcstress.sh` finds the misses ([Tooling — GC stress](docs/contributing/tooling.md#gc-stress)), and the engine's [working rules](docs/g2/README.md#working-rules) list the rest.
 
 ### 3. Testing Requirements
 

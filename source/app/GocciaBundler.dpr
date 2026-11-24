@@ -4,9 +4,8 @@ program GocciaBundler;
   base class and GocciaBundler.dpr's planning), each file compiled by a
   TG2Engine on a thread of its own (G2.Embed CompileArtifact) into a G2
   bytecode file (G2.Artifact), which GocciaRunner on G2 runs as an entry or
-  imports with --prefer-bytecode. `./build.pas g2bundler` builds it as
-  build/g2/GocciaBundler; once it covers GocciaBundler it replaces
-  GocciaBundler.dpr. }
+  imports with --prefer-bytecode. `./build.pas bundler` builds it as
+  build/GocciaBundler. }
 
 {$I Goccia.inc}
 

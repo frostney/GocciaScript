@@ -8,7 +8,7 @@
 - **Non-standard formats are modules** — JSON5, YAML, JSONL, CSV, TSV, and TOML runtime APIs are named-export-only `goccia:` modules, not auto-installed globals.
 - **Namespace imports preserve the old call shape** — Use `import * as CSV from "goccia:csv"` when you want `CSV.parse(...)`; there is no default export.
 - **File-backed imports are unchanged** — `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv` files keep their structured-data import behavior.
-- **Shared parser utilities** — Runtime modules and file-backed imports continue to share the same underlying parser utilities.
+- **Shared parsers** — A runtime module and the file-backed import of its format use the same `parse` function.
 
 ## Runtime module access
 
@@ -35,7 +35,7 @@ Default imports are intentionally unsupported for these modules.
 
 Structured data imports (`.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, `.tsv`), text asset imports (`.txt`, `.md`), import maps, source maps, and CLI configuration files are loaded as raw bytes and tagged as UTF-8 before parsing. Parser-facing text stays on the shared UTF-8 text path so non-ASCII keys and values are preserved consistently across supported formats. The `goccia:` runtime-module migration does not change file-backed data imports.
 
-## JSON (`Goccia.Builtins.JSON.pas`)
+## JSON
 
 Implements the [ECMAScript JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) including source text access and Raw JSON.
 
@@ -60,16 +60,16 @@ The JSON parser is a recursive descent implementation. Special handling:
 - `toJSON()` is called before serializing object values
 - Circular references throw `TypeError`
 
-## JSON5 (`goccia:json5`, `Goccia.Builtins.JSON5.pas`)
+## JSON5 (`goccia:json5`)
 
 | Method | Description |
 |--------|-------------|
 | `JSON5.parse(text, reviver?)` | Parse JSON5 text to a value, with optional reviver function that receives source text access |
 | `JSON5.stringify(value, replacerOrOptions?, space?)` | Serialize a value with JSON5 syntax, including special numeric values and optional `quote` override |
 
-After `import * as JSON5 from "goccia:json5"`, `JSON5.parse` delegates to the standalone `TGocciaJSON5Parser` utility in `Goccia.JSON5`. The JSON5 parser shares the same core capability-driven parser engine as strict JSON, so `JSON.parse(...)` stays strict while `JSON5.parse(...)` opts into comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions. Source text access works identically to `JSON.parse`: the reviver receives `(key, value, context)` where `context.source` preserves the raw JSON5 text for primitives (including extended literals like `Infinity`, `NaN`, `0xFF`, and `+1`).
+`goccia:json5` is written in JavaScript (`source/g2/prelude/json5.js`), with a parser of its own: `JSON.parse(...)` (`G2.JSON`) stays strict while `JSON5.parse(...)` accepts comments, trailing commas, single-quoted strings, unquoted identifier keys, hexadecimal numbers, signed numbers, `Infinity`, `NaN`, line continuations, and ECMAScript whitespace extensions. Source text access works identically to `JSON.parse`: the reviver receives `(key, value, context)` where `context.source` preserves the raw JSON5 text for primitives (including extended literals like `Infinity`, `NaN`, `0xFF`, and `+1`).
 
-The `stringify` export delegates to `TGocciaJSON5Stringifier`, which reuses the same shared serialization core as strict JSON but switches to JSON5 formatting rules. That means unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
+The `stringify` export follows the reference `json5` library's formatting rules: unquoted identifier keys, single- or double-quoted strings (with optional `{ quote: "'" | '"' }` override), preserved `Infinity` / `-Infinity` / `NaN`, trailing commas when pretty-printing, `toJSON5()` preference over `toJSON()`, and the same replacer / space semantics as JSON plus the upstream JSON5 options-object form `{ replacer, space, quote }`.
 
 Compatibility goal: GocciaScript is targeting full JSON5 parser compatibility
 plus upstream-aligned stringify behavior. `GocciaTestRunner` runs the committed
@@ -78,14 +78,14 @@ stringify suite.
 See [Testing](testing.md#running-tests) for checkout preparation and
 commands.
 
-## YAML (`goccia:yaml`, `Goccia.Builtins.YAML.pas`)
+## YAML (`goccia:yaml`)
 
 | Method | Description |
 |--------|-------------|
 | `YAML.parse(text)` | Parse YAML text; returns an array when the stream uses explicit `---` document markers |
 | `YAML.parseDocuments(text)` | Parse a YAML stream and always return an array of documents |
 
-After `import * as YAML from "goccia:yaml"`, `YAML.parse` delegates to the standalone `TGocciaYAMLParser` utility in `Goccia.YAML`, mirroring the JSON built-in's split between parser utility and runtime API. Its behavior now matches Bun's YAML runtime semantics: when the input uses explicit `---` document markers, `YAML.parse(...)` returns an array of parsed documents; otherwise it returns the first parsed document value directly. `YAML.parseDocuments(...)` is the always-array variant.
+After `import * as YAML from "goccia:yaml"`, `YAML.parse` hands the text to the engine-independent `TGocciaYAMLParser` in `Goccia.YAML`; the host returns the parsed `Goccia.DataTree` as JSON text, which `source/g2/prelude/datatree.js` rebuilds into values, so a node that YAML aliases share is one value, cycles included. Its behavior now matches Bun's YAML runtime semantics: when the input uses explicit `---` document markers, `YAML.parse(...)` returns an array of parsed documents; otherwise it returns the first parsed document value directly. `YAML.parseDocuments(...)` is the always-array variant.
 
 The current YAML parser also supports anchors, aliases, merge keys, self-referential alias graphs for mappings and sequences, multiline flow-style collections and flow edge cases such as single-pair mapping entries, empty implicit keys, and trailing commas, block scalars (`|`, `>`, chomping modifiers, and indentation indicators), multiline plain and quoted scalar folding, YAML 1.2 numeric scalar resolution (including base-prefixed integers, exponent forms, and validated digit separators), YAML double-quoted escapes (`\x`, `\u`, `\U`, line continuations, and YAML-specific escapes), `%YAML` / `%TAG` directives, and the standard tags `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary`. Directives are treated as document-preamble syntax and are rejected if they appear after document content without a document boundary.
 
@@ -95,7 +95,7 @@ Explicit keys (`? key`) are supported, including omitted explicit values and zer
 
 Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. Historical decision context lives in [Architecture Decision Records](adr/), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
 
-## JSONL (`goccia:jsonl`, `Goccia.Builtins.JSONL.pas`)
+## JSONL (`goccia:jsonl`)
 
 | Method | Description |
 |--------|-------------|
@@ -104,7 +104,7 @@ Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time wh
 
 After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.parseChunk(...)` are designed to match Bun's JSONL runtime API closely: blank lines are ignored, each non-empty line must be strict JSON, and `Uint8Array` input is supported alongside strings. `parseChunk(...)` returns the next resume offset in `read`, a `done` flag when the provided range was fully consumed, and a `SyntaxError` object in `error` when a delimited record is invalid. Incomplete trailing records are left unread so callers can append more data and resume parsing.
 
-## CSV (`goccia:csv`, `Goccia.Builtins.CSV.pas`)
+## CSV (`goccia:csv`)
 
 | Method | Description |
 |--------|-------------|
@@ -122,7 +122,7 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 
 **`parseChunk` and the final row:** CSV and TSV differ on a last row with no line terminator ([#1277](https://github.com/frostney/GocciaScript/issues/1277)). `CSV.parseChunk("a,b\n1,2\n3")` parses `3` as a row and returns `read: 9, done: true`; an unterminated quoted field is left unread and reported in `error`. `TSV.parseChunk("a\tb\n1\t2\n3")` leaves `3` unread (`read: 8, done: false`), the resume model JSONL uses.
 
-## TSV (`goccia:tsv`, `Goccia.Builtins.TSV.pas`)
+## TSV (`goccia:tsv`)
 
 | Method | Description |
 |--------|-------------|
@@ -138,15 +138,15 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 
 TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, and edge case handling match CSV; `parseChunk` does not (see below).
 
-CSV and TSV share callback selection, reviver argument construction, replacer row conversion, and chunk result assembly in `Goccia.Builtins.DelimitedText`. The adapters retain their own options, parser calls, reviver contexts, and stringifiers. Shared conversion roots intermediate values across callbacks; each adapter keeps the converted array rooted until serialization finishes.
+CSV and TSV are one JavaScript prelude, `source/g2/prelude/delimited.js`, which shares option reading, callback handling and chunk results between the two formats and keeps each format's own escaping, reviver context and stringifier.
 
-## TOML (`goccia:toml`, `Goccia.Builtins.TOML.pas`)
+## TOML (`goccia:toml`)
 
 | Method | Description |
 |--------|-------------|
 | `TOML.parse(text)` | Parse TOML 1.1.0 text into Goccia values |
 
-After `import * as TOML from "goccia:toml"`, `TOML.parse` delegates to the standalone `TGocciaTOMLParser` utility in `Goccia.TOML`, mirroring the JSON and YAML split between parser utility and runtime API. The current TOML API supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed inputs are read as raw bytes, decoded as strict UTF-8, and handed to the parser as UTF-16 text. Encoded bytes never travel in a Pascal string, so non-ASCII keys and values do not depend on compiler or operating-system code pages.
+After `import * as TOML from "goccia:toml"`, `TOML.parse` hands the text to the engine-independent `TGocciaTOMLParser` in `Goccia.TOML`, and `source/g2/prelude/datatree.js` rebuilds the parsed tree into values, as for YAML. The current TOML API supports strings (basic, literal, and multiline variants), integers, floats, booleans, arrays, inline tables, regular tables, arrays of tables, dotted keys, and TOML 1.1.0 date/time values. TOML multiline strings normalize recognized source newlines to LF (`\n`) regardless of the host platform, so the parsed value is stable across Linux, macOS, and Windows. File-backed inputs are read as raw bytes, decoded as UTF-8, and handed to the parser as UTF-16 text, so non-ASCII keys and values do not depend on compiler or operating-system code pages.
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 

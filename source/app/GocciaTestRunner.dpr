@@ -4,9 +4,8 @@ program GocciaTestRunner;
   to G2: the same command line, configs, trust and capability policy (the base
   class), each test file run by a TG2Engine in test mode (G2.Embed TestMode,
   the testing API of prelude/testing.js) on a thread of its own, its suites
-  reported by G2.HostAPI RunTestSuites. `./build.pas g2testrunner` builds it
-  as build/g2/GocciaTestRunner; once it covers GocciaTestRunner it replaces
-  GocciaTestRunner.dpr.
+  reported by G2.HostAPI RunTestSuites. `./build.pas testrunner` builds it
+  as build/GocciaTestRunner.
 
   Not yet on G2: snapshots, heap snapshots, coverage, --globals and --global,
   --test-timeout and --describe-timeout, and bytecode files. }

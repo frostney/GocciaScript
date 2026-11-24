@@ -12,7 +12,7 @@ Every heap thing is a cell with an 8-byte header: kind, flags (mark, old, rememb
 
 - Nursery: a bump region. A minor GC copies live young cells into old space (Cheney), promoting on the first
   survival.
-- Old space: size-class free lists in 64 KB pages, larger cells as separate allocations; a major GC marks
+- Old space: size-class free lists in 256 KiB pages (`PAGE_SIZE` in `G2.Core`), larger cells as separate allocations; a major GC marks
   precisely and sweeps to the free lists.
 - Write barrier: storing a young pointer into an old cell remembers the old cell.
 - Roots: the value stack, frame records, registered globals and the temporary root stack natives use. Atoms

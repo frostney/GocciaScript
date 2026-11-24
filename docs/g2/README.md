@@ -1,29 +1,21 @@
-# G2: an experimental VM and GC for GocciaScript
+# G2: GocciaScript's engine
 
-G2 is a spike: a second engine behind Goccia's front end. It keeps Goccia's lexer, parser and RegExp
-compiler (`source/units`) and replaces everything after the AST: compiler, register bytecode, VM, object
-model, GC and built-ins (`source/g2`). It answers whether an FPC engine built for speed can match or beat
-QuickJS while passing test262.
-
-It is not wired into `build.pas`, the CI or the release, and nothing in Goccia depends on it.
+G2 is GocciaScript's engine. It keeps Goccia's lexer, parser and RegExp compiler (`source/units`) and
+provides everything after the AST: compiler, register bytecode, VM, object model, GC and built-ins
+(`source/g2`). It began as a spike to find out whether an FPC engine built for speed could match or beat
+QuickJS while passing test262; it replaced the old engine, whose units are gone, and every application in
+`source/app` runs on it. The name G2 goes when the units are renamed to Goccia.
 
 ## Status
 
-| Measure | Value |
-|---|---|
-| test262 (pin 91c70759, contract 4, all six categories) | 92,493 / 103,264 runs (89.6%) |
-| JetStream, 6 bundles, wall clock | QuickJS time / G2 time 0.92 (below 1: QuickJS faster) |
-| Web Tooling, 18 bundles, wall clock | 1.23, or 1.03 without coffeescript (QuickJS runs it 25x slower) |
+test262 runs on every pull request through `.github/workflows/g2.yml` against the pinned suite, held to
+`scripts/g2/known-failures/test262.txt`: the known failures listed there are the whole gap. The JavaScript
+suite under `tests/` is held to `scripts/g2/known-failures/suite.txt` the same way, on every platform.
 
-Wall clock is best of 3, one engine at a time, from `scripts/g2/wallclock.sh`; the figures above were taken on a
-shared machine at a load average of 5 to 10, so single bundles can be off by several percent. The front-end
-changes below made Web Tooling 1.21x faster end to end than on this repository's front end before them
-(typescript 1.55x, prettier 1.68x).
-
-Largest remaining test262 gaps: Intl (about 6,300 runs, including Temporal's non-ISO calendars), realms
-(`$262.createRealm`, ShadowRealm: about 700), Date, import defer, Atomics on BigInt arrays, immutable ArrayBuffers.
-Largest performance gaps: generators (lazy-collections 0.67), float arithmetic on typed arrays
-(gaussian-blur 0.78), string-heavy bundles (source-map 0.85, buble 0.85), hash-map and sync-fs (0.88).
+Largest remaining test262-adjacent gaps outside the pinned run: Intl (Temporal's non-ISO calendars and
+locale data), realms (`$262.createRealm`, ShadowRealm), import defer, Atomics on BigInt arrays, immutable
+ArrayBuffers. Performance is measured against QuickJS and Node with `scripts/g2/wallclock.sh` on JetStream and
+the Web Tooling Benchmark.
 
 ## Layout
 
@@ -55,8 +47,8 @@ the first binary compiles the preludes and writes their bytecode, the second emb
 optimized (`-O4`); `--prod` strips the binary and a dev build keeps line information, in its own unit cache.
 On Linux x86-64 it fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with
 an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard against a toolchain that regresses, and is
-skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out,
-so it still builds with FPC 3.2.
+skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) includes `g2` and
+every application, each built the same way.
 
 G2 builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
 i386. Only Linux x86-64 has the JIT (`G2JIT` in `G2.Checks.inc`): it emits code for the System V calling convention
@@ -506,7 +498,7 @@ and the benchmarks stay with the local gate, which needs the bundles under `G2_W
 
 ## Changes to Goccia's front end
 
-G2 parses with `source/units`. This branch changes it in three ways, each checked against Goccia's tests and
+G2 parses with `source/units`. The G2 work changed it in three ways, each checked against Goccia's tests and
 its Pascal unit tests:
 
 - Speed. Parsing and compiling the typescript bundle took about half the instructions afterwards (6.5 G to

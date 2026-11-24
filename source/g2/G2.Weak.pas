@@ -11,7 +11,7 @@ unit G2.Weak;
   FinalizationRegistry cell marks the cleanup as pending when its target dies; the event loop then runs the
   registries' cleanup one job at a time (RunWeakCleanup).
 
-  [[KeptAlive]] (9.10 AddToKeptObjects): the targets a WeakRef constructor or deref returned stay alive until the
+  [[KeptAlive]] (ES2026 §9.11 AddToKeptObjects): the targets a WeakRef constructor or deref returned stay alive until the
   current job ends; ClearKeptObjects empties the list when the next job starts.
 
   WeakMap and WeakSet keep their entries in an ephemeron table outside the heap, owned by a box: an entry's value
@@ -475,7 +475,7 @@ begin
   Result := True;
 end;
 
-{ keep(target): 9.10 AddToKeptObjects }
+{ keep(target): ES2026 §9.11 AddToKeptObjects }
 function WeakKeepNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PWeakState;
 begin

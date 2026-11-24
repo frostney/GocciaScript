@@ -1,10 +1,8 @@
 program GocciaRunner;
 
-{ GocciaRunner on the G2 engine, while the apps move from the old engine to
-  G2: the same command line, configs, trust and capability policy (the base
-  class), each entry file run by a TG2Engine (G2.Embed). `./build.pas --g2
-  runner` builds it as build/GocciaRunner, so the CLI tests run against it
-  unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
+{ GocciaRunner: the command line, configs, trust and capability policy (the
+  base class), each entry file run by a TG2Engine (G2.Embed).
+  `./build.pas runner` builds it as build/GocciaRunner.
 
   Sandbox mode runs each program on a G2 engine over the virtual filesystem
   (Goccia.CLI.G2SandboxHost).
