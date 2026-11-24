@@ -1,7 +1,0 @@
-# GocciaTestRunner on G2, i386-win32: the failures only this target has, added to suite.txt (same format).
-# Windows' ICU has no udtitvfmt_formatCalendarToResult (as on x86_64-win64)
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRange-proleptic-gregorian.js
-# the power-of-two index sweep runs into the memory limit on a 32-bit build (cause not found yet)
-1 tests/built-ins/Array/far-index-assignment.js
-# a timing ratio the -O1 build (FPC 3.3.1 mis-compiles i386 above -O1) missed on the CI runner; it passes under Wine
-1 tests/built-ins/RegExp/compile-cost.js

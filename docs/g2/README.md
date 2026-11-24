@@ -8,9 +8,9 @@ QuickJS while passing test262; it replaced the old engine, whose units are gone,
 
 ## Status
 
-test262 runs on every pull request through `.github/workflows/g2.yml` against the pinned suite, held to
-`scripts/g2/known-failures/test262.txt`: the known failures listed there are the whole gap. The JavaScript
-suite under `tests/` is held to `scripts/g2/known-failures/suite.txt` the same way, on every platform.
+test262 runs on every pull request through `.github/workflows/g2.yml` against the pinned suite, and every
+test passes (with the corrections in `scripts/test262-patches`, [test262](../test262.md)). The JavaScript suite
+under `tests/` passes in full on every platform. A failure in either fails the job.
 
 Largest remaining test262-adjacent gaps outside the pinned run: Intl (Temporal's non-ISO calendars and
 locale data), realms (`$262.createRealm`, ShadowRealm), import defer, Atomics on BigInt arrays, immutable
@@ -490,10 +490,8 @@ holds the expected lines.
 with FPC `3.3.1-b7`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
 `tests/` with `--heap-snapshots`, GocciaTest262Runner over the pinned test262, and the limits test, both
 bytecode-file tests and a 1,000-case grammar fuzz campaign. `platform-build` builds GocciaTestRunner for
-macOS and Linux on aarch64, x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner, against
-the shared list plus the target's own (`known-failures/suite-<target>.txt`).
-`scripts/g2/check-known-failures.py` holds the suite and test262 to `scripts/g2/known-failures`: a failure not on the
-list fails the job, and a listed one that now passes is reported, so the lists only shrink. The digests, GC stress
+macOS and Linux on aarch64, x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner. Any
+failing test or test262 run fails its job. The digests, GC stress
 and the benchmarks stay with the local gate, which needs the bundles under `G2_WT_DIR` and `G2_JS_DIR`.
 
 ## Changes to Goccia's front end

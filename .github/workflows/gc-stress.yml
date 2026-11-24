@@ -8,8 +8,8 @@ name: GC stress
 # instead of in a production run that collects at the wrong moment.
 #
 # The same tests also run plainly with the same binaries, and only tests that
-# pass plainly but fail under stress fail the job. Tests that fail both ways
-# are known failures, not GC findings.
+# pass plainly but fail under stress fail the job. A test that fails both ways
+# is a plain failure, which the suite's own CI reports, not a GC finding.
 #
 # Weekly rather than per-PR: verifying the heap at every collection is two
 # orders of magnitude slower. A failing scheduled or default-branch run opens

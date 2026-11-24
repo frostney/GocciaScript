@@ -3,14 +3,11 @@ name: G2
 # The G2 engine (source/g2, docs/g2/README.md) and the apps built on it.
 #
 # On Linux x86-64 each job builds the targets it runs, so the three run side
-# by side. The JS suite and test262 are checked against
-# scripts/g2/known-failures: a run fails on a failure not on its list, and
-# reports a listed one that now passes.
+# by side. The JS suite and test262 must pass in full.
 #
 # The other targets (as ci.yml's): platform-build cross-compiles the test
 # runners on Linux, or builds them on macOS for Darwin, and platform-test runs
-# the JS suite on the target's own runner against the shared list plus the
-# target's own (known-failures/suite-<target>.txt). Only Linux x86-64 has the
+# the JS suite on the target's own runner, where it must pass in full. Only Linux x86-64 has the
 # JIT; the other targets run the interpreter.
 
 on:
@@ -58,21 +55,17 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests, round-tripping what they observe through heap snapshots
-        # The run exits nonzero for the known failures; the next step decides.
         run: |
           status=0
           build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
             --output=g2-test-results.json 2> g2-heap-snapshots.log || status=$?
-          echo "GocciaTestRunner exit status: $status"
           grep -E '^Heap snapshots:' g2-heap-snapshots.log
           if grep -q '^Heap snapshot failure' g2-heap-snapshots.log; then
             grep '^Heap snapshot failure' g2-heap-snapshots.log | head -20
             echo "::error::A value the suite observed did not round-trip through a heap snapshot"
             exit 1
           fi
-
-      - name: Check against the known failures
-        run: python3 scripts/g2/check-known-failures.py suite g2-test-results.json
+          exit "$status"
 
       - name: Upload results
         if: always()
@@ -135,13 +128,8 @@ jobs:
         env:
           TZ: UTC
         run: |
-          status=0
           build/GocciaTest262Runner --suite-dir=test262-suite --jobs=4 --timeout=20s \
-            --output=g2-test262-results.json || status=$?
-          echo "GocciaTest262Runner exit status: $status"
-
-      - name: Check against the known failures
-        run: python3 scripts/g2/check-known-failures.py test262 g2-test262-results.json
+            --output=g2-test262-results.json
 
       - name: Upload results
         if: always()
@@ -353,21 +341,12 @@ jobs:
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
       - name: Run all JavaScript tests
-        # The run exits nonzero for the known failures; the next step decides.
         # --timeout=120s: these runners are several times slower than the Linux ones (the bytecode-limits
         # class-bodies file took 48 s on macos-15-intel, 7 s on a Linux desktop), and the default 30 s per
         # file is there to stop a hang, not to time a file.
         run: |
-          status=0
           build/GocciaTestRunner -P tests --silent --no-progress --timeout=120s \
-            --output=g2-test-results.json || status=$?
-          echo "GocciaTestRunner exit status: $status"
-
-      - name: Check against the known failures
-        # Windows runners name it python
-        run: |
-          PY=$(command -v python3 || command -v python)
-          "$PY" scripts/g2/check-known-failures.py suite g2-test-results.json --platform ${{ matrix.target }}
+            --output=g2-test-results.json
 
       - name: Upload results
         if: always()

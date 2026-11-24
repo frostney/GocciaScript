@@ -1,4 +1,0 @@
-# GocciaTestRunner on G2, x86_64-win64: the failures only this target has, added to suite.txt (same format).
-# Windows' ICU has no udtitvfmt_formatCalendarToResult, so formatRange formats the Gregorian calendar without the
-# proleptic switch (the old engine's Windows build fails the same two tests)
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRange-proleptic-gregorian.js

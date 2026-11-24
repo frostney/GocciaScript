@@ -1,2 +1,0 @@
-# GocciaTest262Runner on G2 at the pinned suite (scripts/test262-suite-sha.txt): the runs that do not pass.
-# scripts/g2/check-known-failures.py fails a run with any other run not passing. Format: MODE ID.

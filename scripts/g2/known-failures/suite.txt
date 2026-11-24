@@ -1,3 +1,0 @@
-# GocciaTestRunner on G2: the test files that fail, and how many of their tests (a suite error counts as one).
-# scripts/g2/check-known-failures.py fails a run where a file not listed fails or a listed file fails more;
-# it reports a listed file that fails fewer, so this list only shrinks. Format: COUNT PATH.

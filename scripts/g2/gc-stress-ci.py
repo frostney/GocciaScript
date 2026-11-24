@@ -2,7 +2,7 @@
 """GC stress for CI (gc-stress.yml): finds values a collection moved or freed while only a Pascal local held them.
 
 Three parts, each comparing a stressed run with a plain run of the same binaries, so a test that fails both ways
-is a known failure and not a finding:
+is a plain failure (the suite's own CI reports it) and not a finding:
 
 1. tests/: scripts/g2/gcstress-tests.py runs every file through `g2 --test` plainly and with a 16 KB nursery and
    --gc-verify (a collection every few kilobytes, the heap checked after each). BAD lines are findings; TIMEOUT

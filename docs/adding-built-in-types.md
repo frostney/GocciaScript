@@ -303,7 +303,7 @@ Run them:
 ```
 
 - **GC stress** — For native code that allocates, run the tests with a 16 KB nursery and heap verification after every collection: `./build.pas g2 && python3 scripts/g2/gcstress-tests.py build/g2/g2 8 tests/built-ins/YourType`. A file reported `BAD` reads a value an allocation moved or misses a root.
-- **test262** — For an ECMA-262 or ECMA-402 built-in, run its test262 directory ([test262](test262.md)). CI holds the suite and test262 to `scripts/g2/known-failures`: a new failure fails the job, and a listed failure that now passes should be removed from the list.
+- **test262** — For an ECMA-262 or ECMA-402 built-in, run its test262 directory ([test262](test262.md)). CI expects both the suite and test262 to pass in full: any failure fails the job.
 
 ## Step 5: Benchmarks
 
