@@ -2009,20 +2009,57 @@ begin
   end;
 end;
 
-{ the frames below the error being made, innermost first, one line each ("    at name (source:line:column)");
-  frames of the preludes and of field initializers are left out, and past STACK_TRACE_FRAME_LIMIT a last line
-  counts the rest }
+threadvar
+  { ThrowError is making the error: a built-in raised it, so the built-in the innermost frame is calling is a frame
+    of the trace (a script's new Error() is made by the constructor it calls, which is not) }
+  NativeRaising: Boolean;
+
+{ the built-in frame I is calling (its call instruction's callee, held in the callee register while the call is
+  in flight): True with its name }
+function NativeCalleeOf(I: Integer; var Nm: UnicodeString): Boolean;
+var T: PFuncTemplate; PC: Integer; Ins: QWord; V, NV: TValue;
+begin
+  Result := False;
+  T := Frames[I].Tpl;
+  if T = nil then Exit;
+  PC := Frames[I].PC - 1;
+  if (PC < 0) or (PC >= T^.CodeLen) then Exit;
+  Ins := T^.Code[PC];
+  if not (TOp(Ins and $FF) in [opCall, opCallV, opNew, opNewV]) then Exit;
+  V := VStack[Frames[I].Base + InsA(Ins)];
+  if not IsObject(V) or (ObjOf(V)^.OKind <> okNative) then Exit;
+  if DataPropertyOf(ObjOf(V), AtomName, NV) and IsString(NV) then Nm := StrToUnicode(StrOf(NV)) else Nm := '';
+  if Nm = '' then Nm := '<anonymous>';
+  Result := True;
+end;
+
+{ the frames below the error being made, innermost first, one line each ("    at name (source:line:column)", and
+  "    at name (native)" for a built-in a frame is calling: between that frame and the frame the built-in called, or
+  innermost when the built-in raised the error); frames of the preludes and of field initializers are left out,
+  and past STACK_TRACE_FRAME_LIMIT a last line counts the rest }
 function StackFramesText: UnicodeString;
-var I, N, Skipped, PC, L, C: Integer; T: PFuncTemplate; Nm, Src: UnicodeString;
+var I, N, Skipped, PC, L, C: Integer; T: PFuncTemplate; Nm, Src: UnicodeString; Raising: Boolean;
 begin
   Result := '';
   N := 0;
   Skipped := 0;
+  Raising := NativeRaising;
   for I := FrameTop - 1 downto 0 do
   begin
     T := Frames[I].Tpl;
     if T = nil then Continue;
     Src := T^.SourceName;
+    { a user frame calling a built-in: the built-in's frame first (the innermost one only when it raised) }
+    if ((I < FrameTop - 1) or Raising) and (Src <> '') and ((Src[1] <> '<') or (Src = '<stdin>')) and
+       NativeCalleeOf(I, Nm) then
+    begin
+      if N >= STACK_TRACE_FRAME_LIMIT then Inc(Skipped)
+      else
+      begin
+        Result := Result + #10'    at ' + Nm + ' (native)';
+        Inc(N);
+      end;
+    end;
     { the preludes' sources are named <...>; a host's <stdin> is the user's code }
     if (Src = '') or ((Src[1] = '<') and (Src <> '<stdin>')) then Continue;
     if T^.Name <> nil then Nm := StrToUnicode(T^.Name) else Nm := '';
@@ -2189,7 +2226,12 @@ begin
   else if Kind = 'URIError' then P := URIErrorProto
   else if Kind = 'EvalError' then P := EvalErrorProto
   else P := ErrorProto;
-  Pending := MakeError(P, Msg);
+  NativeRaising := True;
+  try
+    Pending := MakeError(P, Msg);
+  finally
+    NativeRaising := False;
+  end;
   Result := False;
 end;
 

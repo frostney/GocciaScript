@@ -139,6 +139,11 @@ test("error thrown inside a native callback preserves a trace", () => {
   expect(caughtStack.includes("    at ")).toBe(true);
 });
 
+// The first frame of a stack that has a position: a built-in's own frame,
+// "    at name (native)", comes before the call that reached it.
+const locatedFrame = (stack) =>
+  stack.split("\n").find((line) => /:\d+:\d+\)$/.test(line));
+
 // The position a stack line ends with: "    at name (file:line:column)".
 const positionOf = (stackLine) => {
   const match = stackLine.match(/:(\d+):(\d+)\)$/);
@@ -158,11 +163,13 @@ test("an error a built-in creates is located at the call that reached it", () =>
   } catch (e) {
     second = e;
   }
-  const firstPosition = positionOf(first.stack.split("\n")[1]);
-  const secondPosition = positionOf(second.stack.split("\n")[1]);
+  const firstPosition = positionOf(locatedFrame(first.stack));
+  const secondPosition = positionOf(locatedFrame(second.stack));
 
-  // The two calls sit five lines apart, at the same column.
+  // The two calls sit five lines apart, at the same column, below JSON.parse's
+  // own frame.
   expect(first.stack.startsWith("SyntaxError: ")).toBe(true);
+  expect(first.stack.split("\n")[1]).toBe("    at parse (native)");
   expect(secondPosition.line - firstPosition.line).toBe(5);
   expect(secondPosition.column).toBe(firstPosition.column);
   expect(firstPosition.column).toBeGreaterThan(0);
@@ -182,8 +189,8 @@ test("an error a built-in method creates is located at the method call", () => {
   } catch (e) {
     fromMethod = e;
   }
-  const functionPosition = positionOf(fromFunction.stack.split("\n")[1]);
-  const methodPosition = positionOf(fromMethod.stack.split("\n")[1]);
+  const functionPosition = positionOf(locatedFrame(fromFunction.stack));
+  const methodPosition = positionOf(locatedFrame(fromMethod.stack));
 
   expect(fromMethod.stack.startsWith("RangeError: ")).toBe(true);
   expect(methodPosition.line - functionPosition.line).toBe(5);
@@ -204,8 +211,8 @@ test("a built-in call that succeeds does not relocate a later error", () => {
   } catch (e) {
     second = e;
   }
-  const firstPosition = positionOf(first.stack.split("\n")[1]);
-  const secondPosition = positionOf(second.stack.split("\n")[1]);
+  const firstPosition = positionOf(locatedFrame(first.stack));
+  const secondPosition = positionOf(locatedFrame(second.stack));
 
   // Seven lines apart: the two successful calls in between leave no trace.
   expect(secondPosition.line - firstPosition.line).toBe(7);
@@ -791,7 +798,7 @@ test("a call is located at the name it follows, or at its opening parenthesis, a
   try {
     JSON.parse("{");
   } catch (e) {
-    line = positionOf(e.stack.split("\n")[1]).line;
+    line = positionOf(locatedFrame(e.stack)).line;
   }
   const stacks = [
     stackOfFailingCall(() => { BigInt(1.5); }),
@@ -829,7 +836,7 @@ test("a failed property read is located at its property name, or at the [ of a c
   try {
     JSON.parse("{");
   } catch (e) {
-    line = positionOf(e.stack.split("\n")[1]).line;
+    line = positionOf(locatedFrame(e.stack)).line;
   }
   const stacks = [
     stackOfFailingCall(() => { absentTarget.value; }),
