@@ -2458,11 +2458,13 @@ end;
 
 { ---------------- property access ---------------- }
 
-{ an index write an array keeps dense: near its length, or anywhere below 4M elements }
+{ an index write an array keeps dense: anywhere below 4M elements, past that only within 1,024 of its length. A
+  jump to several times the length past 4M would fill holes up to ArrayDenseMax (512 MB of them on a 64-bit build,
+  past a 32-bit build's whole heap) for an array that holds a few elements }
 function ArrayDenseOK(E: PValueArray; Idx: Int64): Boolean; inline;
 begin
   { past ArrayDenseMax an index is a property of the shape and the length is kept apart (ArraySetLengthSparse) }
-  Result := (Idx < ArrayDenseMax) and ((Idx < Int64(E^.Len) + 1024 + Int64(E^.Len) * 2) or (Idx < 4 * 1024 * 1024));
+  Result := (Idx < ArrayDenseMax) and ((Idx < 4 * 1024 * 1024) or (Idx < Int64(E^.Len) + 1024));
 end;
 
 { [[Delete]] on an ordinary object: a non-configurable property stays (the delete reports false) }
