@@ -1207,7 +1207,9 @@ function TGocciaObjectValue.MaterializeOwnLazyPropertyForDefine(
 var
   Roots: TGocciaActiveRootFrame;
 begin
-  if ACurrent.ClassType <> TGocciaLazyPropertyDescriptorData then
+  // `is`, as StoreLazyPropertyDescriptor stores: a subclass's factory runs
+  // here, under the cleanup, and not later in a clone of the entry.
+  if not (ACurrent is TGocciaLazyPropertyDescriptorData) then
     Exit(ACurrent);
   Roots.Initialize;
   try

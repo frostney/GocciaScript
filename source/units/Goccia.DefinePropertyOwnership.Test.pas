@@ -5,10 +5,12 @@ program Goccia.DefinePropertyOwnership.Test;
   succeed, refuse or raise, so a descriptor built inline in the call never
   leaks when something raises inside it.
 
-  The first suite raises inside each implementation at the point that can
-  raise there (a host's abort at a value allocation, the memory limit at the
-  property map's growth, a TypeError, guest code) and counts how often the
-  descriptor it passed was freed: exactly once.
+  The first suite raises inside the ordinary object, function, class, array,
+  typed array, String object, mapped arguments and Proxy definitions, at
+  points that can raise there (a host's abort at a value allocation, the
+  memory limit at the property map's growth, a TypeError, a lazy factory,
+  guest code), and after a heap snapshot restore's commit, and counts how
+  often the descriptor it passed was freed: exactly once.
 
   The second suite is the embedder's case end to end. A host that arms its
   abort handle before it builds the engine can have a request land anywhere in
@@ -146,6 +148,9 @@ type
     procedure TestTypedArrayNumericKeyAbortFreesOnce;
     procedure TestMappedArgumentsLazyCopyThrowFreesOnce;
     procedure TestRestoredMapFreesRefusedValuesAgain;
+    procedure TestLazySubclassFactoryThrowFreesOnce;
+    procedure TestLazySubclassFactoryThrowTryFreesOnce;
+    procedure TestTryDefineSymbolPropertyRefusalFreesOnce;
     function ThrowingFactory: TGocciaValue;
   protected
     procedure BeforeEach; override;
@@ -461,6 +466,12 @@ begin
     TestMappedArgumentsLazyCopyThrowFreesOnce);
   Test('a restored object''s map frees a refused value again',
     TestRestoredMapFreesRefusedValuesAgain);
+  Test('a stored lazy subclass whose factory throws frees the descriptor once',
+    TestLazySubclassFactoryThrowFreesOnce);
+  Test('the same through TryDefineProperty',
+    TestLazySubclassFactoryThrowTryFreesOnce);
+  Test('TryDefineSymbolProperty refusing a non-extensible object frees it once',
+    TestTryDefineSymbolPropertyRefusalFreesOnce);
 end;
 
 procedure TOwnershipTests.BeforeEach;
@@ -997,6 +1008,10 @@ procedure TOwnershipTests.TestRestoredMapFreesRefusedValuesAgain;
 var
   Obj: TGocciaObjectValue;
   Prepared: TGocciaRestoredOwnProperties;
+  GC: TGarbageCollector;
+  SavedMaxBytes: Int64;
+  Count, Attempts, I: Integer;
+  Raised: string;
 begin
   Obj := TGocciaObjectValue.Create;
   Obj.CreateDataPropertyOrThrow('a', TGocciaNumberLiteralValue.Create(1));
@@ -1008,7 +1023,92 @@ begin
   end;
   Expect<Boolean>(TGocciaShapedPropertyMap(Obj.Properties).KeepsRefusedValue)
     .ToBe(False);
+  // Enough entries that every later growth is asked about, then a budget
+  // smaller than any growth: the restored map's next growth is refused.
+  for I := 0 to 299 do
+    Obj.DefineProperty('k' + IntToStr(I), TGocciaPropertyDescriptorData.Create(
+      TGocciaUndefinedLiteralValue.UndefinedValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
+  Count := Obj.Properties.Count;
+  GC := TGarbageCollector.Instance;
+  SavedMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := 1;
+  Attempts := 0;
+  Raised := 'nothing';
+  try
+    try
+      while Attempts < 10000 do
+      begin
+        Inc(Attempts);
+        Obj.DefineProperty('r' + IntToStr(Attempts), Counted);
+      end;
+    except
+      on E: Exception do
+        Raised := RaisedName(E);
+    end;
+  finally
+    GC.MaxBytes := SavedMaxBytes;
+  end;
+  Expect<string>(Raised).ToBe(TGocciaMemoryLimitError.ClassName);
+  // Every definition freed its descriptor once, the refused one included.
+  Expect<Integer>(GFreed).ToBe(Attempts);
+  Expect<Integer>(Obj.Properties.Count).ToBe(Count + Attempts - 1);
   Expect<Boolean>(Obj.HasOwnProperty('a')).ToBe(True);
+end;
+
+{ A lazy descriptor subclass is stored whole, like the class itself, so its
+  factory runs when a definition replaces it, under the definition's
+  cleanup. }
+procedure TOwnershipTests.TestLazySubclassFactoryThrowFreesOnce;
+var
+  Obj: TGocciaObjectValue;
+  Raised: string;
+begin
+  Obj := TGocciaObjectValue.Create;
+  Obj.DefineProperty('lazy', TCountedLazyDescriptor.Create(ThrowingFactory,
+    [pfConfigurable, pfWritable]));
+  Raised := 'nothing';
+  try
+    // A fieldless definition validates against the entry as it stands.
+    Obj.DefineProperty('lazy', TCountedDescriptor.CreatePartial(
+      TGocciaUndefinedLiteralValue.UndefinedValue, [], []));
+  except
+    on E: Exception do
+      Raised := RaisedName(E);
+  end;
+  Expect<string>(Raised).ToBe('throw');
+  Expect<Integer>(GFreed).ToBe(1);
+end;
+
+procedure TOwnershipTests.TestLazySubclassFactoryThrowTryFreesOnce;
+var
+  Obj: TGocciaObjectValue;
+  Raised: string;
+begin
+  Obj := TGocciaObjectValue.Create;
+  Obj.DefineProperty('lazy', TCountedLazyDescriptor.Create(ThrowingFactory,
+    [pfConfigurable, pfWritable]));
+  Raised := 'nothing';
+  try
+    Obj.TryDefineProperty('lazy', TCountedDescriptor.CreatePartial(
+      TGocciaUndefinedLiteralValue.UndefinedValue, [], []));
+  except
+    on E: Exception do
+      Raised := RaisedName(E);
+  end;
+  Expect<string>(Raised).ToBe('throw');
+  Expect<Integer>(GFreed).ToBe(1);
+end;
+
+procedure TOwnershipTests.TestTryDefineSymbolPropertyRefusalFreesOnce;
+var
+  Obj: TGocciaObjectValue;
+begin
+  Obj := TGocciaObjectValue.Create;
+  Obj.PreventExtensions;
+  Expect<Boolean>(Obj.TryDefineSymbolProperty(TGocciaSymbolValue.Create('s'),
+    Counted)).ToBe(False);
+  Expect<Integer>(GFreed).ToBe(1);
 end;
 
 { TAbortAtRun }
@@ -1098,6 +1198,11 @@ begin
     Sleep(1);
   ARun.WaitFor;
   Result := StopTracking;
+  // An exception that escaped the thread (its runtime's set-up or shut-down)
+  // is kept alive until the thread is freed: a failure of the trial, not a
+  // leak.
+  if Assigned(ARun.FatalException) then
+    ARun.Unexpected := True;
 end;
 
 procedure TEmbedderAbortTests.TestControlRunLeavesNothing;
@@ -1130,7 +1235,11 @@ var
 begin
   RunOnce(0, AInScript, Run);
   try
-    Result := Run.BlocksSeen;
+    // The count of a clean, complete run, or no sweep at all.
+    if Run.Completed and not Run.Unexpected then
+      Result := Run.BlocksSeen
+    else
+      Result := 0;
   finally
     Run.Free;
   end;

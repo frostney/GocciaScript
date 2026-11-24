@@ -263,7 +263,7 @@ end;
 class function TGocciaHoleValue.HoleValue: TGocciaHoleValue;
 begin
   if not Assigned(FHoleValue) then
-    FHoleValue := TGocciaHoleValue.Create;
+    CreateProcessSingleton(TGocciaHoleValue, FHoleValue);
   Result := FHoleValue;
 end;
 

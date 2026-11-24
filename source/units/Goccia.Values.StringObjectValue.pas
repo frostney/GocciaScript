@@ -843,6 +843,15 @@ begin
   end;
 end;
 
+// Whether AName may name a property the object reports without storing it.
+// Every other name goes to the ordinary definition with no frame.
+function StringObjectNameMayBeOwn(const AName: string): Boolean;
+var
+  Index: Integer;
+begin
+  Result := (AName = PROP_LENGTH) or TryParseCanonicalIndex(AName, Index);
+end;
+
 // A string index or "length" names a property the object reports without
 // storing it, built here for the comparison. Building it allocates a value,
 // whose reservation can collect and which a deadline, a budget, a host's
@@ -881,8 +890,10 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   Compatible: Boolean;
 begin
-  ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
-    FPrimitive, AName, ADescriptor);
+  ExistingDescriptor := nil;
+  if StringObjectNameMayBeOwn(AName) then
+    ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
+      FPrimitive, AName, ADescriptor);
   if Assigned(ExistingDescriptor) then
   begin
     Compatible := IsCompatibleStringDefineDescriptor(ExistingDescriptor,
@@ -905,8 +916,10 @@ function TGocciaStringObjectValue.TryDefineProperty(const AName: string;
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
-  ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
-    FPrimitive, AName, ADescriptor);
+  ExistingDescriptor := nil;
+  if StringObjectNameMayBeOwn(AName) then
+    ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
+      FPrimitive, AName, ADescriptor);
   if Assigned(ExistingDescriptor) then
   begin
     Result := IsCompatibleStringDefineDescriptor(ExistingDescriptor,

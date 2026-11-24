@@ -27,14 +27,17 @@ allocations during built-in registration, and the same happened when an abort,
 a deadline or the memory limit ended a script inside such a definition
 (`Reflect.defineProperty` on a function's `name`, for one).
 
-Measured with a test that requests the abort at the Nth heap allocation of the
-worker's thread, for every N: before this change 157 of the build's trials and
-80 of a definition-heavy script's leaked a descriptor, at seven call sites in
-built-in registration (the `%ThrowTypeError%` intrinsic's `length` and `name`,
+Measured under heaptrc on a worker thread armed before the engine was built,
+with the abort requested at its Nth heap allocation, once for every N of a
+build and of a run (about 6,000 and 2,500 trials): before this change the
+build trials left 77 descriptors unfreed, at seven call sites in built-in
+registration (the `%ThrowTypeError%` intrinsic's `length` and `name`,
 `Promise`'s, `%TypedArray%`'s, the copied statics of every built-in
-constructor) and in `ToPropertyDescriptor`'s descriptor at `Reflect.defineProperty`.
-A memory-limit sweep over the build leaked at the same sites and at the lazy
-globals, whose descriptor a refused growth of the global object's map dropped.
+constructor), and the run trials 80, all `ToPropertyDescriptor`'s descriptor
+at `Reflect.defineProperty` on a function's or class's `name`. A sweep of the
+memory limit over the build, one trial every 37 bytes, left 80 at the same
+sites and at the lazy globals, whose descriptor a refused growth of the global
+object's map dropped. After it all three leave none.
 
 The split contract had also produced double frees: `TGocciaClassValue` and the
 module namespace each freed a descriptor the caller freed again, and comments
@@ -59,6 +62,10 @@ and a caller never frees a descriptor it passed.
 
 - A definition frees the descriptor before it throws its own error, and before
   it stores the descriptor it built from it, so the plain path gains no frame.
+- A process-wide singleton (`undefined`, `null`, the array hole) belongs to no
+  run, so its first allocation polls no deadline, budget or abort and is not
+  refused by the memory limit (`CreateProcessSingleton`): a definition that
+  happens to make one first cannot raise there.
 - Where a definition allocates before it decides, the descriptor is freed in a
   frame that path already had or that only that path pays for:
   `MaterializeIntrinsicProperty` (function and class `name` and `length`),
@@ -97,8 +104,11 @@ and a caller never frees a descriptor it passed.
   left allocated after the thread's runtime shuts down. A request lands at
   the next value allocation, so consecutive requests stop the run at the same
   point; every leaking range before this change was at least two blocks wide.
-  The sweeps cover what that script and the build reach, not every
-  definition the engine has.
+  The sweeps cover what the build and that script reach, and the focused
+  cases cover the ordinary object, function, class, array, typed array,
+  String object, mapped `arguments`, Proxy and heap snapshot restore paths;
+  the module namespaces are covered by reading and the JavaScript suite, not
+  by a focused case.
 - A new override frees its descriptor before anything it does ahead of the
   inherited call can raise. A new caller passes the descriptor and forgets it.
 - An `EOutOfMemory` from FPC's own allocator (a descriptor's, a map's or a

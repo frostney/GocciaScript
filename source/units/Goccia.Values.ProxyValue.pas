@@ -74,6 +74,18 @@ type
     // downstream ever opens a window over this descriptor.
     procedure PushDefineTrapRoots(var AFrame: TGocciaActiveRootFrame;
       const ADescriptor: TGocciaPropertyDescriptor);
+    // The steps of [[DefineOwnProperty]] before the trap or the target takes
+    // ADescriptor: the revocation check, the roots, the trap lookup and, with
+    // a trap, the descriptor object it is handed (ADescObj). Each can
+    // throw; a throw frees ADescriptor, which the definition owns (ADR 0184).
+    function PrepareDefineTrap(var AFrame: TGocciaActiveRootFrame;
+      const ADescriptor: TGocciaPropertyDescriptor;
+      out ADescObj: TGocciaValue): TGocciaValue;
+    // EnterPropertyDelegation for a definition handed on to a Proxy target:
+    // the bound can stop it before the target takes ADescriptor, which is
+    // then freed here.
+    procedure EnterDelegationForDefine(
+      const ADescriptor: TGocciaPropertyDescriptor);
   public
     constructor Create(const ATarget: TGocciaValue;
       const AHandler: TGocciaObjectValue);
@@ -348,14 +360,7 @@ begin
     TGocciaObjectValue(FTarget).DefineProperty(AName, ADescriptor);
     Exit;
   end;
-  // The call takes ownership of ADescriptor, so it is freed here when the
-  // bound stops the call before it starts.
-  try
-    EnterPropertyDelegation;
-  except
-    ADescriptor.Free;
-    raise;
-  end;
+  EnterDelegationForDefine(ADescriptor);
   try
     TGocciaProxyValue(FTarget).DefineProperty(AName, ADescriptor);
   finally
@@ -372,14 +377,7 @@ begin
     TGocciaObjectValue(FTarget).DefineSymbolProperty(ASymbol, ADescriptor);
     Exit;
   end;
-  // The call takes ownership of ADescriptor, so it is freed here when the
-  // bound stops the call before it starts.
-  try
-    EnterPropertyDelegation;
-  except
-    ADescriptor.Free;
-    raise;
-  end;
+  EnterDelegationForDefine(ADescriptor);
   try
     TGocciaProxyValue(FTarget).DefineSymbolProperty(ASymbol, ADescriptor);
   finally
@@ -392,14 +390,7 @@ function TGocciaProxyValue.TargetTryDefineProperty(const AName: string;
 begin
   if FTarget.ClassType <> TGocciaProxyValue then
     Exit(TGocciaObjectValue(FTarget).TryDefineProperty(AName, ADescriptor));
-  // The call takes ownership of ADescriptor, so it is freed here when the
-  // bound stops the call before it starts.
-  try
-    EnterPropertyDelegation;
-  except
-    ADescriptor.Free;
-    raise;
-  end;
+  EnterDelegationForDefine(ADescriptor);
   try
     Result := TGocciaProxyValue(FTarget).TryDefineProperty(AName, ADescriptor);
   finally
@@ -414,13 +405,7 @@ begin
   if FTarget.ClassType <> TGocciaProxyValue then
     Exit(TGocciaObjectValue(FTarget).TryDefineSymbolProperty(ASymbol,
       ADescriptor));
-  // See TargetTryDefineProperty.
-  try
-    EnterPropertyDelegation;
-  except
-    ADescriptor.Free;
-    raise;
-  end;
+  EnterDelegationForDefine(ADescriptor);
   try
     Result := TGocciaProxyValue(FTarget).TryDefineSymbolProperty(ASymbol,
       ADescriptor);
@@ -467,6 +452,36 @@ begin
     if ADescriptor is TGocciaLazyPropertyDescriptorData then
       TGocciaLazyPropertyDescriptorData(ADescriptor).Materialize;
     ADescriptor.PushRoots(AFrame);
+  end;
+end;
+
+function TGocciaProxyValue.PrepareDefineTrap(
+  var AFrame: TGocciaActiveRootFrame;
+  const ADescriptor: TGocciaPropertyDescriptor;
+  out ADescObj: TGocciaValue): TGocciaValue;
+begin
+  ADescObj := nil;
+  try
+    CheckRevoked;
+    PushDefineTrapRoots(AFrame, ADescriptor);
+    Result := GetTrap(PROP_DEFINE_PROPERTY);
+    AFrame.Add(Result);
+    if Assigned(Result) then
+      ADescObj := FromPropertyDescriptor(ADescriptor);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaProxyValue.EnterDelegationForDefine(
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  try
+    EnterPropertyDelegation;
+  except
+    ADescriptor.Free;
+    raise;
   end;
 end;
 
@@ -1996,20 +2011,7 @@ begin
   // descriptor. See PushDefineTrapRoots.
   Roots.Initialize;
   try
-    // ADescriptor is owned here until the trap call or the target takes it;
-    // a revoked Proxy, or a trap lookup stopped by the delegation bound,
-    // throws before then.
-    try
-      CheckRevoked;
-      PushDefineTrapRoots(Roots, ADescriptor);
-      Trap := GetTrap(PROP_DEFINE_PROPERTY);
-      Roots.Add(Trap);
-      if Assigned(Trap) then
-        DescObj := FromPropertyDescriptor(ADescriptor);
-    except
-      ADescriptor.Free;
-      raise;
-    end;
+    Trap := PrepareDefineTrap(Roots, ADescriptor, DescObj);
     if Assigned(Trap) then
     begin
       Args := nil;
@@ -2061,18 +2063,7 @@ begin
   // Same window as the string arm; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    // See DefineProperty.
-    try
-      CheckRevoked;
-      PushDefineTrapRoots(Roots, ADescriptor);
-      Trap := GetTrap(PROP_DEFINE_PROPERTY);
-      Roots.Add(Trap);
-      if Assigned(Trap) then
-        DescObj := FromPropertyDescriptor(ADescriptor);
-    except
-      ADescriptor.Free;
-      raise;
-    end;
+    Trap := PrepareDefineTrap(Roots, ADescriptor, DescObj);
     if Assigned(Trap) then
     begin
       Args := nil;
@@ -2123,20 +2114,7 @@ begin
   // Same window as DefineProperty; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    // ADescriptor is owned here until the trap call or the target takes it;
-    // a revoked Proxy, or a trap lookup stopped by the delegation bound,
-    // throws before then.
-    try
-      CheckRevoked;
-      PushDefineTrapRoots(Roots, ADescriptor);
-      Trap := GetTrap(PROP_DEFINE_PROPERTY);
-      Roots.Add(Trap);
-      if Assigned(Trap) then
-        DescObj := FromPropertyDescriptor(ADescriptor);
-    except
-      ADescriptor.Free;
-      raise;
-    end;
+    Trap := PrepareDefineTrap(Roots, ADescriptor, DescObj);
     if Assigned(Trap) then
     begin
       Args := nil;
@@ -2187,18 +2165,7 @@ begin
   // Same window as DefineProperty; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    // See TryDefineProperty.
-    try
-      CheckRevoked;
-      PushDefineTrapRoots(Roots, ADescriptor);
-      Trap := GetTrap(PROP_DEFINE_PROPERTY);
-      Roots.Add(Trap);
-      if Assigned(Trap) then
-        DescObj := FromPropertyDescriptor(ADescriptor);
-    except
-      ADescriptor.Free;
-      raise;
-    end;
+    Trap := PrepareDefineTrap(Roots, ADescriptor, DescObj);
     if Assigned(Trap) then
     begin
       Args := nil;

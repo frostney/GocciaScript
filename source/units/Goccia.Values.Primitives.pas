@@ -173,7 +173,17 @@ type
     property Value: string read GetValue;
   end;
 
+type
+  TGocciaValueClass = class of TGocciaValue;
+
   procedure PinPrimitiveSingletons;
+  { A process-wide singleton belongs to no run: while one is made, its value
+    allocation polls neither the deadline, the instruction budget nor a host's
+    abort, and the memory limit does not refuse it. Its first use, wherever
+    it falls, cannot raise into a caller that holds something it would then
+    have to free (ADR 0184). }
+  procedure CreateProcessSingleton(const AClass: TGocciaValueClass;
+    out AInstance);
   { True when AValue is one of the process-wide primitive singletons
     (undefined, null, true, false, NaN, 0, 1, -0, Infinity, -Infinity).
     Never creates one. }
@@ -203,6 +213,32 @@ uses
   Goccia.ThreadPolls,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
+
+procedure CreateProcessSingleton(const AClass: TGocciaValueClass;
+  out AInstance);
+var
+  Polls: PGocciaThreadPolls;
+  GC: TGarbageCollector;
+  TimeoutArmed, InstructionLimitActive, Firing: Boolean;
+begin
+  Polls := @GThreadPolls;
+  TimeoutArmed := Polls^.TimeoutArmed;
+  InstructionLimitActive := Polls^.InstructionLimitActive;
+  GC := TGarbageCollector(Polls^.Collector);
+  Firing := Assigned(GC) and GC.MemoryLimitFiring;
+  Polls^.TimeoutArmed := False;
+  Polls^.InstructionLimitActive := False;
+  if Assigned(GC) then
+    GC.MemoryLimitFiring := True;
+  try
+    TGocciaValue(AInstance) := AClass.Create;
+  finally
+    Polls^.TimeoutArmed := TimeoutArmed;
+    Polls^.InstructionLimitActive := InstructionLimitActive;
+    if Assigned(GC) then
+      GC.MemoryLimitFiring := Firing;
+  end;
+end;
 
 function InvariantFormatSettings: TFormatSettings;
 begin
@@ -361,7 +397,7 @@ begin
   if not Assigned(FNullValue) then
   begin
     Assert(not GIsWorkerThread, 'NullValue: must be initialised on main thread');
-    FNullValue := TGocciaNullLiteralValue.Create;
+    CreateProcessSingleton(TGocciaNullLiteralValue, FNullValue);
   end;
   Result := FNullValue;
 end;
@@ -415,7 +451,7 @@ begin
   if not Assigned(FUndefinedValue) then
   begin
     Assert(not GIsWorkerThread, 'UndefinedValue: must be initialised on main thread');
-    FUndefinedValue := TGocciaUndefinedLiteralValue.Create;
+    CreateProcessSingleton(TGocciaUndefinedLiteralValue, FUndefinedValue);
   end;
   Result := FUndefinedValue;
 end;
