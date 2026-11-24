@@ -8,17 +8,16 @@ uses
   Classes,
   Generics.Collections,
 
+  BigInteger,
   CriticalSections,
   HashMap,
   OrderedStringMap,
 
   Goccia.AST.Node,
   Goccia.Error.CallDiagnostics,
-  Goccia.Modules,
-  Goccia.Scope.BindingMap,
+  Goccia.Modules.Phases,
   Goccia.SourceSpan,
-  Goccia.Token,
-  Goccia.Values.Primitives;
+  Goccia.Token;
 
 type
   // Forward declarations
@@ -50,16 +49,43 @@ type
   TGocciaMatchPatternList = TObjectList<TGocciaMatchPattern>;
   TGocciaSetterExpressionMap = TOrderedStringMap<TGocciaSetterExpression>;
 
+  TGocciaLiteralKind = (lkUndefined, lkNull, lkBoolean, lkNumber, lkString,
+    lkBigInt);
+
+  // A literal as the parser read it. It holds no runtime value, so the front
+  // end links no engine. The old runtime's compiler reads it as a runtime value
+  // through Goccia.AST.LiteralValues, which makes that value once and keeps it
+  // in RuntimeValue.
   TGocciaLiteralExpression = class(TGocciaExpression)
   private
-    FValue: TGocciaValue;
+    FKind: TGocciaLiteralKind;
+    FBooleanValue: Boolean;
+    FNumberValue: Double;
+    FStringValue: string;
+    FBigIntValue: TBigInteger;
     FSourceText: string;
+    FRuntimeValue: TObject;
   public
-    constructor Create(const AValue: TGocciaValue; const ASpan: TGocciaSourceSpan;
-      const ASourceText: string = '');
+    constructor CreateUndefined(const ASpan: TGocciaSourceSpan);
+    constructor CreateNull(const ASpan: TGocciaSourceSpan);
+    constructor CreateBoolean(const AValue: Boolean;
+      const ASpan: TGocciaSourceSpan);
+    constructor CreateNumber(const AValue: Double;
+      const ASpan: TGocciaSourceSpan; const ASourceText: string = '');
+    constructor CreateString(const AValue: string;
+      const ASpan: TGocciaSourceSpan; const ASourceText: string = '');
+    constructor CreateBigInt(const AValue: TBigInteger;
+      const ASpan: TGocciaSourceSpan; const ASourceText: string = '');
     destructor Destroy; override;
-    property Value: TGocciaValue read FValue;
+    property Kind: TGocciaLiteralKind read FKind;
+    property BooleanValue: Boolean read FBooleanValue;
+    property NumberValue: Double read FNumberValue;
+    property StringValue: string read FStringValue;
+    property BigIntValue: TBigInteger read FBigIntValue;
     property SourceText: string read FSourceText;
+    // The runtime value Goccia.AST.LiteralValues made of a number, string or
+    // BigInt literal; the expression owns it.
+    property RuntimeValue: TObject read FRuntimeValue write FRuntimeValue;
   end;
 
   TGocciaTemplateLiteralExpression = class(TGocciaExpression)
@@ -989,17 +1015,7 @@ function CalleeDescriptorFor(const ACallee: TGocciaExpression;
 implementation
 
 uses
-  SysUtils,
-
-  Goccia.Execution.CallSite,
-  Goccia.GarbageCollector,
-  Goccia.ImportMeta,
-  Goccia.InstructionLimit,
-  Goccia.RegExp.Runtime,
-  Goccia.Timeout,
-  Goccia.Values.BigIntValue,
-  Goccia.Values.Error,
-  Goccia.Values.PromiseValue;
+  SysUtils;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
@@ -1060,26 +1076,59 @@ end;
 
 { TGocciaLiteralExpression }
 
-constructor TGocciaLiteralExpression.Create(const AValue: TGocciaValue;
+constructor TGocciaLiteralExpression.CreateUndefined(
+  const ASpan: TGocciaSourceSpan);
+begin
+  inherited Create(ASpan);
+  FKind := lkUndefined;
+end;
+
+constructor TGocciaLiteralExpression.CreateNull(const ASpan: TGocciaSourceSpan);
+begin
+  inherited Create(ASpan);
+  FKind := lkNull;
+end;
+
+constructor TGocciaLiteralExpression.CreateBoolean(const AValue: Boolean;
+  const ASpan: TGocciaSourceSpan);
+begin
+  inherited Create(ASpan);
+  FKind := lkBoolean;
+  FBooleanValue := AValue;
+end;
+
+constructor TGocciaLiteralExpression.CreateNumber(const AValue: Double;
   const ASpan: TGocciaSourceSpan; const ASourceText: string);
 begin
   inherited Create(ASpan);
-  FValue := AValue;
+  FKind := lkNumber;
+  FNumberValue := AValue;
   FSourceText := ASourceText;
-  // Remove from GC -- the AST owns this value, not the garbage collector.
-  // A primitive singleton (undefined, true, ...) stays with the collector it
-  // was created in, which frees it when the main thread's runtime shuts down.
-  if Assigned(FValue) and (TGarbageCollector.Instance <> nil) and
-     not IsPrimitiveSingleton(FValue) then
-    TGarbageCollector.Instance.UnregisterObject(FValue);
+end;
+
+constructor TGocciaLiteralExpression.CreateString(const AValue: string;
+  const ASpan: TGocciaSourceSpan; const ASourceText: string);
+begin
+  inherited Create(ASpan);
+  FKind := lkString;
+  FStringValue := AValue;
+  FSourceText := ASourceText;
+end;
+
+constructor TGocciaLiteralExpression.CreateBigInt(const AValue: TBigInteger;
+  const ASpan: TGocciaSourceSpan; const ASourceText: string);
+begin
+  inherited Create(ASpan);
+  FKind := lkBigInt;
+  FBigIntValue := AValue;
+  FSourceText := ASourceText;
 end;
 
 destructor TGocciaLiteralExpression.Destroy;
 begin
-  // Free the owned value unless it is a primitive singleton, which the
-  // collector owns.
-  if Assigned(FValue) and not IsPrimitiveSingleton(FValue) then
-    FValue.Free;
+  // The runtime value Goccia.AST.LiteralValues made (never a singleton the
+  // collector owns: it keeps those out of RuntimeValue).
+  FRuntimeValue.Free;
   inherited;
 end;
 
@@ -1824,7 +1873,7 @@ end;
 function TGocciaImportCallExpression.HasLiteralSpecifier: Boolean;
 begin
   Result := (FSpecifier is TGocciaLiteralExpression) and
-    (TGocciaLiteralExpression(FSpecifier).Value is TGocciaStringLiteralValue);
+    (TGocciaLiteralExpression(FSpecifier).Kind = lkString);
 end;
 
 destructor TGocciaTemplateWithInterpolationExpression.Destroy;

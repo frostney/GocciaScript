@@ -10,8 +10,7 @@ interface
 
 uses
   SysUtils, Classes, Math, Generics.Collections,
-  Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Token,
-  Goccia.Values.Primitives, Goccia.Values.BigIntValue,
+  Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Token, BigInteger,
   Goccia.ClassMask, Goccia.Modules.Phases, OrderedStringMap, G2.Core, G2.Bytecode, G2.BigIntV;
 
 type
@@ -96,8 +95,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.SourceSpan, Goccia.Scope.BindingMap, Goccia.Types.Enforcement,
-  Goccia.Bytecode.Chunk, Goccia.Profiler.Compile, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.SourceSpan, Goccia.Types.LocalType, Goccia.Profiler.Compile, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -630,7 +628,6 @@ type
     procedure EvalDeclarations(Nodes: TList<TGocciaASTNode>; Names: TStringList; Strict: Boolean);
     function EvalOuterFlags(const N: UnicodeString): Integer;
     procedure CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList);
-    procedure CompileBigIntLiteral(V: TGocciaBigIntValue; Dest: Integer);
     procedure CompileVarDecl(D: TGocciaVariableDeclaration);
     procedure CompileIf(S: TGocciaIfStatement);
     procedure CompileFor(S: TGocciaForStatement);
@@ -700,7 +697,7 @@ type
     procedure CompileIncrement(E: TGocciaIncrementExpression; Dest: Integer);
     procedure CompileTemplate(E: TGocciaTemplateWithInterpolationExpression; Dest: Integer);
     procedure CompileTagged(E: TGocciaTaggedTemplateExpression; Dest: Integer);
-    procedure CompileLiteral(V: TGocciaValue; Dest: Integer);
+    procedure CompileLiteral(L: TGocciaLiteralExpression; Dest: Integer);
     procedure CompileFuncExpr(E: TGocciaExpression; Dest: Integer; const NameHint: UnicodeString = '');
     procedure LoadNumber(D: Double; Dest: Integer);
     procedure LoadString(const S: UnicodeString; Dest: Integer);
@@ -1848,24 +1845,16 @@ begin
   Emit(Ins(opLoadK, Dest, 0, AtomConst(S)));
 end;
 
-procedure TCompiler.CompileLiteral(V: TGocciaValue; Dest: Integer);
+procedure TCompiler.CompileLiteral(L: TGocciaLiteralExpression; Dest: Integer);
 begin
-  if V is TGocciaNumberLiteralValue then LoadNumber(TGocciaNumberLiteralValue(V).Value, Dest)
-  else if V is TGocciaStringLiteralValue then LoadString(TGocciaStringLiteralValue(V).Value, Dest)
-  else if V is TGocciaBooleanLiteralValue then
-  begin
-    if TGocciaBooleanLiteralValue(V).Value then Emit(Ins(opLoadTrue, Dest, 0, 0))
-    else Emit(Ins(opLoadFalse, Dest, 0, 0));
-  end
-  else if V is TGocciaNullLiteralValue then Emit(Ins(opLoadNull, Dest, 0, 0))
-  else if V is TGocciaUndefinedLiteralValue then Emit(Ins(opLoadUndef, Dest, 0, 0))
-  else if V is TGocciaBigIntValue then CompileBigIntLiteral(TGocciaBigIntValue(V), Dest)
-  else RaiseUnsupported('literal', V);
-end;
-
-procedure TCompiler.CompileBigIntLiteral(V: TGocciaBigIntValue; Dest: Integer);
-begin
-  Emit(Ins(opLoadK, Dest, 0, AddConst(BigToValue(V.Value, True))));
+  case L.Kind of
+    lkNumber: LoadNumber(L.NumberValue, Dest);
+    lkString: LoadString(UnicodeString(L.StringValue), Dest);
+    lkBoolean: if L.BooleanValue then Emit(Ins(opLoadTrue, Dest, 0, 0)) else Emit(Ins(opLoadFalse, Dest, 0, 0));
+    lkNull: Emit(Ins(opLoadNull, Dest, 0, 0));
+    lkUndefined: Emit(Ins(opLoadUndef, Dest, 0, 0));
+    lkBigInt: Emit(Ins(opLoadK, Dest, 0, AddConst(BigToValue(L.BigIntValue, True))));
+  end;
 end;
 
 { ---------------- functions ---------------- }
@@ -5902,9 +5891,9 @@ begin
   if Prof <> nil then Prof.Count(ccConstantEvaluationVisits);
   { x + small int }
   if (Op in [opAdd, opSub]) and (E.Right is TGocciaLiteralExpression) and
-     (TGocciaLiteralExpression(E.Right).Value is TGocciaNumberLiteralValue) then
+     (TGocciaLiteralExpression(E.Right).Kind = lkNumber) then
   begin
-    V := MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Right).Value).Value);
+    V := MkNumber(TGocciaLiteralExpression(E.Right).NumberValue);
     { the constant proved an exact small integer, or not }
     if Prof <> nil then Prof.Count(ccNumberProofVisits);
     { x - 0 stays a subtraction: as an add of the negated immediate, -0 - 0 would give +0 }
@@ -5918,9 +5907,9 @@ begin
   end;
   { x op k for the bitwise and shift operators and an int32 literal k }
   if (Op in [opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr]) and (E.Right is TGocciaLiteralExpression) and
-     (TGocciaLiteralExpression(E.Right).Value is TGocciaNumberLiteralValue) then
+     (TGocciaLiteralExpression(E.Right).Kind = lkNumber) then
   begin
-    V := MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Right).Value).Value);
+    V := MkNumber(TGocciaLiteralExpression(E.Right).NumberValue);
     if IsInt(V) and (IntOf(V) >= -8388608) and (IntOf(V) < 8388608) then
     begin
       L := ExprAny(E.Left);
@@ -5960,8 +5949,8 @@ begin
     gttNot: begin R := ExprAny(E.Operand); Emit(Ins(opNot, Dest, R, 0)); end;
     gttMinus:
       begin
-        if (E.Operand is TGocciaLiteralExpression) and (TGocciaLiteralExpression(E.Operand).Value is TGocciaNumberLiteralValue) then
-          LoadNumber(-TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Operand).Value).Value, Dest)
+        if (E.Operand is TGocciaLiteralExpression) and (TGocciaLiteralExpression(E.Operand).Kind = lkNumber) then
+          LoadNumber(-TGocciaLiteralExpression(E.Operand).NumberValue, Dest)
         else begin R := ExprAny(E.Operand); Emit(Ins(opNeg, Dest, R, 0)); end;
       end;
     gttPlus: begin R := ExprAny(E.Operand); Emit(Ins(opToNum, Dest, R, 0)); end;
@@ -7030,12 +7019,12 @@ begin
     CO := TGocciaCompoundAssignmentExpression(E);
     BOp := BinOpFor(CO.Operator);
     if (BOp in [opAdd, opSub]) and (CO.Value is TGocciaLiteralExpression) and
-       (TGocciaLiteralExpression(CO.Value).Value is TGocciaNumberLiteralValue) and
-       IsInt(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value)) and
-       (Abs(IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value))) < 4000000) and
-       ((BOp = opAdd) or (IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value)) <> 0)) then
+       (TGocciaLiteralExpression(CO.Value).Kind = lkNumber) and
+       IsInt(MkNumber(TGocciaLiteralExpression(CO.Value).NumberValue)) and
+       (Abs(IntOf(MkNumber(TGocciaLiteralExpression(CO.Value).NumberValue))) < 4000000) and
+       ((BOp = opAdd) or (IntOf(MkNumber(TGocciaLiteralExpression(CO.Value).NumberValue)) <> 0)) then
     begin
-      K := IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value));
+      K := IntOf(MkNumber(TGocciaLiteralExpression(CO.Value).NumberValue));
       if BOp = opAdd then Emit(Ins(opAddI, R, R, K)) else Emit(Ins(opSubI, R, R, -K));
     end
     else
@@ -7294,7 +7283,7 @@ begin
   NotePosition(E, False);
   L := FS.CurLine;
   case KindOf(ExprKinds, ExprClasses, E) of
-    0: CompileLiteral(TGocciaLiteralExpression(E).Value, Dest);
+    0: CompileLiteral(TGocciaLiteralExpression(E), Dest);
     1: LoadIdent(TGocciaIdentifierExpression(E).Name, Dest);
     2: LoadThis(Dest);
     3: CompileBinary(TGocciaBinaryExpression(E), Dest);
@@ -7437,7 +7426,7 @@ begin
       end;
       { bit 4: the specifier is a string literal (the host's read policy exempts its module graph) }
       if (TGocciaImportCallExpression(E).Specifier is TGocciaLiteralExpression) and
-         (TGocciaLiteralExpression(TGocciaImportCallExpression(E).Specifier).Value is TGocciaStringLiteralValue) then
+         (TGocciaLiteralExpression(TGocciaImportCallExpression(E).Specifier).Kind = lkString) then
         L := L or 16;
       if Assigned(TGocciaImportCallExpression(E).Options) then
         ExprTo(TGocciaImportCallExpression(E).Options, R + 1);

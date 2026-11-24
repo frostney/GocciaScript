@@ -4,10 +4,23 @@ unit NativeStackBounds;
 
 interface
 
+const
+  // What a native stack keeps free for the error path once a check refuses to
+  // go deeper (Goccia.StackLimit explains how the engine uses it).
+  NATIVE_STACK_RESERVE = 256 * 1024;
+
 // The lowest address of the calling thread's native stack and its size: the
 // system's bounds where it gives them, else the runtime library's. False when
 // neither is known.
 function TryGetThreadStackBounds(out ALow, ASize: NativeUInt): Boolean;
+// The address of a local in a frame called from the caller's, which is where
+// the native stack currently ends.
+function NativeStackPosition: NativeUInt;
+// The lowest native stack address code may reach on the calling thread:
+// NATIVE_STACK_RESERVE above the bottom of its stack, or a quarter of the
+// stack above it on a stack smaller than four reserves. 0 when the bounds of
+// the thread's stack cannot be found. Found once per thread.
+function NativeStackLimit: NativeUInt;
 
 implementation
 
@@ -16,8 +29,6 @@ uses
   {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, Syscall, UnixType,{$IFEND}
   SysUtils;
 
-// The address of a local in a frame called from the caller's, which is where
-// the native stack currently ends.
 {$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
 function NativeStackPosition: NativeUInt;
 var
@@ -328,6 +339,37 @@ begin
     ASize := StackTop - ALow;
   end;
   {$IFEND}
+end;
+
+threadvar
+  GNativeStackLimit: NativeUInt;
+  GNativeStackLimitFound: Boolean;
+
+function FindNativeStackLimit: NativeUInt;
+var
+  StackLow, StackSize, Reserve, Position: NativeUInt;
+begin
+  Result := 0;
+  if not TryGetThreadStackBounds(StackLow, StackSize) then
+    Exit;
+  // Bounds that do not hold the running frame describe some other stack.
+  Position := NativeStackPosition;
+  if (Position <= StackLow) or (Position - StackLow > StackSize) then
+    Exit;
+  Reserve := NATIVE_STACK_RESERVE;
+  if StackSize < 4 * Reserve then
+    Reserve := StackSize div 4;
+  Result := StackLow + Reserve;
+end;
+
+function NativeStackLimit: NativeUInt;
+begin
+  if not GNativeStackLimitFound then
+  begin
+    GNativeStackLimit := FindNativeStackLimit;
+    GNativeStackLimitFound := True;
+  end;
+  Result := GNativeStackLimit;
 end;
 
 end.

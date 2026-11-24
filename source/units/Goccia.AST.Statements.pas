@@ -12,10 +12,8 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.Bytecode.Chunk,
-  Goccia.Modules,
-  Goccia.SourceSpan,
-  Goccia.Values.Primitives;
+  Goccia.Modules.Phases,
+  Goccia.SourceSpan;
 
 const
   GOCCIA_DEFAULT_EXPORT_BINDING = '*default*';
@@ -769,23 +767,13 @@ uses
   SysUtils,
 
   Goccia.Constants,
-  Goccia.Execution.CallSite,
-  Goccia.GarbageCollector,
-  Goccia.Keywords.Reserved,
-  Goccia.Values.Error,
-  Goccia.Values.ObjectPropertyDescriptor;
-
-function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
-begin
-  Result := AModule.GetNamespaceObject;
-end;
+  Goccia.Keywords.Reserved;
 
 function DirectiveStatementIsUseStrict(const AStatement: TGocciaASTNode;
   out AContinuesDirectivePrologue: Boolean): Boolean;
 var
   LiteralExpression: TGocciaLiteralExpression;
   Expression: TGocciaExpression;
-  Literal: TGocciaValue;
   SourceText: string;
 begin
   Result := False;
@@ -799,8 +787,7 @@ begin
     Exit;
 
   LiteralExpression := TGocciaLiteralExpression(Expression);
-  Literal := LiteralExpression.Value;
-  if not (Literal is TGocciaStringLiteralValue) then
+  if LiteralExpression.Kind <> lkString then
     Exit;
 
   AContinuesDirectivePrologue := True;
@@ -1041,7 +1028,7 @@ end;
     inherited Create(ASpan);
     FHasExpression := AValue <> nil;
     if AValue = nil then
-      FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, ASpan)
+      FValue := TGocciaLiteralExpression.CreateUndefined(ASpan)
     else
       FValue := AValue;
   end;

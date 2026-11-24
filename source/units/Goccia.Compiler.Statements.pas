@@ -185,6 +185,7 @@ uses
   UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
+  Goccia.AST.LiteralValues,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.BlockFunctions,
@@ -203,6 +204,7 @@ uses
   Goccia.Profiler.Compile,
   Goccia.ThreadCleanupRegistry,
   Goccia.Types.Enforcement,
+  Goccia.Types.LocalType,
   Goccia.Values.Primitives;
 
 const

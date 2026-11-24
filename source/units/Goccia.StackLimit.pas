@@ -4,6 +4,9 @@ unit Goccia.StackLimit;
 
 interface
 
+uses
+  NativeStackBounds;
+
 const
   DEFAULT_MAX_STACK_DEPTH = 2200;
 
@@ -20,7 +23,7 @@ const
   // class extending a Proxy) is counted by the delegation caps below, which
   // check the same reserve once they nest. Native re-entries are function
   // calls, and count against --max-stack as well.
-  NATIVE_STACK_RESERVE = 256 * 1024;
+  NATIVE_STACK_RESERVE = NativeStackBounds.NATIVE_STACK_RESERVE;
 
   // Where the bounds of the running thread's stack cannot be found, a native
   // re-entry is refused once this many are live instead.
@@ -107,8 +110,6 @@ procedure CheckProxyPrototypeSteps(const AProxySteps: Integer);
 implementation
 
 uses
-  NativeStackBounds,
-
   Goccia.Error.Messages,
   Goccia.Values.ErrorHelper;
 
@@ -164,35 +165,9 @@ end;
   {$ENDIF}
 {$ENDIF}
 
-threadvar
-  GNativeStackLimit: NativeUInt;
-  GNativeStackLimitFound: Boolean;
-
-function FindNativeStackLimit: NativeUInt;
-var
-  StackLow, StackSize, Reserve, Position: NativeUInt;
-begin
-  Result := 0;
-  if not TryGetThreadStackBounds(StackLow, StackSize) then
-    Exit;
-  // Bounds that do not hold the running frame describe some other stack.
-  Position := NativeStackPosition;
-  if (Position <= StackLow) or (Position - StackLow > StackSize) then
-    Exit;
-  Reserve := NATIVE_STACK_RESERVE;
-  if StackSize < 4 * Reserve then
-    Reserve := StackSize div 4;
-  Result := StackLow + Reserve;
-end;
-
 function NativeStackLimit: NativeUInt;
 begin
-  if not GNativeStackLimitFound then
-  begin
-    GNativeStackLimit := FindNativeStackLimit;
-    GNativeStackLimitFound := True;
-  end;
-  Result := GNativeStackLimit;
+  Result := NativeStackBounds.NativeStackLimit;
 end;
 
 // Out of line: it runs only once native re-entries nest.

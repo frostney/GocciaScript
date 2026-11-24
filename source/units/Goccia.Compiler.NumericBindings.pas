@@ -57,6 +57,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Expressions,
+  Goccia.AST.LiteralValues,
   Goccia.AST.Statements,
   Goccia.Compiler.TypeRules,
   Goccia.Token,

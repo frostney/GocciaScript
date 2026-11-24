@@ -51,6 +51,7 @@ uses
   NumberBits,
   TextSemantics,
 
+  Goccia.AST.LiteralValues,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.Statements,

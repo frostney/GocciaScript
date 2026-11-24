@@ -8,6 +8,7 @@ uses
   Classes,
   Generics.Collections,
 
+  BigInteger,
   HashMap,
   OrderedStringMap,
   UnicodeStringList,
@@ -16,15 +17,13 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Lexer,
-  Goccia.Modules,
+  Goccia.Modules.Phases,
   Goccia.NestingLimit,
   Goccia.OriginMap,
   Goccia.Parser.TypeRanges,
   Goccia.Profiler.Compile,
-  Goccia.Scope.BindingMap,
   Goccia.SourceSpan,
-  Goccia.Token,
-  Goccia.Values.Primitives;
+  Goccia.Token;
 
 type
   // A level of nesting open in the parser; see TGocciaParser.LeaveNesting.
@@ -374,7 +373,7 @@ type
     function ExtractSourceRangeLazy(const AStartLine, AStartColumn: Integer): TGocciaLazySourceText;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteralName(const ALexeme: string): string;
-    function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
+    function ConvertBigIntLiteral(const ALexeme: string): TBigInteger;
     function CheckContextualKeyword(const AKeyword: string): Boolean;
     function CheckContextualKeywordWithLexicalGoal(const AKeyword: string;
       const ALexicalGoal: TGocciaLexicalGoal): Boolean;
@@ -668,7 +667,6 @@ uses
   Math,
   SysUtils,
 
-  BigInteger,
   NumericText,
   StringBuffer,
   TextEncoding,
@@ -682,8 +680,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved,
-  Goccia.Values.BigIntValue;
+  Goccia.Keywords.Reserved;
 
 function IsInOptionalChain(AExpr: TGocciaExpression): Boolean; forward;
 
@@ -2332,7 +2329,7 @@ begin
     Exit(Advance.Lexeme);
 
   if Check(gttNumber) then
-    Exit(FormatDouble(ConvertNumberLiteral(Advance.Lexeme)));
+    Exit(NumberToString(ConvertNumberLiteral(Advance.Lexeme)));
 
   if Check(gttBigInt) then
     Exit(ConvertBigIntLiteralName(Advance.Lexeme));
@@ -2512,7 +2509,6 @@ function TGocciaParser.StatementIsDirective(const AStatement: TGocciaStatement;
   out AIsUseStrict, AHasStrictForbiddenEscape: Boolean): Boolean;
 var
   Expression: TGocciaExpression;
-  Literal: TGocciaValue;
   SourceText: string;
 begin
   Result := False;
@@ -2526,8 +2522,7 @@ begin
   if not (Expression is TGocciaLiteralExpression) or Expression.Parenthesized then
     Exit;
 
-  Literal := TGocciaLiteralExpression(Expression).Value;
-  if not (Literal is TGocciaStringLiteralValue) then
+  if TGocciaLiteralExpression(Expression).Kind <> lkString then
     Exit;
 
   Result := True;
@@ -2789,10 +2784,8 @@ begin
       Column := QuestionToken.Column;
       NumberToken := Advance;
       Condition := Result;
-      Consequent := TGocciaLiteralExpression.Create(
-        TGocciaNumberLiteralValue.Create(
-          ConvertFractionLiteral(NumberToken.Lexeme)),
-        NumberToken.Span);
+      Consequent := TGocciaLiteralExpression.CreateNumber(
+        ConvertFractionLiteral(NumberToken.Lexeme), NumberToken.Span);
     end;
     Consume(gttColon, 'Expected ":" in conditional expression',
       SSuggestTernaryColon);
@@ -2927,8 +2920,7 @@ begin
             AddUnsupportedFeatureWarning('''!='' (loose inequality) is not supported in GocciaScript',
               'Use ''!=='' (strict inequality), or enable --compat-loose-equality',
               Op.Line, Op.Column);
-          Result := TGocciaLiteralExpression.Create(
-            TGocciaUndefinedLiteralValue.UndefinedValue, Op.Span);
+          Result := TGocciaLiteralExpression.CreateUndefined(Op.Span);
         finally
           DiscardedLeft.Free;
           Right.Free;
@@ -3861,9 +3853,8 @@ begin
   try
     while True do
     begin
-      Parts.Add(TGocciaLiteralExpression.Create(
-        TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
-        TemplateToken.Span));
+      Parts.Add(TGocciaLiteralExpression.CreateString(
+        CookedSegments[Length(CookedSegments) - 1], TemplateToken.Span));
 
       Parts.Add(ExpressionAllowIn);
       Consume(gttRightBrace, 'Expected "}" after template expression',
@@ -3874,9 +3865,8 @@ begin
         CookedSegments, RawSegments, CookedValid);
       if TemplateToken.TokenType = gttTemplateTail then
       begin
-        Parts.Add(TGocciaLiteralExpression.Create(
-          TGocciaStringLiteralValue.Create(CookedSegments[Length(CookedSegments) - 1]),
-          TemplateToken.Span));
+        Parts.Add(TGocciaLiteralExpression.CreateString(
+          CookedSegments[Length(CookedSegments) - 1], TemplateToken.Span));
         Break;
       end;
     end;
@@ -4025,26 +4015,22 @@ begin
     gttTrue:
       begin
         Token := Advance;
-        Exit(TGocciaLiteralExpression.Create(
-          TGocciaBooleanLiteralValue.TrueValue, Token.Span));
+        Exit(TGocciaLiteralExpression.CreateBoolean(True, Token.Span));
       end;
     gttFalse:
       begin
         Token := Advance;
-        Exit(TGocciaLiteralExpression.Create(
-          TGocciaBooleanLiteralValue.FalseValue, Token.Span));
+        Exit(TGocciaLiteralExpression.CreateBoolean(False, Token.Span));
       end;
     gttNull:
       begin
         Token := Advance;
-        Exit(TGocciaLiteralExpression.Create(
-          TGocciaNullLiteralValue.NullValue, Token.Span));
+        Exit(TGocciaLiteralExpression.CreateNull(Token.Span));
       end;
     gttNumber:
       begin
         Token := Advance;
-        Exit(TGocciaLiteralExpression.Create(
-          TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Span));
+        Exit(TGocciaLiteralExpression.CreateNumber(ConvertNumberLiteral(Token.Lexeme), Token.Span));
       end;
     gttThis:
       begin
@@ -4087,31 +4073,27 @@ begin
     gttTrue:
       begin
         Token := Advance;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaBooleanLiteralValue.TrueValue, Token.Span);
+        Result := TGocciaLiteralExpression.CreateBoolean(True, Token.Span);
       end;
     gttFalse:
       begin
         Token := Advance;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaBooleanLiteralValue.FalseValue, Token.Span);
+        Result := TGocciaLiteralExpression.CreateBoolean(False, Token.Span);
       end;
     gttNull:
       begin
         Token := Advance;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaNullLiteralValue.NullValue, Token.Span);
+        Result := TGocciaLiteralExpression.CreateNull(Token.Span);
       end;
     gttNumber:
       begin
         Token := Advance;
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Span);
+        Result := TGocciaLiteralExpression.CreateNumber(ConvertNumberLiteral(Token.Lexeme), Token.Span);
       end;
     gttBigInt:
       begin
         Token := Advance;
-        Result := TGocciaLiteralExpression.Create(
+        Result := TGocciaLiteralExpression.CreateBigInt(
           ConvertBigIntLiteral(Token.Lexeme), Token.Span);
       end;
     gttString:
@@ -4123,8 +4105,8 @@ begin
           raise TGocciaSyntaxError.Create(
             'Strict mode string literals must not contain decimal escapes',
             Token.Line, Token.Column, FFileName, FSourceLines);
-        Result := TGocciaLiteralExpression.Create(
-          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Span, SourceText);
+        Result := TGocciaLiteralExpression.CreateString(Token.Lexeme,
+          Token.Span, SourceText);
       end;
     gttTemplate, gttTemplateHead:
       begin
@@ -4399,8 +4381,7 @@ begin
             afcNotMatched:
               Result := TGocciaIdentifierExpression.Create(Name, Token.Span);
             afcDisabled:
-              Result := TGocciaLiteralExpression.Create(
-                TGocciaUndefinedLiteralValue.UndefinedValue, Token.Span);
+              Result := TGocciaLiteralExpression.CreateUndefined(Token.Span);
             afcReady:
             begin
               IsGenerator := False;
@@ -4477,8 +4458,7 @@ begin
             'Use arrow functions: const f = (...) => { ... }; for wrappers needing call-site this, use method shorthand: ({ m(...) {} }).m',
             Token.Line, Token.Column);
           SkipUnsupportedFunctionSignature;
-          Result := TGocciaLiteralExpression.Create(
-            TGocciaUndefinedLiteralValue.UndefinedValue, Token.Span);
+          Result := TGocciaLiteralExpression.CreateUndefined(Token.Span);
         end
         else if Check(gttStar) then
         begin
@@ -5076,7 +5056,7 @@ begin
       else if Check(gttNumber) then
       begin
         NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-        Key := FormatDouble(NumericValue);
+        Key := NumberToString(NumericValue);
       end
       else if Check(gttBigInt) then
         Key := ConvertBigIntLiteralName(Advance.Lexeme)
@@ -5517,7 +5497,7 @@ begin
       begin
         // Convert numeric literals to their decimal string representation
         NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-        Key := FormatDouble(NumericValue);
+        Key := NumberToString(NumericValue);
       end
       else if Check(gttBigInt) then
         Key := ConvertBigIntLiteralName(Advance.Lexeme)
@@ -7185,8 +7165,7 @@ begin
       else
       begin
         Variables[VariableCount].HasInitializer := False;
-        Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedLiteralValue.UndefinedValue, SourceSpanAtPosition(Line, Column));
+        Variables[VariableCount].Initializer := TGocciaLiteralExpression.CreateUndefined(SourceSpanAtPosition(Line, Column));
       end;
     end;
 
@@ -7740,8 +7719,7 @@ begin
       else
       begin
         Variables[VariableCount].HasInitializer := False;
-        Variables[VariableCount].Initializer := TGocciaLiteralExpression.Create(
-          TGocciaUndefinedLiteralValue.UndefinedValue, SourceSpanAtPosition(Line, Column));
+        Variables[VariableCount].Initializer := TGocciaLiteralExpression.CreateUndefined(SourceSpanAtPosition(Line, Column));
       end;
     end;
 
@@ -8361,8 +8339,7 @@ begin
         else
         begin
           Variables[VarCount].HasInitializer := False;
-          Variables[VarCount].Initializer := TGocciaLiteralExpression.Create(
-            TGocciaUndefinedLiteralValue.UndefinedValue, SourceSpanAtPosition(DeclLine, DeclColumn));
+          Variables[VarCount].Initializer := TGocciaLiteralExpression.CreateUndefined(SourceSpanAtPosition(DeclLine, DeclColumn));
         end;
       end;
       Inc(VarCount);
@@ -10413,7 +10390,7 @@ begin
 
         if Check(gttSemicolon) then
           Advance;
-        PropertyValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, Peek.Span);
+        PropertyValue := TGocciaLiteralExpression.CreateUndefined(Peek.Span);
 
         if (Length(MemberDecorators) > 0) or IsStatic or IsComputed then
         begin
@@ -13267,7 +13244,7 @@ begin
   Result := TBigInteger.FromDecimalString(ALexeme).ToString;
 end;
 
-function TGocciaParser.ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
+function TGocciaParser.ConvertBigIntLiteral(const ALexeme: string): TBigInteger;
 var
   DigitStr: string;
 begin
@@ -13276,21 +13253,21 @@ begin
     if (ALexeme[1] = '0') and ((ALexeme[2] = 'x') or (ALexeme[2] = 'X')) then
     begin
       DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
-      Exit(TGocciaBigIntValue.Create(TBigInteger.FromHexString(DigitStr)));
+      Exit(TBigInteger.FromHexString(DigitStr));
     end
     else if (ALexeme[1] = '0') and ((ALexeme[2] = 'b') or (ALexeme[2] = 'B')) then
     begin
       DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
-      Exit(TGocciaBigIntValue.Create(TBigInteger.FromBinaryString(DigitStr)));
+      Exit(TBigInteger.FromBinaryString(DigitStr));
     end
     else if (ALexeme[1] = '0') and ((ALexeme[2] = 'o') or (ALexeme[2] = 'O')) then
     begin
       DigitStr := Copy(ALexeme, 3, Length(ALexeme) - 2);
-      Exit(TGocciaBigIntValue.Create(TBigInteger.FromOctalString(DigitStr)));
+      Exit(TBigInteger.FromOctalString(DigitStr));
     end;
   end;
 
-  Result := TGocciaBigIntValue.Create(TBigInteger.FromDecimalString(ALexeme));
+  Result := TBigInteger.FromDecimalString(ALexeme);
 end;
 
 function TGocciaParser.IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
@@ -13447,7 +13424,7 @@ begin
         else if Check(gttNumber) then
         begin
           NumericValue := ConvertNumberLiteral(Advance.Lexeme);
-          Key := FormatDouble(NumericValue);
+          Key := NumberToString(NumericValue);
         end
         else if Check(gttBigInt) then
         begin

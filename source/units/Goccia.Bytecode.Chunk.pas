@@ -13,9 +13,18 @@ uses
   OrderedStringMap,
 
   Goccia.Bytecode.Debug,
-  Goccia.Error.CallDiagnostics;
+  Goccia.Error.CallDiagnostics,
+  Goccia.Types.LocalType;
 
 const
+  { Goccia.Types.LocalType's strict types, named here too for the runtime's units }
+  sltUntyped = Goccia.Types.LocalType.sltUntyped;
+  sltInteger = Goccia.Types.LocalType.sltInteger;
+  sltFloat = Goccia.Types.LocalType.sltFloat;
+  sltBoolean = Goccia.Types.LocalType.sltBoolean;
+  sltString = Goccia.Types.LocalType.sltString;
+  sltReference = Goccia.Types.LocalType.sltReference;
+
   { The function a static field initializer compiles to. Coverage does not
     count it as a function: the source has none there, and it would share a
     position with the function value it returns. }
@@ -208,14 +217,8 @@ type
     CatchRegister: UInt16;
   end;
 
-  TGocciaLocalType = (
-    sltUntyped,
-    sltInteger,
-    sltFloat,
-    sltBoolean,
-    sltString,
-    sltReference
-  );
+  { declared engine-free (Goccia.Types.LocalType); named here too for the runtime's units }
+  TGocciaLocalType = Goccia.Types.LocalType.TGocciaLocalType;
 
   // Runtime-only inline cache for OP_GET_GLOBAL sites, indexed by the
   // instruction's name-constant index.  Scope/ObjectValue are weak pointers

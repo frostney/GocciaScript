@@ -75,7 +75,7 @@ function NativeStackNearlyExhausted: Boolean;
 implementation
 
 uses
-  Goccia.StackLimit;
+  NativeStackBounds;
 
 function NestingDepthExceeded(const ADepth: Integer): Boolean;
 begin

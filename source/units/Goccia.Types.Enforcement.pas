@@ -5,22 +5,8 @@ unit Goccia.Types.Enforcement;
 interface
 
 uses
-  Goccia.AST.Expressions,
-  Goccia.AST.Node,
-  Goccia.Bytecode.Chunk,
+  Goccia.Types.LocalType,
   Goccia.Values.Primitives;
-
-{ Convert a TypeScript-style type annotation string into the strict
-  TGocciaLocalType enum used by the compiler and runtime guards.
-  Returns sltUntyped when the annotation is empty, references a
-  union type, or names an unsupported type. }
-function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
-
-{ Infer a strict type from an initializer AST expression.  Returns
-  sltUntyped for everything that is not a self-evident literal /
-  reference constructor.  The bytecode compiler uses it to decide
-  which untyped declarations have an inferred type. }
-function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 
 { Throw a TypeError when AValue does not satisfy the AExpected strict
   type.  Used by both the bytecode VM (OP_CHECK_TYPE) and typed scope
@@ -45,64 +31,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper;
-
-function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
-var
-  Ann: string;
-begin
-  Result := sltUntyped;
-  Ann := Trim(AAnnotation);
-  if Ann = '' then
-    Exit;
-  if Pos('|', Ann) > 0 then
-    Exit;
-  if Ann = NUMBER_TYPE_NAME then
-    Result := sltFloat
-  else if Ann = STRING_TYPE_NAME then
-    Result := sltString
-  else if Ann = BOOLEAN_TYPE_NAME then
-    Result := sltBoolean
-  else if (Ann = OBJECT_TYPE_NAME) or (Ann = 'Object')
-       or (Ann = 'Function')
-       or (Pos('<', Ann) > 0)
-       or (Pos('[', Ann) > 0)
-       or (Pos('{', Ann) > 0)
-       or (Pos('=>', Ann) > 0) then
-    Result := sltReference;
-end;
-
-function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
-var
-  Lit: TGocciaLiteralExpression;
-begin
-  Result := sltUntyped;
-  if AExpr is TGocciaLiteralExpression then
-  begin
-    Lit := TGocciaLiteralExpression(AExpr);
-    if Lit.Value is TGocciaNumberLiteralValue then
-      Result := sltFloat
-    else if Lit.Value is TGocciaBooleanLiteralValue then
-      Result := sltBoolean
-    else if Lit.Value is TGocciaStringLiteralValue then
-      Result := sltString;
-  end
-  else if AExpr is TGocciaTemplateLiteralExpression then
-    Result := sltString
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-    Result := sltString
-  else if AExpr is TGocciaObjectExpression then
-    Result := sltReference
-  else if AExpr is TGocciaArrayExpression then
-    Result := sltReference
-  else if AExpr is TGocciaNewExpression then
-    Result := sltReference
-  else if AExpr is TGocciaArrowFunctionExpression then
-    Result := sltReference
-  else if AExpr is TGocciaFunctionExpression then
-    Result := sltReference
-  else if AExpr is TGocciaObjectMethodDefinition then
-    Result := sltReference;
-end;
 
 // ES2026 Types-as-comments: runtime guard shared by the bytecode VM and
 // typed scope bindings.

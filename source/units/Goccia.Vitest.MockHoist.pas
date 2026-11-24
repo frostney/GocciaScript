@@ -49,8 +49,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Keywords.Reserved,
-  Goccia.Values.Primitives;
+  Goccia.Keywords.Reserved;
 
 const
   { Local binding the generated mock module evaluates the factory into. Prefixed
@@ -482,9 +481,9 @@ begin
   if not (ACall.Arguments[0] is TGocciaLiteralExpression) then
     Exit;
   Literal := TGocciaLiteralExpression(ACall.Arguments[0]);
-  if not (Literal.Value is TGocciaStringLiteralValue) then
+  if Literal.Kind <> lkString then
     Exit;
-  Specifier := TGocciaStringLiteralValue(Literal.Value).Value;
+  Specifier := Literal.StringValue;
 
   if not TryResolveSpecifier(Specifier, Address) then
     Exit;

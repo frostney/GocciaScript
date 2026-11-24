@@ -212,9 +212,7 @@ uses
   Goccia.Lexer,
   Goccia.NestingLimit,
   Goccia.SourceSpan,
-  Goccia.Token,
-  Goccia.Values.BigIntValue,
-  Goccia.Values.Primitives;
+  Goccia.Token;
 
 const
   { The walker recurses once per level of the tree. The parser has already
@@ -388,20 +386,22 @@ end;
 
 function LiteralKind(const ALiteral: TGocciaLiteralExpression): string;
 begin
-  if ALiteral.Value is TGocciaStringLiteralValue then
-    Result := 'StringLiteral'
-  else if ALiteral.Value is TGocciaNumberLiteralValue then
-    Result := 'NumericLiteral'
-  else if ALiteral.Value is TGocciaBooleanLiteralValue then
-    Result := 'BooleanLiteral'
-  else if ALiteral.Value is TGocciaNullLiteralValue then
-    Result := 'NullLiteral'
-  else if ALiteral.Value is TGocciaBigIntValue then
-    Result := 'BigIntLiteral'
+  case ALiteral.Kind of
+    lkString:
+      Result := 'StringLiteral';
+    lkNumber:
+      Result := 'NumericLiteral';
+    lkBoolean:
+      Result := 'BooleanLiteral';
+    lkNull:
+      Result := 'NullLiteral';
+    lkBigInt:
+      Result := 'BigIntLiteral';
   else
     { An `undefined` the parser put in place of a construct the host's
       profile turns off. It stands for text, not for a literal. }
     Result := '';
+  end;
 end;
 
 { The kind of an expression-level node, or '' for a node the view does not

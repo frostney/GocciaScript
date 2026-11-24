@@ -216,6 +216,7 @@ uses
   UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
+  Goccia.AST.LiteralValues,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
@@ -235,6 +236,7 @@ uses
   Goccia.Profiler.Compile,
   Goccia.Token,
   Goccia.Types.Enforcement,
+  Goccia.Types.LocalType,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
 

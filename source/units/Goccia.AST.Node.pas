@@ -11,6 +11,9 @@ uses
   Goccia.SourceSpan;
 
 type
+  { How a binding was declared: what the parser records and every scope keeps }
+  TGocciaDeclarationType = (dtLet, dtConst, dtParameter, dtVar);
+
   { ADR 0134 static detection. What the parser found in a function's own code,
     its parameter list included and the bodies of nested functions excluded:
     a call whose callee is the plain identifier `eval` (ES2026 §13.3.6.1 makes

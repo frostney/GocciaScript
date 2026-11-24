@@ -17,6 +17,7 @@ implementation
 
 uses
   Goccia.AST.Expressions,
+  Goccia.AST.LiteralValues,
   Goccia.AST.Node,
   Goccia.Token,
   Goccia.Values.Primitives;

@@ -7,13 +7,24 @@ interface
 uses
   OrderedStringMap,
 
+  Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
   Goccia.Values.Primitives;
 
 type
   TGocciaStringArray = array of string;
 
-  TGocciaDeclarationType = (dtLet, dtConst, dtParameter, dtVar);
+  { declared with the AST (Goccia.AST.Node), which the front end shares without the runtime; named here too for
+    the runtime's units }
+  TGocciaDeclarationType = Goccia.AST.Node.TGocciaDeclarationType;
+
+const
+  dtLet = Goccia.AST.Node.dtLet;
+  dtConst = Goccia.AST.Node.dtConst;
+  dtParameter = Goccia.AST.Node.dtParameter;
+  dtVar = Goccia.AST.Node.dtVar;
+
+type
 
   TLexicalBinding = record
   private
