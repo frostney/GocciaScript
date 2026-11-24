@@ -19,9 +19,9 @@ procedure InitDate;
 implementation
 
 uses
-  BaseUnix, Unix, Linux, UnixType, SysUtils, Math, Goccia.Temporal.TimeZone, G2.Core, G2.VM;
+  SysUtils, Math, Goccia.Temporal.TimeZone, G2.Core, G2.VM;
 
-{$linklib c}
+{$IFDEF UNIX}{$linklib c}{$ENDIF}
 
 const
   okDate = 18;
@@ -41,8 +41,10 @@ type
   end;
   Ptm = ^Ttm;
 
+{$IFDEF UNIX}
 function localtime_r(const T: PInt64; Res: Ptm): Ptm; cdecl; external 'c';
 procedure tzset; cdecl; external 'c';
+{$ENDIF}
 
 threadvar
   DateProtoV: TValue;
@@ -242,10 +244,17 @@ begin
   end;
   S := Trunc(FloorD(T / 1000));
   if Z <> '' then Exit(GetUtcOffsetSeconds(Z, S) * 1000.0);
+  {$IFDEF UNIX}
   FillChar(TM, SizeOf(TM), 0);
   if localtime_r(@S, @TM) = nil then Exit(0);
   if TM.tm_zone <> nil then Abbr := UnicodeString(AnsiString(TM.tm_zone));
   Result := TM.tm_gmtoff * 1000.0;
+  {$ELSE}
+  { no localtime_r: the system zone's IANA name, its TZif data as for a host's zone }
+  Z := UnicodeString(GetSystemTimeZoneId);
+  if Z = '' then Exit(0);
+  Result := GetUtcOffsetSeconds(Z, S) * 1000.0;
+  {$ENDIF}
 end;
 
 function Offset(T: Double): Double;
@@ -1240,7 +1249,7 @@ var C, F: TValue;   { Date.prototype is read from its rooted threadvar: a collec
     DefineNative(O, Name, Fn, Len);
   end;
 begin
-  tzset;
+  {$IFDEF UNIX}tzset;{$ENDIF}
   AddRoot(@DateProtoV);
   RealmVals([@DateProtoV]);
   DateProtoV := MkPtr(NewPlainObject(ObjectProto, 48));

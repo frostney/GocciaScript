@@ -4,7 +4,7 @@
 
 { 23.2.2.1 %TypedArray%.from }
 function TA_From(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Mapping: Boolean; M, L, T, V, LV: TValue; Len, K: Int64; CB: array[0..1] of TValue; Base: Integer;
+var Mapping: Boolean; M, L, T, V, LV: TValue; Len: Int64; K: SizeInt; CB: array[0..1] of TValue; Base: Integer;
 begin
   if not IsConstructorV(Args[0]) then Exit(ThrowTypeError('%TypedArray%.from: this is not a constructor'));
   Mapping := Arg(Args, Argc, 2) <> VUndefined;
@@ -242,7 +242,7 @@ end;
 
 { 23.2.3.10 filter }
 function TAP_Filter(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, N: Int64; V, R, LV, T: TValue; CB: array[0..2] of TValue; Base: Integer;
+var Len, N: Int64; K: SizeInt; V, R, LV, T: TValue; CB: array[0..2] of TValue; Base: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('callback is not a function'));
@@ -336,7 +336,7 @@ function TAP_LastIndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; 
 
 { 23.2.3.18 join and 23.2.3.31 toLocaleString }
 function TAJoin(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): Boolean;
-var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; LA: array[0..1] of TValue;
+var Len: Int64; K: SizeInt; Sep, SV, V, F: TValue; B: UnicodeString; LA: array[0..1] of TValue;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if Locale or (Arg(Args, Argc, 1) = VUndefined) then Sep := StrFromUnicode(',')
@@ -371,7 +371,7 @@ function TAP_ToLocaleString(Args: TArgs; Argc: Integer; var Res: TValue): Boolea
 
 { 23.2.3.22 map }
 function TAP_Map(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K: Int64; V, R, LV, T: TValue; CB: array[0..2] of TValue; Base: Integer;
+var Len: Int64; K: SizeInt; V, R, LV, T: TValue; CB: array[0..2] of TValue; Base: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('callback is not a function'));
@@ -444,7 +444,7 @@ end;
 
 { 23.2.3.26 set }
 function TAP_Set(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var D: Double; Off, TLen, SLen, K: Int64; T, S: PObj; Src, V: TValue; Clone: array of Byte; SP: PByte;
+var D: Double; Off, TLen, SLen: Int64; K: SizeInt; T, S: PObj; Src, V: TValue; Clone: array of Byte; SP: PByte;
   SK, TK, ES: Integer; Tmp: PObj;
 begin
   if not NeedTA(Args, 'set') then Exit(False);
@@ -512,7 +512,7 @@ end;
 
 { 23.2.3.27 slice }
 function TAP_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, Fin, Count, N: Int64; LV, T: TValue; O, A: PObj; ES: Integer;
+var Len, K, Fin, Count: Int64; N: SizeInt; LV, T: TValue; O, A: PObj; ES: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 1), Len, 0, K) then Exit(False);
@@ -577,7 +577,7 @@ end;
 { O points at the typed array's argument slot (a root): reading an element can allocate (a BigInt), so the array
   is read through it each time, and the element before the array it goes into (the capacity is there: no growth) }
 function TASortValues(O: PValue; Len: Int64; Base: Integer): Boolean;
-var K, N, W, I, L, M, R_, J: Int64; Less: Boolean; V, T: TValue; Src: PValueArray;
+var N, W, I, L, M, R_, J: Int64; K: SizeInt; Less: Boolean; V, T: TValue; Src: PValueArray;
 begin
   TempRoots[Base] := MkPtr(NewArray(0, Max(Len, 1)));
   for K := 0 to Len - 1 do
@@ -619,7 +619,7 @@ begin
 end;
 
 function TASortCommon(Args: TArgs; Argc: Integer; var Res: TValue; Copy: Boolean): Boolean;
-var Len, K: Int64; Saved, T: TValue; Base: Integer;
+var Len: Int64; K: SizeInt; Saved, T: TValue; Base: Integer;
 begin
   if (Arg(Args, Argc, 1) <> VUndefined) and not IsCallable(Args[1]) then
     Exit(ThrowTypeError('The comparison function must be either a function or undefined'));
@@ -676,7 +676,7 @@ end;
 
 { 23.2.3.33 toReversed }
 function TAP_ToReversed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K: Int64; T: TValue;
+var Len: Int64; K: SizeInt; T: TValue;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not TACreateSameType(Args[0], Len, T) then Exit(False);
@@ -688,7 +688,7 @@ end;
 
 { 23.2.3.36 with }
 function TAP_With(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, Idx: Int64; D: Double; N, T: TValue; Base: Integer;
+var Len, Idx: Int64; K: SizeInt; D: Double; N, T: TValue; Base: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not ToIntInf(Arg(Args, Argc, 1), D) then Exit(False);

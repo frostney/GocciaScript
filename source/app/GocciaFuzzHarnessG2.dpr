@@ -304,6 +304,10 @@ begin
   RTLEventDestroy(FWake);
 end;
 
+{$IFNDEF UNIX}
+procedure ExitProcessNow(Code: LongWord); stdcall; external 'kernel32' name 'ExitProcess';
+{$ENDIF}
+
 procedure TFuzzWatchdog.Execute;
 begin
   RTLEventWaitFor(FWake, FMilliseconds);
@@ -314,7 +318,11 @@ begin
     [FMilliseconds]));
   { The engine is still running on the main thread: leave without unwinding
     it or running finalization. }
+  {$IFDEF UNIX}
   FpExit(EXIT_OK);
+  {$ELSE}
+  ExitProcessNow(EXIT_OK);
+  {$ENDIF}
 end;
 
 procedure TFuzzWatchdog.Disarm;

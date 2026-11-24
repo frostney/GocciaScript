@@ -325,15 +325,15 @@ end;
 
 { ---------------- Math ---------------- }
 
-{$linklib m}
-function c_log1p(X: Double): Double; cdecl; external 'm' name 'log1p';
-function c_expm1(X: Double): Double; cdecl; external 'm' name 'expm1';
-function c_cosh(X: Double): Double; cdecl; external 'm' name 'cosh';
-function c_sinh(X: Double): Double; cdecl; external 'm' name 'sinh';
-function c_tanh(X: Double): Double; cdecl; external 'm' name 'tanh';
-function c_acosh(X: Double): Double; cdecl; external 'm' name 'acosh';
-function c_asinh(X: Double): Double; cdecl; external 'm' name 'asinh';
-function c_atanh(X: Double): Double; cdecl; external 'm' name 'atanh';
+{$IFDEF UNIX}{$linklib m}{$ENDIF}
+function c_log1p(X: Double): Double; cdecl; external G2LIBM name 'log1p';
+function c_expm1(X: Double): Double; cdecl; external G2LIBM name 'expm1';
+function c_cosh(X: Double): Double; cdecl; external G2LIBM name 'cosh';
+function c_sinh(X: Double): Double; cdecl; external G2LIBM name 'sinh';
+function c_tanh(X: Double): Double; cdecl; external G2LIBM name 'tanh';
+function c_acosh(X: Double): Double; cdecl; external G2LIBM name 'acosh';
+function c_asinh(X: Double): Double; cdecl; external G2LIBM name 'asinh';
+function c_atanh(X: Double): Double; cdecl; external G2LIBM name 'atanh';
 
 { the C library's functions (IEEE 754 signed zeros and infinities, nearly correctly rounded) }
 function MathFn(Args: TArgs; Argc: Integer; var Res: TValue; Which: Integer): Boolean;

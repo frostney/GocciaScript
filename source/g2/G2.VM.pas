@@ -240,6 +240,9 @@ procedure JitTakeThread;
   RangeError (MemoryLimitMessage) and AbortKind 3. }
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
 procedure LimitsDisarm;
+{ the spent limit that aborted the run until LimitsDisarm: 0 none, 1 the timeout, 2 the instruction budget, 3 the
+  memory limit, 4 a host abort }
+function LimitAbortKind: Integer;
 { the spent memory limit's message: the live bytes the collection left and the limit }
 function MemoryLimitMessage: UnicodeString;
 { a host ends the run as a spent limit does (AbortKind 4), past every handler, with an Error of message Msg;
@@ -646,6 +649,11 @@ begin
     4: ThrowError('Error', HostAbortText);
   else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
   end;
+end;
+
+function LimitAbortKind: Integer;
+begin
+  Result := AbortKind;
 end;
 
 function AbortInterrupted: Boolean;
@@ -1087,10 +1095,17 @@ begin
   CurRealm := R;
 end;
 
+{$IFDEF G2JIT}
 function ThreadPtr: PByte; assembler; nostackframe;
 asm
   movq %fs:0, %rax
 end;
+{$ELSE}
+function ThreadPtr: PByte;
+begin
+  Result := nil;
+end;
+{$ENDIF}
 
 type
   { the native stack bounds a realm's set-up borrows from the margin kept for the error path (NativeStackLend) }
@@ -1119,7 +1134,11 @@ begin
   if Length(Realms) > REALM_MAX then Exit(ThrowError('RangeError', 'too many realms'));
   { G2_REALMCHECK=<size of the TLS segment>: report the thread-local bytes the new realm's Init procedures changed
     that the switch back did not restore (state a realm needs that no Init procedure registered) }
+  {$IFDEF G2JIT}
   TlsSize := StrToIntDef(GetEnvironmentVariable('G2_REALMCHECK'), 0);
+  {$ELSE}
+  TlsSize := 0;   { (the check reads the TLS block %fs-relative: Linux x86-64 only) }
+  {$ENDIF}
   if TlsSize > 0 then
   begin
     Base := ThreadPtr - TlsSize;
@@ -4217,7 +4236,7 @@ begin
   SwitchRealm(R0);
 end;
 
-{$IFDEF CPUX86_64}
+{$IFDEF G2JIT}
 function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean; forward;
 function JitCallFast(O: PObj; This: TValue; Args: PValue; Argc: Integer; var Res: TValue; var Ok: Boolean): Boolean; forward;
 {$ENDIF}
@@ -4318,7 +4337,7 @@ begin
         Exit(ThrowClassCall(O));
       { native code entering the interpreter (or compiled code) nests it on the native stack }
       if ReentryTooDeep then Exit(False);
-      {$IFDEF CPUX86_64}
+      {$IFDEF G2JIT}
       { a compiled callee whose frame the fast path pushes: its code run directly }
       if JitCallFast(O, This, Args, Argc, Res, Result) then Exit;
       {$ENDIF}
@@ -4341,7 +4360,7 @@ begin
         Result := True;
       end
       else
-      {$IFDEF CPUX86_64}
+      {$IFDEF G2JIT}
       { the callee's compiled code, run natively when it has some (a callback from a native) }
       if not JitRunPushed(Res, Result) then
       {$ENDIF}
@@ -6996,7 +7015,7 @@ end;
 
 procedure JitTakeThread;
 begin
-  {$IFDEF CPUX86_64}JitMainThread := GetCurrentThreadId;{$ENDIF}
+  {$IFDEF G2JIT}JitMainThread := GetCurrentThreadId;{$ENDIF}
 end;
 
 { ---- a bytecode file's code (G2.Artifact; TFuncTemplate.Loaded): the instructions that trust a register's kind
@@ -7100,7 +7119,7 @@ var
   Bool: Boolean;
   IP: PQWord;   { the next instruction: a pointer, not Code[PC], saves FastLoop's spilled Code load per step }
 begin
-  {$IFDEF CPUX86_64}
+  {$IFDEF G2JIT}
   { a compiled template's code first (it stops at an instruction it does not take) }
   if (JitEnabled = 1) and not JitBlocked and (Fr^.Tpl^.JitState <> 2) then
   begin
@@ -7714,7 +7733,7 @@ LSetPropSlow:
           CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8);
           if CI < 0 then if Interrupt <> 0 then goto LBail;
           Inc(IP, CI);
-          {$IFDEF CPUX86_64}
+          {$IFDEF G2JIT}
           { a loop's back edge: into the compiled loop }
           if (JitEnabled = 1) and not JitBlocked and (CI < 0) and (Fr^.Tpl^.JitState <> 2) then
           begin
@@ -7872,7 +7891,7 @@ LSetPropSlow:
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
-          {$IFDEF CPUX86_64}
+          {$IFDEF G2JIT}
           if (JitEnabled = 1) and not JitBlocked and (T^.JitState <> 2) then
           begin
             CI := XJitRun(Fr, 0);
@@ -7964,7 +7983,7 @@ LSetPropSlow:
             ICs := T^.ICBase;
             Changed := True;
             { the generator's compiled code from its resumption }
-            {$IFDEF CPUX86_64}
+            {$IFDEF G2JIT}
             if (JitEnabled = 1) and not JitBlocked and (T^.JitState <> 2) then
             begin
               CI := XJitRun(Fr, Fr^.PC);
@@ -7996,7 +8015,7 @@ LSetPropSlow:
           ICs := T^.ICBase;
           Changed := True;
           { the consumer's compiled code past its opIterNext }
-          {$IFDEF CPUX86_64}
+          {$IFDEF G2JIT}
           if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
           begin
             CI := XJitRun(Fr, Fr^.PC);
@@ -8026,7 +8045,7 @@ LSetPropSlow:
               K := T^.KBase;
               ICs := T^.ICBase;
               Changed := True;
-              {$IFDEF CPUX86_64}
+              {$IFDEF G2JIT}
               if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
               begin
                 CI := XJitRun(Fr, Fr^.PC);
@@ -8095,7 +8114,7 @@ LSetPropSlow:
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
-          {$IFDEF CPUX86_64}
+          {$IFDEF G2JIT}
           if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
           begin
             CI := XJitRun(Fr, Fr^.PC);
@@ -10448,7 +10467,7 @@ end;
   stubs (no other thread's engine has compiled code: only this thread compiles), and instanceof's cache is
   emptied before HeapDone frees the shapes its entries name }
 procedure JitEngineDone;
-{$IFDEF CPUX86_64}
+{$IFDEF G2JIT}
 var I: Integer;
 begin
   if GetCurrentThreadId <> JitMainThread then Exit;
@@ -10474,11 +10493,7 @@ end;
 procedure VMDone;
 begin
   JitEngineDone;
-  {$IFDEF UNIX}
-  if VStack <> nil then fpmunmap(VStack, STACK_MAX * SizeOf(TValue));
-  {$ELSE}
-  if VStack <> nil then FreeMem(VStack);
-  {$ENDIF}
+  OSFree(VStack, STACK_MAX * SizeOf(TValue));
   VStack := nil; StackTop := 0;
   Frames := nil; FrameTop := 0; Handlers := nil; HandlerTop := 0;
   if OpenUpvals <> nil then FreeMem(OpenUpvals);
@@ -10500,13 +10515,8 @@ begin
   GCDescribeNative := @DescribeTemplate;
   { Zeroed pages on first touch: an eager GetMem + FillChar of the 32 MB stack
     was 8,192 page faults and 32 MB of RSS in every run, empty script included. }
-  {$IFDEF UNIX}
-  VStack := fpmmap(nil, STACK_MAX * SizeOf(TValue), PROT_READ or PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
-  if VStack = PValue(MAP_FAILED) then raise EOutOfMemory.Create('cannot reserve the register stack');
-  {$ELSE}
-  VStack := GetMem(STACK_MAX * SizeOf(TValue));
-  FillChar(VStack^, STACK_MAX * SizeOf(TValue), 0);
-  {$ENDIF}
+  VStack := OSAllocZeroed(STACK_MAX * SizeOf(TValue));
+  if VStack = nil then raise EOutOfMemory.Create('cannot reserve the register stack');
   StackTop := 0;
   SetLength(Frames, FRAME_MAX);
   FrameTop := 0;
@@ -10635,6 +10645,7 @@ end;
 { G2.Bytecode's FreeJitStateHook: a template's entry tables and optimizing state (its feedback, OptFb, is freed with
   the template) }
 procedure FreeTemplateJitState(T: PFuncTemplate);
+{$IFDEF G2JIT}
 var Info: POptInfo; Base, Opt: PPtrUInt;
 begin
   Info := POptInfo(T^.Opt);
@@ -10653,13 +10664,19 @@ begin
   T^.JitTable := nil;
   T^.Opt := nil;
 end;
+{$ELSE}
+begin
+  T^.JitTable := nil;
+  T^.Opt := nil;
+end;
+{$ENDIF}
 
 initialization
   BigIntegerAbortCheck := @BigAbortCheck;
   FreeJitStateHook := @FreeTemplateJitState;
   GCShapeSweepHook := @ForgetRetiredShapesVM;
   InitFastOps;
-  {$IFDEF CPUX86_64}JitOn;{$ENDIF}
+  {$IFDEF G2JIT}JitOn;{$ENDIF}
 {$IFDEF G2_JITSTATS}
 finalization
   WriteLn(ErrOutput, 'jitentries ', JitEntries);

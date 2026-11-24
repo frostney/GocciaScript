@@ -190,7 +190,7 @@ end;
 { ---------------- typed arrays ---------------- }
 
 function TypedCtor(Kind: Integer; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var A0, It, V, Buf: TValue; N, Off, I: Int64; T: PObj; Src: PObj; Done: Boolean; D: Double; Items: PObj;
+var A0, It, V, Buf: TValue; N, Off: Int64; I: SizeInt; T: PObj; Src: PObj; Done: Boolean; D: Double; Items: PObj;
 begin
   if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor ' + TANames[Kind] + ' requires ''new'''));
   A0 := Arg(Args, Argc, 1);
@@ -339,7 +339,7 @@ begin
 end;
 
 function TAProto_Fill(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var T: PObj; Len, S, E, I: Int64; D: Double;
+var T: PObj; Len, S, E: Int64; I: SizeInt; D: Double;
 begin
   if not ThisTA(Args) then Exit(False);
   if not NumArg(Args, Argc, 1, D) then Exit(False);

@@ -482,8 +482,24 @@ function GCEpochNow: Integer; noinline;
   TAWatched, the typed array length fast path is off in this realm }
 procedure TAWatchedChanged(O: PObj);
 
+{$IFNDEF CPU64}
+{ the RTL's 64-bit exchanges a 32-bit target lacks, by the compiler's 64-bit compare-and-swap (cmpxchg8b) }
+function InterlockedCompareExchange64(var Target: Int64; NewValue, Comperand: Int64): Int64;
+function InterLockedExchangeAdd64(var Target: Int64; Source: Int64): Int64;
+function InterLockedExchange64(var Target: Int64; Source: Int64): Int64;
+{$ENDIF}
+
+{ ---- file paths ---- }
+{ S names a file from the root: a leading /, and on Windows a leading \ or a drive (C:\ or C:/) }
+function IsAbsoluteFilePath(const S: UnicodeString): Boolean;
+
+{ ---- memory from the system ---- }
+{ Size bytes of zeroed memory whose pages the system supplies on first touch (nil when it has none) }
+function OSAllocZeroed(Size: PtrUInt): Pointer;
+procedure OSFree(P: Pointer; Size: PtrUInt);
+
 { ---- the native stack ---- }
-{ records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
+{ records how far this thread's native stack may grow (its bounds from the system, a margin kept for the
   error path); call it on the thread, before deep recursion is possible }
 procedure StackGuardInit;
 { True once less than the margin of the native stack is left: a native recursion (a Proxy without traps around a
@@ -534,12 +550,76 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds;
 
-function pthread_self: PtrUInt; cdecl; external 'c';
-function pthread_getattr_np(Th: PtrUInt; Attr: Pointer): Integer; cdecl; external 'c';
-function pthread_attr_getstack(Attr: Pointer; StackAddr: PPointer; StackSize: PPtrUInt): Integer; cdecl; external 'c';
-function pthread_attr_destroy(Attr: Pointer): Integer; cdecl; external 'c';
+{$IFDEF MSWINDOWS}
+{ (declared here: the Windows unit's names would hide SysUtils' in this unit) }
+const
+  MEM_COMMIT = $1000;
+  MEM_RESERVE = $2000;
+  MEM_RELEASE = $8000;
+  PAGE_READWRITE = 4;
+function VirtualAlloc(Address: Pointer; Size: PtrUInt; AllocationType, Protect: LongWord): Pointer; stdcall;
+  external 'kernel32' name 'VirtualAlloc';
+function VirtualFree(Address: Pointer; Size: PtrUInt; FreeType: LongWord): LongBool; stdcall;
+  external 'kernel32' name 'VirtualFree';
+{$ENDIF}
+
+{$IFNDEF CPU64}
+function InterlockedCompareExchange64(var Target: Int64; NewValue, Comperand: Int64): Int64;
+begin
+  Result := AtomicCmpExchange(Target, NewValue, Comperand);
+end;
+
+function InterLockedExchangeAdd64(var Target: Int64; Source: Int64): Int64;
+begin
+  repeat
+    Result := Target;
+  until InterlockedCompareExchange64(Target, Result + Source, Result) = Result;
+end;
+
+function InterLockedExchange64(var Target: Int64; Source: Int64): Int64;
+begin
+  repeat
+    Result := Target;
+  until InterlockedCompareExchange64(Target, Source, Result) = Result;
+end;
+{$ENDIF}
+
+function IsAbsoluteFilePath(const S: UnicodeString): Boolean;
+begin
+  if S = '' then Exit(False);
+  Result := S[1] = '/';
+  {$IFDEF MSWINDOWS}
+  if not Result then
+    Result := (S[1] = '\') or ((Length(S) >= 3) and (S[2] = ':') and (S[3] in ['\', '/']) and
+      (((S[1] >= 'A') and (S[1] <= 'Z')) or ((S[1] >= 'a') and (S[1] <= 'z'))));
+  {$ENDIF}
+end;
+
+function OSAllocZeroed(Size: PtrUInt): Pointer;
+begin
+  {$IFDEF UNIX}
+  Result := fpmmap(nil, Size, PROT_READ or PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  if Result = MAP_FAILED then Result := nil;
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  Result := VirtualAlloc(nil, Size, MEM_RESERVE or MEM_COMMIT, PAGE_READWRITE);
+  {$ELSE}
+  Result := AllocMem(Size);
+  {$ENDIF}
+end;
+
+procedure OSFree(P: Pointer; Size: PtrUInt);
+begin
+  if P = nil then Exit;
+  {$IFDEF UNIX}
+  fpmunmap(P, Size);
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  VirtualFree(P, 0, MEM_RELEASE);
+  {$ELSE}
+  FreeMem(P);
+  {$ENDIF}
+end;
 
 const
   { what the native stack keeps for the error path and the runtime once the guard trips }
@@ -553,13 +633,11 @@ threadvar
   EpochOverridden, MonoOverridden: Boolean;
 
 procedure StackGuardInit;
-var Attr: array[0..127] of Byte; Addr: Pointer; Size: PtrUInt;
+var Low, Size: NativeUInt;
 begin
   NativeStackLimit := 0;
-  if pthread_getattr_np(pthread_self, @Attr[0]) <> 0 then Exit;
-  if pthread_attr_getstack(@Attr[0], @Addr, @Size) = 0 then
-    if Size > 2 * NATIVE_STACK_MARGIN then NativeStackLimit := PtrUInt(Addr) + NATIVE_STACK_MARGIN;
-  pthread_attr_destroy(@Attr[0]);
+  if TryGetThreadStackBounds(Low, Size) and (Size > 2 * NATIVE_STACK_MARGIN) then
+    NativeStackLimit := Low + NATIVE_STACK_MARGIN;
 end;
 
 function NativeGuardLend(Bytes: PtrUInt): PtrUInt;
@@ -720,8 +798,8 @@ begin
     if (Result and $000FFFFFFFFFFFFF) <> 0 then Result := CANON_NAN;
 end;
 function DoubleOf(V: TValue): Double; inline; begin Result := PDouble(@V)^; end;
-function libm_pow(X, Y: Double): Double; cdecl; external 'm' name 'pow';
-function libm_fmod(X, Y: Double): Double; cdecl; external 'm' name 'fmod';
+function libm_pow(X, Y: Double): Double; cdecl; external G2LIBM name 'pow';
+function libm_fmod(X, Y: Double): Double; cdecl; external G2LIBM name 'fmod';
 
 function DFloor(D: Double): Double;
 begin
@@ -893,8 +971,7 @@ begin
   end;
   SetLength(GrayStack, 65536);
   SetLength(RememberedList, 65536);
-  TempRoots := fpmmap(nil, TEMP_ROOTS_MAX * SizeOf(TValue), PROT_READ or PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS,
-    -1, 0);
+  TempRoots := OSAllocZeroed(TEMP_ROOTS_MAX * SizeOf(TValue));
   TempTop := 0;
 end;
 
@@ -2874,7 +2951,7 @@ begin
   Ints := SmallIntAtoms;
   if Ints <> nil then Dispose(Ints);
   SmallIntAtoms := nil;
-  GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; if TempRoots <> nil then fpmunmap(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
+  GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; OSFree(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
   TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
   GCAllocatedBytes := 0; GCPeakBytes := 0;

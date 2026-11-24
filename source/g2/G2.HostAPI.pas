@@ -159,7 +159,7 @@ threadvar
 implementation
 
 uses
-  Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak, G2.HeapSnapshot,
+  Math, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak, G2.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -1045,7 +1045,7 @@ begin
   if IsString(X) then
   begin
     P := StrToUnicode(StrOf(X));
-    if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+    if (P <> '') and not IsAbsoluteFilePath(P) then P := Dir + '/' + P;
     Exit(DefineConfigVirtualModulesAt(UnicodeString(ExpandFileName(UTF8Encode(P))), Depth + 1, Err));
   end;
   if not IsObject(X) or (ObjOf(X)^.OKind <> okArray) then Exit;
@@ -1057,7 +1057,7 @@ begin
       E := ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I];
       if not IsString(E) then Continue;
       P := StrToUnicode(StrOf(E));
-      if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+      if (P <> '') and not IsAbsoluteFilePath(P) then P := Dir + '/' + P;
       if not DefineConfigVirtualModulesAt(UnicodeString(ExpandFileName(UTF8Encode(P))), Depth + 1, Err) then Exit(False);
     end;
   finally
@@ -1098,7 +1098,7 @@ begin
       begin
         P := StrToUnicode(StrOf(M));
         W := P;
-        if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+        if (P <> '') and not IsAbsoluteFilePath(P) then P := Dir + '/' + P;
         if not DefineManifestPath(P, W, Err) then Exit;
       end
       else if IsObject(M) and (ObjOf(M)^.OKind = okArray) then
@@ -1111,7 +1111,7 @@ begin
           if not IsString(E) then begin Err := 'Config module manifests must be paths.'; PopRoots(1); Exit; end;
           P := StrToUnicode(StrOf(E));
           W := P;
-          if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+          if (P <> '') and not IsAbsoluteFilePath(P) then P := Dir + '/' + P;
           if not DefineManifestPath(P, W, Err) then begin PopRoots(1); Exit; end;
         end;
         PopRoots(1);
@@ -1193,7 +1193,7 @@ end;
 { a module's key that is a virtual module's address (a URI such as host:pkg/main or https://...), not a path }
 function IsVirtualKey(const Key: UnicodeString): Boolean;
 begin
-  Result := IsVirtualModuleURI(Key) or ((Key <> '') and (Key[1] <> '/') and (Key[1] <> '<') and IsHostModuleKey(Key));
+  Result := IsVirtualModuleURI(Key) or ((Key <> '') and not IsAbsoluteFilePath(Key) and (Key[1] <> '<') and IsHostModuleKey(Key));
 end;
 
 { ---- the read policy ---- }
@@ -1437,7 +1437,7 @@ begin
       end;
     end;
     { a virtual module at a path a file is at shadows it: warned once, as GocciaScript's loader warns }
-    if (Resolved <> '') and (Resolved[1] = '/') and IsHostModuleKey(Resolved) and FileExists(UTF8Encode(Resolved)) then
+    if IsAbsoluteFilePath(Resolved) and IsHostModuleKey(Resolved) and FileExists(UTF8Encode(Resolved)) then
     begin
       if ShadowWarned = nil then ShadowWarned := TStringList.Create;
       if ShadowWarned.IndexOf(UTF8Encode(Resolved)) < 0 then
@@ -1563,10 +1563,8 @@ end;
 
 { realNow(): the real epoch time in milliseconds, whatever is mocked }
 function Host_RealNow(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var TS: TTimeSpec;
 begin
-  clock_gettime(CLOCK_REALTIME, @TS);
-  Res := MkNumber(TS.tv_sec * 1000.0 + TS.tv_nsec div 1000000);
+  Res := MkNumber(GetEpochNanoseconds div 1000000);
   Result := True;
 end;
 

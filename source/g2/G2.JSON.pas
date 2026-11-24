@@ -393,7 +393,7 @@ threadvar
 { the JSON.parse source text access proposal's InternalizeJSONProperty(holder, name, reviver, parseRecord) }
 function Internalize(Holder: TValue; Name: PStr; Reviver: TValue; Rec: TJRec; RecVals: Integer;
   var Res: TValue): Boolean;
-var Val, Ctx, NewEl: TValue; IsArr: Boolean; Len, I: Int64; Keys: TValue; K: PStr; N, X: Integer;
+var Val, Ctx, NewEl: TValue; IsArr: Boolean; Len: Int64; I: SizeInt; Keys: TValue; K: PStr; N, X: Integer;
   Elems, Ents: array of TJRec; EKeys: array of UnicodeString; Sub: TJRec; CA: array[0..2] of TValue;
   KS: UnicodeString;
 begin

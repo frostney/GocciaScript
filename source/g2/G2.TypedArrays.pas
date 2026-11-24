@@ -382,7 +382,7 @@ end;
 
 { 23.2.5.1.2 InitializeTypedArrayFromTypedArray }
 function FromTypedArray(Kind: Integer; Proto, Src: TValue; var T: TValue): Boolean;
-var S: PObj; Len, I: Int64; SK: Integer;
+var S: PObj; Len: Int64; I: SizeInt; SK: Integer;
 begin
   S := ObjOf(Src);
   if TAOutOfBounds(S) then Exit(ThrowTypeError('the source typed array is detached or out of bounds'));
@@ -447,7 +447,7 @@ end;
 
 { 23.2.5.1.4 / .5: from a list (a rooted array of the iterated values) or an array-like; Set(O, k, v, true) each }
 function FromValues(Kind: Integer; Proto, Src: TValue; FromList: Boolean; var T: TValue): Boolean;
-var Len, K: Int64; V: TValue; Base: Integer;
+var Len: Int64; K: SizeInt; V: TValue; Base: Integer;
 begin
   Base := TempTop;
   PushRoot(Src); PushRoot(Proto);

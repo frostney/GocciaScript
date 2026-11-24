@@ -54,7 +54,7 @@ threadvar
 implementation
 
 uses
-  Classes, Linux, UnixType, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy, G2.Snapshot, G2.Artifact, Goccia.Profiler.Compile;
 
 { the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
@@ -674,9 +674,9 @@ function LazyCompileIn(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
   Finder: TBodyFinder; IsMethod: Boolean; PrevModule: Integer;
-  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec; RStart, RStop: Integer;
+  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: Int64; RStart, RStop: Integer;
 begin
-  clock_gettime(CLOCK_MONOTONIC, @TS0);
+  TS0 := GetNanoseconds;
   St := PLazyStub(T^.Lazy);
   if St^.Src = nil then Exit(MaterializeSnapshotTemplate(T));
   LS := St^.Src;
@@ -725,7 +725,7 @@ begin
       LS.TargetStart := R^.Start;
       LS.TargetStop := R^.Stop;
       PrevArena := ActivateASTArena(Arena);
-      clock_gettime(CLOCK_MONOTONIC, @TSa);
+      TSa := GetNanoseconds;
       try
         E := P.ParseExpressionUnchecked;
       finally
@@ -733,9 +733,9 @@ begin
         LS.Compiling := -1;
         LS.SkipOutside := False;
       end;
-      clock_gettime(CLOCK_MONOTONIC, @TSb);
-      Inc(LazySetupNs, (Int64(TSa.tv_sec) - TS0.tv_sec) * 1000000000 + (TSa.tv_nsec - TS0.tv_nsec));
-      Inc(LazyParseNs, (Int64(TSb.tv_sec) - TSa.tv_sec) * 1000000000 + (TSb.tv_nsec - TSa.tv_nsec));
+      TSb := GetNanoseconds;
+      Inc(LazySetupNs, TSa - TS0);
+      Inc(LazyParseNs, TSb - TSa);
       Inc(LazyTokens, L.Tokens.Count);
       Inc(LazyChars, R^.Stop - R^.Start);
       Finder := TBodyFinder.Create;
@@ -781,9 +781,9 @@ begin
     else L.Free;
     Arena.Free;
   end;
-  clock_gettime(CLOCK_MONOTONIC, @TS1);
+  TS1 := GetNanoseconds;
   Inc(LazyCompileCount);
-  Inc(LazyCompileNs, (Int64(TS1.tv_sec) - TS0.tv_sec) * 1000000000 + (TS1.tv_nsec - TS0.tv_nsec));
+  Inc(LazyCompileNs, TS1 - TS0);
   if Msg <> '' then Exit(ThrowError('SyntaxError', Msg));
   Result := True;
 end;

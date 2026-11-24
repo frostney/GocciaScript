@@ -752,7 +752,7 @@ end;
 
 { 10.5.8 / 10.5.7 / 10.5.10 / 10.5.11: what a proxy trap may report given its target (G2.VM's ProxyCheckHook) }
 function ProxyCheckOM(Kind: Integer; PV: TValue; Key: PStr; var Res: TValue): Boolean;
-var D: TPropDesc; Found, Ext: Boolean; Len, I, J: Int64; V, TK: TValue; K: PStr; Keys: array of PStr;
+var D: TPropDesc; Found, Ext: Boolean; Len: Int64; I, J: SizeInt; V, TK: TValue; K: PStr; Keys: array of PStr;
   Used: array of Boolean; NonCfg: array of PStr; Cfg: array of PStr; N: Integer;
 begin
   Result := True;

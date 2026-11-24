@@ -398,7 +398,7 @@ end;
 function IsSchemeSpecifier(const Spec: UnicodeString): Boolean;
 var I, C: Integer;
 begin
-  if (Spec = '') or (Spec[1] = '/') or (Copy(Spec, 1, 2) = './') or (Copy(Spec, 1, 3) = '../') or (Spec = '.') or
+  if (Spec = '') or IsAbsoluteFilePath(Spec) or (Copy(Spec, 1, 2) = './') or (Copy(Spec, 1, 3) = '../') or (Spec = '.') or
      (Spec = '..') then Exit(False);
   C := Pos(':', Spec);
   if C = 0 then Exit(Pos('/', Spec) = 0);
@@ -420,7 +420,7 @@ begin
       -2: Exit(#0#1);
     end;
   if Assigned(HostModules) and IsSchemeSpecifier(Spec) then Exit(Spec);
-  if (Spec <> '') and (Spec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(Spec))));
+  if IsAbsoluteFilePath(Spec) then Exit(UnicodeString(ExpandFileName(string(Spec))));
   if (Referrer = '') or (Referrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
   else Base := UnicodeString(ExtractFilePath(ExpandFileName(string(Referrer))));
   Result := UnicodeString(ExpandFileName(string(Base + Spec)));
@@ -565,7 +565,7 @@ begin
     Exit(ThrowTypeError('Unsupported module type ''' + AType + ''''));
   { a host's virtual module (an address, not a path) reinterprets the source it stores }
   Virtual := False;
-  if Assigned(HostModules) and (Path <> '') and (Path[1] <> '/') then
+  if Assigned(HostModules) and (Path <> '') and not IsAbsoluteFilePath(Path) then
   begin
     K := HostModules(Path, V);
     if K = -1 then Exit(False);

@@ -28,7 +28,7 @@ threadvar
 implementation
 
 uses
-  NumericText, Linux, UnixType, G2.ObjModel, BigInteger, G2.BigIntV, TextSemantics;
+  NumericText, G2.ObjModel, BigInteger, G2.BigIntV, TextSemantics;
 
 type
   TArgs = PValue;
@@ -1836,7 +1836,7 @@ end;
 
 { 22.1.3.19 String.prototype.repeat ( count ) }
 function StrProto_Repeat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; D: Double; N, I, L: Int64; U: UnicodeString;
+var S: PStr; D: Double; N, L: Int64; I: SizeInt; U: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if Arg(Args, Argc, 1) = VUndefined then D := 0
@@ -1855,7 +1855,7 @@ begin
 end;
 
 function StrProto_Pad(Args: TArgs; Argc: Integer; var Res: TValue; AtStart: Boolean): Boolean;
-var S, F: PStr; N, I: Int64; T, Fill, P: UnicodeString;
+var S, F: PStr; N: Int64; I: SizeInt; T, Fill, P: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
@@ -2159,22 +2159,22 @@ end;
 
 { ---------------- Math ---------------- }
 
-{$linklib m}
+{$IFDEF UNIX}{$linklib m}{$ENDIF}
 { the C library's math functions: correctly rounded or nearly so, with IEEE 754's signed zeros and infinities
   (FPC's Math unit is neither) }
-function c_sin(X: Double): Double; cdecl; external 'm' name 'sin';
-function c_cos(X: Double): Double; cdecl; external 'm' name 'cos';
-function c_tan(X: Double): Double; cdecl; external 'm' name 'tan';
-function c_asin(X: Double): Double; cdecl; external 'm' name 'asin';
-function c_acos(X: Double): Double; cdecl; external 'm' name 'acos';
-function c_atan(X: Double): Double; cdecl; external 'm' name 'atan';
-function c_atan2(Y, X: Double): Double; cdecl; external 'm' name 'atan2';
-function c_exp(X: Double): Double; cdecl; external 'm' name 'exp';
-function c_log(X: Double): Double; cdecl; external 'm' name 'log';
-function c_log2(X: Double): Double; cdecl; external 'm' name 'log2';
-function c_log10(X: Double): Double; cdecl; external 'm' name 'log10';
-function c_cbrt(X: Double): Double; cdecl; external 'm' name 'cbrt';
-function c_hypot(X, Y: Double): Double; cdecl; external 'm' name 'hypot';
+function c_sin(X: Double): Double; cdecl; external G2LIBM name 'sin';
+function c_cos(X: Double): Double; cdecl; external G2LIBM name 'cos';
+function c_tan(X: Double): Double; cdecl; external G2LIBM name 'tan';
+function c_asin(X: Double): Double; cdecl; external G2LIBM name 'asin';
+function c_acos(X: Double): Double; cdecl; external G2LIBM name 'acos';
+function c_atan(X: Double): Double; cdecl; external G2LIBM name 'atan';
+function c_atan2(Y, X: Double): Double; cdecl; external G2LIBM name 'atan2';
+function c_exp(X: Double): Double; cdecl; external G2LIBM name 'exp';
+function c_log(X: Double): Double; cdecl; external G2LIBM name 'log';
+function c_log2(X: Double): Double; cdecl; external G2LIBM name 'log2';
+function c_log10(X: Double): Double; cdecl; external G2LIBM name 'log10';
+function c_cbrt(X: Double): Double; cdecl; external G2LIBM name 'cbrt';
+function c_hypot(X, Y: Double): Double; cdecl; external G2LIBM name 'hypot';
 
 function Math1(Args: TArgs; Argc: Integer; var Res: TValue; F: Integer): Boolean;
 var D: Double;

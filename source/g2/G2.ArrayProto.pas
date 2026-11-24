@@ -743,7 +743,7 @@ end;
 { an object MoveRange may visit sparsely: a plain object or array whose prototypes are plain kinds without index
   keys or elements, so a step whose source and destination are both absent on it does nothing }
 function SparseQualifies(P: PObj): Boolean;
-var Q: TValue; QO: PObj; K: Int64;
+var Q: TValue; QO: PObj; K: SizeInt;
 begin
   Result := False;
   if not (P^.OKind in [okPlain, okArray]) then Exit;
@@ -763,7 +763,7 @@ end;
 { the steps from MinStep on whose source or destination is an own index of P now, ascending (repeats adjacent) }
 procedure CollectMoveSteps(P: PObj; From, To_, Count, MinStep: Int64; Dir: Integer; var Steps: TInt64Array;
   var N: Integer);
-var E: PValueArray; S: PShape; I, J, Gap: Integer; K, Idx, T: Int64;
+var E: PValueArray; S: PShape; I, J, Gap: Integer; Idx, T: Int64; K: SizeInt;
 
   procedure AddStep(Pos: Int64);
   var St: Int64;
@@ -974,7 +974,7 @@ end;
 
 { 23.1.3.31 splice }
 function AP_Splice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, Start, Skip, ItemCount, K: Int64; D: Double; Has: Boolean; V, A: TValue; Base, I: Integer; E: PValueArray;
+var Len, Start, Skip, ItemCount: Int64; K: SizeInt; D: Double; Has: Boolean; V, A: TValue; Base, I: Integer; E: PValueArray;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
@@ -1527,7 +1527,7 @@ end;
 
 { 23.1.3.33 toReversed }
 function AP_ToReversed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K: Int64; A, V: TValue; Base: Integer;
+var Len: Int64; K: SizeInt; A, V: TValue; Base: Integer;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
@@ -1588,7 +1588,7 @@ end;
 
 { 23.1.3.39 with }
 function AP_With(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, Idx: Int64; D: Double; A, V: TValue; Base: Integer;
+var Len, Idx: Int64; K: SizeInt; D: Double; A, V: TValue; Base: Integer;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);

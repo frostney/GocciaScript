@@ -5,7 +5,7 @@ program g2threads;
 {$I G2.Checks.inc}
 
 uses
-  cthreads, Classes, SysUtils, G2.Engine, G2.Builtins;
+  {$IFDEF UNIX}cthreads,{$ENDIF} Classes, SysUtils, G2.Engine, G2.Builtins;
 
 type
   TRunner = class(TThread)

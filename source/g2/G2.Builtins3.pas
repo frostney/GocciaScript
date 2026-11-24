@@ -18,7 +18,7 @@ function SymbolRegistryObject: TValue;
 implementation
 
 uses
-  SysUtils, Math, DateUtils, Linux, UnixType, G2.VM, G2.Builtins;
+  SysUtils, Math, DateUtils, TimingUtils, G2.VM, G2.Builtins;
 
 const
   okDate = 18;
@@ -38,11 +38,9 @@ end;
 { ---------------- Date (UTC; enough for timing and formatting) ---------------- }
 
 function NowMs: Double;
-var TS: TTimeSpec;
 begin
   if EpochOverride(Result) then Exit;
-  clock_gettime(CLOCK_REALTIME, @TS);
-  Result := TS.tv_sec * 1000.0 + TS.tv_nsec div 1000000;
+  Result := GetEpochNanoseconds div 1000000;
 end;
 
 function ThisTime(Args: TArgs; var T: Double): Boolean;
@@ -648,7 +646,7 @@ end;
 
 { 7.3.20 CreateListFromArrayLike, into a new array (Res) }
 function CreateListFromArrayLike(Obj: TValue; var Res: TValue): Boolean;
-var LenV, V: TValue; D: Double; N, I: Int64; A: PObj;
+var LenV, V: TValue; D: Double; N: Int64; I: SizeInt; A: PObj;
 begin
   if not IsObject(Obj) then Exit(ThrowTypeError('CreateListFromArrayLike called on non-object'));
   PushRoot(Obj);

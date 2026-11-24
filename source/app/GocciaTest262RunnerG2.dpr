@@ -30,6 +30,7 @@ uses
   Goccia.TextFiles,
 
   G2.Core,
+  G2.VM,
   G2.Embed,
   G2.Engine,
   G2.Profile,
@@ -129,6 +130,22 @@ type
     HostEvalWarningUnsupportedFeatures: Boolean;
     HostEvalModule: Boolean;
   end;
+
+  TTest262App = class;
+
+  {$IFNDEF UNIX}
+  { a run without fork: each case on a thread of its own (a thread's engine state is made once), as
+    GocciaTestRunner runs each file }
+  TTest262Worker = class(TThread)
+  private
+    FApp: TTest262App;
+    FIndex: Integer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AApp: TTest262App; AIndex: Integer);
+  end;
+  {$ENDIF}
 
   TTest262App = class
   private
@@ -1140,8 +1157,10 @@ var
   SourceText: string;
   StartNanoseconds: Int64;
   StrictMode: Boolean;
+  {$IFNDEF UNIX}TimedOut, EngineMade: Boolean;{$ENDIF}
 begin
   AResult := Default(TTest262Result);
+  {$IFNDEF UNIX}EngineMade := False;{$ENDIF}
   AResult.Id := ACase.Id;
   AResult.Mode := ACase.Mode;
   StartNanoseconds := GetNanoseconds;
@@ -1170,16 +1189,31 @@ begin
       StrictMode := (ACase.Mode = trmStrict) and not Metadata.HasFlag('module');
       HeapCeiling := FOptions.MaxMemoryBytes;
       InitTest262Engine(Metadata.HasFlag('CanBlockIsFalse'));
+      {$IFNDEF UNIX}EngineMade := True;{$ENDIF}
       if FOptions.ProfileDir <> '' then
       begin
         ProfilePath := ProfilePathForTest(ACase.Id, ACase.Mode);
         ForceHostDirectories(ExtractFileDir(ProfilePath));
         ConfigureProfiler;
       end;
+      {$IFNDEF UNIX}
+      { no fork: the run shares the process, so its deadline is the engine's own (LimitsArm), not a kill }
+      LimitsArm(FOptions.TimeoutMs, 0);
+      {$ENDIF}
       Outcome := RunTest262Case(Harness, ACase.Path, StrictMode,
         Metadata.HasFlag('module'));
       if FOptions.ProfileDir <> '' then
         ProfileStop;
+      {$IFNDEF UNIX}
+      TimedOut := LimitAbortKind = 1;
+      if TimedOut then
+      begin
+        AResult.Status := toTimeout;
+        AResult.Message := Format('TIMEOUT after %dms', [FOptions.TimeoutMs]);
+        AResult.Diagnostic := AResult.Message;
+      end
+      else
+      {$ENDIF}
       ClassifyResult(Kind, Metadata.NegativeType, Outcome,
         string(Test262PrintText), AResult.Status, AResult.Message,
         AResult.Diagnostic);
@@ -1192,6 +1226,8 @@ begin
       end;
     end;
   finally
+    { no fork: the next case on this thread makes its own engine }
+    {$IFNDEF UNIX}if EngineMade then DoneTest262Engine;{$ENDIF}
     if (ProfilePath <> '') and Assigned(TGocciaProfiler.Instance) then
     begin
       try
@@ -1216,6 +1252,86 @@ begin
   end;
 end;
 
+{$IFNDEF UNIX}
+const
+  { the native stack of a worker: as GocciaTestRunner's file threads (deep recursion tests) }
+  T262_THREAD_STACK = 64 * 1024 * 1024;
+
+constructor TTest262Worker.Create(AApp: TTest262App; AIndex: Integer);
+begin
+  FApp := AApp;
+  FIndex := AIndex;
+  inherited Create(True, T262_THREAD_STACK);
+end;
+
+var
+  { held by a run of a test that starts agents: their reports share one process-wide queue (G2.Agent) }
+  AgentRunLock: TRTLCriticalSection;
+
+procedure TTest262Worker.Execute;
+var
+  UsesAgents: Boolean;
+begin
+  try
+    UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
+  except
+    UsesAgents := False;
+  end;
+  if UsesAgents then
+    EnterCriticalSection(AgentRunLock);
+  try
+    FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
+  finally
+    if UsesAgents then
+      LeaveCriticalSection(AgentRunLock);
+  end;
+  FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
+end;
+
+{ no fork: up to Jobs cases at a time, each on its own thread, each run bounded by its engine's deadline }
+procedure TTest262App.ExecuteAll;
+var
+  Workers: array of TTest262Worker;
+  Next, Oldest, Done: Integer;
+  StartNanoseconds: Int64;
+
+  procedure Finish(I: Integer);
+  begin
+    Workers[I].WaitFor;
+    FreeAndNil(Workers[I]);
+    Inc(Done);
+    if FOptions.Verbose or (Done = FCases.Count) or ((Done mod 1024) = 0) then
+      WriteLn('[', Done, '/', FCases.Count, ']');
+  end;
+
+begin
+  SetLength(FResults, FCases.Count);
+  if FCases.Count = 0 then
+    Exit;
+  StartNanoseconds := GetNanoseconds;
+  InitCriticalSection(AgentRunLock);
+  SetLength(Workers, FCases.Count);
+  Oldest := 0;
+  Done := 0;
+  for Next := 0 to FCases.Count - 1 do
+  begin
+    if Next - Oldest >= Max(1, FOptions.Jobs) then
+    begin
+      Finish(Oldest);
+      Inc(Oldest);
+    end;
+    Workers[Next] := TTest262Worker.Create(Self, Next);
+    Workers[Next].Start;
+  end;
+  while Oldest < FCases.Count do
+  begin
+    Finish(Oldest);
+    Inc(Oldest);
+  end;
+  DoneCriticalSection(AgentRunLock);
+  FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
+end;
+{$ELSE}
 procedure TTest262App.ExecuteAll;
 var
   ActiveWorkers: Integer;
@@ -1379,6 +1495,7 @@ begin
     DeleteFile(ResultPaths[Slot]);
   FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
 end;
+{$ENDIF}
 
 function CategoryForId(const AId: string): string;
 var
@@ -1707,10 +1824,10 @@ begin
   HostPath := HarnessFilePath('$262.js');
   if FOptions.HostEvalModule then
     ProbePath := IncludeTrailingPathDelimiter(GetCurrentDir) +
-      Format('.goccia-test262-host-eval-%d.mjs', [fpGetPid])
+      Format('.goccia-test262-host-eval-%d.mjs', [GetProcessID])
   else
     ProbePath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
-      Format('goccia-test262-host-eval-%d.js', [fpGetPid]);
+      Format('goccia-test262-host-eval-%d.js', [GetProcessID]);
   with TStringList.Create do
   try
     Text := Source;

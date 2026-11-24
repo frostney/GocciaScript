@@ -26,6 +26,8 @@ procedure InstallHostHooks;
   settings), the agent host (CannotBlock: the main agent may not suspend, test262's CanBlockIsFalse), G2Host with
   the agent API moved into it (so $262 stays the only harness global) and print, which records into PrintText }
 procedure InitTest262Engine(CannotBlock: Boolean);
+{ the engine InitTest262Engine made, ended: a thread that runs another case after it makes a new one }
+procedure DoneTest262Engine;
 { one run on the engine InitTest262Engine made: the harness files in order, then TestFile }
 function RunTest262Case(const Harness: array of string; const TestFile: string; Strict, IsModule: Boolean): TG2T262Outcome;
 { what the run's print calls printed, a line each }
@@ -39,8 +41,8 @@ uses
   Classes, SysUtils, G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Eval, G2.Promise, G2.Atomics, G2.Agent,
   G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins;
 
-var
-  PrintBuf: UnicodeString;
+threadvar
+  PrintBuf: UnicodeString;   { (per thread: a runner without fork runs cases on several threads) }
 
 function Test262PrintText: UnicodeString;
 begin
@@ -227,6 +229,12 @@ begin
   GetV(GlobalObj, AtomOf('print'), H);
   DeleteProperty(ObjOf(GlobalObj), AtomOf('print'));
   DefineOwn(GlobalObj, AtomOf('print'), H, pfHidden);
+end;
+
+procedure DoneTest262Engine;
+begin
+  LimitsDisarm;
+  EngineDone;
 end;
 
 type

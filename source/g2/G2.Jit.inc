@@ -12,7 +12,7 @@
   read fs-relative as FPC's own code reads them. Entry: rdi R, rsi the instruction's code, rdx Fr, ecx the
   flags (the System V order FPC uses). }
 
-{$IFDEF CPUX86_64}
+{$IFDEF G2JIT}
 type
   { the code at Target (an instruction's entry, from JitTable) for frame Fr; Flags 1: XJitCall's frame }
   TJitFn = function(R: PValue; Target: Pointer; Fr: PFrame; Flags: Integer): Integer;
@@ -5409,5 +5409,25 @@ begin
   OptMax := StrToIntDef(GetEnvironmentVariable('G2_OPTMAX'), -1);
   OptReadNoEmbed;
   Result := JitEnabled = 1;
+end;
+{$ENDIF}
+
+{$IFNDEF G2JIT}
+{ no JIT on this target: nothing inlined, nothing compiled }
+function InlinedFrameCount(I: Integer): Integer;
+begin
+  Result := 0;
+end;
+
+procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplate; out Base, Argc: Integer);
+begin
+  Closure := VUndefined;
+  Tpl := nil;
+  Base := 0;
+  Argc := 0;
+end;
+
+procedure JitForgetRetiredShapes;
+begin
 end;
 {$ENDIF}
