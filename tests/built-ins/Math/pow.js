@@ -115,6 +115,28 @@ describe("Math.pow precision", () => {
     expect(Math.pow(5, -3)).toBe(0.008);
   });
 
+  test("returns the correctly rounded 1 / x for exponent -1", () => {
+    expect(Math.pow(4.615, -1)).toBe(0.21668472372697725);
+    expect(Math.pow(0.499, -1)).toBe(2.004008016032064);
+    expect(Math.pow(-7390256613.693091, -1)).toBe(-1.35313298613629e-10);
+  });
+
+  test("rounds a subnormal reciprocal once for exponent -1", () => {
+    expect(Math.pow(7e307, -1)).toBe(1.4285714285714287e-308);
+  });
+
+  test("returns NaN for a NaN base with exponent -1", () => {
+    expect(Math.pow(NaN, -1)).toBe(NaN);
+  });
+
+  test("returns -0 for a -Infinity base with exponent -1", () => {
+    expect(Object.is(Math.pow(-Infinity, -1), -0)).toBe(true);
+  });
+
+  test("returns -Infinity for a -0 base with exponent -1", () => {
+    expect(Math.pow(-0, -1)).toBe(-Infinity);
+  });
+
   test("keeps the sign of a negative base for large integral exponents", () => {
     expect(Math.pow(-2, 2 ** 31)).toBe(Infinity);
     expect(Math.pow(-3, 2 ** 31 + 1)).toBe(-Infinity);
