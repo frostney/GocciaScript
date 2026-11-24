@@ -328,10 +328,8 @@ affected by later builder calls on the original.
 
 ## Command line
 
-Every binary in [What each binary honors](#what-each-binary-honors) except
-`GocciaWasmTestRunner` fills the set from the same grammar.
-`GocciaWasmTestRunner` takes no capability flags; its grants come only from
-config, with `-P`:
+Every binary in [What each binary honors](#what-each-binary-honors) fills
+the set from the same grammar:
 
 ```text
 --allow-<cap>[=<scope>,<scope>...]
@@ -493,7 +491,6 @@ being validated.
 | `GocciaBundler` | none | none | per-file, for compatibility flags |
 | `GocciaScriptLoaderBare` | none | `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack` | none |
 | `GocciaTest262Runner` | none | `--timeout`, `--max-memory` | none |
-| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file, accepted with `-P` |
 
 ## Config trust
 
@@ -639,7 +636,6 @@ neither is a scope that disappears.
 | Linux and BSD | `$XDG_CONFIG_HOME/goccia/trust.json`, or `~/.config/goccia/trust.json` |
 | macOS | `~/Library/Application Support/Goccia/trust.json` |
 | Windows | `%APPDATA%\Goccia\trust.json` |
-| LAKON | none; `GocciaWasmTestRunner` takes `-P` |
 
 ```json
 {
@@ -690,14 +686,6 @@ A store that cannot be located (`cannot locate the per-user trust store (HOME
 is not set); pass --trust-store=<path>`), a `--trust-store` path that is a
 directory (refused before anything runs or is asked), a held lock, or a
 failed write is also an error with status 1.
-
-### `GocciaWasmTestRunner`
-
-The Wasm test runner has no store: it takes `GocciaWasmTestRunner [-P]
-<manifest>`. Without `-P`, each file whose config requests a grant fails with
-`FILEERROR <file> :: <config> requests permissions; pass -P to accept them
-(GocciaWasmTestRunner has no trust store)`. Extra arguments after the
-manifest are ignored with a warning, for the external harness.
 
 ## Sandbox mode
 

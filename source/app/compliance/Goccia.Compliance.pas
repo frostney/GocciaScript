@@ -5,9 +5,7 @@ unit Goccia.Compliance;
 interface
 
 uses
-  Classes,
-
-  Goccia.Threading;
+  Classes;
 
 const
   COMPLIANCE_REPORT_VERSION = 1;
@@ -65,10 +63,11 @@ type
 
   TComplianceCoordinator = class
   private
+    FCases: TStringList;
     FExecutor: TComplianceCaseExecutor;
+    FNextCase: LongInt;
     FResults: TComplianceCaseResultArray;
-    procedure WorkerProc(const AFileName: string; const AIndex: Integer;
-      out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
+    procedure RunCases;
   public
     constructor Create(const AExecutor: TComplianceCaseExecutor);
     function Run(const ACases: TStringList;
@@ -430,29 +429,58 @@ begin
   FExecutor := AExecutor;
 end;
 
-procedure TComplianceCoordinator.WorkerProc(const AFileName: string;
-  const AIndex: Integer; out AConsoleOutput: string;
-  out AErrorMessage: string; AData: Pointer);
-begin
-  AConsoleOutput := '';
-  AErrorMessage := '';
-  try
-    FExecutor.ExecuteCase(AFileName, AIndex, FResults[AIndex]);
-  except
-    on E: Exception do
-    begin
-      FResults[AIndex].ID := AFileName;
-      FResults[AIndex].Outcome := coInfrastructure;
-      FResults[AIndex].MessageText := E.ClassName + ': ' + E.Message;
-    end;
+type
+  { Each case runs in a child process, so a worker only waits on it: the
+    workers take the next case index from the coordinator until none is
+    left. }
+  TComplianceWorker = class(TThread)
+  private
+    FCoordinator: TComplianceCoordinator;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ACoordinator: TComplianceCoordinator);
   end;
+
+constructor TComplianceWorker.Create(const ACoordinator: TComplianceCoordinator);
+begin
+  FCoordinator := ACoordinator;
+  inherited Create(False);
+end;
+
+procedure TComplianceWorker.Execute;
+begin
+  FCoordinator.RunCases;
+end;
+
+procedure TComplianceCoordinator.RunCases;
+var
+  Index: Integer;
+  CaseID: string;
+begin
+  repeat
+    Index := InterLockedIncrement(FNextCase) - 1;
+    if Index >= FCases.Count then
+      Exit;
+    CaseID := FCases[Index];
+    try
+      FExecutor.ExecuteCase(CaseID, Index, FResults[Index]);
+    except
+      on E: Exception do
+      begin
+        FResults[Index].ID := CaseID;
+        FResults[Index].Outcome := coInfrastructure;
+        FResults[Index].MessageText := E.ClassName + ': ' + E.Message;
+      end;
+    end;
+  until False;
 end;
 
 function TComplianceCoordinator.Run(const ACases: TStringList;
   const AJobCount: Integer): TComplianceCaseResultArray;
 var
   I, JobCount: Integer;
-  Pool: TGocciaThreadPool;
+  Workers: array of TComplianceWorker;
 begin
   SetLength(FResults, ACases.Count);
   for I := 0 to High(FResults) do
@@ -462,12 +490,17 @@ begin
     FResults[I].MessageText := 'case was not executed';
   end;
   JobCount := Min(Max(1, AJobCount), Max(1, ACases.Count));
-  Pool := TGocciaThreadPool.Create(JobCount);
-  try
-    Pool.RunAll(ACases, WorkerProc);
-  finally
-    Pool.Free;
+  FCases := ACases;
+  FNextCase := 0;
+  SetLength(Workers, JobCount);
+  for I := 0 to High(Workers) do
+    Workers[I] := TComplianceWorker.Create(Self);
+  for I := 0 to High(Workers) do
+  begin
+    Workers[I].WaitFor;
+    Workers[I].Free;
   end;
+  FCases := nil;
   SetLength(Result, Length(FResults));
   for I := 0 to High(FResults) do
     Result[I] := FResults[I];

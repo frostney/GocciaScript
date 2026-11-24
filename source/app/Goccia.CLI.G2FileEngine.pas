@@ -681,7 +681,7 @@ begin
   Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
 end;
 
-{$I GocciaRunnerG2.Suggestions.inc}
+{$I GocciaRunner.Suggestions.inc}
 
 { Msg is Template with each %s, %d or %x standing for any text }
 function TemplateMatches(const ATemplate, AMsg: string): Boolean;

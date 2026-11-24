@@ -390,8 +390,8 @@ export function Install({
               before 0.14), <code>GocciaScriptLoaderBare</code>,{" "}
               <code>GocciaTestRunner</code>, <code>GocciaTest262Runner</code>,{" "}
               <code>GocciaBundler</code>, <code>GocciaBenchmarkRunner</code>,{" "}
-              <code>GocciaREPL</code>, <code>GocciaFuzzHarness</code>, and{" "}
-              <code>GocciaWasmTestRunner</code> — plus the <code>tests/</code>,{" "}
+              <code>GocciaREPL</code>, and <code>GocciaFuzzHarness</code> —
+              plus the <code>tests/</code>,{" "}
               <code>benchmarks/</code>, and <code>examples/</code> directories,
               all inside one versioned folder named after the archive. The
               commands below put the three most common binaries on your{" "}
@@ -417,13 +417,6 @@ export function Install({
               </a>{" "}
               required. Clone, run the build script, then point your{" "}
               <code>$PATH</code> at <code>./build</code>.
-            </p>
-            <p>
-              Delphi 12 Community Edition is also supported for the Win32 and
-              Win64 application matrix: the REPL, Runner, Bare Script Loader,
-              Test Runner, Benchmark Runner and Bundler. Open the repository
-              project group and follow the{" "}
-              <Link href="/docs/build-system">build and validation guide</Link>.
             </p>
             <CommandTabs
               tabs={OS_TABS}

@@ -16,16 +16,14 @@ uses
 type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
-    btTestRunner, btTest262Runner, btTOMLComplianceRunner, btWasmTestRunner,
-    btBenchmarkRunner, btBundler, btREPL, btG2, btG2Runner, btG2TestRunner, btG2REPL,
-    btG2BenchmarkRunner, btG2Bundler, btG2Test262Runner, btG2FuzzHarness, btG2LoaderBare);
+    btTestRunner, btTest262Runner, btTOMLComplianceRunner,
+    btBenchmarkRunner, btBundler, btREPL, btG2);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
-    'test262runner', 'tomlcompliancerunner', 'wasmtestrunner',
-    'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner', 'g2testrunner', 'g2repl',
-    'g2benchrunner', 'g2bundler', 'g2test262runner', 'g2fuzzharness', 'g2loaderbare');
+    'test262runner', 'tomlcompliancerunner',
+    'benchmarkrunner', 'bundler', 'repl', 'g2');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
   G2_PRELUDES: array[0..23, 0..2] of string = (
@@ -62,17 +60,6 @@ var
   TestJobs: Integer;
   RunTestsRequested: Boolean = False;
   BuildMode: TBuildMode = bmDev;
-  { --gc-stress: a development build with -dGOCCIA_GC_STRESS and heaptrc (-gh),
-    compiled into its own unit caches and written to build/gc-stress/ so it
-    never mixes with, or replaces, the ordinary binaries. }
-  GCStressBuild: Boolean = False;
-  { --layout-probe: a production build with -dGOCCIA_VM_LAYOUT_PROBE, which
-    adds a few hundred bytes of code that never runs ahead of the VM's
-    dispatch function, so that function and all code after it sit further
-    along, compiled into its own unit caches and written to build/layout-probe/.
-    Benchmarked against the ordinary production build, it shows how much code
-    placement alone moves a benchmark (issue #1917). }
-  LayoutProbeBuild: Boolean = False;
   CleanRequested: Boolean = False;
   GVersion, GCommit, GBuildDate: string;
 
@@ -300,26 +287,10 @@ begin
   end;
 end;
 
-function GCStressExecutableDirectory: string;
-begin
-  Result := 'build' + DirectorySeparator + 'gc-stress';
-end;
-
-function LayoutProbeExecutableDirectory: string;
-begin
-  Result := 'build' + DirectorySeparator + 'layout-probe';
-end;
-
-{ Root of the unit caches. The GC-stress and layout-probe builds keep their
-  own, because FPC does not recompile a unit when only the defines change: a
-  shared cache would hand their units to an ordinary build, or the reverse. }
+{ Root of the unit caches. }
 function CompiledRootDirectory: string;
 begin
   Result := 'build' + DirectorySeparator + 'compiled';
-  if GCStressBuild then
-    Result := Result + DirectorySeparator + 'gc-stress'
-  else if LayoutProbeBuild then
-    Result := Result + DirectorySeparator + 'layout-probe';
 end;
 
 function FPCArgs(const ASource: string;
@@ -358,11 +329,6 @@ begin
       Args.Add('-CX');
       Args.Add('-XX');
       Args.Add('-B');
-      if LayoutProbeBuild then
-      begin
-        Args.Add('-dGOCCIA_VM_LAYOUT_PROBE');
-        Args.Add('-FE' + LayoutProbeExecutableDirectory);
-      end;
     end else
     begin
       Args.Add('-O-');
@@ -372,12 +338,6 @@ begin
       Args.Add('-Ct');
       Args.Add('-Cr');
       Args.Add('-Sa');
-      if GCStressBuild then
-      begin
-        Args.Add('-gh');
-        Args.Add('-dGOCCIA_GC_STRESS');
-        Args.Add('-FE' + GCStressExecutableDirectory);
-      end;
     end;
 
     Args.Add('-vw-n-h-i-l-d-u-t-p-c-x-');
@@ -863,7 +823,7 @@ begin
   Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-empty.js';
   WriteIfChanged(Empty, 'const x = 0;' + LineEnding);
   { the benchmark runner fails a file without benchmarks: its run measures one, as briefly as the settings allow }
-  if ATarget = 'g2benchrunner' then
+  if ATarget = 'benchmarkrunner' then
   begin
     Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-bench.js';
     WriteIfChanged(Empty, 'import { bench } from "goccia:microbench";' + LineEnding +
@@ -876,7 +836,7 @@ begin
     for K := 0 to GetEnvironmentVariableCount - 1 do
       Proc.Environment.Add(GetEnvironmentString(K));
     Proc.Environment.Add('G2_SNAPSHOT_OUT=' + Snap);
-    if ATarget = 'g2benchrunner' then
+    if ATarget = 'benchmarkrunner' then
     begin
       Proc.Parameters.Add('--no-progress');
       Proc.Environment.Add('GOCCIA_BENCH_WARMUP=1');
@@ -1028,130 +988,52 @@ begin
   BuildG2Program('source/g2/g2.dpr', 'g2', 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'g2');
 end;
 
-{ GocciaRunner on G2 while the apps move to it (source/app/GocciaRunnerG2.dpr) }
-procedure BuildG2Runner;
+procedure BuildRunner;
 begin
   CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaRunnerG2.dpr', 'g2runner',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaRunner');
+  BuildG2Program('source/app/GocciaRunner.dpr', 'runner', 'build' + DirectorySeparator + 'GocciaRunner');
 end;
 
-{ GocciaTestRunner on G2 while the apps move to it (source/app/GocciaTestRunnerG2.dpr) }
-procedure BuildG2TestRunner;
+procedure BuildTestRunner;
 begin
   CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaTestRunnerG2.dpr', 'g2testrunner',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaTestRunner');
-end;
-
-{ GocciaREPL on G2 while the apps move to it (source/app/GocciaREPLG2.dpr) }
-procedure BuildG2REPL;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaREPLG2.dpr', 'g2repl',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaREPL');
-end;
-
-{ GocciaBenchmarkRunner on G2 while the apps move to it (source/app/GocciaBenchmarkRunnerG2.dpr) }
-procedure BuildG2BenchmarkRunner;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaBenchmarkRunnerG2.dpr', 'g2benchrunner',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaBenchmarkRunner');
-end;
-
-{ GocciaBundler on G2 while the apps move to it (source/app/GocciaBundlerG2.dpr) }
-procedure BuildG2Bundler;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaBundlerG2.dpr', 'g2bundler',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaBundler');
-end;
-
-{ GocciaTest262Runner on G2 while the apps move to it (source/app/GocciaTest262RunnerG2.dpr) }
-procedure BuildG2Test262Runner;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaTest262RunnerG2.dpr', 'g2test262runner',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaTest262Runner');
-end;
-
-{ GocciaFuzzHarness on G2 while the apps move to it (source/app/GocciaFuzzHarnessG2.dpr) }
-procedure BuildG2FuzzHarness;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaFuzzHarnessG2.dpr', 'g2fuzzharness',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaFuzzHarness');
-end;
-
-{ GocciaScriptLoaderBare on G2 while the apps move to it (source/app/GocciaScriptLoaderBareG2.dpr) }
-procedure BuildG2LoaderBare;
-begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/app/GocciaScriptLoaderBareG2.dpr', 'g2loaderbare',
-    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaScriptLoaderBare');
+  BuildG2Program('source/app/GocciaTestRunner.dpr', 'testrunner', 'build' + DirectorySeparator + 'GocciaTestRunner');
 end;
 
 procedure BuildREPL;
-var
-  Output: string;
 begin
-  WriteLn('Building GocciaREPL...');
-  if not CompileWithStaleRetry('source/app/GocciaREPL.dpr',
-      TargetUnitOutputDirectory('repl'), 'repl', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaREPL build failed');
-  WriteLn(Output);
-  WriteLn('GocciaREPL built successfully');
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaREPL.dpr', 'repl', 'build' + DirectorySeparator + 'GocciaREPL');
 end;
 
-procedure BuildRunner;
-var
-  Output: string;
+procedure BuildBenchmarkRunner;
 begin
-  WriteLn('');
-  WriteLn('Building GocciaRunner...');
-  if not CompileWithStaleRetry('source/app/GocciaRunner.dpr',
-      TargetUnitOutputDirectory('runner'), 'runner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaRunner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaRunner built successfully');
-  WriteLn('');
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaBenchmarkRunner.dpr', 'benchmarkrunner', 'build' + DirectorySeparator + 'GocciaBenchmarkRunner');
 end;
 
-procedure BuildScriptLoaderBare;
-var
-  Output: string;
+procedure BuildGocciaBundler;
 begin
-  WriteLn('');
-  WriteLn('Building GocciaScriptLoaderBare...');
-  if not CompileWithStaleRetry('source/app/GocciaScriptLoaderBare.dpr',
-      TargetUnitOutputDirectory('loaderbare'), 'loaderbare', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed');
-  WriteLn(Output);
-  WriteLn('GocciaScriptLoaderBare built successfully');
-  WriteLn('');
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaBundler.dpr', 'bundler', 'build' + DirectorySeparator + 'GocciaBundler');
+end;
+
+procedure BuildTest262Runner;
+begin
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaTest262Runner.dpr', 'test262runner', 'build' + DirectorySeparator + 'GocciaTest262Runner');
 end;
 
 procedure BuildFuzzHarness;
-var
-  Output: string;
 begin
-  WriteLn('');
-  WriteLn('Building GocciaFuzzHarness...');
-  if not CompileWithStaleRetry('source/app/GocciaFuzzHarness.dpr',
-      TargetUnitOutputDirectory('fuzzharness'), 'fuzzharness', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaFuzzHarness build failed');
-  WriteLn(Output);
-  WriteLn('GocciaFuzzHarness built successfully');
-  WriteLn('');
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaFuzzHarness.dpr', 'fuzzharness', 'build' + DirectorySeparator + 'GocciaFuzzHarness');
+end;
+
+procedure BuildScriptLoaderBare;
+begin
+  CheckG2Compiler;
+  BuildG2Program('source/app/GocciaScriptLoaderBare.dpr', 'loaderbare', 'build' + DirectorySeparator + 'GocciaScriptLoaderBare');
 end;
 
 { Worker threads only compile. The coordinator joins every started worker and
@@ -1286,12 +1168,7 @@ begin
   if RunTestsRequested then
     for K := 0 to SelectedTests.Count - 1 do
     begin
-      Executable := 'build';
-      if GCStressBuild then
-        Executable := GCStressExecutableDirectory
-      else if LayoutProbeBuild then
-        Executable := LayoutProbeExecutableDirectory;
-      Executable := Executable + DirectorySeparator +
+      Executable := 'build' + DirectorySeparator +
         ChangeFileExt(ExtractFileName(SelectedTests[K]), '');
       {$IFDEF MSWINDOWS}
       Executable := Executable + '.exe';
@@ -1305,31 +1182,6 @@ begin
       end;
       WriteLn(Output);
     end;
-end;
-
-procedure BuildTestRunner;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaTestRunner...');
-  if not CompileWithStaleRetry('source/app/GocciaTestRunner.dpr',
-      TargetUnitOutputDirectory('testrunner'), 'testrunner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaTestRunner built successfully');
-end;
-
-procedure BuildTest262Runner;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaTest262Runner...');
-  if not CompileWithStaleRetry('source/app/GocciaTest262Runner.dpr',
-      TargetUnitOutputDirectory('test262runner'),
-      'test262runner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaTest262Runner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaTest262Runner built successfully');
 end;
 
 procedure BuildTOMLComplianceRunner;
@@ -1346,19 +1198,6 @@ begin
   WriteLn('GocciaTOMLComplianceRunner built successfully');
 end;
 
-procedure BuildWasmTestRunner;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaWasmTestRunner...');
-  if not CompileWithStaleRetry('source/app/GocciaWasmTestRunner.dpr',
-      TargetUnitOutputDirectory('wasmtestrunner'),
-      'wasmtestrunner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaWasmTestRunner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaWasmTestRunner built successfully');
-end;
-
 procedure BuildFFIFixture;
 var
   Output: string;
@@ -1371,31 +1210,6 @@ begin
     Halt(1);
   end;
   WriteLn(Output);
-end;
-
-procedure BuildBenchmarkRunner;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaBenchmarkRunner...');
-  if not CompileWithStaleRetry('source/app/GocciaBenchmarkRunner.dpr',
-      TargetUnitOutputDirectory('benchmarkrunner'),
-      'benchmarkrunner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaBenchmarkRunner built successfully');
-end;
-
-procedure BuildGocciaBundler;
-var
-  Output: string;
-begin
-  WriteLn('Building GocciaBundler...');
-  if not CompileWithStaleRetry('source/app/GocciaBundler.dpr',
-      TargetUnitOutputDirectory('bundler'), 'bundler', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaBundler build failed');
-  WriteLn(Output);
-  WriteLn('GocciaBundler built successfully');
 end;
 
 procedure Clean;
@@ -1451,19 +1265,10 @@ begin
       end;
     btTest262Runner: BuildTest262Runner;
     btTOMLComplianceRunner: BuildTOMLComplianceRunner;
-    btWasmTestRunner: BuildWasmTestRunner;
     btBenchmarkRunner: BuildBenchmarkRunner;
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;
     btG2: BuildG2;
-    btG2Runner: BuildG2Runner;
-    btG2TestRunner: BuildG2TestRunner;
-    btG2REPL: BuildG2REPL;
-    btG2BenchmarkRunner: BuildG2BenchmarkRunner;
-    btG2Bundler: BuildG2Bundler;
-    btG2Test262Runner: BuildG2Test262Runner;
-    btG2FuzzHarness: BuildG2FuzzHarness;
-    btG2LoaderBare: BuildG2LoaderBare;
   end;
 end;
 
@@ -1488,10 +1293,14 @@ begin
       BuildMode := bmDev
     else if ParamStr(I) = '--prod' then
       BuildMode := bmProd
-    else if ParamStr(I) = '--gc-stress' then
-      GCStressBuild := True
-    else if ParamStr(I) = '--layout-probe' then
-      LayoutProbeBuild := True
+    else if (ParamStr(I) = '--gc-stress') or (ParamStr(I) = '--layout-probe') then
+    begin
+      { G2 has no stress build: its binaries take --gc-stress and --gc-verify, and the G2_NURSERY_KB
+        environment variable shrinks the nursery (scripts/g2/gcstress.sh) }
+      WriteLn(ParamStr(I), ' built the old engine, which is gone; G2''s binaries take --gc-stress and ',
+        '--gc-verify at run time (scripts/g2/gcstress.sh)');
+      Halt(1);
+    end
     else if ParamStr(I) = '--clean' then
       CleanRequested := True
     else if Copy(ParamStr(I), 1, 7) = '--test=' then
@@ -1524,36 +1333,8 @@ begin
         BuildTriggers.Add(LowerCase(ParamStr(I)));
   end;
 
-  if GCStressBuild and (BuildMode = bmProd) then
-  begin
-    WriteLn('--gc-stress builds on the development flags; it cannot be ' +
-      'combined with --prod');
-    Halt(1);
-  end;
-
-  if LayoutProbeBuild and (BuildMode <> bmProd) then
-  begin
-    WriteLn('--layout-probe measures production code placement; it needs ' +
-      '--prod');
-    Halt(1);
-  end;
-
-  if LayoutProbeBuild then
-  begin
-    WriteLn('Build mode: production, layout probe (binaries in ',
-      LayoutProbeExecutableDirectory, ')');
-    if not DirectoryExists(LayoutProbeExecutableDirectory) then
-      CreateDir(LayoutProbeExecutableDirectory);
-  end
-  else if BuildMode = bmProd then
+  if BuildMode = bmProd then
     WriteLn('Build mode: production')
-  else if GCStressBuild then
-  begin
-    WriteLn('Build mode: development, GC stress (binaries in ',
-      GCStressExecutableDirectory, ')');
-    if not DirectoryExists(GCStressExecutableDirectory) then
-      CreateDir(GCStressExecutableDirectory);
-  end
   else
     WriteLn('Build mode: development');
 
@@ -1569,10 +1350,7 @@ begin
     so engine signature changes cannot leave the nightly harness broken. }
   if BuildTriggers.Count = 0 then
     for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
-      { G2 needs FPC 3.3.1, which the full build's toolchain is not yet: it is built by name }
-      if not (TBuildTarget(I) in [btG2, btG2Runner, btG2TestRunner, btG2REPL, btG2BenchmarkRunner, btG2Bundler,
-        btG2Test262Runner, btG2FuzzHarness, btG2LoaderBare]) then
-        BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
+      BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
 
   { Resolve and validate the complete selection before removing any cache. }
   for I := 0 to BuildTriggers.Count - 1 do

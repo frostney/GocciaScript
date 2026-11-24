@@ -65,8 +65,6 @@ for archive in "$@"; do
   echo "Checking $archive"
   for src in "${entrypoints[@]}"; do
     name="$(basename "${src%.dpr}")"
-    # The G2 apps are not released yet (stage-build-artifacts.sh skips them).
-    case "$name" in *G2) continue ;; esac
     mode=""
     entry=""
     for candidate in "$root/$name" "$root/$name.exe"; do

@@ -52,7 +52,7 @@ jobs:
           version: ${{ env.FPC_VERSION }}
 
       - name: Build GocciaTestRunner on G2
-        run: ./build.pas --prod g2testrunner
+        run: ./build.pas --prod testrunner
 
       - name: Build FFI fixture library
         run: ./fixtures/ffi/build.sh
@@ -61,7 +61,7 @@ jobs:
         # The run exits nonzero for the known failures; the next step decides.
         run: |
           status=0
-          build/g2/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
+          build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
             --output=g2-test-results.json 2> g2-heap-snapshots.log || status=$?
           echo "GocciaTestRunner exit status: $status"
           grep -E '^Heap snapshots:' g2-heap-snapshots.log
@@ -103,7 +103,7 @@ jobs:
           version: ${{ env.FPC_VERSION }}
 
       - name: Build GocciaTest262Runner on G2
-        run: ./build.pas --prod g2test262runner
+        run: ./build.pas --prod test262runner
 
       - name: Read test262 pin
         id: test262-pin
@@ -132,7 +132,7 @@ jobs:
           TZ: UTC
         run: |
           status=0
-          build/g2/GocciaTest262Runner --suite-dir=test262-suite --jobs=4 --timeout=20s \
+          build/GocciaTest262Runner --suite-dir=test262-suite --jobs=4 --timeout=20s \
             --output=g2-test262-results.json || status=$?
           echo "GocciaTest262Runner exit status: $status"
 
@@ -166,7 +166,7 @@ jobs:
           version: ${{ env.FPC_VERSION }}
 
       - name: Build G2, GocciaRunner, GocciaBundler and GocciaFuzzHarness on G2
-        run: ./build.pas --prod g2 g2runner g2bundler g2fuzzharness
+        run: ./build.pas --prod g2 runner bundler fuzzharness
 
       - name: Execution limits
         run: bash scripts/g2/limits-test.sh build/g2/g2
@@ -175,13 +175,13 @@ jobs:
         run: python3 scripts/g2/artifact-roundtrip-tests.py build/g2/g2 4 tests
 
       - name: Tampered bytecode files fail in every tier
-        run: python3 scripts/g2/artifact-tamper-tests.py build/g2/GocciaBundler build/g2/GocciaRunner
+        run: python3 scripts/g2/artifact-tamper-tests.py build/GocciaBundler build/GocciaRunner
 
       - name: Generated programs agree between the interpreter and the JIT
         # A short campaign on a seed of its own per run; a finding's input,
         # program and report are uploaded.
         run: |
-          python3 scripts/g2/grammar-fuzz.py build/g2/GocciaFuzzHarness 1000 --jobs 4 \
+          python3 scripts/g2/grammar-fuzz.py build/GocciaFuzzHarness 1000 --jobs 4 \
             --seed "${GITHUB_RUN_ID}" --findings g2-grammar-findings
 
       - name: Upload grammar fuzz findings
@@ -276,7 +276,7 @@ jobs:
               export G2_FPC_FLAGS="-Fl${SDK_ROOT}/usr/lib -k-F${SDK_ROOT}/System/Library/Frameworks"
               ;;
           esac
-          ./build.pas --prod g2testrunner
+          ./build.pas --prod testrunner
 
       - name: Upload the build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -284,7 +284,7 @@ jobs:
           name: g2-${{ matrix.target }}
           if-no-files-found: error
           retention-days: 7
-          path: build/g2/GocciaTestRunner*
+          path: build/GocciaTestRunner*
 
   platform-test:
     name: JavaScript suite on G2 (${{ matrix.target }})
@@ -317,11 +317,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: g2-${{ matrix.target }}
-          path: build/g2/
+          path: build/
 
       - name: Make the runner executable
         if: runner.os != 'Windows'
-        run: chmod +x build/g2/GocciaTestRunner
+        run: chmod +x build/GocciaTestRunner
 
       - name: Build FFI fixture library
         if: runner.os != 'Windows'
@@ -350,7 +350,7 @@ jobs:
         # file is there to stop a hang, not to time a file.
         run: |
           status=0
-          build/g2/GocciaTestRunner -P tests --silent --no-progress --timeout=120s \
+          build/GocciaTestRunner -P tests --silent --no-progress --timeout=120s \
             --output=g2-test-results.json || status=$?
           echo "GocciaTestRunner exit status: $status"
 

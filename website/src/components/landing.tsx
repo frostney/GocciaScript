@@ -1343,17 +1343,6 @@ export function Landing({
             </Card>
             <Card className="paper-card feature-card" padding={6}>
               <VStack gap={2}>
-                <Heading level={4}>Delphi 12</Heading>
-                <Text as="p" type="supporting" display="block">
-                  Repository projects cover the REPL, Runner, Bare Script
-                  Loader, Test Runner, Benchmark Runner and Bundler on Win32 and
-                  Win64; the support contract includes all applicable Pascal and
-                  JavaScript tests.
-                </Text>
-              </VStack>
-            </Card>
-            <Card className="paper-card feature-card" padding={6}>
-              <VStack gap={2}>
                 <Heading level={4}>Native embedding</Heading>
                 <Text as="p" type="supporting" display="block">
                   Hosts can embed portable JavaScript and define application

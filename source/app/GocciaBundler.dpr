@@ -1,4 +1,12 @@
 program GocciaBundler;
+{ GocciaBundler on the G2 engine, while the apps move from the old engine to
+  G2: the same command line, configs, output plan and collision checks (the
+  base class and GocciaBundler.dpr's planning), each file compiled by a
+  TG2Engine on a thread of its own (G2.Embed CompileArtifact) into a G2
+  bytecode file (G2.Artifact), which GocciaRunner on G2 runs as an entry or
+  imports with --prefer-bytecode. `./build.pas g2bundler` builds it as
+  build/g2/GocciaBundler; once it covers GocciaBundler it replaces
+  GocciaBundler.dpr. }
 
 {$I Goccia.inc}
 
@@ -8,33 +16,26 @@ uses
   SysUtils,
 
   HostOutputFiles,
+  TextSemantics,
   TimingUtils,
 
-  Goccia.Application,
-  Goccia.Bytecode.Binary,
-  Goccia.Bytecode.Module,
-  Goccia.Bytecode.Profile.Options,
   CLI.ConfigFile,
-  Goccia.CLI.Application,
-  Goccia.CLI.EngineApplication,
-  Goccia.CLI.Stdin,
-  Goccia.CLI.SourceMaps,
-  Goccia.CLI.SourcePipelineResult,
-  Goccia.CLI.Options,
   CLI.Options,
+  Goccia.Application,
   Goccia.Capabilities,
-  Goccia.Compiler,
-  Goccia.Engine,
+  Goccia.CLI.Application,
+  Goccia.CLI.FileSettings,
+  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
+  Goccia.CLI.SourceMaps,
+  Goccia.CLI.Stdin,
   Goccia.FileExtensions,
-  Goccia.FloatingPoint,
-  Goccia.GarbageCollector,
+  Goccia.JSX.Transformer,
   Goccia.ScriptLoader.Input,
-  Goccia.SourcePipeline,
-  Goccia.SourceMap,
+  Goccia.Terminal.Colors,
   Goccia.TextFiles,
-  Goccia.Threading,
-  Goccia.Threading.Flags,
-  Goccia.Threading.Init,
+  G2.Embed,
 
   FileUtils;
 
@@ -46,38 +47,63 @@ type
     CreateParents: Boolean;
   end;
 
-  TBundlerApp = class(TGocciaCLIEngineApplication)
+  { a file that did not compile: Message the report as GocciaRunner prints it, Detail the error alone (a
+    parallel run's "Error in" line) }
+  EG2BundleFailure = class(Exception)
+  public
+    Detail: string;
+  end;
+
+  TBundlerApp = class(TGocciaCLIApplication)
   private
     FOutputPath: TStringOption;
     FSourceMap: TStringOption;
     FPlan: array of TBundlerOutput;
 
-    function CompileSource(const ASource: TStringList;
-      const AFileName: string;
-      out ASourceMap: TGocciaSourceMap): TGocciaBytecodeModule;
-    procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
-      const AOutput: TBundlerOutput);
-    procedure EmitBytecode(const ASource: TStringList;
-      const AOutput: TBundlerOutput);
+    procedure WriteSourceMapIfEnabled(const ASource: TStringList; const AOutput: TBundlerOutput);
+    procedure EmitBytecode(const ASource: TStringList; const AOutput: TBundlerOutput; AQuiet: Boolean);
     function ResolveOutputPath(const AInputFile, AInputRoot: string): string;
     procedure AddPlannedFiles(const AFiles: TStringList;
       const AInputRoot: string; const AStdin: Boolean);
     procedure ValidateOutputPlan;
-    procedure EmitPlannedFile(const AIndex: Integer);
-    procedure EmitWorkerProc(const AFileName: string; const AIndex: Integer;
-      out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
-    procedure EmitParallel(const AFiles: TStringList;
-      const AJobCount: Integer);
-
+    procedure EmitPlannedFile(const AIndex: Integer; AQuiet: Boolean);
+    procedure EmitFiles(AJobCount: Integer);
   protected
     function HonoredSettings: TGocciaHonoredSettings; override;
     function HonorsUnsafeRequests: Boolean; override;
     procedure Configure; override;
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
-    procedure Validate; override;
+    procedure HandleError(const AException: Exception); override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
+
+  { one file compiled on a thread of its own: a G2 engine's state is its thread's }
+  TBundleThread = class(TThread)
+  private
+    FApp: TBundlerApp;
+    FIndex: Integer;
+    FQuiet: Boolean;
+    FErrorClass: ExceptClass;
+    FErrorMessage, FErrorDetail: string;
+  protected
+    procedure Execute; override;
+  end;
+
+procedure TBundleThread.Execute;
+begin
+  try
+    FApp.EmitPlannedFile(FIndex, FQuiet);
+  except
+    on E: Exception do
+    begin
+      FErrorClass := ExceptClass(E.ClassType);
+      FErrorMessage := E.Message;
+      if E is EG2BundleFailure then FErrorDetail := EG2BundleFailure(E).Detail
+      else FErrorDetail := E.Message;
+    end;
+  end;
+end;
 
 { TBundlerApp - Configure }
 
@@ -116,152 +142,103 @@ begin
   FSourceMap.WritesHostFile := True;
 end;
 
-{ TBundlerApp - Validate }
-
-procedure TBundlerApp.Validate;
+{ a file that did not compile prints its report, as GocciaBundler prints a compile error }
+procedure TBundlerApp.HandleError(const AException: Exception);
 begin
-  inherited Validate;
+  if AException is EG2BundleFailure then
+    WriteLn(AException.Message)
+  else
+    inherited HandleError(AException);
 end;
 
 { TBundlerApp - Core logic }
 
-procedure TBundlerApp.WriteSourceMapIfEnabled(
-  const ASourceMap: TGocciaSourceMap; const AOutput: TBundlerOutput);
+{ --source-map: the JSX transform's map of the file (GocciaBundler's map is its source pipeline's, the same
+  transform), at the planned path; nothing for a file the transform leaves alone }
+procedure TBundlerApp.WriteSourceMapIfEnabled(const ASource: TStringList; const AOutput: TBundlerOutput);
 var
-  SourceName: string;
+  SourceName, Text: string;
+  Transformed: TGocciaJSXTransformResult;
 begin
   if AOutput.MapOutputPath = '' then
+    Exit;
+  if IsJSXExcludedExtension(ExtractFileExt(AOutput.InputFile)) then
     Exit;
   SourceName := AOutput.InputFile;
   if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
     SourceName := AOutput.OutputPath;
-  WriteSourceMapIfAvailable(ASourceMap, AOutput.MapOutputPath,
-    AOutput.OutputPath, SourceName, not GIsWorkerThread);
+  Text := StringListToSourceText(ASource);
+  Transformed := TGocciaJSXTransformer.Transform(Text, AOutput.InputFile);
+  try
+    if Assigned(Transformed.SourceMap) then
+      Transformed.SourceMap.SetSourceContent(0, Text);
+    WriteSourceMapIfAvailable(Transformed.SourceMap, AOutput.MapOutputPath,
+      AOutput.OutputPath, SourceName, False);
+  finally
+    Transformed.SourceMap.Free;
+    Transformed.OriginMap.Free;
+  end;
 end;
 
-function TBundlerApp.CompileSource(const ASource: TStringList;
-  const AFileName: string;
-  out ASourceMap: TGocciaSourceMap): TGocciaBytecodeModule;
+{ runs on the file's own thread: a fresh engine under the file's settings compiles it }
+procedure TBundlerApp.EmitBytecode(const ASource: TStringList; const AOutput: TBundlerOutput; AQuiet: Boolean);
 var
-  SourcePipelineResult: TGocciaCLISourcePipelineResult;
-  Compiler: TGocciaCompiler;
-  CompiledModule: TGocciaBytecodeModule;
+  Engine: TG2Engine;
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
-  EffectiveStrictTypes: Boolean;
-  EffectiveWarningUnsupportedFeatures: Boolean;
-  EffectiveSourceType: TGocciaSourceType;
-  EffectiveCompatibility: TGocciaCompatibilityFlags;
-  EffectiveLabelStatementsEnabled: Boolean;
-  EffectiveForInLoopsEnabled: Boolean;
-  EffectiveExperimentalJSModuleSourceEnabled: Boolean;
-  PipelineOptions: TGocciaSourcePipelineOptions;
+  NoUnsafe: TGocciaUnsafeRequests;
+  Bytes: TBytes;
+  R: TG2RunResult;
+  StartTime, EndTime: Int64;
+  Failure: EG2BundleFailure;
+  Stream: TFileStream;
+  SnapshotErr: UnicodeString;
 begin
-  ASourceMap := nil;
-  { Resolve source pipeline flags: CLI flag > per-file config >
-    root config > default. }
-  FileConfigPath := DiscoverFileConfigPath(AFileName);
+  if not AQuiet then
+    WriteLn('Compiling: ', AOutput.InputFile);
+  StartTime := GetNanoseconds;
+  { CLI flag > per-file config > root config > default }
+  FileConfigPath := DiscoverFileConfigPath(AOutput.InputFile);
   if FileConfigPath <> '' then
     FileConfig := LoadFileConfig(FileConfigPath)
   else
     SetLength(FileConfig, 0);
   { The bundler grants nothing, so a permissions block is only validated and
     any grant it requests reported as ignored. }
-  FilePermissionRequest(FileConfigPath, AFileName);
-  ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
-  EffectiveLabelStatementsEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfLabel), FileConfig);
-  EffectiveForInLoopsEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfForIn), FileConfig);
-  EffectiveExperimentalJSModuleSourceEnabled := ResolveFlagOption(
-    EngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
-    FileConfig);
-  EffectiveSourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
-    FileConfig, AFileName);
-  EffectiveStrictTypes := ResolveFlagOption(
-    EngineOptions.StrictTypes, FileConfig);
-  EffectiveWarningUnsupportedFeatures := ResolveFlagOption(
-    EngineOptions.WarningUnsupportedFeatures, FileConfig);
-
-  CompiledModule := nil;
-  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-  PipelineOptions.Preprocessors := TGocciaEngine.DefaultPreprocessors;
-  PipelineOptions.Compatibility := EffectiveCompatibility;
-  PipelineOptions.LabelStatementsEnabled := EffectiveLabelStatementsEnabled;
-  PipelineOptions.ForInLoopsEnabled := EffectiveForInLoopsEnabled;
-  PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-    EffectiveExperimentalJSModuleSourceEnabled;
-  PipelineOptions.WarningUnsupportedFeatures :=
-    EffectiveWarningUnsupportedFeatures;
-  PipelineOptions.SourceType := EffectiveSourceType;
-  SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
-    PipelineOptions, False);
+  FilePermissionRequest(FileConfigPath, AOutput.InputFile);
+  NoUnsafe := [];
+  Engine := TG2Engine.Create;
   try
-    Compiler := TGocciaCompiler.Create(AFileName);
-    try
-      Compiler.StrictTypes := EffectiveStrictTypes;
-      { The goal the parse settled for a detected entry (ADR 0140). }
-      Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
-        (SourcePipelineResult.SourceType = stScript);
-      Compiler.ArgumentsObjectEnabled :=
-        cfArgumentsObject in EffectiveCompatibility;
-      if SourcePipelineResult.SourceType = stModule then
-      begin
-        Compiler.GlobalBackedTopLevel := True;
-        Compiler.PreinitializedTopLevelFunctions := True;
-        Compiler.AsyncTopLevel := SourcePipelineResult.ProgramNode.HasTopLevelAwait;
-      end;
-      CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
-      PipelineOptions.SourceType := SourcePipelineResult.SourceType;
-      CompiledModule.CompileProfile := BuildBytecodeCompileProfile(
-        PipelineOptions, EffectiveStrictTypes);
-      ASourceMap := SourcePipelineResult.TakeSourceMap;
-      Result := CompiledModule;
-      CompiledModule := nil;
-    finally
-      Compiler.Free;
+    { build.pas snapshots the compiled preludes from a run of an empty file with G2_SNAPSHOT_OUT set: the host's
+      are compiled too, so the snapshot holds what the other G2 apps' have }
+    if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+      Engine.PrepareHost(SnapshotErr);
+    ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig, AOutput.InputFile, NoUnsafe));
+    R := Default(TG2RunResult);
+    if not Engine.CompileArtifact(AOutput.InputFile, UnicodeString(StringListToSourceText(ASource)), Bytes, R) then
+    begin
+      Failure := EG2BundleFailure.Create(FailureText(AOutput.InputFile, R, ASource, Engine, '', nil, True, True,
+        IsColorTerminal, 0, 0));
+      Failure.Detail := UTF8Encode(R.ErrorText);
+      raise Failure;
     end;
   finally
-    SourcePipelineResult.Free;
-    CompiledModule.Free;
+    Engine.Free;
   end;
-end;
-
-procedure TBundlerApp.EmitBytecode(const ASource: TStringList;
-  const AOutput: TBundlerOutput);
-var
-  Module: TGocciaBytecodeModule;
-  SourceMap: TGocciaSourceMap;
-  StartTime, EndTime: Int64;
-  FloatingPointState: TGocciaFloatingPointState;
-begin
-  if not GIsWorkerThread then
-    WriteLn('Compiling: ', AOutput.InputFile);
-  StartTime := GetNanoseconds;
-
-  SourceMap := nil;
-  { Constant folding is IEEE-754 arithmetic and needs floating-point
-    exceptions masked, as TGocciaEngine does around its compile and run
-    steps. The scope is per call because the mask is per thread. }
-  EnterGocciaFloatingPointScope(FloatingPointState);
+  if AOutput.CreateParents then
+    EnsureHostOutputParent(AOutput.OutputPath);
+  Stream := TFileStream.Create(AOutput.OutputPath, fmCreate);
   try
-    Module := CompileSource(ASource, AOutput.InputFile, SourceMap);
+    if Length(Bytes) > 0 then
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
   finally
-    LeaveGocciaFloatingPointScope(FloatingPointState);
+    Stream.Free;
   end;
-  try
-    if AOutput.CreateParents then
-      EnsureHostOutputParent(AOutput.OutputPath);
-    Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutput.OutputPath);
-    WriteSourceMapIfEnabled(SourceMap, AOutput);
-    EndTime := GetNanoseconds;
-    if not GIsWorkerThread then
-      WriteLn(SysUtils.Format('  Compiled to %s (%s)',
-        [AOutput.OutputPath, FormatDuration(EndTime - StartTime)]));
-  finally
-    SourceMap.Free;
-    Module.Free;
-  end;
+  WriteSourceMapIfEnabled(ASource, AOutput);
+  EndTime := GetNanoseconds;
+  if not AQuiet then
+    WriteLn(SysUtils.Format('  Compiled to %s (%s)',
+      [AOutput.OutputPath, FormatDuration(EndTime - StartTime)]));
 end;
 
 function TBundlerApp.ResolveOutputPath(const AInputFile,
@@ -289,13 +266,13 @@ begin
     Result := ChangeFileExt(AInputFile, EXT_GBC);
 end;
 
-procedure TBundlerApp.EmitPlannedFile(const AIndex: Integer);
+procedure TBundlerApp.EmitPlannedFile(const AIndex: Integer; AQuiet: Boolean);
 var
   Source: TStringList;
 begin
   Source := SourceRegistry.Load(FPlan[AIndex].InputFile);
   try
-    EmitBytecode(Source, FPlan[AIndex]);
+    EmitBytecode(Source, FPlan[AIndex], AQuiet);
   finally
     Source.Free;
   end;
@@ -416,42 +393,74 @@ begin
   end;
 end;
 
-procedure TBundlerApp.EmitWorkerProc(const AFileName: string;
-  const AIndex: Integer; out AConsoleOutput: string;
-  out AErrorMessage: string; AData: Pointer);
-begin
-  AConsoleOutput := '';
-  AErrorMessage := '';
-  try
-    EmitPlannedFile(AIndex);
-  except
-    on E: Exception do
-      AErrorMessage := E.Message;
-  end;
-end;
-
-procedure TBundlerApp.EmitParallel(const AFiles: TStringList;
-  const AJobCount: Integer);
+{ every planned file, each on its own thread, at most AJobCount at once. One at a time (AJobCount 1), a failure
+  stops the run as GocciaBundler's does; in parallel each failed file is reported and the exit code is 1. }
+procedure TBundlerApp.EmitFiles(AJobCount: Integer);
 var
-  Pool: TGocciaThreadPool;
-  I: Integer;
+  I, Next, Oldest, Started, Running: Integer;
+  Workers: array of TBundleThread;
+  Parallel: Boolean;
+  ErrorClass: ExceptClass;
+  ErrorMessage: string;
+  Failure: EG2BundleFailure;
 begin
-  EnsureSharedPrototypesInitialized;
-
-  Pool := TGocciaThreadPool.Create(AJobCount);
+  Parallel := AJobCount > 1;
+  SetLength(Workers, Length(FPlan));
+  Running := 0;
+  Oldest := 0;
+  Started := 0;
+  ErrorClass := nil;
+  ErrorMessage := '';
   try
-    if (TGarbageCollector.Instance <> nil) then
-      Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    Pool.RunAll(AFiles, EmitWorkerProc);
-
-    for I := 0 to AFiles.Count - 1 do
-      if Pool.Results[I].ErrorMessage <> '' then
+    for Next := 0 to High(FPlan) do
+    begin
+      if Running = AJobCount then
       begin
-        WriteLn('Error in ', Pool.Results[I].FileName, ': ', Pool.Results[I].ErrorMessage);
-        ExitCode := 1;
+        Workers[Oldest].WaitFor;
+        Dec(Running);
+        Inc(Oldest);
+        if not Parallel and (Workers[Oldest - 1].FErrorClass <> nil) then
+          Break;
       end;
+      if not Parallel and (Next > 0) then
+        WriteLn;
+      Workers[Next] := TBundleThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next].FApp := Self;
+      Workers[Next].FIndex := Next;
+      Workers[Next].FQuiet := Parallel;
+      Workers[Next].Start;
+      Inc(Started);
+      Inc(Running);
+    end;
   finally
-    Pool.Free;
+    for I := 0 to Started - 1 do
+    begin
+      if I >= Oldest then
+        Workers[I].WaitFor;
+      if Workers[I].FErrorClass <> nil then
+      begin
+        if Parallel then
+        begin
+          WriteLn('Error in ', FPlan[I].InputFile, ': ', Workers[I].FErrorDetail);
+          ExitCode := 1;
+        end
+        else if ErrorClass = nil then
+        begin
+          ErrorClass := Workers[I].FErrorClass;
+          ErrorMessage := Workers[I].FErrorMessage;
+        end;
+      end;
+      Workers[I].Free;
+    end;
+  end;
+  if ErrorClass <> nil then
+  begin
+    if ErrorClass = EG2BundleFailure then
+    begin
+      Failure := EG2BundleFailure.Create(ErrorMessage);
+      raise Failure;
+    end;
+    raise ErrorClass.Create(ErrorMessage);
   end;
 end;
 
@@ -459,7 +468,7 @@ end;
 
 procedure TBundlerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  I: Integer;
+  I, Jobs: Integer;
   Inputs, Found, Files, StdinNames: TStringList;
   InputRoot: string;
 begin
@@ -538,22 +547,10 @@ begin
       end;
     end;
     ValidateOutputPlan;
-    Inputs.Clear;
-    for I := 0 to High(FPlan) do
-      Inputs.Add(FPlan[I].InputFile);
-    if GetJobCount(Inputs.Count) > 1 then
-    begin
-      WriteLn(SysUtils.Format('Compiling %d files with %d workers',
-        [Inputs.Count, GetJobCount(Inputs.Count)]));
-      EmitParallel(Inputs, GetJobCount(Inputs.Count));
-    end
-    else
-      for I := 0 to High(FPlan) do
-      begin
-        if I > 0 then
-          WriteLn;
-        EmitPlannedFile(I);
-      end;
+    Jobs := GetJobCount(Length(FPlan));
+    if Jobs > 1 then
+      WriteLn(SysUtils.Format('Compiling %d files with %d workers', [Length(FPlan), Jobs]));
+    EmitFiles(Jobs);
   finally
     StdinNames.Free;
     Inputs.Free;

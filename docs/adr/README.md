@@ -197,3 +197,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0185 — On G2 the memory limit refuses with a catchable RangeError at the next back edge or call](0185-g2-refuses-memory-at-the-next-safe-point.md)
 - [0186 — G2 serializes every core before code its JIT wrote runs](0186-g2-serializes-every-core-before-new-jit-code-runs.md)
 - [0187 — G2 reuses a frame for a tail call only past a depth floor](0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md)
+- [0188 — The Delphi projects and the Wasm test runner leave with the old engine](0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)

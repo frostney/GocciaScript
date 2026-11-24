@@ -15,7 +15,7 @@ project's static module graph, a script reaches no filesystem, network or
 process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
 and a run can be made deterministic, with a fixed clock and seeded randomness.
-Today the host is a FreePascal or Delphi application; see
+Today the host is a FreePascal application; see
 [Embedding the Engine](docs/embedding.md).
 
 [![test262 pass rate on main, runs in both modes combined, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
@@ -47,7 +47,7 @@ Today the host is a FreePascal or Delphi application; see
   V8 or other runtime to install beside the binary (HTTPS on Linux uses the
   system's OpenSSL). Prebuilt for
   macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
-  in FreePascal and Delphi applications.
+  in FreePascal applications.
 - **Modern JavaScript and TypeScript.** ES modules, classes with private
   fields, async/await, Temporal, Intl, TC39 type annotations run directly, and
   a Vitest-compatible test runner. GocciaScript also tracks TC39 proposals,
@@ -526,20 +526,12 @@ For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the
 complete implementation, default-profile, and compatibility-path detail, see
 [Language](docs/language.md).
 
-## FreePascal, Delphi, and native embedding
+## FreePascal and native embedding
 
 FreePascal builds GocciaScript's native binaries, so the engine needs no other
 runtime underneath, and it is the toolchain for releases and the documented
-embedding API. The repository also includes
-[`GocciaScript.Delphi.groupproj`](source/app/GocciaScript.Delphi.groupproj) and
-Delphi projects for the REPL, the Runner, the Bare Script Loader, Test Runner,
-Benchmark Runner, and Bundler on Win32 and Win64.
-
-The Delphi support contract requires the complete application matrix and all
-applicable Pascal and JavaScript tests to pass with the same runtime semantics
-as the FreePascal build. Delphi 12 Community Edition contributors validate that
-contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
-and [Build System](docs/build-system.md#prerequisites).
+embedding API. Delphi support is planned for a later release
+([ADR 0188](docs/adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)).
 
 Embedding is covered under [Embed it](#embed-it) and in
 [Embedding the Engine](docs/embedding.md).

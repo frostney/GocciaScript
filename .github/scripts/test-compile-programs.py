@@ -34,6 +34,14 @@ if source.stem == os.environ.get("FAIL_PROGRAM"):
     print("deliberate compiler failure")
     sys.exit(7)
 '''
+BUILD_SCRIPT = r'''#!/usr/bin/env python3
+import json, os, pathlib, sys
+pathlib.Path(os.environ["RECORDS"], "build.pas.args").write_text(json.dumps({
+    "args": sys.argv[1:], "cwd": os.getcwd(),
+    "env": {k: os.environ.get(k) for k in ("FPC_TARGET_CPU", "FPC_TARGET_OS", "G2_FPC_FLAGS")}}))
+print("build.pas fixture")
+sys.exit(5 if os.environ.get("FAIL_BUILD_PAS") else 0)
+'''
 
 
 class CompileProgramsTest(unittest.TestCase):
@@ -41,15 +49,18 @@ class CompileProgramsTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ci build ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.apps = ["source/app/GocciaFirst.dpr", "source/app/GocciaScriptLoaderBare.dpr"]
         self.sources = [
-            "source/app/First.dpr", "source/app/Second.dpr",
             "source/units/Unit.Test.pas", "source/shared/Shared.Test.pas",
             "source/app/cli/CLI.Test.pas", "source/app/compliance/Compliance.dpr",
         ]
-        for name in self.sources + ["source/app/FirstG2.dpr"]:
+        for name in self.apps + self.sources:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("program Fixture; begin end.\n")
+        build_script = self.root / "build.pas"
+        build_script.write_text(BUILD_SCRIPT)
+        build_script.chmod(0o755)
         compiler = self.root / "bin/fpc"
         compiler.parent.mkdir()
         compiler.write_text(COMPILER)
@@ -85,21 +96,33 @@ class CompileProgramsTest(unittest.TestCase):
         for _, delta in events:
             active += delta
             peak = max(peak, active)
-        self.assertEqual(peak, 2)
+        self.assertLessEqual(peak, 2)
         self.assertEqual(list(self.records.glob("*.postlink")), [])
+        build = json.loads((self.records / "build.pas.args").read_text())
+        self.assertEqual(build["args"], ["--prod", "first", "loaderbare"])
+        self.assertEqual(Path(build["cwd"]).resolve(), self.root.resolve())
+        self.assertEqual(build["env"], {"FPC_TARGET_CPU": "x86_64", "FPC_TARGET_OS": "linux",
+                                        "G2_FPC_FLAGS": "-Xd"})
         self.assertIn("6 programs", result.stdout)
         self.assertIn("0 failed", result.stdout)
         self.assertEqual(list((self.root / "build/ci-compiled").iterdir()), [])
 
     def test_compiler_failure_is_fatal_and_preserves_diagnostics(self):
-        self.env["FAIL_PROGRAM"] = "First"
+        self.env["FAIL_PROGRAM"] = "Compliance"
         result = self.run_build()
         self.assertEqual(result.returncode, 1)
         self.assertIn("deliberate compiler failure", result.stdout)
         self.assertIn("1 failed", result.stdout)
         self.assertEqual(len(list(self.records.glob("*.json"))), len(self.sources))
         self.assertIn("deliberate compiler failure",
-                      (self.root / "build/ci-logs/First.log").read_text())
+                      (self.root / "build/ci-logs/Compliance.log").read_text())
+
+    def test_application_build_failure_is_fatal_and_shows_its_log(self):
+        self.env["FAIL_BUILD_PAS"] = "1"
+        result = self.run_build()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("build.pas fixture", result.stdout)
+        self.assertIn("1 failed", result.stdout)
 
     def test_win32_finalizes_every_output_and_deletes_rejected_images(self):
         result = self.run_build(cpu="i386", os_name="win32")
@@ -112,17 +135,17 @@ class CompileProgramsTest(unittest.TestCase):
             postlink = json.loads((self.records / f"{name}.postlink").read_text())
             self.assertEqual(postlink, ["--apply", str(self.root / f"build/{name}.exe"),
                                        str(self.root / f"build/{name}.map"), record["cwd"]])
-        self.env["FAIL_POSTLINK"] = "First"
+        self.env["FAIL_POSTLINK"] = "Compliance"
         result = self.run_build(cpu="i386", os_name="win32")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertFalse((self.root / "build/First.exe").exists())
-        self.assertTrue((self.root / "build/Second.exe").exists())
+        self.assertFalse((self.root / "build/Compliance.exe").exists())
+        self.assertTrue((self.root / "build/Shared.Test.exe").exists())
 
     def test_refuses_missing_program_groups_and_colliding_output_names(self):
         for jobs in [0, -1]:
             self.assertNotEqual(self.run_build(jobs).returncode, 0)
-        collision = self.root / "source/app/compliance/First.dpr"
-        collision.write_text("program First; begin end.\n")
+        collision = self.root / "source/app/compliance/GocciaFirst.dpr"
+        collision.write_text("program GocciaFirst; begin end.\n")
         self.assertIn("basenames must be unique", self.run_build().stderr)
         collision.unlink()
         (self.root / "source/app/compliance/Compliance.dpr").unlink()

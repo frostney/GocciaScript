@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Build every full-CI program with bounded concurrency and isolated FPC units."""
+"""Build every full-CI program with bounded concurrency and isolated FPC units.
+
+The applications (source/app/*.dpr) run on G2, whose engine embeds its compiled
+preludes: only build.pas builds them, all in one serial run (they share the
+generated prelude sources), alongside the compiler pool that builds the Pascal
+tests and compliance runners."""
+
+import os
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +15,13 @@ import subprocess
 import sys
 import tempfile
 import time
+
+
+def build_target(source):
+    """build.pas's target for an application: its name without the Goccia
+    prefix, lower-cased (GocciaTestRunner: testrunner)."""
+    name = source.stem.removeprefix("Goccia").lower()
+    return {"scriptloaderbare": "loaderbare"}.get(name, name)
 
 
 def main():
@@ -21,10 +35,7 @@ def main():
         parser.error("--jobs must be positive")
 
     root = Path.cwd()
-    # The G2 apps (*G2.dpr) embed their compiled preludes and build only
-    # through build.pas; g2.yml builds and tests them.
-    entrypoints = sorted(path for path in root.glob("source/app/*.dpr")
-                         if not path.stem.endswith("G2"))
+    entrypoints = sorted(root.glob("source/app/*.dpr"))
     tests = sorted(
         path
         for tree in ("source/units", "source/shared", "source/app")
@@ -33,8 +44,8 @@ def main():
     compliance = sorted(root.glob("source/app/compliance/*.dpr"))
     if not entrypoints or not tests or not compliance:
         parser.error("expected application entrypoints, Pascal tests and compliance runners")
-    sources = entrypoints + tests + compliance
-    names = [source.stem for source in sources]
+    sources = tests + compliance
+    names = [source.stem for source in entrypoints + sources]
     if len(set(names)) != len(names):
         parser.error("program basenames must be unique in the build output directory")
 
@@ -108,13 +119,32 @@ def main():
         print(message, flush=True)
         return result.returncode
 
+    def build_applications():
+        started = time.monotonic()
+        log = logs / "applications.log"
+        env = dict(os.environ, FPC_TARGET_CPU=args.cpu, FPC_TARGET_OS=args.os,
+                   G2_FPC_FLAGS=" ".join(flags))
+        command = [str(root / "build.pas"), "--prod",
+                   *[build_target(source) for source in entrypoints]]
+        with log.open("w") as output:
+            result = subprocess.run(command, cwd=root, env=env, stdout=output,
+                                    stderr=subprocess.STDOUT)
+        message = (f"{len(entrypoints)} applications through build.pas: "
+                   f"{time.monotonic() - started:.1f}s, exit {result.returncode}")
+        if result.returncode:
+            message += "\n" + log.read_text(errors="replace")
+        print(message, flush=True)
+        return result.returncode
+
     print(f"Building {len(entrypoints)} applications, {len(tests)} Pascal tests and "
           f"{len(compliance)} compliance runners with {args.jobs} compiler processes", flush=True)
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        applications = pool.submit(build_applications)
         results = list(pool.map(compile_program, sources))
+        results.append(applications.result())
     failures = sum(result != 0 for result in results)
-    print(f"Built {len(sources)} programs in {time.monotonic() - started:.1f}s; "
+    print(f"Built {len(entrypoints) + len(sources)} programs in {time.monotonic() - started:.1f}s; "
           f"{failures} failed", flush=True)
     return int(failures != 0)
 

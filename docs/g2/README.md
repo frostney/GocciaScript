@@ -292,7 +292,7 @@ epoch, so nothing reloads.
 
 ### GocciaTestRunner
 
-`./build.pas g2testrunner` builds `build/g2/GocciaTestRunner` from `source/app/GocciaTestRunnerG2.dpr`: the old
+`./build.pas testrunner` builds `build/GocciaTestRunner` from `source/app/GocciaTestRunner.dpr`: the old
 runner's options, file discovery (a directory's `node_modules` is skipped), stdin and `--multifile`, the results
 summary, the JSON envelope, exit codes, `--exit-on-first-failure` and coverage. Each file runs on a thread of its
 own with an engine in test mode (`TestMode`, `prelude/testing.js`), its suites reported by `RunTestSuites`; at most
@@ -345,14 +345,14 @@ embedder's session and restore API and the pause checkpoint.
 
 ### GocciaREPL
 
-`./build.pas g2repl` builds `build/g2/GocciaREPL` from `source/app/GocciaREPLG2.dpr`: one G2 engine for the session
+`./build.pas repl` builds `build/GocciaREPL` from `source/app/GocciaREPL.dpr`: one G2 engine for the session
 on a thread of its own, each input run on it as a Script (`TG2Engine.Run` again), so declarations and imports stay
 for the next input. Values print by the old REPL's rules (`host.js` `replFormat`, the `g2rfREPL` result form); each
 run's Script imports are a module of their own, and a rejection an input leaves goes with it.
 
 ### GocciaBenchmarkRunner
 
-`./build.pas g2benchrunner` builds `build/g2/GocciaBenchmarkRunner` from `source/app/GocciaBenchmarkRunnerG2.dpr`:
+`./build.pas benchmarkrunner` builds `build/GocciaBenchmarkRunner` from `source/app/GocciaBenchmarkRunner.dpr`:
 the old runner's options, file discovery (a `helpers/` folder is skipped), stdin and `--multifile`, `--jobs`, the
 console, text, CSV and JSON reports (`Goccia.Benchmark.Reporter`, shared with the old runner), exit codes and the
 profiles (`--profile`, `--profile-deterministic`). Each file runs on a thread of its own with an engine in benchmark
@@ -403,7 +403,7 @@ keeps only the registers live across a `yield` or `await`, and a file's suspensi
 
 ### GocciaBundler
 
-`./build.pas g2bundler` builds `build/g2/GocciaBundler` from `source/app/GocciaBundlerG2.dpr`: the old Bundler's
+`./build.pas bundler` builds `build/GocciaBundler` from `source/app/GocciaBundler.dpr`: the old Bundler's
 options, configs, output plan and collision checks, stdin, `--multifile`, `--jobs` and `--source-map` (the JSX
 transform's map). Each file compiles on a thread of its own with a fresh engine (`TG2Engine.CompileArtifact`),
 under its file settings. GocciaRunner on G2 runs a `.gbc` entry (`TG2Engine.RunArtifact`) and, with
@@ -413,7 +413,7 @@ sections of `scripts/test-cli-apps.ts` pass against the G2 runner and bundler.
 
 ### GocciaTest262Runner
 
-`./build.pas g2test262runner` builds `build/g2/GocciaTest262Runner` from `source/app/GocciaTest262RunnerG2.dpr`:
+`./build.pas test262runner` builds `build/GocciaTest262Runner` from `source/app/GocciaTest262Runner.dpr`:
 the old runner's options, discovery, sharding, run modes, JSON report and per-test profiles (`--profile-dir`), on
 G2's test262 host (`G2.Test262`, which `g2 --test262` also runs). `$262.js`, the host object, is compiled in
 (`source/g2/prelude/test262host.js`), so the runner works from any directory. Each run is a forked process with a fresh engine, killed at `--timeout` (G2's
@@ -424,7 +424,7 @@ which G2 does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`
 
 ### GocciaScriptLoaderBare
 
-`./build.pas g2loaderbare` builds `build/g2/GocciaScriptLoaderBare` from `source/app/GocciaScriptLoaderBareG2.dpr`:
+`./build.pas loaderbare` builds `build/GocciaScriptLoaderBare` from `source/app/GocciaScriptLoaderBare.dpr`:
 the old loader's command line (compatibility flags, `--source-type`, `--source-name`, `--print`, the limits and
 `--profile`) over an engine with `TG2Engine.Bare` set. Its global object is the old loader's: the core built-ins,
 `DOMException`, `atob`, `btoa`, `PermissionDenied`, `print` and `Goccia` (without `semver`), and no `console`,
@@ -439,7 +439,7 @@ nothing on G2.
 
 ### GocciaFuzzHarness
 
-`./build.pas g2fuzzharness` builds `build/g2/GocciaFuzzHarness` from `source/app/GocciaFuzzHarnessG2.dpr`, the old
+`./build.pas fuzzharness` builds `build/GocciaFuzzHarness` from `source/app/GocciaFuzzHarness.dpr`, the old
 harness's contract on G2: exit 0 for every outcome the engine models (completed, script-throw, parse-error,
 timeout, instruction-limit, memory-limit, module-denied, input-rejected, snapshot-refused) and exit 1 with a
 backtrace for anything else. Each input runs twice, on a fresh engine with the fuzz profile (the compatibility

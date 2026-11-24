@@ -306,15 +306,13 @@ async function installationMarkdown(): Promise<string> {
     "",
     "## Pre-built binaries",
     "",
-    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaRunner\` (with its sandbox mode; \`GocciaScriptLoader\` before 0.14), \`GocciaScriptLoaderBare\`, \`GocciaTestRunner\`, \`GocciaTest262Runner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
+    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaRunner\` (with its sandbox mode; \`GocciaScriptLoader\` before 0.14), \`GocciaScriptLoaderBare\`, \`GocciaTestRunner\`, \`GocciaTest262Runner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, and \`GocciaFuzzHarness\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
     "",
     "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly three binaries on your `PATH`: the runner (`GocciaRunner` from 0.14, `GocciaScriptLoader` before it), `GocciaTestRunner`, and `GocciaREPL`; the remaining tools are yours to copy out of that directory.",
     "",
     "## Build from source",
     "",
     "FreePascal is required.",
-    "",
-    "Delphi 12 Community Edition is also supported for the Win32 and Win64 application matrix: the REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
     "",
     fence(
       [

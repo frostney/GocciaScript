@@ -1,169 +1,260 @@
 program GocciaFuzzHarness;
 
-{ Coverage-blind crash harness for the lexer, parser, compiler, and VM, and
-  for the heap snapshot reader (ADR 0148).
+{ GocciaFuzzHarness on G2: a coverage-blind crash harness for G2's parser,
+  compiler, bytecode tiers and JIT, and for its heap snapshot reader.
 
-  Reads one source input from a file argument or stdin, then drives it
-  through lex -> parse -> compile -> bytecode VM under tight instruction,
-  timeout, memory, and stack bounds. The bounds exist so that a merely slow
-  or merely large input is not reported as a crash: the harness treats every
-  engine-defined limit and every JavaScript-level throw as a NORMAL outcome
-  and exits 0. Only outcomes the engine does not model — an unexpected
-  Pascal exception, an access violation, a heap corruption abort — reach the
-  fuzzer as a nonzero exit.
+  Reads one source input from a file argument or stdin and runs it twice,
+  each time on an engine of its own:
+
+    [bytecode]  under the engine's limits (timeout, instruction budget,
+                frame limit, memory ceiling). Armed limits keep the JIT
+                off, so this run fuzzes the interpreter and the limits.
+    [jit]       with no engine limits, so the baseline JIT and the
+                optimizing tier compile what gets hot (G2_JIT_HOT lowers
+                the threshold). The memory ceiling still holds; a watchdog
+                thread ends the process with exit 0 at the deadline, since
+                JIT code does not poll the engine's timeout.
+
+  Every limit, every uncaught JavaScript throw and every parse error is an
+  outcome the engine models, and exits 0. Only what it does not model (a
+  Pascal exception escaping the engine, an access violation, a heap
+  corruption abort) reaches the fuzzer as a nonzero exit or a crash.
+
+  A module import never reaches the host's files: the run's resolver refuses
+  every specifier before it probes a path, the run's file reader (G2.Modules
+  SetFileReadHook) refuses every path as well, and a run that asked for
+  either reports module-denied. Without capabilities G2 also refuses fetch()
+  and leaves FFI out.
+
+  With --grammar the input is not source text but the choices of a program
+  generator (Goccia.Fuzz.Generator): every input is a program that parses,
+  and it prints the same lines in every run, so the harness also compares
+  the two runs. When both end as the program does (completed, or an
+  uncaught throw) and neither reached the frame limit, a difference in what
+  they printed or in how they ended is a finding: the JIT computed
+  something the interpreter did not.
 
   Usage:
     GocciaFuzzHarness <file>          # AFL++ / manual reproduction
+    GocciaFuzzHarness --grammar <f>   # <f>'s bytes choose a program
+    GocciaFuzzHarness --grammar --print-program <f>
+                                      # print the program <f> chooses
     GocciaFuzzHarness -               # read stdin
-    GocciaFuzzHarness --verbose <f>   # print the classification and detail
+    GocciaFuzzHarness --verbose <f>   # print each run's outcome
     GocciaFuzzHarness --heap-snapshot <file>
                                       # restore <file> as a heap snapshot
     GocciaFuzzHarness --write-heap-snapshot-seeds <dir>
                                       # write real snapshots to seed with
 
-  A heap snapshot names the engine build that wrote it, and a reader refuses
-  another build's, so the snapshot seeds are written by the harness that
-  fuzzes them. Functions and generators are named by the bytecode of the
-  module that compiled them, so the engine a snapshot is restored in runs
-  the seeds' own program first. What restores is then used
-  (Goccia.HeapSnapshot.Exercise): its functions called and its generators
-  resumed, returned or thrown into.
-
-  See docs/contributing/tooling.md for the AFL++ and reproduction workflow. }
+  A heap snapshot names the engine build that wrote it and the code of the
+  entry its closures were compiled from, so the seeds and the restore run
+  one program (HEAP_SNAPSHOT_PROGRAM): in a seed run it hands each seed
+  graph to capture(i, v), which writes it; in a restore run restored()
+  reads the input, and the program then uses what restored, calling its
+  functions. G2's writer has no codec for a generator's frame, a Map's
+  table or a buffer's bytes (G2.HeapSnapshot), so the seeds hold data
+  graphs, closures, bound functions, errors and wrapper objects. Linux on
+  x86-64 only, as G2. }
 
 {$I Goccia.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
-  { Backtrace symbolisation needs no unit here: dev builds pass -gl, which
-    links FPC's DWARF line-info reader automatically (adding lnfodwrf by
-    hand is a duplicate-identifier error). On macOS the frames still print
-    as bare addresses because FPC emits DWARF into a separate .dSYM it does
-    not read back — resolve those with `atos -o build/GocciaFuzzHarness`.
-    The Linux CI job where the fuzzers actually run symbolises directly. }
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
   Classes,
   SysUtils,
 
   TextEncoding,
-  TextSemantics,
 
   Goccia.CLI.Stdin,
-  Goccia.Engine,
-  Goccia.Error,
-  Goccia.GarbageCollector,
-  Goccia.HeapSnapshot,
-  Goccia.HeapSnapshot.Codec,
-  Goccia.HeapSnapshot.Exercise,
-  Goccia.InstructionLimit,
-  Goccia.MemoryLimit,
-  Goccia.Modules.ContentProvider,
-  Goccia.Arguments.Collection,
-  Goccia.Scope.BindingMap,
-  Goccia.StackLimit,
-  Goccia.TextFiles,
-  Goccia.Threading,
-  Goccia.Timeout,
-  Goccia.Utils,
-  Goccia.Values.Error,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.NativeFunctionCallback,
-  Goccia.Values.Primitives,
-  Goccia.VM.Exception;
+  Goccia.Fuzz.Generator,
+  Goccia.ModuleResolver,
+
+  G2.Core,
+  G2.Embed,
+  G2.HeapSnapshot,
+  G2.Modules,
+  G2.VM;
 
 const
   FUZZ_PROGRAM_NAME = 'GocciaFuzzHarness';
-  FUZZ_EXECUTOR_NAME = 'bytecode';
 
   { Bounds are deliberately tight. A fuzzer generates far more slow inputs
     than interesting ones, and every second spent on a runaway loop is a
-    second not spent exploring. These are also what makes an unbounded
-    input distinguishable from a genuine hang. }
+    second not spent exploring. }
   FUZZ_TIMEOUT_MS = 1000;
   FUZZ_MAX_INSTRUCTIONS = 5000000;
   FUZZ_MAX_MEMORY_BYTES = Int64(256) * 1024 * 1024;
-  FUZZ_STACK_DEPTH = 256;
+  FUZZ_MAX_FRAMES = 256;
 
-  { A fuzzer will happily feed us a multi-megabyte file. Lexing that is not
-    a useful discovery, so oversized inputs are rejected before the engine
-    ever sees them. }
+  { A multi-megabyte input is not a useful discovery, so oversized inputs
+    are rejected before the engine sees them. }
   FUZZ_MAX_INPUT_BYTES = 1024 * 1024;
-
-  { Every opt-in dialect flag the engine has. A fuzzer exploring the default
-    dialect would be rejected at the parser for `var`, `while`, traditional
-    `for`, labels, `for...in`, loose equality, and `arguments`, which is most
-    of the interesting grammar. Turning them all on is the widest reachable
-    surface, and matches this harness's job of finding faults rather than
-    exercising the shipped default configuration. }
-  FUZZ_COMPATIBILITY = [cfASI, cfVar, cfFunction, cfTraditionalFor,
-    cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfArgumentsObject,
-    cfLabel, cfForIn];
 
   EXIT_OK = 0;
   EXIT_USAGE = 64;
 
-type
-  { How a single run ended. Everything except feUnexpected is a bounded,
-    engine-modelled outcome and must not be reported to the fuzzer.
+  { The program both heap snapshot modes run. fuzzMode() is 0 in a seed run,
+    which hands each seed graph to capture(i, v) after the closure that
+    built it has returned (a binding a running frame holds has no codec),
+    and 1 in a restore run, which uses what restored() gives: its functions
+    called, accessors read, everything it reaches walked under a budget.
+    exerciseMode() picks how a function is called, from the input's size,
+    so each way is fuzzed. }
+  HEAP_SNAPSHOT_PROGRAM =
+    'if (fuzzMode() === 0) {' + LineEnding +
+    '  capture(0, { n: 1.5, s: "text", b: 12345678901234567890n, t: true, ' +
+    'u: undefined, z: null, neg: -0 });' + LineEnding +
+    '  capture(1, (() => { const a = [1, , "three", [4]]; a.length = 8; ' +
+    'a.extra = 1; return a; })());' + LineEnding +
+    '  capture(2, (() => { const shared = { s: 1 }; ' +
+    'const o = { x: shared, y: [shared] }; o.self = o; return o; })());' +
+    LineEnding +
+    '  capture(3, { [Symbol("local")]: 1, [Symbol.for("shared")]: 2, ' +
+    '[Symbol.iterator]: Array.prototype.values, m: Math, ' +
+    'p: Object.prototype });' + LineEnding +
+    '  capture(4, (() => { const o = {}; ' +
+    'Object.defineProperty(o, "h", { value: 1 }); ' +
+    'Object.defineProperty(o, "g", { get: Object.prototype.valueOf, ' +
+    'enumerable: true }); return [Object.freeze({ f: 1 }), ' +
+    'Object.seal([1]), Object.preventExtensions(o), ' +
+    'Object.create(null)]; })());' + LineEnding +
+    '  capture(5, Array.from({ length: 64 }, (_, i) => ' +
+    '({ i, next: { s: String(i) } })));' + LineEnding +
+    '  capture(6, (() => { let n = 0; const inc = () => { n += 1; ' +
+    'return n; }; const source = { m(x) { return super.toString === ' +
+    'Object.prototype.toString ? x + n : -1; }, get count() { return n; }, ' +
+    'set count(v) { n = v; } }; inc(); return { inc, source, ' +
+    'bound: source.m.bind(source, 3), ' +
+    'chain: Array.from({ length: 16 }, (_, i) => i).reduce((prev, i) => ' +
+    '{ const f = () => prev; f.i = i; return f; }, null) }; })());' +
+    LineEnding +
+    '  capture(7, (() => { const e = new TypeError("seed", { cause: 1 }); ' +
+    'e.extra = [e]; return [e, Object(1), Object("s"), Object(true), ' +
+    'Object(Symbol("w"))]; ' +
+    '})());' + LineEnding +
+    '} else {' + LineEnding +
+    '  const root = restored();' + LineEnding +
+    '  if (root !== undefined) {' + LineEnding +
+    '    const how = exerciseMode();' + LineEnding +
+    '    const seen = new Set();' + LineEnding +
+    '    let budget = 4096;' + LineEnding +
+    '    const use = (v, depth) => {' + LineEnding +
+    '      if (budget <= 0 || depth > 12 || v === null || ' +
+    '(typeof v !== "object" && typeof v !== "function") || seen.has(v)) ' +
+    'return;' + LineEnding +
+    '      budget -= 1;' + LineEnding +
+    '      seen.add(v);' + LineEnding +
+    '      if (typeof v === "function") {' + LineEnding +
+    '        try {' + LineEnding +
+    '          const r = how === 0 ? v(1, "two") : how === 1 ? ' +
+    'v.call(root, root) : new v(v);' + LineEnding +
+    '          use(r, depth + 1);' + LineEnding +
+    '        } catch (e) { use(e, depth + 1); }' + LineEnding +
+    '      }' + LineEnding +
+    '      let keys = [];' + LineEnding +
+    '      try { keys = Reflect.ownKeys(v); } catch (e) {}' + LineEnding +
+    '      for (const k of keys) {' + LineEnding +
+    '        try {' + LineEnding +
+    '          const d = Object.getOwnPropertyDescriptor(v, k);' + LineEnding +
+    '          if (d === undefined) continue;' + LineEnding +
+    '          if ("value" in d) use(d.value, depth + 1);' + LineEnding +
+    '          else { use(d.get, depth + 1); use(d.set, depth + 1); ' +
+    'use(v[k], depth + 1); }' + LineEnding +
+    '        } catch (e) { use(e, depth + 1); }' + LineEnding +
+    '      }' + LineEnding +
+    '      try { use(Object.getPrototypeOf(v), depth + 1); } catch (e) {}' +
+    LineEnding +
+    '    };' + LineEnding +
+    '    use(root, 0);' + LineEnding +
+    '    try { JSON.stringify(root); } catch (e) {}' + LineEnding +
+    '    try { String(root); } catch (e) {}' + LineEnding +
+    '  }' + LineEnding +
+    '}' + LineEnding;
+  HEAP_SNAPSHOT_SEEDS = 8;
+  HEAP_SNAPSHOT_FILE = 'heap-snapshot-seeds.js';
 
-    Stack overflow has no outcome of its own: the engine deliberately models a
-    depth breach as a script-catchable RangeError (see Goccia.StackLimit), so it
-    is indistinguishable from a guest throw at this boundary and lands in
-    foScriptThrow. foMemoryLimit, by contrast, is a distinct RTL type. }
+type
+  { How a single run ended. Everything except foUnexpected is a bounded,
+    engine-modelled outcome and must not be reported to the fuzzer. A frame
+    limit is a RangeError the script can catch, so it lands in
+    foScriptThrow. }
   TFuzzOutcome = (
     foCompleted,
     foScriptThrow,
     foParseError,
-    foRuntimeError,
     foInstructionLimit,
     foTimeout,
     foMemoryLimit,
+    foHostAbort,
     foModuleDenied,
     foInputRejected,
     foSnapshotRefused,
     foUnexpected
   );
 
-  { Raised instead of loading a module. Typed so the outcome ladder can tell
-    "this input imported something" apart from a genuine stream fault. }
-  EFuzzModuleDenied = class(Exception);
-
-  { Denies every module load.
-
-    Two reasons, both mandatory. First, a fuzz input must never reach the host
-    filesystem — without this, `import "/etc/passwd"` is a file read driven by
-    attacker-shaped input, which is precisely the property this harness exists
-    to protect. Second, the engine's default provider refuses with a
-    script-catchable JavaScript error, so the fuzzed input could swallow its own
-    import with a try/catch and the outcome ladder would score the run as
-    ordinary script behaviour; EFuzzModuleDenied is an RTL type the input cannot
-    intercept, so owning the provider means owning that distinction. }
-  TFuzzDeniedModuleContentProvider = class(TGocciaModuleContentProvider)
+  { What a run's console writes is dropped: the fuzzer reads only the exit
+    status, and printing costs time. A grammar run keeps it, to compare. }
+  TFuzzConsole = class
   public
-    function Exists(const APath: string): Boolean; override;
-    function LoadContent(const APath: string): TGocciaModuleContent; override;
-    function TryGetLastModified(const APath: string;
-      out ALastModified: TDateTime): Boolean; override;
+    procedure Discard(const AMethod, ALine: UnicodeString);
+  end;
+
+  { Refuses every import before any path is probed, so an input learns
+    nothing about the host's files, not even whether one exists. G2 turns
+    the exception into the error the import fails with. }
+  TFuzzDeniedResolver = class(TModuleResolver)
+  public
+    function Resolve(const AModulePath,
+      AImportingFilePath: string): string; override;
+  end;
+
+  { Ends the process with exit 0 when a run passes its deadline, for the run
+    whose engine arms no timeout. }
+  TFuzzWatchdog = class(TThread)
+  private
+    FWake: PRTLEvent;
+    FDisarmed: LongInt;
+    FMilliseconds: Integer;
+    FExecutor: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AMilliseconds: Integer; const AExecutor: string);
+    destructor Destroy; override;
+    procedure Disarm;
   end;
 
 var
   GVerbose: Boolean = False;
+  GConsole: TFuzzConsole;
+  { a grammar run's console lines (nil: dropped) }
+  GCapture: TStringList;
+  GResolver: TFuzzDeniedResolver;
+  { the first path a run's import asked for, refused ('' none) }
+  GDeniedPath: UnicodeString;
+  { heap snapshot mode: 0 seeds, 1 restore; the seed directory and how many
+    seeds were written; the input a restore reads, and its refusal }
+  GSnapshotMode: Integer;
+  GSeedDirectory: string;
+  GSeedsWritten: Integer;
+  GSeedFailure: string;
+  GSnapshotInput: TBytes;
+  GSnapshotRefused: Boolean;
+  GSnapshotRefusal: string;
+  GSetupError: UnicodeString;
 
-function TFuzzDeniedModuleContentProvider.Exists(const APath: string): Boolean;
+procedure TFuzzConsole.Discard(const AMethod, ALine: UnicodeString);
 begin
-  Result := False;
+  if Assigned(GCapture) then
+    GCapture.Add(UTF8Encode(AMethod + ' ' + ALine));
 end;
 
-function TFuzzDeniedModuleContentProvider.LoadContent(
-  const APath: string): TGocciaModuleContent;
+function TFuzzDeniedResolver.Resolve(const AModulePath,
+  AImportingFilePath: string): string;
 begin
-  raise EFuzzModuleDenied.Create('module loading is disabled: ' + APath);
-end;
-
-function TFuzzDeniedModuleContentProvider.TryGetLastModified(
-  const APath: string; out ALastModified: TDateTime): Boolean;
-begin
-  ALastModified := 0;
-  Result := False;
+  if GDeniedPath = '' then
+    GDeniedPath := UTF8Decode(AModulePath);
+  raise Exception.Create('module loading is disabled: ' + AModulePath);
 end;
 
 function OutcomeName(const AOutcome: TFuzzOutcome): string;
@@ -172,10 +263,10 @@ begin
     foCompleted:        Result := 'completed';
     foScriptThrow:      Result := 'script-throw';
     foParseError:       Result := 'parse-error';
-    foRuntimeError:     Result := 'runtime-error';
     foInstructionLimit: Result := 'instruction-limit';
     foTimeout:          Result := 'timeout';
     foMemoryLimit:      Result := 'memory-limit';
+    foHostAbort:        Result := 'host-abort';
     foModuleDenied:     Result := 'module-denied';
     foInputRejected:    Result := 'input-rejected';
     foSnapshotRefused:  Result := 'snapshot-refused';
@@ -184,145 +275,204 @@ begin
   end;
 end;
 
-procedure Report(const AOutcome: TFuzzOutcome; const ADetail: string);
+procedure Report(const AExecutor: string; const AOutcome: TFuzzOutcome;
+  const ADetail: string);
 begin
   if not GVerbose then
     Exit;
   if ADetail = '' then
-    WriteLn(ErrOutput, Format('[%s] %s', [FUZZ_EXECUTOR_NAME,
-      OutcomeName(AOutcome)]))
+    WriteLn(ErrOutput, Format('[%s] %s', [AExecutor, OutcomeName(AOutcome)]))
   else
-    WriteLn(ErrOutput, Format('[%s] %s: %s', [FUZZ_EXECUTOR_NAME,
+    WriteLn(ErrOutput, Format('[%s] %s: %s', [AExecutor,
       OutcomeName(AOutcome), ADetail]));
+  Flush(ErrOutput);
 end;
 
-{ Renders the frames of the exception currently being handled. Kept separate
-  from the report so the capture happens before the handler unwinds. }
-function CaptureBackTrace: string;
-var
-  Frames: PPointer;
-  I: Integer;
+constructor TFuzzWatchdog.Create(AMilliseconds: Integer;
+  const AExecutor: string);
 begin
-  Result := '';
-  Frames := ExceptFrames;
-  for I := 0 to ExceptFrameCount - 1 do
-    Result := Result + BackTraceStrFunc(Frames[I]) + LineEnding;
+  FWake := RTLEventCreate;
+  FMilliseconds := AMilliseconds;
+  FExecutor := AExecutor;
+  FDisarmed := 0;
+  inherited Create(False);
 end;
 
-{ Runs one source on an engine of its own and classifies the outcome.
+destructor TFuzzWatchdog.Destroy;
+begin
+  inherited Destroy;
+  RTLEventDestroy(FWake);
+end;
 
-  The except ladder is the whole point of this harness, so it is exhaustive
-  by construction: every engine-defined error type is named explicitly and
-  the bare `on E: Exception` fallback is what a genuine finding looks like.
-  Do not add a blanket handler above the specific ones. }
-function RunOnce(const ASource: TStringList;
+{$IFNDEF UNIX}
+procedure ExitProcessNow(Code: LongWord); stdcall; external 'kernel32' name 'ExitProcess';
+{$ENDIF}
+
+procedure TFuzzWatchdog.Execute;
+begin
+  RTLEventWaitFor(FWake, FMilliseconds);
+  { the run finished first when Disarm got here before the deadline }
+  if InterlockedCompareExchange(FDisarmed, 2, 0) <> 0 then
+    Exit;
+  Report(FExecutor, foTimeout, Format('the run passed %d ms',
+    [FMilliseconds]));
+  { The engine is still running on the main thread: leave without unwinding
+    it or running finalization. }
+  {$IFDEF UNIX}
+  FpExit(EXIT_OK);
+  {$ELSE}
+  ExitProcessNow(EXIT_OK);
+  {$ENDIF}
+end;
+
+procedure TFuzzWatchdog.Disarm;
+begin
+  { once the watchdog fired it is exiting the process: wait for that }
+  if InterlockedCompareExchange(FDisarmed, 1, 0) <> 0 then
+    while True do
+      Sleep(1000);
+  RTLEventSetEvent(FWake);
+  { WaitFor on the main thread polls in 100 ms steps until Finished: wait
+    for that first, so the join is immediate }
+  while not Finished do
+    ThreadSwitch;
+  WaitFor;
+end;
+
+{ The run's file reader: refuses every path, before any file is opened, and
+  remembers the first one. }
+function DenyFileRead(const APath: UnicodeString;
+  var ABytes: RawByteString): Boolean;
+begin
+  ABytes := '';
+  if GDeniedPath = '' then
+    GDeniedPath := APath;
+  Result := False;
+end;
+
+function DenyFileTime(const APath: UnicodeString;
+  out AModified: TDateTime): Boolean;
+begin
+  AModified := 0;
+  Result := False;
+end;
+
+{ Every opt-in dialect switch, as the old harness turned them all on: the
+  default dialect rejects `var`, `while`, traditional `for`, labels and
+  more, which would wall the fuzzer off from most of the grammar. }
+function FuzzProfile: TLangProfile;
+begin
+  Result := RecommendedProfile;
+  Result.Asi := True;
+  Result.VarDecl := True;
+  Result.FuncDecl := True;
+  Result.ForLoop := True;
+  Result.WhileLoop := True;
+  Result.LooseEq := True;
+  Result.NonStrict := True;
+  Result.ArgumentsObject := True;
+  Result.Labels := True;
+  Result.ForIn := True;
+end;
+
+function NewFuzzEngine(ABounded: Boolean): TG2Engine;
+begin
+  Result := TG2Engine.Create;
+  Result.Profile := FuzzProfile;
+  Result.OnConsole := GConsole.Discard;
+  Result.Resolver := GResolver;
+  Result.MaxMemory := FUZZ_MAX_MEMORY_BYTES;
+  if ABounded then
+  begin
+    Result.TimeoutMs := FUZZ_TIMEOUT_MS;
+    Result.MaxInstructions := FUZZ_MAX_INSTRUCTIONS;
+    Result.MaxFrames := FUZZ_MAX_FRAMES;
+  end;
+end;
+
+{ A run's result as an outcome. A denied import wins: the input reached for
+  the host's files, whatever it then did with the refusal. }
+function Classify(const AResult: TG2RunResult;
+  out ADetail: string): TFuzzOutcome;
+begin
+  ADetail := UTF8Encode(AResult.ErrorMessage);
+  if GDeniedPath <> '' then
+  begin
+    ADetail := UTF8Encode(GDeniedPath);
+    Exit(foModuleDenied);
+  end;
+  if not AResult.Compiled then
+  begin
+    { a parse error names its error; a host that could not be set up does
+      not, and is not something an input can cause }
+    if AResult.ErrorIsError then
+      Exit(foParseError);
+    ADetail := 'the engine could not be set up: ' + ADetail;
+    Exit(foUnexpected);
+  end;
+  case AResult.Aborted of
+    g2aTimeout:          Exit(foTimeout);
+    g2aInstructionLimit: Exit(foInstructionLimit);
+    g2aMemoryLimit:      Exit(foMemoryLimit);
+    g2aHostAbort:        Exit(foHostAbort);
+  end;
+  if AResult.Ok then
+    Result := foCompleted
+  else
+    Result := foScriptThrow;
+end;
+
+{ Runs ASource on an engine of its own. Unbounded runs have the watchdog in
+  place of the engine's timeout. }
+function RunOnce(const ASource: UnicodeString; const AFileName: string;
+  ABounded: Boolean; const AExecutor: string;
   out ADetail: string): TFuzzOutcome;
 var
-  Engine: TGocciaEngine;
-  GC: TGarbageCollector;
+  Engine: TG2Engine;
+  Watchdog: TFuzzWatchdog;
+  RunResult: TG2RunResult;
 begin
-  ADetail := '';
-  StartExecutionTimeout(FUZZ_TIMEOUT_MS);
-  StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
-  SetMaxStackDepth(FUZZ_STACK_DEPTH);
+  GDeniedPath := '';
+  Watchdog := nil;
+  Engine := NewFuzzEngine(ABounded);
   try
-    Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ASource);
+    SetFileReadHook(DenyFileRead);
+    SetFileTimeHook(DenyFileTime);
     try
-      { Widen the accepted grammar as far as the engine allows. The default
-        dialect rejects `var`, `while`, traditional `for`, labels, and more,
-        which would wall the fuzzer off from most of the parser. Compatibility
-        must be assigned after Create — the source pipeline runs at Execute,
-        which is also why syntax errors are classified by type below rather
-        than by which call raised them. }
-      Engine.Compatibility := FUZZ_COMPATIBILITY;
-      Engine.LabelStatementsEnabled := True;
-      Engine.ForInLoopsEnabled := True;
-      Engine.ModuleLoader.SetContentProvider(
-        TFuzzDeniedModuleContentProvider.Create, True);
-
-      GC := TGarbageCollector.Instance;
-      if Assigned(GC) then
-        GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
+      if not ABounded then
+        Watchdog := TFuzzWatchdog.Create(FUZZ_TIMEOUT_MS, AExecutor);
       try
-        Engine.Execute;
-        Result := foCompleted;
-      except
-        on E: EGocciaBytecodeThrow do
+        RunResult := Engine.Run(AFileName, ASource);
+      finally
+        if Assigned(Watchdog) then
         begin
-          Result := foScriptThrow;
-          ADetail := 'bytecode throw';
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          Result := foScriptThrow;
-          ADetail := E.Message;
-        end;
-        on E: TGocciaMemoryLimitError do
-        begin
-          { The 256 MB budget is a bounded, engine-modelled outcome, not a
-            finding. TGocciaMemoryLimitError is an RTL type the input cannot
-            catch (uncatchable from script by design), so the host owns this
-            distinction here at its top-level boundary. Without this branch it
-            would escape the ladder and be misreported as an unexpected fault. }
-          Result := foMemoryLimit;
-          ADetail := E.Message;
-        end;
-        on E: TGocciaInstructionLimitError do
-        begin
-          Result := foInstructionLimit;
-          ADetail := E.Message;
-        end;
-        on E: TGocciaTimeoutError do
-        begin
-          Result := foTimeout;
-          ADetail := E.Message;
-        end;
-        on E: EFuzzModuleDenied do
-        begin
-          Result := foModuleDenied;
-          ADetail := E.Message;
-        end;
-        on E: TGocciaSyntaxError do
-        begin
-          { Covers TGocciaLexerError too — both are rejections of the input
-            text, which is the single most common fuzz outcome. }
-          Result := foParseError;
-          ADetail := E.Message;
-        end;
-        on E: TGocciaError do
-        begin
-          Result := foRuntimeError;
-          ADetail := E.Message;
+          Watchdog.Disarm;
+          Watchdog.Free;
         end;
       end;
     finally
-      Engine.Free;
+      SetFileReadHook(nil);
+      SetFileTimeHook(nil);
     end;
+    Result := Classify(RunResult, ADetail);
   finally
-    ClearInstructionLimit;
-    ClearExecutionTimeout;
+    Engine.Free;
   end;
 end;
 
 { Reads stdin but stops the instant the FUZZ_MAX_INPUT_BYTES cap is breached,
-  so a fuzzer piping a multi-gigabyte input through `-` is rejected without the
-  harness ever holding it in memory. Reading raw bytes from the fd in chunks —
-  rather than materialising every line and measuring afterwards — is what makes
-  the bound apply before the allocation, not after: a single unbounded line
-  would otherwise be fully read before any length check could see it.
-  THandleStream never consults a (pipe-invalid) length and never closes the
-  handle it did not open. }
-function ReadBoundedStdin(out ASourceText: string; out ADetail: string): Boolean;
+  so a fuzzer piping a multi-gigabyte input through `-` is rejected without
+  the harness ever holding it in memory. }
+function ReadBoundedStdin(out ABytes: TBytes; out ADetail: string): Boolean;
 const
   STDIN_CHUNK_BYTES = 65536;
 var
   Stream: THandleStream;
-  Chunk, Collected: TBytes;
+  Chunk: TBytes;
   Total, BytesRead: Integer;
 begin
-  ASourceText := '';
   ADetail := '';
-  SetLength(Collected, 0);
+  SetLength(ABytes, 0);
   Total := 0;
   Stream := THandleStream.Create(StdInputHandle);
   try
@@ -336,355 +486,261 @@ begin
           ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
           Exit(False);
         end;
-        SetLength(Collected, Total + BytesRead);
-        Move(Chunk[0], Collected[Total], BytesRead);
+        SetLength(ABytes, Total + BytesRead);
+        Move(Chunk[0], ABytes[Total], BytesRead);
         Inc(Total, BytesRead);
       end;
     until BytesRead <= 0;
   finally
     Stream.Free;
   end;
-  if Total > 0 then
-    SetString(ASourceText, PAnsiChar(@Collected[0]), Total);
   Result := True;
 end;
 
-function ReadInput(const AFileName: string; out ASource: TStringList;
+{ Reads a file whose on-disk length is checked against the cap before any of
+  it is read, from the handle that was checked, so the path cannot be
+  swapped for a larger file in between. }
+function ReadBoundedFile(const AFileName: string; out ABytes: TBytes;
   out ADetail: string): Boolean;
 var
-  SourceText: string;
-  InputStream: TFileStream;
-  FileByteSize: Int64;
-  FileBytes: TBytes;
-  DecodeErrorOffset: Integer;
+  Input: TFileStream;
+  Size: Int64;
 begin
   ADetail := '';
-  ASource := nil;
+  SetLength(ABytes, 0);
+  if not FileExists(AFileName) then
+  begin
+    ADetail := 'no such input file: ' + AFileName;
+    Exit(False);
+  end;
+  Input := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+  try
+    Size := Input.Size;
+    if Size > FUZZ_MAX_INPUT_BYTES then
+    begin
+      ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
+      Exit(False);
+    end;
+    SetLength(ABytes, Size);
+    if Size > 0 then
+      Input.ReadBuffer(ABytes[0], Size);
+  finally
+    Input.Free;
+  end;
+  Result := True;
+end;
+
+{ The input as source text: valid UTF-8 within the cap. Unreadable or
+  undecodable bytes are an input-selection problem, not an engine finding. }
+function ReadInput(const AFileName: string; out ASource: UnicodeString;
+  out ADetail: string): Boolean;
+var
+  Bytes: TBytes;
+  Text: string;
+  ErrorOffset: Integer;
+begin
+  ASource := '';
   try
     if (AFileName = '') or (AFileName = '-') then
-    begin
-      if not ReadBoundedStdin(SourceText, ADetail) then
-        Exit(False);
-    end
+      Result := ReadBoundedStdin(Bytes, ADetail)
     else
+      Result := ReadBoundedFile(AFileName, Bytes, ADetail);
+    if not Result then
+      Exit;
+    if not TryDecodeUTF8(Bytes, Text, ErrorOffset) then
     begin
-      if not FileExists(AFileName) then
-      begin
-        ADetail := 'no such input file: ' + AFileName;
-        Exit(False);
-      end;
-      { Reject an oversized file by its on-disk length BEFORE reading it.
-        ReadUTF8FileText would otherwise allocate the whole file first, so a
-        pathologically large input could exhaust memory before the size gate
-        ran — and a harness that OOMs on input it should have rejected reports
-        a false crash to the fuzzer. Opening the stream reads no content; only
-        its length is consulted. }
-      InputStream := TFileStream.Create(AFileName,
-        fmOpenRead or fmShareDenyWrite);
-      try
-        FileByteSize := InputStream.Size;
-        if FileByteSize > FUZZ_MAX_INPUT_BYTES then
-        begin
-          ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
-          Exit(False);
-        end;
-        { Read the handle that was just size-checked rather than reopening
-          AFileName. Reopening would leave a TOCTOU window in which the path
-          could be swapped for a larger file after the size check, defeating
-          the cap; reading the validated handle binds the check and the read
-          to the same open file. }
-        SetLength(FileBytes, FileByteSize);
-        if FileByteSize > 0 then
-          InputStream.ReadBuffer(FileBytes[0], FileByteSize);
-      finally
-        InputStream.Free;
-      end;
-      if not TryDecodeUTF8(FileBytes, SourceText, DecodeErrorOffset) then
-      begin
-        ADetail := Format('invalid UTF-8 at byte %d', [DecodeErrorOffset]);
-        Exit(False);
-      end;
+      ADetail := Format('invalid UTF-8 at byte %d', [ErrorOffset]);
+      Exit(False);
     end;
   except
-    { Unreadable or undecodable bytes are an input-selection problem, not an
-      engine finding. }
     on E: Exception do
     begin
       ADetail := E.Message;
       Exit(False);
     end;
   end;
-
-  { Belt-and-suspenders: both interfaces above bound input at or before read,
-    so this decoded-length re-check can only ever confirm the cap already held. }
-  if Length(SourceText) > FUZZ_MAX_INPUT_BYTES then
-  begin
-    ADetail := Format('input exceeds %d bytes', [FUZZ_MAX_INPUT_BYTES]);
-    Exit(False);
-  end;
-
-  ASource := CreateFileTextLines(SourceText);
+  ASource := UTF8Decode(Text);
   Result := True;
 end;
 
-{ The graphs the snapshot seeds hold: every codec the reader has, shared
-  references, cycles, symbols, built-ins named and attributes, and built-ins
-  the run changed, one of them built during the run. }
-const
-  HEAP_SNAPSHOT_SEEDS: array[0..6] of string = (
-    '({ n: 1.5, s: "text", b: 12345678901234567890n, t: true, u: undefined, ' +
-      'z: null, neg: -0 })',
-    '(() => { const a = [1, , "three", [4]]; a.length = 8; a.extra = 1; ' +
-      'return a; })()',
-    '(() => { const shared = { s: 1 }; const o = { x: shared, y: [shared] }; ' +
-      'o.self = o; return o; })()',
-    '({ [Symbol("local")]: 1, [Symbol.for("shared")]: 2, ' +
-      '[Symbol.iterator]: Array.prototype.values, m: Math, p: Object.prototype })',
-    '(() => { const o = {}; Object.defineProperty(o, "h", { value: 1 }); ' +
-      'Object.defineProperty(o, "g", { get: Object.prototype.valueOf, ' +
-      'enumerable: true }); return [Object.freeze({ f: 1 }), Object.seal([1]), ' +
-      'Object.preventExtensions(o), Object.create(null)]; })()',
-    'Array.from({ length: 64 }, (_, i) => ({ i, next: { s: String(i) } }))',
-    '(() => { const shared = { s: 1 }; JSON.fuzz = shared; ' +
-      'delete JSON.rawJSON; Object.defineProperty(JSON, "acc", ' +
-      '{ get: Object.prototype.valueOf, configurable: true }); ' +
-      'JSON[Symbol("k")] = [shared]; Goccia.shims.push(shared); ' +
-      'Object.seal(JSON); Reflect.fuzz = shared; return shared; })()');
+{ ---- heap snapshots ---- }
 
-{ The program whose functions and suspended generators the VM seeds hold:
-  closures sharing a cell, a generator inside try/finally, one with a binding
-  in its temporal dead zone, one with rest arguments and one not started,
-  methods with their home object and a getter. capture(i, v) hands seed i
-  over. Every engine that restores a snapshot runs it first, so the seeds'
-  functions resolve there; it runs in the default dialect, as it was written. }
-const
-  HEAP_SNAPSHOT_VM_PROGRAM =
-    '(() => { let n = 0; const inc = () => { n += 1; return n; }; ' +
-    'const log = []; const source = { *steps(start) { try { ' +
-    'const a = yield start; const b = yield a * 2; return a + b + start; } ' +
-    'finally { log.push(n); } }, *late() { const peek = () => x; ' +
-    'yield peek; let x = 5; yield peek(); }, *wide(...args) { yield 0; ' +
-    'yield args.length + args[args.length - 1]; }, get count() { ' +
-    'return n; } }; const g = source.steps(1); g.next(); g.next(10); ' +
-    'inc(); const late = source.late(); const peek = late.next().value; ' +
-    'const wide = source.wide(1, 2, 3, 4); wide.next(); ' +
-    'capture(0, { inc, g, log }); capture(1, { late, peek }); ' +
-    'capture(2, { wide, source, fresh: source.steps(7) }); ' +
-    'capture(3, Array.from({ length: 16 }, (_, i) => i).reduce(' +
-    '(prev, i) => { const f = () => prev; f.i = i; return f; }, null)); })();';
-  HEAP_SNAPSHOT_VM_SEEDS = 4;
+{ fuzzMode(): 0 in a seed run, 1 in a restore run }
+function Native_FuzzMode(AArgs: PValue; AArgc: Integer;
+  var ARes: TValue): Boolean;
+begin
+  ARes := MkInt(GSnapshotMode);
+  Result := True;
+end;
 
-type
-  { capture(i, v): keeps v as VM seed i, rooted until the harness exits. }
-  TFuzzSeedCapture = class
-  public
-    Values: array[0..HEAP_SNAPSHOT_VM_SEEDS - 1] of TGocciaValue;
-    function Capture(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-    function Ignore(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
+{ exerciseMode(): how a restore run calls what restored, from the input's
+  size }
+function Native_ExerciseMode(AArgs: PValue; AArgc: Integer;
+  var ARes: TValue): Boolean;
+begin
+  ARes := MkInt(Length(GSnapshotInput) mod 3);
+  Result := True;
+end;
 
-function TFuzzSeedCapture.Capture(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
+{ capture(i, v): in a seed run, v written as seed i }
+function Native_Capture(AArgs: PValue; AArgc: Integer;
+  var ARes: TValue): Boolean;
 var
-  Index: Integer;
-begin
-  { A fuzz input picks the index, so NaN and the infinities must not reach a
-    bare Trunc; a missing index is out of range. }
-  Index := ToIntegerFromArgs(AArgs, 0, -1);
-  if (Index >= 0) and (Index < HEAP_SNAPSHOT_VM_SEEDS) and
-     not Assigned(Values[Index]) then
-  begin
-    Values[Index] := AArgs.GetElement(1);
-    TGarbageCollector.Instance.AddTempRoot(Values[Index]);
-  end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TFuzzSeedCapture.Ignore(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-{ An engine that has run the VM seeds' program, with capture(i, v) bound to
-  ACapture. }
-function CreateVMSeedEngine(const ALines: TStringList;
-  const ACapture: TGocciaNativeFunctionCallback): TGocciaEngine;
-begin
-  ALines.Text := HEAP_SNAPSHOT_VM_PROGRAM;
-  Result := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ALines);
-  Result.GlobalScope.DefineLexicalBinding('capture',
-    TGocciaNativeFunctionValue.Create(ACapture, 'capture', 2), dtConst);
-end;
-
-procedure WriteSeed(const ASession: TGocciaHeapSnapshotSession;
-  const AValue: TGocciaValue; const AFileName: string);
-var
+  Index: Double;
+  Data: TBytes;
+  Refusal: UnicodeString;
   Output: TFileStream;
 begin
-  Output := TFileStream.Create(AFileName, fmCreate);
+  ARes := VUndefined;
+  Result := True;
+  if (GSnapshotMode <> 0) or (AArgc < 2) or not IsNumber(AArgs[1]) then
+    Exit;
+  Index := NumOf(AArgs[1]);
+  if not ((Index >= 0) and (Index < HEAP_SNAPSHOT_SEEDS) and
+    (Frac(Index) = 0)) then
+    Exit;
+  Refusal := '';
+  if not SnapshotWrite(AArgs[2], Data, Refusal) then
+  begin
+    if GSeedFailure = '' then
+      GSeedFailure := Format('seed %d: %s', [Trunc(Index),
+        UTF8Encode(Refusal)]);
+    Exit;
+  end;
+  Output := TFileStream.Create(IncludeTrailingPathDelimiter(GSeedDirectory) +
+    Format('heap-snapshot-%d.ghsn', [Trunc(Index)]), fmCreate);
   try
-    ASession.Snapshot([AValue], Output);
+    if Length(Data) > 0 then
+      Output.WriteBuffer(Data[0], Length(Data));
   finally
     Output.Free;
   end;
+  Inc(GSeedsWritten);
 end;
 
-{ Writes one snapshot per seed graph into ADirectory, from a fresh engine
-  each, and one per VM seed from one run of their program. Returns the
-  number written. }
-function WriteHeapSnapshotSeeds(const ADirectory: string): Integer;
+{ restored(): in a restore run, the input restored; undefined when the
+  reader refuses it }
+function Native_Restored(AArgs: PValue; AArgc: Integer;
+  var ARes: TValue): Boolean;
 var
-  I: Integer;
-  Lines: TStringList;
-  Engine: TGocciaEngine;
-  Session: TGocciaHeapSnapshotSession;
-  Stage: TGocciaGlobalEvalStage;
-  Value: TGocciaValue;
-  Capture: TFuzzSeedCapture;
+  Refusal: UnicodeString;
+  Root: TValue;
 begin
-  Result := 0;
-  ForceDirectories(ADirectory);
-  for I := 0 to High(HEAP_SNAPSHOT_SEEDS) do
+  ARes := VUndefined;
+  Result := True;
+  if GSnapshotMode <> 1 then
+    Exit;
+  Refusal := '';
+  Root := VUndefined;
+  if not SnapshotRestore(GSnapshotInput, Root, Refusal) then
   begin
-    Lines := TStringList.Create;
-    Engine := nil;
-    Session := nil;
-    try
-      Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, Lines);
-      Session := TGocciaHeapSnapshotSession.Create(Engine);
-      Session.CheckAccounting := False;
-      Value := Engine.EvaluateGlobalEval(HEAP_SNAPSHOT_SEEDS[I],
-        FUZZ_PROGRAM_NAME, Stage);
-      TGarbageCollector.Instance.AddTempRoot(Value);
-      try
-        WriteSeed(Session, Value, IncludeTrailingPathDelimiter(ADirectory) +
-          Format('heap-snapshot-%d.ghsn', [I]));
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(Value);
-      end;
-      Inc(Result);
-    finally
-      Session.Free;
-      Engine.Free;
-      Lines.Free;
-    end;
+    GSnapshotRefused := True;
+    GSnapshotRefusal := UTF8Encode(Refusal);
+    Exit;
   end;
-  Lines := TStringList.Create;
-  Capture := TFuzzSeedCapture.Create;
-  Engine := nil;
-  Session := nil;
+  ARes := Root;
+end;
+
+{ An engine with the heap snapshot program's natives, run on it, bounded as
+  a script run is. Both modes set it up the same way, so a seed run's
+  built-ins and code are the ones the restore run names. }
+function RunSnapshotProgram(AMode: Integer; out ADetail: string): TFuzzOutcome;
+var
+  Engine: TG2Engine;
+  RunResult: TG2RunResult;
+  Err: UnicodeString;
+begin
+  GSnapshotMode := AMode;
+  GSnapshotRefused := False;
+  GSnapshotRefusal := '';
+  GDeniedPath := '';
+  Engine := NewFuzzEngine(True);
   try
-    Engine := CreateVMSeedEngine(Lines, Capture.Capture);
-    Session := TGocciaHeapSnapshotSession.Create(Engine);
-    Session.CheckAccounting := False;
-    Engine.Execute;
-    for I := 0 to HEAP_SNAPSHOT_VM_SEEDS - 1 do
+    Engine.HeapSnapshots := True;
+    Err := '';
+    if not Engine.PrepareHost(Err) then
     begin
-      WriteSeed(Session, Capture.Values[I],
-        IncludeTrailingPathDelimiter(ADirectory) +
-        Format('heap-snapshot-vm-%d.ghsn', [I]));
-      Inc(Result);
+      ADetail := 'the engine could not be set up: ' + UTF8Encode(Err);
+      Exit(foUnexpected);
+    end;
+    DefineNative(GlobalObj, 'fuzzMode', Native_FuzzMode, 0);
+    DefineNative(GlobalObj, 'exerciseMode', Native_ExerciseMode, 0);
+    DefineNative(GlobalObj, 'capture', Native_Capture, 2);
+    DefineNative(GlobalObj, 'restored', Native_Restored, 0);
+    SetFileReadHook(DenyFileRead);
+    SetFileTimeHook(DenyFileTime);
+    try
+      RunResult := Engine.Run(ExpandFileName(HEAP_SNAPSHOT_FILE),
+        HEAP_SNAPSHOT_PROGRAM);
+    finally
+      SetFileReadHook(nil);
+      SetFileTimeHook(nil);
+    end;
+    Result := Classify(RunResult, ADetail);
+    if GSnapshotRefused then
+    begin
+      Result := foSnapshotRefused;
+      ADetail := GSnapshotRefusal;
     end;
   finally
-    for I := 0 to HEAP_SNAPSHOT_VM_SEEDS - 1 do
-      if Assigned(Capture.Values[I]) then
-        TGarbageCollector.Instance.RemoveTempRoot(Capture.Values[I]);
-    Session.Free;
     Engine.Free;
-    Capture.Free;
-    Lines.Free;
   end;
 end;
 
-{ Restores one input as a heap snapshot on an engine of its own, which has
-  run the VM seeds' program, under the same bounds as a script run, and uses
-  what restored. A refusal is the reader doing its job, and the run's limits
-  and a script error are outcomes a run can have; only what escapes the
-  typed ladder is a finding. }
+{ Writes the seeds into ADirectory: the number written, or -1 when a seed
+  could not be written (ADetail says why). }
+function WriteHeapSnapshotSeeds(const ADirectory: string;
+  out ADetail: string): Integer;
+var
+  Outcome: TFuzzOutcome;
+begin
+  ForceDirectories(ADirectory);
+  GSeedDirectory := ADirectory;
+  GSeedsWritten := 0;
+  GSeedFailure := '';
+  Outcome := RunSnapshotProgram(0, ADetail);
+  if Outcome <> foCompleted then
+  begin
+    ADetail := OutcomeName(Outcome) + ': ' + ADetail;
+    Exit(-1);
+  end;
+  if (GSeedFailure <> '') or (GSeedsWritten <> HEAP_SNAPSHOT_SEEDS) then
+  begin
+    ADetail := Format('%d of %d seeds written; %s',
+      [GSeedsWritten, HEAP_SNAPSHOT_SEEDS, GSeedFailure]);
+    Exit(-1);
+  end;
+  Result := GSeedsWritten;
+end;
+
 function RestoreOnce(const AFileName: string;
   out ADetail: string): TFuzzOutcome;
-var
-  Engine: TGocciaEngine;
-  Lines: TStringList;
-  Input: TFileStream;
-  Restore: TGocciaHeapSnapshotRestore;
-  Limits: TGocciaHeapSnapshotLimits;
-  GC: TGarbageCollector;
-  Capture: TFuzzSeedCapture;
 begin
-  ADetail := '';
-  if not FileExists(AFileName) then
-  begin
-    ADetail := 'no such input file: ' + AFileName;
+  if not ReadBoundedFile(AFileName, GSnapshotInput, ADetail) then
     Exit(foInputRejected);
-  end;
-  Limits := TGocciaHeapSnapshotLimits.Defaults;
-  Limits.MaxInputBytes := FUZZ_MAX_INPUT_BYTES;
-  Lines := TStringList.Create;
-  Capture := TFuzzSeedCapture.Create;
-  Engine := nil;
-  Input := nil;
-  Restore := nil;
-  try
-    Engine := CreateVMSeedEngine(Lines, Capture.Ignore);
-    Engine.Execute;
-    StartExecutionTimeout(FUZZ_TIMEOUT_MS);
-    StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
-    SetMaxStackDepth(FUZZ_STACK_DEPTH);
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
-    Input := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
-    try
-      Restore := TGocciaHeapSnapshotRestore.Create(Engine, Input, Limits);
-      // A root can be any object a codec writes, a cell among them; what is
-      // used is a value.
-      if (Length(Restore.Roots) > 0) and
-         (Restore.Roots[0] is TGocciaValue) then
-        // The input's size picks how its generators are used, so each
-        // way is fuzzed.
-        ExerciseRestored(Engine, TGocciaValue(Restore.Roots[0]),
-          Integer(Input.Size mod EXERCISE_MODES));
-      Result := foCompleted;
-    except
-      on E: EGocciaHeapSnapshotRefused do
-      begin
-        Result := foSnapshotRefused;
-        ADetail := E.Message;
-      end;
-      on E: TGocciaMemoryLimitError do
-      begin
-        Result := foMemoryLimit;
-        ADetail := E.Message;
-      end;
-      on E: TGocciaInstructionLimitError do
-      begin
-        Result := foInstructionLimit;
-        ADetail := E.Message;
-      end;
-      on E: TGocciaTimeoutError do
-      begin
-        Result := foTimeout;
-        ADetail := E.Message;
-      end;
-      on E: TGocciaThrowValue do
-      begin
-        Result := foScriptThrow;
-        ADetail := E.Message;
-      end;
-    end;
-  finally
-    Restore.Free;
-    Input.Free;
-    Engine.Free;
-    Capture.Free;
-    Lines.Free;
-    ClearInstructionLimit;
-    ClearExecutionTimeout;
-  end;
+  Result := RunSnapshotProgram(1, ADetail);
+end;
+
+{ ---- the invocation ---- }
+
+{ Renders the frames of the exception currently being handled. }
+function CaptureBackTrace: string;
+var
+  Frames: PPointer;
+  I: Integer;
+begin
+  Result := BackTraceStrFunc(ExceptAddr) + LineEnding;
+  Frames := ExceptFrames;
+  for I := 0 to ExceptFrameCount - 1 do
+    Result := Result + BackTraceStrFunc(Frames[I]) + LineEnding;
+end;
+
+procedure ReportFault(const AWhere, ADetail, ATrace: string);
+begin
+  WriteLn(ErrOutput, Format('%s: unexpected fault in %s: %s',
+    [FUZZ_PROGRAM_NAME, AWhere, ADetail]));
+  if ATrace <> '' then
+    WriteLn(ErrOutput, ATrace);
 end;
 
 procedure PrintUsage;
@@ -694,33 +750,187 @@ begin
     ' [--verbose] --heap-snapshot <file>');
   WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
     ' --write-heap-snapshot-seeds <dir>');
+  WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
+    ' [--verbose] --grammar [--print-program] <file>|-');
   WriteLn(ErrOutput);
-  WriteLn(ErrOutput, 'Drives one input through lex, parse, and both ' +
-    'executors under tight bounds.');
+  WriteLn(ErrOutput, 'Runs one input on G2 under its limits, then with ' +
+    'the JIT on, each on an engine of its own.');
   WriteLn(ErrOutput, 'Exits 0 for every engine-modelled outcome; nonzero ' +
     'only for an unexpected fault.');
 end;
 
-{ The whole invocation. A procedure rather than the program block so that its
-  strings are finalized when it returns, before the runtime shuts down and
-  heaptrc counts what is left. It sets ExitCode and returns, never Halt: Halt
-  would skip that shutdown. }
+{ One executor's run of the input, a fault reported. True when it faulted. }
+function RunExecutor(const ASource: UnicodeString; const AFileName: string;
+  ABounded: Boolean; const AExecutor: string;
+  out AOutcome: TFuzzOutcome): Boolean;
+var
+  Detail, Trace: string;
+begin
+  Trace := '';
+  try
+    AOutcome := RunOnce(ASource, AFileName, ABounded, AExecutor, Detail);
+  except
+    { anything that escapes the engine is by definition not an outcome it
+      models; the backtrace is captured here, before the handler unwinds }
+    on E: Exception do
+    begin
+      AOutcome := foUnexpected;
+      Detail := E.ClassName + ': ' + E.Message;
+      Trace := CaptureBackTrace;
+    end;
+  end;
+  Result := AOutcome = foUnexpected;
+  if Result then
+    ReportFault('the ' + AExecutor + ' run', Detail, Trace)
+  else
+    Report(AExecutor, AOutcome, Detail);
+end;
+
+{ RunExecutor, with the run's detail. True when it faulted. }
+function RunGrammarExecutor(const ASource: UnicodeString;
+  const AFileName: string; ABounded: Boolean; const AExecutor: string;
+  out AOutcome: TFuzzOutcome; out ADetail: string): Boolean;
+var
+  Trace: string;
+begin
+  Trace := '';
+  ADetail := '';
+  try
+    AOutcome := RunOnce(ASource, AFileName, ABounded, AExecutor, ADetail);
+  except
+    on E: Exception do
+    begin
+      AOutcome := foUnexpected;
+      ADetail := E.ClassName + ': ' + E.Message;
+      Trace := CaptureBackTrace;
+    end;
+  end;
+  Result := AOutcome = foUnexpected;
+  if Result then
+    ReportFault('the ' + AExecutor + ' run', ADetail, Trace)
+  else
+    Report(AExecutor, AOutcome, ADetail);
+end;
+
+{ ---- grammar runs ---- }
+
+const
+  FRAME_LIMIT_MESSAGE = 'Maximum call stack size exceeded';
+
+{ A run that reached the frame limit: the interpreter run's limit is
+  FUZZ_MAX_FRAMES and the JIT run's the engine's own, so where recursion
+  stops differs by design. }
+function ReachedFrameLimit(const ALines: TStringList;
+  const ADetail: string): Boolean;
+var
+  I: Integer;
+begin
+  if Pos(FRAME_LIMIT_MESSAGE, ADetail) > 0 then
+    Exit(True);
+  for I := 0 to ALines.Count - 1 do
+    if Pos(FRAME_LIMIT_MESSAGE, ALines[I]) > 0 then
+      Exit(True);
+  Result := False;
+end;
+
+{ Compares the two runs of a generated program: '' when they agree or are
+  not comparable, else what differs. }
+function CompareRuns(AFirst, ASecond: TFuzzOutcome;
+  const AFirstDetail, ASecondDetail: string;
+  const AFirstLines, ASecondLines: TStringList): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if not (AFirst in [foCompleted, foScriptThrow]) or
+    not (ASecond in [foCompleted, foScriptThrow]) then
+    Exit;
+  if ReachedFrameLimit(AFirstLines, AFirstDetail) or
+    ReachedFrameLimit(ASecondLines, ASecondDetail) then
+    Exit;
+  for I := 0 to AFirstLines.Count - 1 do
+  begin
+    if I >= ASecondLines.Count then
+      Exit(Format('line %d: the bytecode run printed %s, the jit run ' +
+        'nothing more', [I + 1, AFirstLines[I]]));
+    if AFirstLines[I] <> ASecondLines[I] then
+      Exit(Format('line %d: the bytecode run printed %s, the jit run %s',
+        [I + 1, AFirstLines[I], ASecondLines[I]]));
+  end;
+  if ASecondLines.Count > AFirstLines.Count then
+    Exit(Format('line %d: the jit run printed %s, the bytecode run ' +
+      'nothing more', [AFirstLines.Count + 1,
+      ASecondLines[AFirstLines.Count]]));
+  if AFirst <> ASecond then
+    Exit(Format('the bytecode run ended %s (%s), the jit run %s (%s)',
+      [OutcomeName(AFirst), AFirstDetail, OutcomeName(ASecond),
+      ASecondDetail]));
+  if (AFirst = foScriptThrow) and (AFirstDetail <> ASecondDetail) then
+    Exit(Format('the bytecode run threw %s, the jit run %s',
+      [AFirstDetail, ASecondDetail]));
+end;
+
+{ Runs the program AData chooses in both executors and compares them.
+  The exit code: 0, or 1 for a fault or a difference. }
+function RunGrammar(const AData: TBytes; const ARunName: string): Integer;
+var
+  Source: UnicodeString;
+  BytecodeLines, JitLines: TStringList;
+  BytecodeOutcome, JitOutcome: TFuzzOutcome;
+  BytecodeDetail, JitDetail, Difference: string;
+begin
+  Source := GenerateFuzzProgram(AData);
+  BytecodeLines := TStringList.Create;
+  JitLines := TStringList.Create;
+  try
+    GCapture := BytecodeLines;
+    try
+      if RunGrammarExecutor(Source, ARunName, True, 'bytecode',
+        BytecodeOutcome, BytecodeDetail) then
+        Exit(1);
+      GCapture := JitLines;
+      if RunGrammarExecutor(Source, ARunName, False, 'jit', JitOutcome,
+        JitDetail) then
+        Exit(1);
+    finally
+      GCapture := nil;
+    end;
+    Difference := CompareRuns(BytecodeOutcome, JitOutcome, BytecodeDetail,
+      JitDetail, BytecodeLines, JitLines);
+    if Difference <> '' then
+    begin
+      WriteLn(ErrOutput, Format('%s: the runs differ: %s',
+        [FUZZ_PROGRAM_NAME, Difference]));
+      Exit(1);
+    end;
+    if GVerbose then
+      WriteLn(ErrOutput, Format('[grammar] %d lines; %s',
+        [BytecodeLines.Count, 'the runs agree or are not comparable']));
+    Result := EXIT_OK;
+  finally
+    JitLines.Free;
+    BytecodeLines.Free;
+  end;
+end;
+
 procedure RunHarness;
 var
   I: Integer;
-  Arg, FileName, Detail, Trace, SeedDirectory: string;
-  Source: TStringList;
+  Arg, FileName, RunName, Detail, Trace, SeedDirectory: string;
+  Source: UnicodeString;
   Outcome: TFuzzOutcome;
-  Failed, SelfTestFault, HeapSnapshot: Boolean;
+  SelfTestFault, HeapSnapshot, Grammar, PrintProgram, Readable: Boolean;
+  Written: Integer;
+  Bytes: TBytes;
 begin
   FileName := '';
-  Failed := False;
   SelfTestFault := False;
   HeapSnapshot := False;
+  Grammar := False;
+  PrintProgram := False;
   SeedDirectory := '';
-  Trace := '';
-
-  for I := 1 to ParamCount do
+  I := 1;
+  while I <= ParamCount do
   begin
     Arg := ParamStr(I);
     if (Arg = '--verbose') or (Arg = '-v') then
@@ -729,10 +939,17 @@ begin
       SelfTestFault := True
     else if Arg = '--heap-snapshot' then
       HeapSnapshot := True
+    else if Arg = '--grammar' then
+      Grammar := True
+    else if Arg = '--print-program' then
+      PrintProgram := True
     else if Arg = '--write-heap-snapshot-seeds' then
     begin
       if I < ParamCount then
-        SeedDirectory := ParamStr(I + 1);
+      begin
+        Inc(I);
+        SeedDirectory := ParamStr(I);
+      end;
     end
     else if (Arg = '--help') or (Arg = '-h') then
     begin
@@ -742,26 +959,20 @@ begin
     end
     else
       FileName := Arg;
+    Inc(I);
   end;
 
-  { Proves the finding path end to end without needing a live engine bug:
-    the fault is raised where an engine fault would be, so the classification,
-    the backtrace, and the nonzero exit are all exercised. Regression-tested
-    in tests/fuzz-harness.test.js. }
+  { Proves the finding path end to end without a live engine bug: the fault
+    is raised where an engine fault would be, so its report, backtrace and
+    nonzero exit are all exercised. }
   if SelfTestFault then
   begin
     try
       raise Exception.Create('injected self-test fault');
     except
       on E: Exception do
-      begin
-        WriteLn(ErrOutput, Format(
-          '%s: unexpected fault in %s executor: %s: %s',
-          [FUZZ_PROGRAM_NAME, FUZZ_EXECUTOR_NAME, E.ClassName,
-           E.Message]));
-        WriteLn(ErrOutput, BackTraceStrFunc(ExceptAddr) + LineEnding +
+        ReportFault('the bytecode run', E.ClassName + ': ' + E.Message,
           CaptureBackTrace);
-      end;
     end;
     ExitCode := 1;
     Exit;
@@ -769,14 +980,23 @@ begin
 
   if SeedDirectory <> '' then
   begin
+    Written := WriteHeapSnapshotSeeds(SeedDirectory, Detail);
+    if Written < 0 then
+    begin
+      WriteLn(ErrOutput, FUZZ_PROGRAM_NAME,
+        ': the heap snapshot seeds could not be written: ', Detail);
+      ExitCode := 1;
+      Exit;
+    end;
     WriteLn(Format('%d heap snapshot seeds written to %s',
-      [WriteHeapSnapshotSeeds(SeedDirectory), SeedDirectory]));
+      [Written, SeedDirectory]));
     ExitCode := EXIT_OK;
     Exit;
   end;
 
   if HeapSnapshot then
   begin
+    Trace := '';
     try
       Outcome := RestoreOnce(FileName, Detail);
     except
@@ -784,19 +1004,16 @@ begin
       begin
         Outcome := foUnexpected;
         Detail := E.ClassName + ': ' + E.Message;
-        Trace := BackTraceStrFunc(ExceptAddr) + LineEnding +
-          CaptureBackTrace;
+        Trace := CaptureBackTrace;
       end;
     end;
     if Outcome = foUnexpected then
     begin
-      WriteLn(ErrOutput, Format('%s: unexpected fault in the heap snapshot ' +
-        'reader: %s', [FUZZ_PROGRAM_NAME, Detail]));
-      WriteLn(ErrOutput, Trace);
+      ReportFault('the heap snapshot reader', Detail, Trace);
       ExitCode := 1;
       Exit;
     end;
-    Report(Outcome, Detail);
+    Report('heap-snapshot', Outcome, Detail);
     ExitCode := EXIT_OK;
     Exit;
   end;
@@ -808,62 +1025,80 @@ begin
     Exit;
   end;
 
+  if Grammar then
+  begin
+    if (FileName = '') or (FileName = '-') then
+      Readable := ReadBoundedStdin(Bytes, Detail)
+    else
+      Readable := ReadBoundedFile(FileName, Bytes, Detail);
+    if not Readable then
+    begin
+      Report('grammar', foInputRejected, Detail);
+      ExitCode := EXIT_OK;
+      Exit;
+    end;
+    if PrintProgram then
+    begin
+      Write(UTF8Encode(GenerateFuzzProgram(Bytes)));
+      ExitCode := EXIT_OK;
+      Exit;
+    end;
+    ExitCode := RunGrammar(Bytes, ExpandFileName('grammar.js'));
+    Exit;
+  end;
+
   if not ReadInput(FileName, Source, Detail) then
   begin
-    Report(foInputRejected, Detail);
+    Report('bytecode', foInputRejected, Detail);
     ExitCode := EXIT_OK;
     Exit;
   end;
 
-  try
-    try
-      Outcome := RunOnce(Source, Detail);
-    except
-      { The finding path. Anything that escapes RunOnce's typed ladder is
-        by definition not an outcome the engine models. Keep the message
-        on stderr and the reproduction in the fuzzer's crash directory.
-        The backtrace is captured here, at the raise site, because the
-        handler below unwinds past it. Dev builds compile with -gl/-gw so
-        the frames carry file and line. }
-      on E: Exception do
-      begin
-        Outcome := foUnexpected;
-        Detail := E.ClassName + ': ' + E.Message;
-        Trace := BackTraceStrFunc(ExceptAddr) + LineEnding +
-          CaptureBackTrace;
-      end;
-    end;
-
-    if Outcome = foUnexpected then
-    begin
-      WriteLn(ErrOutput, Format('%s: unexpected fault in %s executor: %s',
-        [FUZZ_PROGRAM_NAME, FUZZ_EXECUTOR_NAME, Detail]));
-      WriteLn(ErrOutput, Trace);
-      Failed := True;
-    end
-    else
-      Report(Outcome, Detail);
-  finally
-    Source.Free;
-  end;
-
-  if Failed then
-    ExitCode := 1
+  { relative imports resolve against the input's directory; stdin's against
+    the working directory }
+  if (FileName = '') or (FileName = '-') then
+    RunName := ExpandFileName('stdin.js')
   else
+    RunName := ExpandFileName(FileName);
+
+  if RunExecutor(Source, RunName, True, 'bytecode', Outcome) then
+  begin
+    ExitCode := 1;
+    Exit;
+  end;
+  { the same text the parser just rejected has nothing more to show the JIT }
+  if Outcome in [foParseError, foModuleDenied] then
+  begin
     ExitCode := EXIT_OK;
+    Exit;
+  end;
+  if RunExecutor(Source, RunName, False, 'jit', Outcome) then
+  begin
+    ExitCode := 1;
+    Exit;
+  end;
+  ExitCode := EXIT_OK;
 end;
 
 begin
+  { build.pas snapshots the compiled preludes from a run with
+    G2_SNAPSHOT_OUT set: a host's, as the other G2 apps take them }
+  if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+  begin
+    GSetupError := '';
+    if not TG2Engine.Create.PrepareHost(GSetupError) then
+    begin
+      WriteLn(ErrOutput, 'Error: ', UTF8Encode(GSetupError));
+      Halt(1);
+    end;
+    Halt(0);
+  end;
+  GConsole := TFuzzConsole.Create;
+  GResolver := TFuzzDeniedResolver.Create;
   try
     RunHarness;
   finally
-    { Every engine is gone by now. As TGocciaApplication.RunApplication does,
-      shut the main thread's runtime down so its collector destroys what it
-      still manages: the garbage of every freed engine (no collection runs
-      after the last one), the thread's caches and the process-wide
-      singletons. A run then ends with nothing left allocated, which the
-      scheduled heaptrc replay requires (#1592, ADR 0143). The harness never
-      starts worker threads, so none can still be reading that runtime. }
-    ShutdownMainThreadRuntime;
+    GResolver.Free;
+    GConsole.Free;
   end;
 end.

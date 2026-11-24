@@ -169,9 +169,9 @@ jobs:
     needs: supersede
     # Only the Darwin targets need a macOS runner, the scarcest kind this
     # workflow uses; the Linux and Windows targets cross-compile on Linux.
-    # frostney/fpc-toolchain ships every target here for its runner's host;
-    # its Apple Silicon build compiles x86_64-darwin with its own x86_64
-    # cross compiler.
+    # Each Darwin target builds on a runner of its own architecture, as in
+    # g2.yml: build.pas makes the engine's prelude snapshot with a build for
+    # the runner's host, and there the host build is the target build.
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -184,7 +184,7 @@ jobs:
           - target: x86_64-darwin
             cpu: x86_64
             os: darwin
-            runner: macos-latest
+            runner: macos-15-intel
           - target: x86_64-linux
             cpu: x86_64
             os: linux
