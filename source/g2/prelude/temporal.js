@@ -3492,6 +3492,10 @@
       if (isPlainDateTime(v)) return msOfNs(GetUTCEpochNanoseconds(getPDT(v).isoDateTime));
       if (isInstant(v)) return msOfNs(getInst(v).ns);
       return msOfNs(getZDT(v).ns);
+    },
+    // the month code of the date an instant (in integral milliseconds) has in a time zone and a non-ISO calendar
+    monthCode(cal, tz, ms) {
+      return NonISOCalendarISOToDate(cal, GetISODateTimeFor(tz, Big(ms) * 1000000n).isoDate).monthCode;
     }
   };
 })
