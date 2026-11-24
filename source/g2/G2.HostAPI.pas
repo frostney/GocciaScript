@@ -2351,6 +2351,14 @@ end;
 
 { ---- the benchmark API (prelude/microbench.js) ---- }
 
+{ n.pendingJobs(): the jobs queued and not yet run, so a synchronous batch drains the jobs its calls queue instead of
+  holding all of them until it ends }
+function Bench_PendingJobs(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(PendingJobCount);
+  Result := True;
+end;
+
 threadvar
   BenchApiV: TValue;
   BenchApiRootedGen: Integer;
@@ -2480,6 +2488,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'collect', Host_GC, 0);
   DefineNative(RootAt(TempTop - 1), 'forget', Bench_Forget, 0);
   DefineNative(RootAt(TempTop - 1), 'discardJobs', Work_Discard, 0);
+  DefineNative(RootAt(TempTop - 1), 'pendingJobs', Bench_PendingJobs, 0);
   DefineNative(RootAt(TempTop - 1), 'progress', Bench_Progress, 4);
   DefineNative(RootAt(TempTop - 1), 'entry', Bench_Entry, 22);
   DefineOwn(RootAt(TempTop - 1), AtomOf('progressOn'), MkBool(Assigned(BenchProgress)), pfDefault);

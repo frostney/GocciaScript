@@ -35,6 +35,8 @@ function TakeRejections(From: Integer): TValue;
 function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;
 function TakeJobErrors: TValue;
 procedure DiscardJobs;
+{ the jobs queued and not yet run }
+function PendingJobCount: Integer;
 threadvar
   JobErrorsToHost: Boolean;
   { while a test file's suites are collected, a recorded job error drops the jobs behind it (the runner's own work
@@ -141,6 +143,11 @@ begin
 end;
 
 { ---------------- jobs ---------------- }
+
+function PendingJobCount: Integer;
+begin
+  Result := JobCount;
+end;
 
 procedure EnqueueJob(Kind: Integer; A, B, C: TValue);
 var Q, N: PValueArray; Cap, I, J: Integer;

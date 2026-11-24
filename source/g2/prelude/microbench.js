@@ -40,12 +40,19 @@
   // a result that is a promise or another thenable is awaited (AwaitBenchmarkResult)
   const isThenable = (v) => isObject(v) && typeof v.then === 'function';
 
-  // count calls of fn: undefined when every result was synchronous, else a promise that finishes the batch from the
-  // first thenable on, awaiting each one
+  // the jobs a synchronous batch may leave queued before it awaits them: a call that queues jobs (Promise.all of
+  // resolved promises) runs them as the batch goes, as each call's jobs ran after it on the earlier engine, instead
+  // of holding every call's jobs until the batch ends (memory past a 32-bit build's ceiling)
+  const JOB_DRAIN = 4096;
+  const jobsPiling = (i) => (i & 255) === 255 && n.pendingJobs() > JOB_DRAIN;
+
+  // count calls of fn: undefined when every result was synchronous and left few jobs, else a promise that finishes
+  // the batch from the first thenable or job pile-up on, awaiting each
   const batch = (fn, count) => {
     for (let i = 0; i < count; i++) {
       const r = fn();
       if (isThenable(r)) return finishBatch(fn, count, i + 1, r);
+      if (jobsPiling(i)) return finishBatch(fn, count, i + 1, undefined);
     }
     return undefined;
   };
@@ -54,6 +61,7 @@
     for (; i < count; i++) {
       const r = fn();
       if (isThenable(r)) await r;
+      else if (jobsPiling(i)) await undefined;
     }
   }
 
