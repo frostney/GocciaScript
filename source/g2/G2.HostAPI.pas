@@ -608,7 +608,7 @@ var Sink: TConsoleSink;
 begin
   Sink := ConsoleSink;
   if Assigned(Sink) then Sink(ArgStr(Args, Argc, 2), ArgStr(Args, Argc, 1))
-  else WriteLn(UTF8Encode(ArgStr(Args, Argc, 1)));
+  else WriteLn(ArgStr(Args, Argc, 1));   { the output's encoder writes an unpaired surrogate as U+FFFD }
   Res := VUndefined;
   Result := True;
 end;

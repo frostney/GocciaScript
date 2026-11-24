@@ -233,8 +233,10 @@ procedure TG2ConsoleCapture.CaptureOutput(const AMethod, ALine: UnicodeString);
 var
   Method, Line: string;
 begin
-  Method := UTF8Encode(AMethod);
-  Line := UTF8Encode(ALine);
+  { as they are: an explicit UTF8Encode drops an unpaired surrogate, which the output's encoder
+    (ProcessEncoding) writes as U+FFFD }
+  Method := AMethod;
+  Line := ALine;
   FOutputLines.Add(Line);
   if MethodWritesToStderr(Method) then
     FStderrLines.Add(UnformatLine(Method, Line))
@@ -249,12 +251,14 @@ end;
 
 procedure TG2ConsoleCapture.Emit(const AMethod, ALine: UnicodeString);
 begin
+  { the line as it is: the --log writer and the output's encoder write an unpaired surrogate as U+FFFD, which an
+    explicit UTF8Encode would drop }
   if Assigned(LogLine) then
-    LogLine(UTF8Encode(AMethod), UTF8Encode(ALine));
+    LogLine(AMethod, ALine);
   if Capturing then
     CaptureOutput(AMethod, ALine)
   else if not Silent then
-    WriteLn(UTF8Encode(ALine));
+    WriteLn(ALine);
 end;
 
 procedure TG2ConsoleCapture.PrintWarning(const AMessage, ASuggestion: UnicodeString;
