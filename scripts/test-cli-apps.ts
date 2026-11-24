@@ -8006,19 +8006,18 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
       }
     }
 
-    // (b) Test that trips --max-memory: afterEach is skipped and the run aborts
-    // uncatchably. 100M array elements far exceed the 64 MiB budget; the refusal
-    // raises the uncatchable TGocciaMemoryLimitError, which must tear the run
-    // down without running the guest hook.
-    console.log("TestRunner: afterEach is skipped when a memory limit aborts the run...");
+    // (b) A test that trips --max-memory once: on G2 the refusal is a
+    // catchable RangeError at the next back edge or call (ADR 0185), an
+    // ordinary failure of the test, so afterEach still runs.
+    console.log("TestRunner: afterEach runs after a memory refusal fails the test...");
     {
       const tmp = makeTmp();
       try {
-        const file = join(tmp, "afterEach-memory.test.js");
+        const file = join(tmp, "afterEach-refusal.test.js");
         writeFileSync(file, [
           'describe("suite", () => {',
           '  afterEach(() => { console.log("RAN:afterEach"); });',
-          '  test("t", () => { console.log("RAN:body"); const a = new Array(100000000); expect(a.length).toBe(100000000); });',
+          '  test("t", () => { console.log("RAN:body"); const a = new Array(10000000).fill(0); expect(a.length).toBe(10000000); });',
           "});",
           "",
         ].join("\n"));
@@ -8029,11 +8028,52 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
         );
         const all = proc.stdout.toString() + proc.stderr.toString();
         if (!all.includes("RAN:body"))
-          throw new Error(`${label} (memory) should run the body up to the refusal, got: ${all.slice(0, 400)}`);
-        if (!/memory budget/.test(all))
-          throw new Error(`${label} (memory) should abort on the memory budget, got: ${all.slice(0, 400)}`);
+          throw new Error(`${label} (refusal) should run the body up to the refusal, got: ${all.slice(0, 400)}`);
+        if (!/exceeds the configured memory limit/.test(all))
+          throw new Error(`${label} (refusal) should fail the test with the memory refusal, got: ${all.slice(0, 400)}`);
+        if (!all.includes("RAN:afterEach"))
+          throw new Error(`${label} (refusal) must run afterEach after a catchable refusal, got: ${all.slice(0, 400)}`);
+        if (proc.exitCode === 0)
+          throw new Error(`${label} (refusal) should exit non-zero for the failed test, got 0`);
+      } finally {
+        clean(tmp);
+      }
+    }
+
+    // (c) A test that catches every refusal and keeps what it allocated: after
+    // eight refusals that free nothing the limit ends the run past every
+    // handler (MemoryLimitError, "Live heap of N bytes exceeds the memory
+    // limit"), so the guest hook does not run.
+    console.log("TestRunner: afterEach is skipped when the memory limit ends the run...");
+    {
+      const tmp = makeTmp();
+      try {
+        const file = join(tmp, "afterEach-memory.test.js");
+        writeFileSync(file, [
+          'describe("suite", () => {',
+          '  afterEach(() => { console.log("RAN:afterEach"); });',
+          '  test("t", () => {',
+          '    console.log("RAN:body");',
+          "    const keep = [];",
+          "    for (const _ of Array(100000).keys()) {",
+          '      try { for (const j of Array(1000).keys()) keep.push({ j, s: "x" + j }); } catch (e) {}',
+          "    }",
+          "  });",
+          "});",
+          "",
+        ].join("\n"));
+
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), file, "--no-progress", "--max-memory=16777216"],
+          { stdout: "pipe", stderr: "pipe", timeout: 120_000 },
+        );
+        const all = proc.stdout.toString() + proc.stderr.toString();
+        if (!all.includes("RAN:body"))
+          throw new Error(`${label} (memory) should run the body up to the abort, got: ${all.slice(0, 400)}`);
+        if (!/exceeds the memory limit/.test(all))
+          throw new Error(`${label} (memory) should abort on the memory limit, got: ${all.slice(0, 400)}`);
         if (all.includes("RAN:afterEach"))
-          throw new Error(`${label} (memory) must NOT run afterEach after an uncatchable limit, got: ${all.slice(0, 400)}`);
+          throw new Error(`${label} (memory) must NOT run afterEach after the limit ended the run, got: ${all.slice(0, 400)}`);
         if (proc.exitCode === 0)
           throw new Error(`${label} (memory) should abort with a non-zero exit, got 0`);
       } finally {
@@ -14991,22 +15031,25 @@ await section("Fuzz Harness: oversized stdin is rejected like an oversized file.
 // refusal below asserts peak resident memory as well as the error. See
 // scripts/test-cli/rss.ts for how that is measured and where it cannot be.
 
-await section("Memory budget: single large allocation is refused before it happens...", async () => {
+await section("Memory budget: a large allocation is refused, close to the ceiling...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "alloc.js");
-    // ~800 MB of pointer storage requested in one step.
-    writeFileSync(file, "const a = new Array(100000000); print('len ' + a.length);\n");
+    // 80 MB of element storage, filled so it is allocated: `new Array(n)` alone
+    // only sets a length, which an engine may keep without storage.
+    writeFileSync(file, "const a = new Array(10000000).fill(0); print('len ' + a.length);\n");
 
     const refused = await runWithPeakRss([BARE, "--max-memory=67108864", file]);
     if (refused.exitCode === 0)
       throw new Error(`Allocation past the budget was permitted:\n${refused.output}`);
-    if (!/exceed the memory budget/i.test(refused.output))
+    // G2 refuses at the next back edge or call after the collection that left
+    // the heap over the ceiling (ADR 0185): the allocation that crossed it has
+    // happened, so resident memory ends near the ceiling plus that allocation.
+    if (!/exceeds the configured memory limit/i.test(refused.output))
       throw new Error(`Expected a memory-budget error, got:\n${refused.output}`);
-    // Measured ~16 MiB here; the same script when the gate lets it through
-    // peaks near 1.4 GB, so the ceiling sits an order of magnitude below the
-    // failure mode and well clear of engine startup.
-    assertPeakRssBelow(refused, "refused Array(100000000)", 192 * 1024 * 1024);
+    // Measured ~91 MiB; the bound keeps it well under twice the ceiling plus
+    // the allocation, and far below an unbounded run.
+    assertPeakRssBelow(refused, "refused Array(10000000).fill(0)", 192 * 1024 * 1024);
 
     // The same script under a budget that accommodates it must still work,
     // otherwise the gate is just broken rather than enforcing anything.
@@ -15015,7 +15058,7 @@ await section("Memory budget: single large allocation is refused before it happe
       stderr: "pipe",
     });
     const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
-    if (permitted.exitCode !== 0 || !permittedOut.includes("len 100000000"))
+    if (permitted.exitCode !== 0 || !permittedOut.includes("len 10000000"))
       throw new Error(`Allocation within budget was refused:\n${permittedOut}`);
   } finally {
     clean(tmp);
@@ -15067,7 +15110,7 @@ await section("Memory budget: property storage growth is refused before it happe
       throw new Error(
         `Property growth past the budget was permitted:\n${refused.output}`,
       );
-    if (!/exceed the memory budget/i.test(refused.output))
+    if (!/exceeds the configured memory limit/i.test(refused.output))
       throw new Error(`Expected a memory-budget error, got:\n${refused.output}`);
     // Measured ~80 MiB. The ceiling is far above that and far below the
     // ~1 GB the same 4M-property loop reaches when nothing refuses it — most
@@ -15258,45 +15301,10 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     if (!unstarted || Number(unstarted[1]) < 2000 * 48)
       throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
 
-    // A frame inside a try block also holds an exception handler, which is
-    // charged with the stacks (ADR 0132) and given back once the recursion
-    // has returned. Each recursion runs in its own process, so that both
-    // start from the same stack capacities; what a try block adds at 1,000
-    // levels is then measured at 21,840 bytes, and 6,000 before the handlers
-    // were charged.
-    const recursionCharge = (name: string, body: string): { charged: number; kept: number } => {
-      const file = join(tmp, `${name}.js`);
-      writeFileSync(
-        file,
-        "const step = (x) => x + 1;\n" +
-          "const runAWhile = () => [...Array(4096).keys()].map(step).length;\n" +
-          "let peak = 0;\n" +
-          "const atBottom = () => { runAWhile(); peak = Goccia.gc.bytesAllocated; return 0; };\n" +
-          `const recurse = (n) => { ${body} };\n` +
-          "runAWhile(); Goccia.gc();\n" +
-          "const before = Goccia.gc.bytesAllocated;\n" +
-          "recurse(1000);\n" +
-          "runAWhile(); Goccia.gc();\n" +
-          'console.log("charged " + (peak - before) + " kept " + (Goccia.gc.bytesAllocated - before));\n',
-      );
-      const result = Bun.spawnSync([RUNNER, file], { stdout: "pipe", stderr: "pipe" });
-      const out = result.stdout.toString() + result.stderr.toString();
-      const match = out.match(/charged (-?\d+) kept (-?\d+)/);
-      if (result.exitCode !== 0 || !match) throw new Error(`The ${name} recursion did not run:\n${out}`);
-      return { charged: Number(match[1]), kept: Number(match[2]) };
-    };
-    const plainCharge = recursionCharge("plain", "if (n === 0) return atBottom(); return 1 + recurse(n - 1);");
-    const guardedCharge = recursionCharge(
-      "guarded",
-      "try { if (n === 0) return atBottom(); return 1 + recurse(n - 1); } catch (e) { throw e; }",
-    );
-    if (guardedCharge.charged - plainCharge.charged < 1000 * 12)
-      throw new Error(
-        `A recursion through try blocks was not charged for its handlers: ` +
-          `${guardedCharge.charged} bytes against ${plainCharge.charged} without them`,
-      );
-    if (guardedCharge.kept >= 8 * 1024)
-      throw new Error(`A recursion through try blocks kept ${guardedCharge.kept} bytes of charge after it returned`);
+    // G2 does not charge its stacks or exception handlers to the ceiling: they
+    // are fixed per engine, outside the collected heap the limit bounds
+    // (docs/garbage-collector.md, "What the ceiling does not bound"; ADR 0185),
+    // so the old engine's per-handler charge (ADR 0132) has nothing to measure.
   } finally {
     clean(tmp);
   }

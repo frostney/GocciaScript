@@ -150,6 +150,7 @@ uses
   TextSemantics,
 
   Goccia.CapabilityAudit,
+  Goccia.Error.Suggestions,
   Goccia.HostEnvironment,
   Goccia.Sandbox.Modules,
   Goccia.ThreadCleanupRegistry;
@@ -420,12 +421,23 @@ begin
                 AuditFailure := R.ErrorText;
               end;
           else
-            if Assigned(Host.OnFormatFailure) then
-              Message_ := Host.OnFormatFailure(Run, R)
+            if (R.ErrorSuggestion = SSuggestMemoryLimitExceeded) or
+               (R.ErrorSuggestion = SSuggestStackMemoryLimitExceeded) then
+            begin
+              { --max-memory's refusal (ADR 0185: a catchable RangeError, which the engine marks with its suggestion
+                in a slot the script cannot set) left uncaught: the host's ceiling, as the run the limit ends }
+              Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
+              Result.FailureKind := sfkResourceLimit;
+            end
             else
-              Message_ := R.ErrorMessage;
-            Result.ErrorMessage := Message_;
-            Result.FailureKind := sfkScriptError;
+            begin
+              if Assigned(Host.OnFormatFailure) then
+                Message_ := Host.OnFormatFailure(Run, R)
+              else
+                Message_ := R.ErrorMessage;
+              Result.ErrorMessage := Message_;
+              Result.FailureKind := sfkScriptError;
+            end;
           end;
         end;
       except
