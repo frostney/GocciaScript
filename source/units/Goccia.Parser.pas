@@ -6740,6 +6740,9 @@ var
     end;
   end;
 begin
+  { a block first: no other statement starts with "{", and the checks below cost a token lookup each }
+  if Match(gttLeftBrace) then
+    Exit(BlockStatement);
   if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and IsTypeDeclaration then
   begin
     Line := Peek.Line;
@@ -7292,7 +7295,7 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after block',
       SSuggestCloseBlock);
-    if not FEarlyErrorsChecked then
+    if not FEarlyErrorsChecked and (Nodes.Count > 0) then
       ValidateStatementListDeclarations(Nodes.ToArray, AFunctionsAreVar,
         EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
   except

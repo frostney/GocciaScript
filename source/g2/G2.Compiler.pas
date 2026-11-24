@@ -2617,12 +2617,24 @@ const
 { runs for every statement; most hold no var binding, and CollectVarNamesOf's
   string temporaries cost an exception frame per call }
 { the let / const / class names a statement list declares (its function declarations are not included) }
+threadvar
+  LexNameKinds, AnnexBKinds: TKindCache;
+const
+  { the nodes LexNamesOf reads a name from }
+  LexNameClasses: array[0..4] of TClass = (TGocciaVariableDeclaration, TGocciaDestructuringDeclaration,
+    TGocciaClassDeclaration, TGocciaEnumDeclaration, TGocciaExportDefaultDeclaration);
+  { the nodes the Annex B walk looks at or into }
+  AnnexBClasses: array[0..10] of TClass = (TGocciaFunctionDeclaration, TGocciaBlockStatement, TGocciaIfStatement,
+    TGocciaForStatement, TGocciaForOfStatement, TGocciaForInStatement, TGocciaWhileStatement,
+    TGocciaDoWhileStatement, TGocciaWithStatement, TGocciaTryStatement, TGocciaSwitchStatement);
+
 procedure LexNamesOf(L: TList<TGocciaASTNode>; Out_: TStringList);
 var I, K: Integer; N: TGocciaASTNode; VD: TGocciaVariableDeclaration;
 begin
   for I := 0 to L.Count - 1 do
   begin
     N := L[I];
+    if KindOf(LexNameKinds, LexNameClasses, N) = Length(LexNameClasses) then Continue;
     if (N is TGocciaVariableDeclaration) and not TGocciaVariableDeclaration(N).IsVar then
     begin
       VD := TGocciaVariableDeclaration(N);
@@ -2659,8 +2671,17 @@ end;
   would raise no early error: no enclosing block (nor the top level) declares the name lexically, its own block
   only by function declarations }
 procedure TCompiler.AnnexBWalkList(L: TList<TGocciaASTNode>; Encl, Names: TStringList);
-var I: Integer; Lex, E2: TStringList; FD: TGocciaFunctionDeclaration;
+var I: Integer; Lex, E2: TStringList; FD: TGocciaFunctionDeclaration; Found: Boolean;
 begin
+  { a list with no function declaration and no statement holding one has nothing to walk }
+  Found := False;
+  for I := 0 to L.Count - 1 do
+    if (L[I] <> nil) and (KindOf(AnnexBKinds, AnnexBClasses, L[I]) < Length(AnnexBClasses)) then
+    begin
+      Found := True;
+      Break;
+    end;
+  if not Found then Exit;
   Lex := NewNameList;
   E2 := NewNameList;
   try
@@ -3164,6 +3185,12 @@ var I, K: Integer; VD: TGocciaVariableDeclaration;
   end;
 begin
   if N = nil then Exit;
+  { a block, the common container, without the chain below (VarNameClasses lists it third, as the chain does) }
+  if KindOf(VarNameKinds, VarNameClasses, N) = 2 then
+  begin
+    for I := 0 to TGocciaBlockStatement(N).Nodes.Count - 1 do CollectVarNames(TGocciaBlockStatement(N).Nodes[I], Names);
+    Exit;
+  end;
   if N is TGocciaVariableDeclaration then
   begin
     VD := TGocciaVariableDeclaration(N);
@@ -3247,12 +3274,14 @@ end;
 threadvar
   HoistMaskCache: TClassMaskCache;
 const
-  HoistMaskClasses: array[0..4] of TClass = (
+  HoistMaskClasses: array[0..6] of TClass = (
     TGocciaVariableDeclaration,
     TGocciaDestructuringDeclaration,
     TGocciaClassDeclaration,
     TGocciaFunctionDeclaration,
-    TGocciaUsingDeclaration);
+    TGocciaUsingDeclaration,
+    TGocciaEnumDeclaration,
+    TGocciaExportDefaultDeclaration);
 
 procedure TCompiler.HoistBlock(L: TList<TGocciaASTNode>);
 var I: Integer; N: TGocciaASTNode; VD: TGocciaVariableDeclaration; K: Integer; FD: TGocciaFunctionDeclaration;
@@ -3274,13 +3303,13 @@ begin
       DeclarePatternNames(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
     else if ((HoistMask and Cardinal(4)) <> 0) then
       DeclareLocal(TGocciaClassDeclaration(N).ClassDefinition.Name, False)
-    else if N is TGocciaEnumDeclaration then
+    else if ((HoistMask and Cardinal(32)) <> 0) then
     begin
       { an enum declaration: a lexical binding, uninitialized until the declaration runs }
       DeclaringLexical := True;
       DeclareLocal(TGocciaEnumDeclaration(N).Name, False);
     end
-    else if (N is TGocciaExportDefaultDeclaration) and TGocciaExportDefaultDeclaration(N).IsDirectDeclaration and
+    else if ((HoistMask and Cardinal(64)) <> 0) and TGocciaExportDefaultDeclaration(N).IsDirectDeclaration and
             (TGocciaExportDefaultDeclaration(N).Expression is TGocciaClassExpression) then
     begin
       { a default export that declares a named class: a lexical binding of the module (16.2.3.7) from the start,
@@ -4387,7 +4416,8 @@ begin
          FreeTo(R);
        end;
     3: if (AnnexBFuncs <> nil) and AnnexBFuncs.ContainsKey(S) then EmitAnnexBCopy(TGocciaFunctionDeclaration(S));
-    4: begin
+    4: if TGocciaBlockStatement(S).Nodes.Count > 0 then
+       begin
          PushScope;
          HoistBlock(TList<TGocciaASTNode>(TGocciaBlockStatement(S).Nodes));
          StmtList(TGocciaBlockStatement(S).Nodes);
@@ -8534,6 +8564,14 @@ begin
   end;
 end;
 
+threadvar
+  ModuleDeclKinds: TKindCache;
+const
+  { the import and export declarations, which only a module may contain }
+  ModuleDeclClasses: array[0..7] of TClass = (TGocciaImportDeclaration, TGocciaExportDeclaration,
+    TGocciaExportDefaultDeclaration, TGocciaExportVariableDeclaration, TGocciaExportDestructuringDeclaration,
+    TGocciaExportFunctionDeclaration, TGocciaExportClassDeclaration, TGocciaExportEnumDeclaration);
+
 function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; ReturnLast: Boolean;
   Goal: Integer): PFuncTemplate;
 var C: TCompiler; Params: TGocciaParameterArray; I: Integer; Nodes: TList<TGocciaASTNode>; Strict: Boolean;
@@ -8575,7 +8613,7 @@ begin
     { 16.1.1 / 19.2.1.1: import and export declarations belong to modules only }
     if Goal <> 3 then
       for I := 0 to Prog.Body.Count - 1 do
-        if (Prog.Body[I] is TGocciaImportDeclaration) or (Copy(Prog.Body[I].ClassName, 1, 13) = 'TGocciaExport') then
+        if KindOf(ModuleDeclKinds, ModuleDeclClasses, Prog.Body[I]) < Length(ModuleDeclClasses) then
           if C.EvalContext then raise EEarlySyntaxError.Create('Module declarations are not allowed in eval code')
           else raise EEarlySyntaxError.Create('Cannot use import or export outside a module');
     if Goal = 3 then
@@ -8719,6 +8757,9 @@ begin
   ExprKinds := Default(TKindCache);
   VarNameKinds := Default(TKindCache);
   StmtKinds := Default(TKindCache);
+  LexNameKinds := Default(TKindCache);
+  AnnexBKinds := Default(TKindCache);
+  ModuleDeclKinds := Default(TKindCache);
   HoistMaskCache := Default(TClassMaskCache);
   EvalOuterDesc := '';
 end;

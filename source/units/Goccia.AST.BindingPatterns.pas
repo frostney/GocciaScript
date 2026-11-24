@@ -810,12 +810,24 @@ const
     TGocciaEnumDeclaration,
     TGocciaExportEnumDeclaration);
 
+{ the import case in a procedure of its own: its managed pair would otherwise be initialized and finalized on
+  every call, whatever the node }
+procedure CollectImportBindingNames(const AImportDecl: TGocciaImportDeclaration;
+  const ANames: TUnicodeStringList);
+var
+  ImportPair: TStringStringMap.TKeyValuePair;
+begin
+  AddBindingName(ANames, AImportDecl.NamespaceName, False);
+  for ImportPair in AImportDecl.Imports do
+    AddBindingName(ANames, ImportPair.Key, False);
+  // The import map retains one entry when two specifiers bind one name.
+  AddBindingName(ANames, AImportDecl.DuplicateBinding, False);
+end;
+
 procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
   const ANames: TUnicodeStringList);
 var
   VarDecl: TGocciaVariableDeclaration;
-  ImportDecl: TGocciaImportDeclaration;
-  ImportPair: TStringStringMap.TKeyValuePair;
   DefaultDecl: TGocciaExportDefaultDeclaration;
   I: Integer;
   LexMask: Cardinal;
@@ -844,14 +856,7 @@ begin
     CollectLexicallyDeclaredNames(
       TGocciaExportClassDeclaration(ANode).Declaration, ANames)
   else if ((LexMask and Cardinal(32)) <> 0) then
-  begin
-    ImportDecl := TGocciaImportDeclaration(ANode);
-    AddBindingName(ANames, ImportDecl.NamespaceName, False);
-    for ImportPair in ImportDecl.Imports do
-      AddBindingName(ANames, ImportPair.Key, False);
-    // The import map retains one entry when two specifiers bind one name.
-    AddBindingName(ANames, ImportDecl.DuplicateBinding, False);
-  end
+    CollectImportBindingNames(TGocciaImportDeclaration(ANode), ANames)
   else if ((LexMask and Cardinal(64)) <> 0) then
   begin
     DefaultDecl := TGocciaExportDefaultDeclaration(ANode);

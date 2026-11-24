@@ -2,8 +2,3 @@
 # scripts/g2/check-known-failures.py fails a run with any other run not passing. Format: MODE ID.
 # the test predates the current FunctionDeclarationInstantiation; tc39/test262#5112 corrects it
 non-strict annexB/language/function-code/block-decl-func-skip-arguments.js
-# a timeout on a CI runner, not a wrong result: the test evals a 4 MB and then an 8 MB script of empty blocks, about
-# 16 s per mode on a workstation against the 20 s limit, at the shared parser's roughly 0.7 us per block (an object
-# list and a declaration check per block); a faster parser removes these
-non-strict staging/sm/regress/regress-610026.js
-strict staging/sm/regress/regress-610026.js
