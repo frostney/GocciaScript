@@ -322,6 +322,8 @@ type
     FHasEvaluationError: Boolean;
     FNamespaceObject: TGocciaObjectValue;
     function EnsureNamespaceObject: TGocciaObjectValue;
+    function NamespaceForDefine(
+      const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
   public
     constructor Create(const AModulePath, AImportingFilePath: string;
       const ALoadModule: TLoadModuleCallback);
@@ -1406,17 +1408,22 @@ begin
   Result := inherited DeleteProperty(AName);
 end;
 
-// DefineProperty follows the base contract: it takes ownership of ADescriptor
-// only on success, and leaves it to the caller when it throws. Going through
-// TryDefineProperty here freed the descriptor before the throw, so callers
-// such as Object.defineProperty freed it a second time.
+// DefineProperty follows the base contract: it takes ADescriptor on every
+// exit, a throw included (ADR 0184). Reading an export can throw (an
+// uninitialized binding).
 procedure TGocciaModuleNamespaceObject.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Accepted: Boolean;
 begin
-  if not AcceptsDescriptor(AName, ADescriptor) then
+  try
+    Accepted := AcceptsDescriptor(AName, ADescriptor);
+  finally
+    ADescriptor.Free;
+  end;
+  if not Accepted then
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
-  ADescriptor.Free;
 end;
 
 function TGocciaModuleNamespaceObject.GetAllPropertyNames: TArray<string>;
@@ -1805,6 +1812,30 @@ begin
   Result := EnsureNamespaceObject.HasOwnProperty(AName);
 end;
 
+// The namespace a definition on the deferred namespace goes to. Evaluating
+// the module runs guest code, which can collect and can throw: the deferred
+// object and what ADescriptor holds stay rooted across it, and a throw frees
+// ADescriptor, which the definition owns (ADR 0184).
+function TGocciaDeferredModuleNamespaceObject.NamespaceForDefine(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(Self);
+      ADescriptor.PushRoots(Roots);
+      Result := EnsureNamespaceObject;
+    except
+      ADescriptor.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
+  end;
+end;
+
 procedure TGocciaDeferredModuleNamespaceObject.DefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 begin
@@ -1813,25 +1844,16 @@ begin
     inherited DefineProperty(AName, ADescriptor);
     Exit;
   end;
-  EnsureNamespaceObject.DefineProperty(AName, ADescriptor);
+  NamespaceForDefine(ADescriptor).DefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaDeferredModuleNamespaceObject.TryDefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
-var
-  Namespace: TGocciaObjectValue;
 begin
   if AName = PROP_THEN then
     Exit(inherited TryDefineProperty(AName, ADescriptor));
-  // The call takes ownership of ADescriptor, so it is freed here when the
-  // module's evaluation error stops the call before it reaches the namespace.
-  try
-    Namespace := EnsureNamespaceObject;
-  except
-    ADescriptor.Free;
-    raise;
-  end;
-  Result := Namespace.TryDefineProperty(AName, ADescriptor);
+  Result := NamespaceForDefine(ADescriptor).TryDefineProperty(AName,
+    ADescriptor);
 end;
 
 function TGocciaDeferredModuleNamespaceObject.DeleteProperty(

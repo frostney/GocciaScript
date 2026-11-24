@@ -66,7 +66,8 @@ type
       const ADescriptor: TGocciaPropertyDescriptor;
       out ABlockedByExtensibility: Boolean): Boolean;
     // MaterializeOwnLazyProperty for a define whose pending ADescriptor, a
-    // plain class the collector does not trace, holds the value.
+    // plain class the collector does not trace, holds the value. The define
+    // owns ADescriptor, so a raise here frees it.
     function MaterializeOwnLazyPropertyForDefine(const AName: string;
       const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
@@ -130,6 +131,15 @@ type
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
     function ToNumberLiteral: TGocciaNumberLiteralValue; override;
 
+    { [[DefineOwnProperty]]. Each of DefineProperty, TryDefineProperty,
+      DefineSymbolProperty and TryDefineSymbolProperty takes ADescriptor on
+      every exit: it stores or frees it whether the call succeeds, refuses or
+      raises (a TypeError, guest code, the memory limit, a timeout or a host's
+      abort at any allocation inside the call). A caller never frees a
+      descriptor it passed, so one built inline in the call cannot leak. An
+      override frees ADescriptor itself before anything it does ahead of the
+      inherited call raises. An EOutOfMemory from FPC's own allocator is
+      outside the contract (ADR 0184). }
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure CreateDataPropertyOrThrow(const AName: string;
@@ -978,16 +988,23 @@ procedure DefineOwnPropertyOrThrowForKey(
   const AObject: TGocciaObjectValue;
   const AKey: TGocciaValue;
   const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Name: string;
 begin
+  // The definition takes ADescriptor on every exit; until it starts, this
+  // owns it.
+  if AKey is TGocciaSymbolValue then
+  begin
+    AObject.DefineSymbolProperty(TGocciaSymbolValue(AKey), ADescriptor);
+    Exit;
+  end;
   try
-    if AKey is TGocciaSymbolValue then
-      AObject.DefineSymbolProperty(TGocciaSymbolValue(AKey), ADescriptor)
-    else
-      AObject.DefineProperty(AKey.ToStringLiteral.Value, ADescriptor);
+    Name := AKey.ToStringLiteral.Value;
   except
     ADescriptor.Free;
     raise;
   end;
+  AObject.DefineProperty(Name, ADescriptor);
 end;
 
 function TGocciaObjectValue.OwnPropertyDescriptorForKey(
@@ -1190,13 +1207,23 @@ function TGocciaObjectValue.MaterializeOwnLazyPropertyForDefine(
 var
   Roots: TGocciaActiveRootFrame;
 begin
-  if ACurrent.ClassType <> TGocciaLazyPropertyDescriptorData then
+  // `is`, as StoreLazyPropertyDescriptor stores: a subclass's factory runs
+  // here, under the cleanup, and not later in a clone of the entry.
+  if not (ACurrent is TGocciaLazyPropertyDescriptorData) then
     Exit(ACurrent);
   Roots.Initialize;
   try
-    Roots.Add(Self);
-    ADescriptor.PushRoots(Roots);
-    Result := MaterializeOwnLazyProperty(AName, ACurrent);
+    try
+      Roots.Add(Self);
+      ADescriptor.PushRoots(Roots);
+      Result := MaterializeOwnLazyProperty(AName, ACurrent);
+    except
+      // Materializing runs a shim and allocates, so a deadline, a budget, a
+      // host's abort or the memory limit can end it. The define owns
+      // ADescriptor and has stored nothing yet.
+      ADescriptor.Free;
+      raise;
+    end;
   finally
     Roots.Clear;
   end;
@@ -1262,6 +1289,7 @@ begin
 
   if Assigned(Current) then
     Current.Free;
+  // A refused growth frees ADescriptor (TGocciaShapedPropertyMap).
   FProperties.Add(AName, ADescriptor);
   Result := True;
 end;
@@ -1705,6 +1733,9 @@ begin
     Map := TGocciaShapedPropertyMap.Create;
     Result.FProperties := Map;
     Map.Owner := Self;
+    // Its descriptors are the caller's or the object's until the commit, so
+    // a refused growth leaves them to their owners.
+    Map.KeepsRefusedValue := True;
     for I := 0 to High(AKeys) do
     begin
       if I and 1023 = 1023 then
@@ -1765,6 +1796,10 @@ begin
   FSymbolDescriptors.Free;
   FSymbolInsertionOrder.Free;
   FProperties := AProperties.FProperties;
+  // The object owns the descriptors from here, so a refused growth frees the
+  // one it was storing, as in any object's map (ADR 0184).
+  if FProperties is TGocciaShapedPropertyMap then
+    TGocciaShapedPropertyMap(FProperties).KeepsRefusedValue := False;
   FSymbolDescriptors := AProperties.FSymbolDescriptors;
   FSymbolInsertionOrder := AProperties.FSymbolOrder;
   AProperties.FProperties := nil;
@@ -2282,7 +2317,7 @@ begin
 end;
 
 // ES2026 §20.1.2.3.1 DefinePropertyOrThrow(O, P, desc)
-// Does NOT take ownership of ADescriptor on failure — caller must free.
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaObjectValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Current: TGocciaPropertyDescriptor;
@@ -2294,8 +2329,11 @@ begin
      BlockedByExtensibility) then
     Exit;
   if BlockedByExtensibility then
+  begin
+    ADescriptor.Free;
     ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
       SSuggestObjectNotExtensible);
+  end;
 
   Current := nil;
   FProperties.TryGetValue(AName, Current);
@@ -2305,24 +2343,22 @@ begin
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
+    ADescriptor.Free;
     if not Assigned(Current) and not FExtensible then
       ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]), SSuggestCannotDeleteNonConfigurable);
   end;
 
-  if Assigned(Current) then
-  begin
-    Current.Free;
-    FProperties.Add(AName, Applied);
-  end
-  else
-    FProperties.Add(AName, Applied);
-
+  // Applied carries everything the definition stores, and the map's growth
+  // gate roots it, or frees it if it refuses the growth.
   ADescriptor.Free;
+  if Assigned(Current) then
+    Current.Free;
+  FProperties.Add(AName, Applied);
 end;
 
 // ES2026 §10.1.6.1 OrdinaryDefineOwnProperty(O, P, Desc)
-// Takes ownership of ADescriptor — frees it on failure.
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 function TGocciaObjectValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Current: TGocciaPropertyDescriptor;
@@ -2351,10 +2387,10 @@ begin
     Exit(False);
   end;
 
+  ADescriptor.Free;
   if Assigned(Current) then
     Current.Free;
   FProperties.Add(AName, Applied);
-  ADescriptor.Free;
   Result := True;
 end;
 
@@ -2698,7 +2734,7 @@ end;
 { Symbol property methods }
 
 // ES2026 §20.1.2.3.1 DefinePropertyOrThrow — symbol variant
-// Does NOT take ownership of ADescriptor on failure — caller must free.
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaObjectValue.DefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Current: TGocciaPropertyDescriptor;
@@ -2710,6 +2746,7 @@ begin
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
+    ADescriptor.Free;
     if not Assigned(Current) and not FExtensible then
       ThrowTypeError(SErrorCannotAddSymbolNotExtensible, SSuggestObjectNotExtensible);
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
@@ -2726,7 +2763,7 @@ begin
 end;
 
 // ES2026 §10.1.6.1 OrdinaryDefineOwnProperty — symbol variant
-// Takes ownership of ADescriptor — frees it on failure.
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 function TGocciaObjectValue.TryDefineSymbolProperty(const ASymbol: TGocciaSymbolValue; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Current: TGocciaPropertyDescriptor;

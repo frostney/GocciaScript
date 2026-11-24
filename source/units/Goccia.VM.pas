@@ -12989,17 +12989,12 @@ begin
 
   Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
     [pfEnumerable, pfConfigurable]);
-  // A definition that throws (a static accessor named "prototype") leaves the
-  // descriptor to its caller.
-  try
-    if AKey is TGocciaSymbolValue then
-      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
-    else
-      Target.DefineProperty(AName, Descriptor);
-  except
-    Descriptor.Free;
-    raise;
-  end;
+  // The definition takes the descriptor on every exit, a throw (a static
+  // accessor named "prototype") included (ADR 0184).
+  if AKey is TGocciaSymbolValue then
+    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+  else
+    Target.DefineProperty(AName, Descriptor);
 end;
 
 function TGocciaVM.BeginDecorators(
@@ -14687,34 +14682,21 @@ begin
   end;
 end;
 
+// The definition takes the descriptor on every exit (ADR 0184).
 procedure TGocciaVM.DefineOwnDataProperty(
   const ATarget: TGocciaObjectValue; const AName: string;
   const AValue: TGocciaValue; const AFlags: TPropertyFlags);
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
-  try
-    ATarget.DefineProperty(AName, Descriptor);
-  except
-    Descriptor.Free;
-    raise;
-  end;
+  ATarget.DefineProperty(AName,
+    TGocciaPropertyDescriptorData.Create(AValue, AFlags));
 end;
 
 procedure TGocciaVM.DefineOwnDataSymbolProperty(
   const ATarget: TGocciaObjectValue; const ASymbol: TGocciaSymbolValue;
   const AValue: TGocciaValue; const AFlags: TPropertyFlags);
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
-  try
-    ATarget.DefineSymbolProperty(ASymbol, Descriptor);
-  except
-    Descriptor.Free;
-    raise;
-  end;
+  ATarget.DefineSymbolProperty(ASymbol,
+    TGocciaPropertyDescriptorData.Create(AValue, AFlags));
 end;
 
 // An ordinary object goes straight to its [[Set]]. This procedure keeps no
