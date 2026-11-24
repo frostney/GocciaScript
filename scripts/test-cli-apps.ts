@@ -970,7 +970,7 @@ await section("Bare Loader: bytecode top-level declarations back globalThis...",
 
 await section("Bare Loader: test262 host marker is hidden by default...", async () => {
   const proc = Bun.spawnSync([BARE], {
-    stdin: new TextEncoder().encode("print(typeof Goccia.test262Host); print(typeof Goccia.test262);\n"),
+    stdin: new TextEncoder().encode("print(typeof $262); print(typeof globalThis.$262);\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -993,20 +993,19 @@ await section("Bare Loader: Test262 host option belongs to GocciaTest262Runner..
   }
 });
 
-await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", async () => {
+await section("Test262 Runner: --eval-host exposes the test262 host hooks as $262...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-loose-equality"], {
     stdin: new TextEncoder().encode([
-      "print(Goccia.test262Host);",
-      "print(typeof Goccia.test262);",
-      "print(typeof Goccia.test262.createRealm);",
-      "print(typeof Goccia.test262.evalScript);",
-      "const htmlDDA = Goccia.test262.isHTMLDDA;",
+      "print(typeof $262);",
+      "print(typeof $262.createRealm);",
+      "print(typeof $262.evalScript);",
+      "const htmlDDA = $262.IsHTMLDDA;",
       "print(typeof htmlDDA);",
       "print(Boolean(htmlDDA));",
       "print(htmlDDA == null);",
       "print(htmlDDA == undefined);",
       "print(htmlDDA === undefined);",
-      "const realm = Goccia.test262.createRealm();",
+      "const realm = $262.createRealm();",
       "print(realm.global.Object !== Object);",
       "print(typeof realm.global.eval);",
       "print(realm.global.eval('1 + 2'));",
@@ -1016,7 +1015,6 @@ await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", asy
     stderr: "pipe",
   });
   const expected = [
-    "true",
     "object",
     "function",
     "function",
@@ -1678,9 +1676,8 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       // ...against the realm's global environment, not the module's: the
       // Script's `this`, its free identifiers and its top-level lexical
       // declarations are the global ones (GlobalDeclarationInstantiation),
-      // whether the module reaches the host function through the harness's
-      // $262 wrapper (a closure of the realm) or directly.
-      ...[["$262.evalScript", "evalscript-wrapper"], ["Goccia.test262.evalScript", "evalscript-host"]].flatMap(
+      // when the module reaches the host function through $262.
+      ...[["$262.evalScript", "evalscript-wrapper"]].flatMap(
         ([call, name]): [string, string[], string, string][] => [
           [`module-${name}-this.js`, test(["module"], [], [
             `if (${call}("this") !== globalThis) throw new Error("evalScript this is not the global object");`,
@@ -1947,7 +1944,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
     for (let index = 0; index < 12; index++) {
       const source = index === 0
         ? [
-            "if (!Goccia.test262Host) throw new Error('missing test262 host');",
+            "if (typeof $262 !== 'object') throw new Error('missing test262 host');",
             "if (typeof $262.createRealm !== 'function') throw new Error('missing createRealm');",
             "const child = $262.createRealm();",
             "child.evalScript('globalThis.answer = 42;');",
@@ -2254,7 +2251,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
 await section("Test262 Runner: child realms expose host records...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
-      "const child = Goccia.test262.createRealm();",
+      "const child = $262.createRealm();",
       "print(typeof child.evalScript);",
       "print(typeof child.createRealm);",
       "child.evalScript('globalThis.childRealmValue = 42;');",
@@ -2294,11 +2291,10 @@ await section("Test262 Runner: child realms expose host records...", async () =>
 await section("Test262 Runner: child realm globals expose host hooks...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
-      "const child = Goccia.test262.createRealm();",
-      "print(child.global.Goccia.test262Host);",
-      "print(typeof child.global.Goccia.test262);",
-      "print(typeof child.global.Goccia.test262.createRealm);",
-      "print(typeof child.global.Goccia.test262.evalScript);",
+      "const child = $262.createRealm();",
+      "print(typeof child.global.$262);",
+      "print(typeof child.global.$262.createRealm);",
+      "print(typeof child.global.$262.evalScript);",
       "print(typeof child.global.eval);",
       "",
     ].join("\n")),
@@ -2306,7 +2302,6 @@ await section("Test262 Runner: child realm globals expose host hooks...", async 
     stderr: "pipe",
   });
   const expected = [
-    "true",
     "object",
     "function",
     "function",
@@ -2322,7 +2317,7 @@ console.log("Test262 Runner: cross-realm weak constructors use the newTarget rea
 {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
     stdin: new TextEncoder().encode([
-      "const child = Goccia.test262.createRealm();",
+      "const child = $262.createRealm();",
       "child.evalScript('function NewTarget() {} NewTarget.prototype = null; globalThis.NewTarget = NewTarget;');",
       "const newTarget = child.global.NewTarget;",
       "const weakRef = Reflect.construct(WeakRef, [{}], newTarget);",
@@ -2348,7 +2343,7 @@ console.log("Test262 Runner: cross-realm weak constructors use the newTarget rea
 await section("Test262 Runner: calling another realm's built-in returns to the caller's realm...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
-      "const child = Goccia.test262.createRealm();",
+      "const child = $262.createRealm();",
       "const childAbs = child.global.Math.abs;",
       "const magnitude = childAbs(-3);",
       "const after = [];",

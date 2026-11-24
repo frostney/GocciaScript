@@ -639,8 +639,8 @@ console.log("--deterministic child realms use stable distinct streams...");
     );
 
   const bareRealmSource = [
-    "const realm = Goccia.test262.createRealm();",
-    'print([Math.random(), realm.evalScript("Math.random()"), realm.evalScript("Goccia.test262.createRealm().evalScript(\\"Math.random()\\")")].join("|"));',
+    "const realm = $262.createRealm();",
+    'print([Math.random(), realm.evalScript("Math.random()"), realm.evalScript("$262.createRealm().evalScript(\\"Math.random()\\")")].join("|"));',
     "",
   ].join("\n");
   const bareRealm = Bun.spawnSync(
