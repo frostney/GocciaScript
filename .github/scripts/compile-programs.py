@@ -124,6 +124,12 @@ def main():
         log = logs / "applications.log"
         env = dict(os.environ, FPC_TARGET_CPU=args.cpu, FPC_TARGET_OS=args.os,
                    G2_FPC_FLAGS=" ".join(flags))
+        if args.os == "darwin":
+            # instantfpc compiles build.pas itself for the host first; on a
+            # macOS runner whose linker finds no libc outside the SDK (macOS
+            # 26), that compile needs the SDK paths the targets get.
+            env["INSTANTFPCOPTIONS"] = " ".join(
+                part for part in (os.environ.get("INSTANTFPCOPTIONS", ""), *flags) if part)
         command = [str(root / "build.pas"), "--prod",
                    *[build_target(source) for source in entrypoints]]
         with log.open("w") as output:

@@ -38,7 +38,8 @@ BUILD_SCRIPT = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys
 pathlib.Path(os.environ["RECORDS"], "build.pas.args").write_text(json.dumps({
     "args": sys.argv[1:], "cwd": os.getcwd(),
-    "env": {k: os.environ.get(k) for k in ("FPC_TARGET_CPU", "FPC_TARGET_OS", "G2_FPC_FLAGS")}}))
+    "env": {k: os.environ.get(k) for k in ("FPC_TARGET_CPU", "FPC_TARGET_OS", "G2_FPC_FLAGS",
+                                           "INSTANTFPCOPTIONS")}}))
 print("build.pas fixture")
 sys.exit(5 if os.environ.get("FAIL_BUILD_PAS") else 0)
 '''
@@ -102,10 +103,18 @@ class CompileProgramsTest(unittest.TestCase):
         self.assertEqual(build["args"], ["--prod", "first", "loaderbare"])
         self.assertEqual(Path(build["cwd"]).resolve(), self.root.resolve())
         self.assertEqual(build["env"], {"FPC_TARGET_CPU": "x86_64", "FPC_TARGET_OS": "linux",
-                                        "G2_FPC_FLAGS": "-Xd"})
+                                        "G2_FPC_FLAGS": "-Xd", "INSTANTFPCOPTIONS": None})
         self.assertIn("6 programs", result.stdout)
         self.assertIn("0 failed", result.stdout)
         self.assertEqual(list((self.root / "build/ci-compiled").iterdir()), [])
+
+    def test_darwin_passes_the_sdk_flags_to_the_build_script_compile(self):
+        self.env.pop("INSTANTFPCOPTIONS", None)
+        result = self.run_build(cpu="aarch64", os_name="darwin")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        build = json.loads((self.records / "build.pas.args").read_text())
+        self.assertEqual(build["env"]["INSTANTFPCOPTIONS"], "-Xd")
+        self.assertEqual(build["env"]["G2_FPC_FLAGS"], "-Xd")
 
     def test_compiler_failure_is_fatal_and_preserves_diagnostics(self):
         self.env["FAIL_PROGRAM"] = "Compliance"
