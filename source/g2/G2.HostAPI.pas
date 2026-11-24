@@ -1522,6 +1522,13 @@ begin
 end;
 
 { fileSize(path): a file's size in bytes, -1 when it cannot be read }
+{ isAbsolutePath(path): whether path names a file from the root (IsAbsoluteFilePath: a drive on Windows) }
+function Host_IsAbsolutePath(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if IsAbsoluteFilePath(ArgStr(Args, Argc, 1)) then Res := VTrue else Res := VFalse;
+  Result := True;
+end;
+
 function Host_FileSize(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var SR: TSearchRec; Path: string; B: RawByteString;
 begin
@@ -1830,6 +1837,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
+  DefineNative(RootAt(TempTop - 1), 'isAbsolutePath', Host_IsAbsolutePath, 1);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
   DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));

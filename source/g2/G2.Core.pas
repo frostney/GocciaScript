@@ -221,6 +221,9 @@ function NumberRemainder(N, D: Double): Double; inline;
 function QuickInt32(V: TValue; out I: Int32): Boolean; inline;
 { floor / ceil / Math.round on doubles over their whole range (FPC's Floor and Ceil return a 32-bit Integer);
   -0 is kept where the spec keeps it }
+{ D's integer part, a zero signed as D (Int's zero is +0 on some targets: Win64's RTL); NaN and infinities as
+  they are }
+function DTrunc(D: Double): Double;
 function DFloor(D: Double): Double;
 function DCeil(D: Double): Double;
 function DRound(D: Double): Double;
@@ -801,21 +804,29 @@ function DoubleOf(V: TValue): Double; inline; begin Result := PDouble(@V)^; end;
 function libm_pow(X, Y: Double): Double; cdecl; external G2LIBM name 'pow';
 function libm_fmod(X, Y: Double): Double; cdecl; external G2LIBM name 'fmod';
 
-function DFloor(D: Double): Double;
+function DTrunc(D: Double): Double;
 begin
   if IsNan(D) or IsInfinite(D) then Exit(D);
   Result := Int(D);
+  { a zero takes D's sign bit: trunc(-0.5) and trunc(-0) are -0 }
+  if Result = 0 then PQWord(@Result)^ := PQWord(@D)^ and QWord($8000000000000000);
+end;
+
+function DFloor(D: Double): Double;
+begin
+  if IsNan(D) or IsInfinite(D) then Exit(D);
+  Result := DTrunc(D);
   if Result > D then Result := Result - 1;
 end;
 
 function DCeil(D: Double): Double;
 begin
   if IsNan(D) or IsInfinite(D) then Exit(D);
-  Result := Int(D);
+  Result := DTrunc(D);
   if Result < D then
   begin
     Result := Result + 1;
-    if Result = 0 then Result := -0.0;   { ceil(-0.5) is -0 }
+    if Result = 0 then PQWord(@Result)^ := QWord($8000000000000000);   { ceil(-0.5) is -0 }
   end;
 end;
 
@@ -834,6 +845,9 @@ function NumberExponentiate(B, E: Double): Double;
 begin
   if IsNan(E) then Exit(NaN);
   if IsInfinite(E) and (Abs(B) = 1) then Exit(NaN);
+  { a positive finite base to the power 0.5: its square root, correctly rounded on every target (the Universal
+    CRT's pow is not) }
+  if (E = 0.5) and (B > 0) and not IsInfinite(B) then Exit(Sqrt(B));
   Result := libm_pow(B, E);
 end;
 

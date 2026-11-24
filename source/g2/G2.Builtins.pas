@@ -2192,7 +2192,7 @@ begin
     8: D := c_atan(D);
     9: D := c_exp(D);
     10: D := c_log(D);
-    11: if not (IsNaN(D) or IsInfinite(D)) then D := Int(D);
+    11: D := DTrunc(D);
     12: if D > 0 then D := 1 else if D < 0 then D := -1;
     13: D := c_asin(D);
     14: D := c_acos(D);

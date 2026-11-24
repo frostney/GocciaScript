@@ -20,8 +20,10 @@
   };
   const EXPORT_LIST = Symbol('export list');
   shared.EXPORT_LIST = EXPORT_LIST;
+  // a path's last separator: a slash, or on Windows a backslash
+  const lastSlash = (path) => Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   const extensionOf = (path) => {
-    const slash = path.lastIndexOf('/'), dot = path.lastIndexOf('.');
+    const slash = lastSlash(path), dot = path.lastIndexOf('.');
     return dot > slash ? path.slice(dot).toLowerCase() : '';
   };
   const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
@@ -34,7 +36,7 @@
       exports = make();
       if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
     } else {
-      const format = key[0] === '/' ? formats[extensionOf(key)] : undefined;
+      const format = n.isAbsolutePath(key) ? formats[extensionOf(key)] : undefined;
       if (format === undefined) return undefined;
       const text = n.readText(key);
       if (text === undefined) return undefined;
@@ -75,7 +77,7 @@
   };
   formats['.json'] = (text) => shared.jsonExports(JSON.parse(text));
   const textAsset = (text, path) => {
-    const slash = path.lastIndexOf('/');
+    const slash = lastSlash(path);
     const fileName = path.slice(slash + 1);
     const metadata = Object.freeze({ kind: 'text', path, fileName, extension: extensionOf(path),
       byteLength: n.fileSize(path) });
