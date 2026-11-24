@@ -4748,6 +4748,10 @@ begin
               FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
               EntryModuleEvaluationStarted := False;
               FModuleLoader.FailEntryModule(EntryModule, E);
+              { the finally that frees it below is not entered from here: a
+                raise while the module's functions compile (an abort at a
+                value allocation) would leave it behind }
+              FreeAndNil(EntryRequestedModules);
               raise;
             end;
           end;
