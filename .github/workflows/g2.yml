@@ -334,9 +334,12 @@ jobs:
 
       - name: Run all JavaScript tests
         # The run exits nonzero for the known failures; the next step decides.
+        # --timeout=120s: these runners are several times slower than the Linux ones (the bytecode-limits
+        # class-bodies file took 48 s on macos-15-intel, 7 s on a Linux desktop), and the default 30 s per
+        # file is there to stop a hang, not to time a file.
         run: |
           status=0
-          build/g2/GocciaTestRunner -P tests --silent --no-progress \
+          build/g2/GocciaTestRunner -P tests --silent --no-progress --timeout=120s \
             --output=g2-test-results.json || status=$?
           echo "GocciaTestRunner exit status: $status"
 
