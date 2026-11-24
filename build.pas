@@ -681,7 +681,7 @@ end;
 function G2Args(const ASource, AUnitDirectory, AOutput, ATarget: string; AHost: Boolean = False): TStringArray;
 var
   Args: TStringList;
-  Extra, Word: string;
+  Extra, Word, Cpu: string;
   J: Integer;
 begin
   Args := TStringList.Create;
@@ -705,7 +705,16 @@ begin
         else
           Word := Word + Extra[J];
     end;
-    Args.Add('-O4');
+    { i386 (win32): -O1. FPC 3.3.1's -O3 and -O4 address an inlined field read through a register they never
+      loaded in G2.VM's iterator step (an access violation on every typed array iteration), and with -O2 a
+      describe.each inside a describe throws a TypeError that -O1 does not (the miscompile not yet isolated) }
+    Cpu := LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU'));
+    if AHost or (Cpu = '') then
+      Cpu := LowerCase({$I %FPCTARGETCPU%});
+    if Cpu = 'i386' then
+      Args.Add('-O1')
+    else
+      Args.Add('-O4');
     Args.Add('-OoNOFASTMATH');
     Args.Add('-dPRODUCTION');
     if BuildMode = bmProd then
