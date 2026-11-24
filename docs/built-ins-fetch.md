@@ -59,18 +59,16 @@ try {
 }
 ```
 
-The host name is checked synchronously, before any lookup, so a refused
-request has no observable side effect. The request then checks the address the
-name resolved to, and repeats both checks on **every redirect hop**; a hop the
-capability refuses rejects the returned promise with `PermissionDenied`.
+A refused host name throws `PermissionDenied` before lookup. The request
+skips any resolved address the capability refuses and rejects the promise
+with `PermissionDenied` if no address is permitted. The checks repeat on
+every redirect hop.
 
-On the command line `--allow-net` and `--deny-net` fill the capability, and a
-config file's `permissions` block does the same once the config is trusted
-(`--trust`) or accepted for the run (`-P`); see
-[Config trust](permissions.md#config-trust). Private, loopback, and
-link-local destinations are refused unless the grant names them: with
-`private`, or with an IP or CIDR scope covering the address. A host-name grant,
-even an unscoped `--allow-net`, does not reach a name that resolves privately.
+On the command line `--allow-net` and `--deny-net` fill the capability. A
+trusted config file or a config accepted for the run with `-P` can set the
+same grants. See [Net scopes](permissions.md#net-scopes-and-private-ranges)
+and [Config trust](permissions.md#config-trust).
+
 `--max-fetch-bytes` sets the response-body ceiling (default `8MiB`); it is a
 setting, not a capability. See [Permissions](permissions.md#command-line) for
 the grammar and [Limits and units](permissions.md#limits-and-units) for the
@@ -114,11 +112,11 @@ Transport](embedding.md#fetch-transport).
 These are documented candidly, in the spirit of [VISION.md](../VISION.md): the
 sandbox is a reduced attack surface, not a verified security boundary.
 
-**DNS rebinding is addressed.** The host is resolved **once**, the resolved
-address is validated, and the connection is pinned to that address, so an
-allowed name under attacker DNS control cannot answer the check with a public
-address and the connect with an internal one. Resolution, validation, and
-pinning are re-applied on every redirect hop.
+**DNS rebinding is addressed.** The host is resolved once per new connection,
+and only approved numeric addresses can be dialed. The socket that connects
+keeps its approved address. A redirect on that socket rechecks the address,
+while a redirect that opens another connection resolves and checks its own
+candidates.
 
 TLS verification still runs against the **hostname**, never the pinned
 literal. Pinning changes which address is dialed, not which identity the peer

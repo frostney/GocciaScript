@@ -73,6 +73,9 @@ type
     procedure TestConnectionCloseWhenNoReuseCanFollow;
     procedure TestSendOnResetConnectionIsRetried;
     procedure TestReusedHopChecksThePinnedAddress;
+    {$IFDEF LINUX}
+    procedure TestReusedHopChecksTheApprovedIPv6Winner;
+    {$ENDIF}
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -171,7 +174,8 @@ begin
 end;
 
 { A TCP listener on an ephemeral loopback port. }
-function CreateLoopbackListener(out APort: Word): cint;
+function CreateLoopbackListener(out APort: Word;
+  const ARequestedPort: Word = 0): cint;
 var
   Address: TInetSockAddr;
   AddressLength: TSockLen;
@@ -181,7 +185,7 @@ begin
     raise Exception.Create('socket failed');
   FillChar(Address, SizeOf(Address), 0);
   Address.sin_family := AF_INET;
-  Address.sin_port := 0;
+  Address.sin_port := htons(ARequestedPort);
   Address.sin_addr := StrToNetAddr('127.0.0.1');
   AddressLength := SizeOf(Address);
   if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
@@ -193,6 +197,30 @@ begin
   end;
   APort := ntohs(Address.sin_port);
 end;
+
+{$IFDEF LINUX}
+function CreateIPv6LoopbackListener(out APort: Word): cint;
+var
+  Address: TInetSockAddr6;
+  AddressLength: TSockLen;
+begin
+  Result := fpSocket(AF_INET6, SOCK_STREAM, 0);
+  if Result < 0 then
+    raise Exception.Create('IPv6 socket failed');
+  FillChar(Address, SizeOf(Address), 0);
+  Address.sin6_family := AF_INET6;
+  Address.sin6_addr := StrToNetAddr6('::1');
+  AddressLength := SizeOf(Address);
+  if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
+     (fpListen(Result, 1) <> 0) or
+     (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
+  begin
+    CloseSocket(Result);
+    raise Exception.Create('IPv6 loopback listener failed');
+  end;
+  APort := ntohs(Address.sin6_port);
+end;
+{$ENDIF}
 
 { Accepts one connection within 10 s, or returns -1, so a server thread
   whose client never connected still ends and the test can join it. The
@@ -913,6 +941,10 @@ begin
     TestSendOnResetConnectionIsRetried);
   Test('A reused connection''s hop checks the address it was opened to',
     TestReusedHopChecksThePinnedAddress);
+  {$IFDEF LINUX}
+  Test('A refused IPv4 candidate is skipped and the reused hop checks IPv6',
+    TestReusedHopChecksTheApprovedIPv6Winner);
+  {$ENDIF}
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -2133,18 +2165,25 @@ type
     Port: Word;
     Connections: Integer;
     Served: Integer;
-    constructor Create(const AResponses: array of RawByteString);
+    constructor Create(const AResponses: array of RawByteString
+      {$IFDEF LINUX}; const AIPv6: Boolean = False{$ENDIF});
     destructor Destroy; override;
   end;
 
-constructor TKeepAliveServer.Create(const AResponses: array of RawByteString);
+constructor TKeepAliveServer.Create(const AResponses: array of RawByteString
+  {$IFDEF LINUX}; const AIPv6: Boolean{$ENDIF});
 var
   I: Integer;
 begin
   SetLength(FResponses, Length(AResponses));
   for I := 0 to High(AResponses) do
     FResponses[I] := AResponses[I];
-  FListener := CreateLoopbackListener(Port);
+  {$IFDEF LINUX}
+  if AIPv6 then
+    FListener := CreateIPv6LoopbackListener(Port)
+  else
+  {$ENDIF}
+    FListener := CreateLoopbackListener(Port);
   inherited Create;
 end;
 
@@ -2228,8 +2267,8 @@ end;
 { GETs (or with AHead, HEADs) http://127.0.0.1:<port>/ from AServer under
   APolicy and answers 'status|body', or 'error: <message>'. }
 function FetchKeepAlive(const AServer: TKeepAliveServer;
-  const APolicy: THTTPRequestPolicy; const AHead: Boolean = False): string;
-  overload;
+  const APolicy: THTTPRequestPolicy; const AHead: Boolean = False;
+  const AHost: string = '127.0.0.1'): string; overload;
 var
   Body: RawByteString;
   Headers: THTTPHeaders;
@@ -2237,7 +2276,7 @@ var
   URL: string;
 begin
   SetLength(Headers, 0);
-  URL := Format('http://127.0.0.1:%d/', [AServer.Port]);
+  URL := Format('http://%s:%d/', [AHost, AServer.Port]);
   try
     if AHead then
       Response := HTTPHead(URL, Headers, nil, 5000, APolicy)
@@ -2533,6 +2572,42 @@ begin
     Gate.Free;
   end;
 end;
+
+{$IFDEF LINUX}
+procedure THTTPClientTests.TestReusedHopChecksTheApprovedIPv6Winner;
+var
+  Gate: THopGate;
+  Policy: THTTPRequestPolicy;
+  Server: TKeepAliveServer;
+  IPv4Listener: cint;
+  IPv4Port: Word;
+begin
+  Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE], True);
+  try
+    IPv4Listener := CreateLoopbackListener(IPv4Port, Server.Port);
+    try
+      Gate := THopGate.Create;
+      try
+        Gate.DenyAddressCheck := 1;
+        Policy := DefaultHTTPPolicy;
+        Policy.HostCheck := Gate.Check;
+        Expect<string>(FetchKeepAlive(Server, Policy, False, 'localhost'))
+          .ToBe('200|ok');
+        Server.WaitFor;
+        Expect<string>(Gate.CheckedAddresses).ToBe('127.0.0.1;::1;::1;');
+        Expect<Integer>(Server.Connections).ToBe(1);
+        Expect<Boolean>(HasPendingInput(IPv4Listener)).ToBe(False);
+      finally
+        Gate.Free;
+      end;
+    finally
+      CloseSocket(IPv4Listener);
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+{$ENDIF}
 {$ENDIF}
 
 { HTML Standard, same origin: scheme, host and port. An HTTPS-to-HTTP
@@ -2688,9 +2763,21 @@ end;
   file; FPC's NetDB DNS client did not, so this name failed to resolve
   (issue #1565). }
 procedure THTTPClientTests.TestResolvesAHostsFileName;
+var
+  Resolved, Listed: TNetworkAddress;
+  AddressText: string;
+  Found: Boolean;
 begin
-  Expect<Boolean>(GHostsFileAddresses.IndexOf(
-    ResolveHostToAddress(GHostsFileName)) >= 0).ToBe(True);
+  Found := False;
+  if TryParseIPAddress(ResolveHostToAddress(GHostsFileName), Resolved) then
+    for AddressText in GHostsFileAddresses do
+      if TryParseIPAddress(AddressText, Listed) and
+         AddressesEqual(Resolved, Listed) then
+      begin
+        Found := True;
+        Break;
+      end;
+  Expect<Boolean>(Found).ToBe(True);
 end;
 {$ENDIF}
 

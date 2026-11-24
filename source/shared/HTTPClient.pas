@@ -457,35 +457,35 @@ end;
 function ConnectToAddress(const ASocket: TSocket;
   const AAddress: THTTPAddress; const APort: Integer): Integer;
 var
-  Addr4: TSocketAddress4;
-  Addr6: TSocketAddress6;
+  IPv4SocketAddress: TSocketAddress4;
+  IPv6SocketAddress: TSocketAddress6;
   SockAddr: PSockAddr;
   AddrLength: Integer;
 begin
   if AAddress.IP.Family = nafIPv4 then
   begin
-    FillChar(Addr4, SizeOf(Addr4), 0);
+    FillChar(IPv4SocketAddress, SizeOf(IPv4SocketAddress), 0);
     {$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
-    Addr4.sin_len := SizeOf(Addr4);
+    IPv4SocketAddress.sin_len := SizeOf(IPv4SocketAddress);
     {$IFEND}
-    Addr4.sin_family := AF_INET;
-    Addr4.sin_port := htons(APort);
-    Move(AAddress.IP.Bytes[0], Addr4.sin_addr, 4);
-    SockAddr := PSockAddr(@Addr4);
-    AddrLength := SizeOf(Addr4);
+    IPv4SocketAddress.sin_family := AF_INET;
+    IPv4SocketAddress.sin_port := htons(APort);
+    Move(AAddress.IP.Bytes[0], IPv4SocketAddress.sin_addr, 4);
+    SockAddr := PSockAddr(@IPv4SocketAddress);
+    AddrLength := SizeOf(IPv4SocketAddress);
   end
   else
   begin
-    FillChar(Addr6, SizeOf(Addr6), 0);
+    FillChar(IPv6SocketAddress, SizeOf(IPv6SocketAddress), 0);
     {$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
-    Addr6.sin6_len := SizeOf(Addr6);
+    IPv6SocketAddress.sin6_len := SizeOf(IPv6SocketAddress);
     {$IFEND}
-    Addr6.sin6_family := AF_INET6;
-    Addr6.sin6_port := htons(APort);
-    Addr6.sin6_scope_id := AAddress.ScopeID;
-    Move(AAddress.IP.Bytes[0], Addr6.sin6_addr, 16);
-    SockAddr := PSockAddr(@Addr6);
-    AddrLength := SizeOf(Addr6);
+    IPv6SocketAddress.sin6_family := AF_INET6;
+    IPv6SocketAddress.sin6_port := htons(APort);
+    IPv6SocketAddress.sin6_scope_id := AAddress.ScopeID;
+    Move(AAddress.IP.Bytes[0], IPv6SocketAddress.sin6_addr, 16);
+    SockAddr := PSockAddr(@IPv6SocketAddress);
+    AddrLength := SizeOf(IPv6SocketAddress);
   end;
   {$IFDEF UNIX}
   Result := fpConnect(ASocket, SockAddr, AddrLength);
@@ -1759,7 +1759,10 @@ begin
           Current := Current^.ai_next;
           Continue;
         end;
-        if Assigned(HostInetNtop(Current^.ai_family, @Address.IP.Bytes[0],
+        Address.IP := NormalizeIPAddress(Address.IP);
+        if Address.IP.Family = nafIPv4 then
+          Address.ScopeID := 0;
+        if Assigned(HostInetNtop(SocketFamily(Address), @Address.IP.Bytes[0],
             @NumericText[0], SizeOf(NumericText))) then
         begin
           Address.Text := string(AnsiString(PAnsiChar(@NumericText[0])));
@@ -1806,6 +1809,8 @@ function DoRequest(const AMethod, AURL: string;
   const AMaxRedirects: Integer; const AAllowedHosts: TStrings;
   const ATimeoutMilliseconds: Integer;
   const APolicy: THTTPRequestPolicy): THTTPResponse;
+type
+  TAddressDenial = (adNone, adCapability, adPrivate);
 var
   Parsed, NextParsed: THTTPParsedURL;
   ResolvedAddress: string;
@@ -1875,30 +1880,39 @@ var
   end;
 
   function AddressDenial(const AParsed: THTTPParsedURL; const AAddress: string;
-    out AReason: string): Boolean;
+    out AReason: string): TAddressDenial;
   begin
-    Result := Assigned(APolicy.HostCheck) and
-      not APolicy.HostCheck(AParsed.Host, AParsed.Port, AAddress, AReason);
+    AReason := '';
+    if Assigned(APolicy.HostCheck) and
+       not APolicy.HostCheck(AParsed.Host, AParsed.Port, AAddress, AReason) then
+      Exit(adCapability);
+    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(AAddress) then
+      Exit(adPrivate);
+    Result := adNone;
   end;
 
-  procedure RefusePrivateAddress(const AParsed: THTTPParsedURL;
-    const AAddress: string);
+  procedure RaiseAddressDenial(const AParsed: THTTPParsedURL;
+    const AAddress, AReason: string; const ADenial: TAddressDenial);
   begin
-    raise EHTTPError.CreateFmt(
-      'fetch destination not allowed: %s resolves to private address %s',
-      [AParsed.Host, AAddress]);
+    case ADenial of
+      adCapability:
+        raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
+          AReason);
+      adPrivate:
+        raise EHTTPError.CreateFmt(
+          'fetch destination not allowed: %s resolves to private address %s',
+          [AParsed.Host, AAddress]);
+    end;
   end;
 
   procedure ValidateAddress(const AParsed: THTTPParsedURL;
     const AAddress: string);
   var
     Reason: string;
+    Denial: TAddressDenial;
   begin
-    if AddressDenial(AParsed, AAddress, Reason) then
-      raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
-        Reason);
-    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(AAddress) then
-      RefusePrivateAddress(AParsed, AAddress);
+    Denial := AddressDenial(AParsed, AAddress, Reason);
+    RaiseAddressDenial(AParsed, AAddress, Reason, Denial);
   end;
 
   function ResolveAndValidateDestination(
@@ -1906,41 +1920,28 @@ var
   var
     Address: THTTPAddress;
     DeniedAddress, FirstReason, Reason: string;
-    FirstDenialFromHostCheck: Boolean;
+    FirstDenial, Denial: TAddressDenial;
   begin
     ValidateName(AParsed);
     Result := nil;
-    DeniedAddress := '';
-    FirstDenialFromHostCheck := False;
+    FirstDenial := adNone;
     for Address in ResolveHostAddresses(AParsed.Host) do
     begin
-      if AddressDenial(AParsed, Address.Text, Reason) then
-      begin
-        if DeniedAddress = '' then
-        begin
-          DeniedAddress := Address.Text;
-          FirstReason := Reason;
-          FirstDenialFromHostCheck := True;
-        end;
-      end
-      else if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(Address.Text) then
-      begin
-        if DeniedAddress = '' then
-          DeniedAddress := Address.Text;
-      end
-      else
+      Denial := AddressDenial(AParsed, Address.Text, Reason);
+      if Denial = adNone then
       begin
         SetLength(Result, Length(Result) + 1);
         Result[High(Result)] := Address;
+      end
+      else if FirstDenial = adNone then
+      begin
+        FirstDenial := Denial;
+        DeniedAddress := Address.Text;
+        FirstReason := Reason;
       end;
     end;
     if Length(Result) = 0 then
-    begin
-      if FirstDenialFromHostCheck then
-        raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
-          FirstReason);
-      RefusePrivateAddress(AParsed, DeniedAddress);
-    end;
+      RaiseAddressDenial(AParsed, DeniedAddress, FirstReason, FirstDenial);
   end;
 
   procedure CloseConnection;

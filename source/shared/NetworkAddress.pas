@@ -47,6 +47,9 @@ function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
 function IsAddressInNetwork(const AAddress, ANetwork: TNetworkAddress;
   const APrefixLength: Integer): Boolean;
 
+{ IPv4-mapped IPv6 addresses name the same endpoints as their IPv4 forms. }
+function NormalizeIPAddress(const AAddress: TNetworkAddress): TNetworkAddress;
+
 function AddressesEqual(const A, B: TNetworkAddress): Boolean;
 
 { The IPv4 host an IPv6 address is translated or relayed to: the well-known
@@ -259,6 +262,14 @@ begin
     Result.Bytes[I] := AAddress.Bytes[AOffset + I];
 end;
 
+function NormalizeIPAddress(const AAddress: TNetworkAddress): TNetworkAddress;
+begin
+  if IsIPv4MappedAddress(AAddress) then
+    Result := EmbeddedIPv4(AAddress, 12)
+  else
+    Result := AAddress;
+end;
+
 function TryParseRawIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 var
@@ -281,8 +292,8 @@ function TryParseIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 begin
   Result := TryParseRawIPAddress(AValue, AAddress);
-  if Result and IsIPv4MappedAddress(AAddress) then
-    AAddress := EmbeddedIPv4(AAddress, 12);
+  if Result then
+    AAddress := NormalizeIPAddress(AAddress);
 end;
 
 function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
