@@ -22,6 +22,9 @@ type
   TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON, g2rfSandbox, g2rfREPL, g2rfREPLColor);
   { a warning of the entry's parse (warning-unsupported-features), given to the host before the entry runs }
   TG2WarningEvent = procedure(const Message, Suggestion: UnicodeString; Line, Column: Integer) of object;
+  { a warning of an imported module's parse, given as the module compiles (FileName the module's path) }
+  TG2ModuleWarningEvent = procedure(const FileName, Message, Suggestion: UnicodeString; Line, Column: Integer)
+    of object;
 
   { how the entry is compiled: a script, a module, or as the source shows (a top-level import or export
     declaration makes a module); a .mjs file is a module unless the kind says otherwise }
@@ -98,6 +101,7 @@ type
     FModuleContentCheck: TModuleContentCheck;
     FProviderGraph: TProviderGraphCheck;
     FOnWarning: TG2WarningEvent;
+    FOnModuleWarning: TG2ModuleWarningEvent;
     FDeterministic: Boolean;
     { a deterministic run's Math.random streams: realm 0 seeded as GocciaScript's deterministic profile is, each
       other realm a fork of it in the order the realms first draw }
@@ -148,6 +152,7 @@ type
     function LoadHostEnvironment: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
     procedure SetHeapSnapshots(V: Boolean);
+    procedure SetOnModuleWarning(const Value: TG2ModuleWarningEvent);
   public
     { builds this thread's engine; one at a time per thread }
     constructor Create;
@@ -241,6 +246,9 @@ type
     { whether a file is a provider package's, reached as that package (the read policy admits it); nil for none }
     property ProviderGraph: TProviderGraphCheck read FProviderGraph write FProviderGraph;
     property OnWarning: TG2WarningEvent read FOnWarning write FOnWarning;
+    { an imported module's parse warnings, from setup loads (virtual modules, globals) and the run alike; set on
+      the engine's thread }
+    property OnModuleWarning: TG2ModuleWarningEvent read FOnModuleWarning write SetOnModuleWarning;
     { GocciaScript's deterministic profile (--deterministic): the epoch and monotonic clocks at 0, the time zone
       UTC, Math.random a seeded stream; set before the first run or PrepareHost }
     property Deterministic: Boolean read FDeterministic write FDeterministic;
@@ -770,8 +778,15 @@ begin
   Result := Audit(gckReadFile, Allow, Subject, Reason);
 end;
 
+procedure TG2Engine.SetOnModuleWarning(const Value: TG2ModuleWarningEvent);
+begin
+  FOnModuleWarning := Value;
+  ModuleWarningHook := Value;
+end;
+
 destructor TG2Engine.Destroy;
 begin
+  ModuleWarningHook := nil;
   SetReadPolicy(False, TGocciaCapabilities.None, '', nil);
   SetModuleLoadingUnsupported(False);
   CompileCoverage := False;
@@ -1194,7 +1209,12 @@ begin
       if not FArtifactEntry then SetProvidedSource(EntryKey, Source)
       else SetProvidedSource(EntryKey, '');
       SetEntryCompletionWanted((FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
-      Result.Ok := RunModuleFile(EntryKey, Phase) and RunEventLoop;
+      ModuleWarningEntry := EntryKey;
+      try
+        Result.Ok := RunModuleFile(EntryKey, Phase) and RunEventLoop;
+      finally
+        ModuleWarningEntry := '';
+      end;
       Completion := EntryCompletion;
       PopRoots(1);
       PushRoot(Completion);

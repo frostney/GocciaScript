@@ -128,7 +128,8 @@ type
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure RunTestFile(AIndex: Integer; ASource: TStringList);
-    procedure SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext);
+    { APrintWarnings: the file's own engine, whose parse warnings print (a heap check's engine loads again) }
+    procedure SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext; APrintWarnings: Boolean);
     function VerifyHeapRoot(const C: TG2FileContext; const ARoot: TG2HeapRoot; const ASource: UnicodeString;
       out ADetail: UnicodeString): TG2HeapVerdict;
     procedure RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
@@ -528,7 +529,8 @@ end;
 
 { a file's engine before its code runs: its settings, globals and testing API. A heap snapshot's restoring
   engine is set up the same way }
-procedure TG2TestRunnerApp.SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext);
+procedure TG2TestRunnerApp.SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext;
+  APrintWarnings: Boolean);
 var
   Err: UnicodeString;
   SetupError: string;
@@ -557,6 +559,13 @@ begin
   if LogFileOpen then
     C.Capture.LogLine := HandleConsoleLog;
   AEngine.OnConsole := C.Capture.Emit;
+  { parse warnings, the file's and its imports', print in a text run one file at a time, as GocciaTestRunner's
+    (#2038): never ahead of a JSON report, and never from parallel files, whose lines would interleave }
+  if APrintWarnings and not IsJsonOutput and not FParallel then
+  begin
+    AEngine.OnWarning := C.Capture.PrintWarning;
+    AEngine.OnModuleWarning := C.Capture.PrintModuleWarning;
+  end;
   AEngine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, C.FileConfig);
   if AuditLogOpen then
   begin
@@ -603,7 +612,7 @@ begin
   try
     { the same testing API as the file's engine, its observe native included }
     Dest.HeapSnapshots := True;
-    SetUpTestEngine(Dest, C);
+    SetUpTestEngine(Dest, C, False);
     Dest.Coverage := False;
     Result := Dest.HeapSnapshotVerify(ARoot, C.FileName, ASource, ADetail);
   finally
@@ -649,7 +658,7 @@ var
 
   procedure SetUpEngine(AEngine: TG2Engine);
   begin
-    SetUpTestEngine(AEngine, Context);
+    SetUpTestEngine(AEngine, Context, True);
   end;
 
   { --heap-snapshots: each object the source engine wrote, restored in a fresh engine of its own }

@@ -47,6 +47,8 @@ type
     procedure Discard(const AMethod, ALine: UnicodeString);
     { a parse warning as GocciaRunner prints it (PrintPipelineWarnings); FileName set by the runner }
     procedure PrintWarning(const AMessage, ASuggestion: UnicodeString; ALine, AColumn: Integer);
+    { an imported module's parse warning, printed as GocciaRunner's module loader prints it }
+    procedure PrintModuleWarning(const AFileName, AMessage, ASuggestion: UnicodeString; ALine, AColumn: Integer);
     function OutputText: string;
     function StdoutText: string;
     function StderrText: string;
@@ -268,6 +270,15 @@ begin
   if ASuggestion <> '' then
     WriteLn('  Suggestion: ', UTF8Encode(ASuggestion));
   WriteLn(Format('  --> %s:%d:%d', [FileName, ALine, AColumn]));
+end;
+
+procedure TG2ConsoleCapture.PrintModuleWarning(const AFileName, AMessage, ASuggestion: UnicodeString;
+  ALine, AColumn: Integer);
+begin
+  WriteLn('Warning: ', UTF8Encode(AMessage));
+  if ASuggestion <> '' then
+    WriteLn('  Suggestion: ', UTF8Encode(ASuggestion));
+  WriteLn(Format('  --> %s:%d:%d', [UTF8Encode(AFileName), ALine, AColumn]));
 end;
 
 function TG2ConsoleCapture.OutputText: string;

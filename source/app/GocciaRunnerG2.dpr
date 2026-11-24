@@ -1093,8 +1093,13 @@ begin
           Exit;
         end;
       end;
-      if not IsJsonOutput then
+      { parse warnings print in a text run on the main thread, as GocciaRunner's (#2038): never ahead of a JSON
+        envelope, and never from a parallel worker, whose lines would interleave }
+      if not IsJsonOutput and not FQuietWorkers then
+      begin
         Engine.OnWarning := Capture.PrintWarning;
+        Engine.OnModuleWarning := Capture.PrintModuleWarning;
+      end;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
         AFileName, Verdict.AcceptedUnsafe));
       if EngineOptions.Timeout.Present then

@@ -29,7 +29,16 @@ function ActivePipelineOptions(Module: Boolean): TGocciaSourcePipelineOptions;
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean = False): Boolean;
 
+type
+  { a warning of an imported module's parse under a restricted profile (G2.Embed OnModuleWarning) }
+  TModuleWarningHook = procedure(const FileName, Message, Suggestion: UnicodeString; Line, Column: Integer)
+    of object;
+
 threadvar
+  { given each warning of a module's parse as the module compiles; nil to drop them }
+  ModuleWarningHook: TModuleWarningHook;
+  { the entry module's path while it runs: its warnings went to the host from HostCompileEntry already }
+  ModuleWarningEntry: UnicodeString;
   { why the last ParseAndCompile failed: 1 the parser rejected the source (an early error; ParseErrorName is
     the ECMAScript error it stands for), 2 G2's compiler does not support a construct }
   CompileFailKind: Integer;
@@ -788,6 +797,16 @@ begin
   Result := True;
 end;
 
+{ the warnings HostParse kept for a module, given to the host's hook (an entry's go to its own OnWarning) }
+procedure ReportModuleWarnings(const FileName: UnicodeString);
+var I: Integer;
+begin
+  if Assigned(ModuleWarningHook) and (FileName <> ModuleWarningEntry) then
+    for I := 0 to EntryWarningCount - 1 do
+      ModuleWarningHook(FileName, EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I],
+        EntryWarningColumns[I]);
+end;
+
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
   var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
@@ -799,7 +818,11 @@ begin
   L := nil; P := nil; Prog := nil;
   try
     try
-      if ActiveProfile.Restricted then Prog := HostParse(Source, FileName, stModule, Settled)
+      if ActiveProfile.Restricted then
+      begin
+        Prog := HostParse(Source, FileName, stModule, Settled);
+        ReportModuleWarnings(FileName);
+      end
       else
       begin
         L := TGocciaLexer.Create(Source, FileName);
