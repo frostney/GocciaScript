@@ -9383,7 +9383,8 @@ LReload:
             end;
             goto LReload;
           end;
-          if (O^.OKind = okNative) and not MultiRealmAny then
+          { a native's call: the registers past its arguments are dead (a collection in it does not scan them) }
+          if O^.OKind = okNative then
           begin
             SavedTop := StackTop;
             StackTop := Fr^.Base + A + 2 + Argc;
@@ -9394,7 +9395,16 @@ LReload:
             NP2 := TempTop;
             NativeData := O^.Pad and $00FFFFFF;
             NativeSelf := MkPtr(O);
-            Ok := TNativeFn(O^.Native)(@R[A + 1], Argc, V);
+            if MultiRealmAny and (FnRealm(O) <> CurRealm) then
+            begin
+              { a built-in function runs in its own realm (10.3.1 [[Call]] step 6) }
+              J := CurRealm;
+              SwitchRealm(FnRealm(O));
+              Ok := TNativeFn(O^.Native)(@R[A + 1], Argc, V);
+              SwitchRealm(J);
+            end
+            else
+              Ok := TNativeFn(O^.Native)(@R[A + 1], Argc, V);
             if RootCheck and (TempTop <> NP2) then
             begin
               XReportRootImbalance(O, TempTop - NP2, Ok, Tpl);

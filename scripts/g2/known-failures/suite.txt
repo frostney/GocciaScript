@@ -11,20 +11,12 @@
 17 tests/language/explicit-resource-management/await-using-dispose-timing.js
 1 tests/language/explicit-resource-management/using-basic.js
 1 tests/language/expressions/stack-growth-reentry/non-strict/global-delete.js
-3 tests/language/for-of/exit-releases-dead-registers.js
 1 tests/language/for-of/for-await-of-close-timing.js
 1 tests/language/function-keyword/class-computed-field-yield.js
 2 tests/language/functions/concise-arrow-tail-calls.js
 6 tests/language/functions/stack-depth-limit.js
-1 tests/language/labels/labeled-break-releases-dead-registers.js
 6 tests/language/modules/imported-module-stack-depth.js
 1 tests/language/modules/source-phase-experimental/dynamic-import-source.js
-1 tests/language/while-loops/exit-releases-dead-registers.js
-# main's #2035, #2036 and #2148 (merged 24 Nov): a value the program dropped is not held by a suspended or
-# exited frame. G2 still keeps it in registers an exited block, a module's top level, a for-await body or a
-# promise callback left, until the frame ends.
-2 tests/language/async-await/awaited-container-released.js
-5 tests/language/pattern-matching/matched-value-released.js
 # FPC 3.3.1-b6 at -O4 copies an array[0..0] field before a scan loop and indexes the copy, so the join
 # stack's cycle check reads the stack (fpc-toolchain patch 0129 fixes it; drop this with 3.3.1-b7)
 2 tests/built-ins/Array/prototype/toString.js
