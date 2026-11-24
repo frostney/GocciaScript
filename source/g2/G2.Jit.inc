@@ -2197,8 +2197,10 @@ begin
     opSetPriv: if not PrivateSet(R[A], PStr(PtrOf(R[C])), R[B]) then Exit(False);
     opPrivIn:
       begin
+        { the interpreter's message (G2.VM opPrivIn) }
         if not IsObject(R[B]) then
-          Exit(ThrowTypeError('Cannot use ''in'' operator to search for a private field in a non-object'));
+          Exit(ThrowTypeError('Cannot use ''in'' operator to search for ''' + StrToUnicode(PStr(PtrOf(R[C]))) +
+            ''' in ' + ValueDisplayText(R[B])));
         if ShapeLookup(ObjOf(R[B])^.Shape, PStr(PtrOf(R[C]))) >= 0 then R[A] := VTrue else R[A] := VFalse;
       end;
     opSetUpv:
