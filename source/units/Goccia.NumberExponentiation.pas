@@ -60,7 +60,13 @@ const
   // The exponent field of a double's top 12 bits.
   EXPONENT_FIELD = $7FF;
   ABS_MASK: UInt64 = (UInt64(1) shl 63) - 1;
-  FRACTION_MASK: UInt64 = (UInt64(1) shl 52) - 1;
+  // A double's stored fraction bits; its significand has one more, implicit.
+  FRACTION_BITS = 52;
+  FRACTION_MASK: UInt64 = (UInt64(1) shl FRACTION_BITS) - 1;
+  IMPLICIT_BIT: UInt64 = UInt64(1) shl FRACTION_BITS;
+  // |x| = m 2^(e - 1075) for the exponent field e, and the subnormal step is
+  // 2^-1074, so 1 / |x| counts 2^(RECIPROCAL_SCALE - e) / m steps.
+  RECIPROCAL_SCALE = 1075 + 1074;
   TWO_POW_1022: UInt64 = $7FD0000000000000;
   ONE_BITS: UInt64 = $3FF0000000000000;
   // Masks that clear the low 32 and the low 27 bits.
@@ -617,25 +623,26 @@ begin
   Result := ExpInline(EHi, ELo, SignBias);
 end;
 
-// 1 / x for |x| >= 2^1022, whose reciprocal is subnormal or 2^-1022, rounded
-// once in integer arithmetic. A floating-point division rounds such a result
-// twice on x87, which keeps its extended exponent range even at double
-// precision.
+// 1 / x for |x| >= 2^1022, whose reciprocal is subnormal or, at 2^1022
+// itself, the smallest normal 2^-1022, rounded once in integer arithmetic.
+// x87 keeps its extended exponent range even at double precision, so a
+// floating-point division can round a subnormal reciprocal twice.
 function LargeBaseReciprocal(const ABits: UInt64): Double;
 var
   Mantissa, Quotient, Remainder: UInt64;
   Shift, I: Integer;
 begin
-  // |x| = m 2^(e - 1075) for the exponent field e, so 1 / |x| in units of
-  // 2^-1074, the subnormal step, is 2^(2149 - e) / m: below 2^52 once
-  // rounded, or exactly 2^52 for 2^-1022.
-  Mantissa := (ABits and FRACTION_MASK) or (UInt64(1) shl 52);
-  Shift := 2149 - Integer((ABits shr 52) and EXPONENT_FIELD);
+  // The quotient 2^Shift / m is below 2^52 once rounded, or exactly 2^52
+  // for 2^-1022, so its bits are the result's.
+  Mantissa := (ABits and FRACTION_MASK) or IMPLICIT_BIT;
+  Shift := RECIPROCAL_SCALE -
+    Integer((ABits shr FRACTION_BITS) and EXPONENT_FIELD);
   // Long division of 2^Shift by m, one bit at a time. m >= 2^52, so the
-  // first 51 bits of the quotient are zero and leave the remainder 2^51.
+  // first 51 steps give zero quotient bits and only double the remainder
+  // from 1 to 2^51; the loop starts after them.
   Quotient := 0;
-  Remainder := UInt64(1) shl 51;
-  for I := 52 to Shift do
+  Remainder := IMPLICIT_BIT shr 1;
+  for I := FRACTION_BITS to Shift do
   begin
     Remainder := Remainder shl 1;
     Quotient := Quotient shl 1;
@@ -645,9 +652,10 @@ begin
       Quotient := Quotient or 1;
     end;
   end;
-  // Round half to even.
-  if (Remainder shl 1 > Mantissa) or
-     ((Remainder shl 1 = Mantissa) and ((Quotient and 1) <> 0)) then
+  // Round to nearest. A tie would need 2^(Shift + 1) = (2 Quotient + 1) m,
+  // and an odd factor above 1 never divides a power of two, so there is
+  // none to break.
+  if Remainder shl 1 > Mantissa then
     Inc(Quotient);
   Result := BitsToDouble(Quotient or (ABits and SIGN_BIT));
 end;
