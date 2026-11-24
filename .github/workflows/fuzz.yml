@@ -510,7 +510,7 @@ jobs:
       - name: Install Valgrind
         run: |
           sudo apt-get update
-          sudo apt-get install valgrind -qq > /dev/null
+          sudo apt-get install valgrind gdb -qq > /dev/null
 
       - name: Build test runner with heaptrc
         # -gh links the heaptrc unit; the trailing summary goes to stderr on
@@ -533,7 +533,17 @@ jobs:
           # log= writes it to a file of heaptrc's own: FPC 3.3.1's heaptrc
           # leaves its report unflushed when stderr is a regular file, so a
           # 2> redirect captures nothing.
-          HEAPTRC="log=build/heaptrc.log" ./build/GocciaTestRunnerHeaptrc -P tests
+          # A crash keeps its core, and every thread's stack is printed.
+          sudo sysctl -q -w kernel.core_pattern="$PWD/build/core.%p"
+          ulimit -c unlimited
+          code=0
+          HEAPTRC="log=build/heaptrc.log" ./build/GocciaTestRunnerHeaptrc -P tests || code=$?
+          for core in build/core.*; do
+            [ -e "$core" ] || continue
+            echo "::error::GocciaTestRunnerHeaptrc crashed (exit $code)"
+            gdb -batch -q -ex "thread apply all bt" build/GocciaTestRunnerHeaptrc "$core" 2>&1 | head -200
+            exit 1
+          done
           tail -20 build/heaptrc.log
           if ! grep -qE '^[0-9]+ unfreed memory blocks' build/heaptrc.log; then
             echo "::error::heaptrc wrote no summary"
@@ -543,6 +553,7 @@ jobs:
             echo "::error::heaptrc reported unfreed blocks"
             exit 1
           fi
+          exit $code
 
       - name: Run suite under Valgrind memcheck
         # --error-exitcode makes any invalid access fail the job rather than
