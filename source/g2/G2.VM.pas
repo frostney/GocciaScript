@@ -4818,6 +4818,16 @@ begin
   Result := PushBytecodeFrame(ObjOf(FV), VStack[Base], @VStack[Base + 1], Argc, RetIdx, Kind, VUndefined);
 end;
 
+{ whether the frames are past the tail-call floor: the interpreter loops' test, out of line. Inline in FastLoop, the
+  two threadvar reads (calls to FPC_THREADVAR_RELOCATE on x86_64-darwin, where FPC 3.3.1+7 has no native TLS) made
+  that build fail 12 test files with a TypeError before their tests ran, though the test itself compiled right and
+  never fired; out of line, or with no threadvar read there, they pass (the cause in the rest of FastLoop's code is
+  not found) }
+function XTailDeep: Boolean; noinline;
+begin
+  Result := FrameTop > TailFloorNow;
+end;
+
 { ---------------- the interpreter ---------------- }
 
 function ICGetEntry(E: PICEntry; O: PObj; var Res: TValue): Boolean;
@@ -7889,7 +7899,7 @@ LSetPropSlow:
           VA := R[A];
           if not IsObject(VA) or MultiRealmAny then goto LBail;
           { a call in tail position once the frames are deep: Execute's, which reuses the frame }
-          if ((PByte(IP)[-3] and 2) <> 0) and (FrameTop > TailFloorNow) then goto LBail;
+          if ((PByte(IP)[-3] and 2) <> 0) and XTailDeep then goto LBail;
           O := ObjOf(VA);
           Argc := PWord(PByte(IP) - 5)^;
           if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
@@ -9397,7 +9407,7 @@ LReload:
           Fr^.PC := PC;
           { a call in tail position once the frames are deep: this frame gives way to the callee's (a construction's
             frame keeps its own, which checks the result) }
-          if ((I shr 41) and 1 <> 0) and (FrameTop > TailFloorNow) and ((Fr^.Kind = 0) or (Fr^.Kind = 2)) and
+          if ((I shr 41) and 1 <> 0) and XTailDeep and ((Fr^.Kind = 0) or (Fr^.Kind = 2)) and
              ((TOp(I and $FF) = opCall) or (TOp(I and $FF) = opCallV)) and XTailCallOk(VA) then
           begin
             if not XTailCall(Fr, A, Argc) then goto LThrow;
