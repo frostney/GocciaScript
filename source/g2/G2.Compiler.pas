@@ -4699,6 +4699,9 @@ begin
       DeclareMatchBindings(S.MatchPattern);
       MatchTest(V, S.MatchPattern, MissL);
     end;
+    { the binding has the value and the pattern took what it needs: nothing reads V before the next step writes
+      it, so a value the body drops is not kept by the loop while the body awaits }
+    Emit(Ins(opLoadUndef, V, 0, 0));
     BeginLoop(True);
     MarkIterationScope(S.Body);
     Stmt(S.Body);
