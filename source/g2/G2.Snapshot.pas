@@ -339,10 +339,19 @@ begin
   for I := 0 to High(T^.Children) do DropSource(T^.Children[I]);
 end;
 
+{ a prelude is the engine's own code: it compiles under the unrestricted profile, whatever profile an earlier run
+  on this thread left active (a second engine on a thread compiles its preludes after the first engine's runs) }
 function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
+var Saved: TLangProfile;
 begin
   if FromSnapshot(Name, Source, T) then Exit(True);
-  Result := ParseAndCompile(Source, Name, True, T, Err);
+  Saved := ActiveProfile;
+  SetActiveProfile(Default(TLangProfile));
+  try
+    Result := ParseAndCompile(Source, Name, True, T, Err);
+  finally
+    SetActiveProfile(Saved);
+  end;
   if Result then
   begin
     DropSource(T);
