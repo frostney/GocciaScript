@@ -7,7 +7,7 @@
   var setProto = Object.setPrototypeOf;
   var SymDispose = Symbol.dispose, SymAsyncDispose = Symbol.asyncDispose, SymToStringTag = Symbol.toStringTag;
   var TypeErr = TypeError, RefErr = ReferenceError, Err = Error, Str = String;
-  var PromiseResolve = Promise.resolve.bind(Promise);
+  var PromiseCtor = Promise, PromiseResolve = Promise.resolve.bind(Promise);
 
   // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
   function isObject(v) {
@@ -55,7 +55,14 @@
         if (m === undefined || m === null) return undefined;
         if (!isCallable(m)) throw new TypeErr("[Symbol.dispose] is not a function");
         var sync = m;
-        return function () { apply(sync, this, []); };
+        // the closure of GetDisposeMethod: the sync method's result is not awaited, and its throw is a rejection
+        return function () {
+          var obj = this;
+          return new PromiseCtor(function (resolve, reject) {
+            try { apply(sync, obj, []); } catch (e) { reject(e); return; }
+            resolve(undefined);
+          });
+        };
       }
     } else {
       m = v[SymDispose];
@@ -91,23 +98,60 @@
     if (errored) throw err;
     if (retComp) throw exc;
   }
-  async function disposeAsync(cap, exc, hasExc) {
-    var retComp = hasExc && isRetComp(exc), errored = hasExc && !retComp, err = exc;
-    var needsAwait = false, hasAwaited = false;
-    for (var i = cap.length - 3; i >= 0; i -= 3) {
-      var v = cap[i], m = cap[i + 1], async = cap[i + 2];
-      if (!async && needsAwait && !hasAwaited) { await undefined; needsAwait = false; }
+  // DisposeResources with awaits (ES2027 draft 7.5.4), as steps the caller drives: an await using block's own
+  // async function awaits each value, so every Await of the algorithm is one of that function's (G2.Compiler
+  // EmitUsingDispose). asyncStart makes the state; asyncStep runs the algorithm up to its next Await and returns
+  // true with the value to await in s.v, or false when it is done; a rejection of that await goes to asyncFail;
+  // asyncEnd then completes as the algorithm returns.
+  function asyncStart(cap, exc, hasExc) {
+    var retComp = hasExc && isRetComp(exc);
+    return { cap: cap, i: cap.length - 3, exc: exc, retComp: retComp, errored: hasExc && !retComp, err: exc,
+      needsAwait: false, hasAwaited: false, last: false, v: undefined };
+  }
+  function asyncFail(s, e) {
+    if (s.errored) s.err = suppressed(e, s.err); else { s.errored = true; s.err = e; }
+  }
+  function asyncStep(s) {
+    var cap = s.cap;
+    while (s.i >= 0) {
+      var v = cap[s.i], m = cap[s.i + 1], async = cap[s.i + 2];
+      if (!async && s.needsAwait && !s.hasAwaited) {
+        s.needsAwait = false;
+        s.v = undefined;
+        return true;
+      }
+      s.i -= 3;
       if (m !== undefined) {
-        try {
-          var r = apply(m, v, []);
-          if (async) { hasAwaited = true; await r; }
-        } catch (e) { if (errored) err = suppressed(e, err); else { errored = true; err = e; } }
-      } else needsAwait = true;
+        var r;
+        try { r = apply(m, v, []); } catch (e) { asyncFail(s, e); continue; }
+        if (async) {
+          s.hasAwaited = true;
+          s.v = r;
+          return true;
+        }
+      } else s.needsAwait = true;
     }
-    if (needsAwait && !hasAwaited) await undefined;
-    cap.length = 0;
-    if (errored) throw err;
-    if (retComp) throw exc;
+    if (!s.last) {
+      s.last = true;
+      if (s.needsAwait && !s.hasAwaited) {
+        s.v = undefined;
+        return true;
+      }
+    }
+    return false;
+  }
+  function asyncEnd(s) {
+    s.cap.length = 0;
+    s.v = undefined;
+    if (s.errored) throw s.err;
+    if (s.retComp) throw s.exc;
+  }
+  async function disposeAsync(cap, exc, hasExc) {
+    var s = asyncStart(cap, exc, hasExc);
+    while (asyncStep(s)) {
+      try { await s.v; } catch (e) { asyncFail(s, e); }
+    }
+    asyncEnd(s);
   }
 
   class Stamp { constructor(o) { return o; } }
@@ -169,8 +213,8 @@
     get disposed() { AsyncDisposableStack.#check(this, "disposed"); return this.#state === "disposed"; }
     disposeAsync() {
       if (!AsyncDisposableStack.#has(this)) {
-        try { throw new TypeErr("AsyncDisposableStack.prototype.disposeAsync called on an incompatible receiver"); }
-        catch (e) { return Promise.reject(e); }
+        var err = new TypeErr("AsyncDisposableStack.prototype.disposeAsync called on an incompatible receiver");
+        return new PromiseCtor(function (resolve, reject) { reject(err); });
       }
       if (this.#state === "disposed") return PromiseResolve(undefined);
       this.#state = "disposed";
@@ -235,5 +279,6 @@
   }[SymAsyncDispose];
   def(AIP, SymAsyncDispose, asyncIterDispose);
 
-  return { add: add, dispose: dispose, disposeAsync: disposeAsync };
+  return { add: add, dispose: dispose,
+    disposeAsync: { start: asyncStart, step: asyncStep, fail: asyncFail, end: asyncEnd } };
 })

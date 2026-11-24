@@ -3486,25 +3486,56 @@ begin
   FS.Tpl^.ICs[Result].Key := Key;
 end;
 
-{ 27.? DisposeResources of a using block: the helper (G2.Disposal) disposes the capability's resources in reverse
-  order; ExcReg >= 0 is the block's exception (rethrown, or wrapped in SuppressedErrors), -1 a normal completion }
+{ DisposeResources of a using block (ES2027 draft §7.5.4): the helpers (G2.Disposal, prelude/disposal.js) dispose
+  the capability's resources in reverse order; ExcReg >= 0 is the block's exception (rethrown, or wrapped in
+  SuppressedErrors), -1 a normal completion. For await using, the algorithm's Awaits are this function's own: the
+  helpers run it in steps (start, step until it returns false, end), and each value a step hands back is awaited
+  here, a rejection passed to fail, so every Await takes one job as the algorithm's does }
 procedure TCompiler.EmitUsingDispose(Cap: Integer; Async: Boolean; ExcReg: Integer);
-var B, Skip: Integer;
-begin
-  Skip := -1;
-  if Async then
+var B, Skip, H, St, E, Top, JDone, TryPC: Integer;
+
+  { B := H.Name, B + 1 := H: the window of a call of one of the helpers }
+  procedure HelperCall(const Name: UnicodeString);
   begin
-    { DisposeResources awaits only for resources it disposes: an await using never reached adds none, and the
-      block then completes without a tick (its capability empty: no call) }
-    B := AllocReg;
-    Emit(Ins(opGetLength, B, Cap, NewIC('length')));
-    Skip := EmitJ(opJF, B, 0);
-    FreeTo(B);
+    Emit(Ins(opGetProp, B, H, NewIC(Name)));
+    Emit(Ins(opMov, B + 1, H, 0));
   end;
+
+begin
+  if not Async then
+  begin
+    B := AllocRegs(5);
+    Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(1))));
+    Emit(Ins(opLoadUndef, B + 1, 0, 0));
+    Emit(Ins(opMov, B + 2, Cap, 0));
+    if ExcReg >= 0 then
+    begin
+      Emit(Ins(opMov, B + 3, ExcReg, 0));
+      Emit(Ins(opLoadTrue, B + 4, 0, 0));
+    end
+    else
+    begin
+      Emit(Ins(opLoadUndef, B + 3, 0, 0));
+      Emit(Ins(opLoadFalse, B + 4, 0, 0));
+    end;
+    Emit(Ins(opCall, B, 3, 0));
+    FreeTo(B);
+    Exit;
+  end;
+  { DisposeResources awaits only for resources it disposes: an await using never reached adds none, and the block
+    then completes without a tick (its capability empty: no call; a throw completion in flight is rethrown by the
+    caller, ExcReg) }
+  B := AllocReg;
+  Emit(Ins(opGetLength, B, Cap, NewIC('length')));
+  Skip := EmitJ(opJF, B, 0);
+  FreeTo(B);
+  H := AllocReg;
+  Emit(Ins(opGetGlobal, H, 0, NewICKey(UsingKey(2))));
+  St := AllocReg;
+  E := AllocReg;
+  { St := H.start(Cap, exception, has exception) }
   B := AllocRegs(5);
-  if Async then Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(2))))
-  else Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(1))));
-  Emit(Ins(opLoadUndef, B + 1, 0, 0));
+  HelperCall('start');
   Emit(Ins(opMov, B + 2, Cap, 0));
   if ExcReg >= 0 then
   begin
@@ -3517,13 +3548,39 @@ begin
     Emit(Ins(opLoadFalse, B + 4, 0, 0));
   end;
   Emit(Ins(opCall, B, 3, 0));
-  if Async then Emit(Ins(opAwait, B, B, 0));
+  Emit(Ins(opMov, St, B, 0));
   FreeTo(B);
-  if Skip >= 0 then
-  begin
-    { with an empty capability, a throw completion in flight is rethrown by the caller (ExcReg) }
-    PatchHere(Skip);
-  end;
+  { while H.step(St): await St.v, a rejection to H.fail(St, e) }
+  Top := Here;
+  B := AllocRegs(3);
+  HelperCall('step');
+  Emit(Ins(opMov, B + 2, St, 0));
+  Emit(Ins(opCall, B, 1, 0));
+  JDone := EmitJ(opJF, B, 0);
+  FreeTo(B);
+  B := AllocReg;
+  Emit(Ins(opGetProp, B, St, NewIC('v')));
+  TryPC := Emit(Ins(opTry, E, 0, 0));
+  Emit(Ins(opAwait, B, B, 0));
+  Emit(Ins(opEndTry, 0, 0, 0));
+  FreeTo(B);
+  PatchTo(EmitJ(opJmp, 0, 0), Top);
+  PatchHere(TryPC);
+  B := AllocRegs(4);
+  HelperCall('fail');
+  Emit(Ins(opMov, B + 2, St, 0));
+  Emit(Ins(opMov, B + 3, E, 0));
+  Emit(Ins(opCall, B, 2, 0));
+  FreeTo(B);
+  PatchTo(EmitJ(opJmp, 0, 0), Top);
+  { H.end(St): the algorithm's completion }
+  PatchHere(JDone);
+  B := AllocRegs(3);
+  HelperCall('end');
+  Emit(Ins(opMov, B + 2, St, 0));
+  Emit(Ins(opCall, B, 1, 0));
+  FreeTo(H);
+  PatchHere(Skip);
 end;
 
 { a statement list with using declarations (14.2.2 BlockDeclarationInstantiation + DisposeResources): its body
