@@ -215,8 +215,8 @@ describe("exponentiation with a negative base", () => {
 });
 
 describe("exponentiation with exponent -1", () => {
-  // Each base is one where pow's general path misses the correctly rounded
-  // reciprocal by one ULP; Node 24 on x86-64 Linux misses 0.499 too.
+  // pow's general path misses each of these correctly rounded reciprocals by
+  // one ULP; Node 24 on x86-64 Linux misses 0.499 too.
   const reciprocals = [
     [4.615, 0.21668472372697725],
     [7.943, 0.12589701624071511],
@@ -227,7 +227,6 @@ describe("exponentiation with exponent -1", () => {
   ];
 
   test.each(reciprocals)("%s ** -1 is %s, the correctly rounded 1 / x", (x, expected) => {
-    expect(1 / x).toBe(expected);
     expect(power(x, -1)).toBe(expected);
     expect(boxed(x, -1)).toBe(expected);
   });
@@ -238,20 +237,40 @@ describe("exponentiation with exponent -1", () => {
     expect((-7390256613.693091) ** -1).toBe(-1.35313298613629e-10);
   });
 
-  test("a reciprocal past the range overflows or turns subnormal", () => {
-    expect(power(5e-324, -1)).toBe(Infinity);
-    expect(power(-5e-324, -1)).toBe(-Infinity);
-    expect(power(Number.MAX_VALUE, -1)).toBe(5.562684646268003e-309);
-    expect(power(1e308, -1)).toBe(1e-308);
+  // A division rounds 7e307's reciprocal twice on x87, to
+  // 1.4285714285714284e-308.
+  const subnormals = [
+    [7e307, 1.4285714285714287e-308],
+    [-7e307, -1.4285714285714287e-308],
+    [1e308, 1e-308],
+    [Number.MAX_VALUE, 5.562684646268003e-309],
+    [2 ** 1022, 2 ** -1022],
+  ];
+
+  test.each(subnormals)("%s ** -1 rounds its subnormal reciprocal %s once", (x, expected) => {
+    expect(power(x, -1)).toBe(expected);
   });
 
-  test("special values follow Number::exponentiate", () => {
+  test("the reciprocal of the smallest subnormal overflows", () => {
+    expect(power(5e-324, -1)).toBe(Infinity);
+    expect(power(-5e-324, -1)).toBe(-Infinity);
+  });
+
+  test("NaN ** -1 is NaN", () => {
     expect(power(NaN, -1)).toBeNaN();
-    expect(power(Infinity, -1)).toBe(0);
+  });
+
+  test("±Infinity ** -1 is a zero of the same sign", () => {
     expect(Object.is(power(Infinity, -1), 0)).toBe(true);
     expect(Object.is(power(-Infinity, -1), -0)).toBe(true);
+  });
+
+  test("±0 ** -1 is an infinity of the same sign", () => {
     expect(power(0, -1)).toBe(Infinity);
     expect(power(-0, -1)).toBe(-Infinity);
+  });
+
+  test("exact reciprocals are exact", () => {
     expect(power(1, -1)).toBe(1);
     expect(power(-1, -1)).toBe(-1);
     expect(power(2, -1)).toBe(0.5);

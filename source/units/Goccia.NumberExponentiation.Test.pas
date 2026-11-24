@@ -133,8 +133,9 @@ begin
   Expect<Double>(NumberExponentiation(-10.0, 309.0)).ToBe(NegInfinity);
 end;
 
-// Each base is one where the general path misses the correctly rounded 1 / x
-// by one ULP.
+// The general path misses each of the first six correctly rounded
+// reciprocals by one ULP. A division rounds 7e307's subnormal reciprocal
+// twice on x87, to $000A45C4AB92BA50.
 procedure TNumberExponentiationTests.TestReciprocal;
 begin
   Expect<UInt64>(DoubleToBits(NumberExponentiation(
@@ -151,6 +152,10 @@ begin
   Expect<UInt64>(DoubleToBits(NumberExponentiation(
     BitsToDouble(UInt64($B3068B46C0C6E145)), -1.0))).ToBe(
     UInt64($CCD6B60A40A21585));
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($7FD8EBBB5516E5AD), -1.0))).ToBe($000A45C4AB92BA51);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($7FD0000000000000), -1.0))).ToBe($0010000000000000);
   Expect<Double>(NumberExponentiation(BitsToDouble(1), -1.0)).ToBe(Infinity);
   Expect<UInt64>(DoubleToBits(NumberExponentiation(
     BitsToDouble($7FEFFFFFFFFFFFFF), -1.0))).ToBe($0004000000000000);

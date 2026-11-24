@@ -60,6 +60,8 @@ const
   // The exponent field of a double's top 12 bits.
   EXPONENT_FIELD = $7FF;
   ABS_MASK: UInt64 = (UInt64(1) shl 63) - 1;
+  FRACTION_MASK: UInt64 = (UInt64(1) shl 52) - 1;
+  TWO_POW_1022: UInt64 = $7FD0000000000000;
   ONE_BITS: UInt64 = $3FF0000000000000;
   // Masks that clear the low 32 and the low 27 bits.
   LOW_32_CLEAR: UInt64 = not UInt64($FFFFFFFF);
@@ -615,6 +617,40 @@ begin
   Result := ExpInline(EHi, ELo, SignBias);
 end;
 
+// 1 / x for |x| >= 2^1022, whose reciprocal is subnormal or 2^-1022, rounded
+// once in integer arithmetic. A floating-point division rounds such a result
+// twice on x87, which keeps its extended exponent range even at double
+// precision.
+function LargeBaseReciprocal(const ABits: UInt64): Double;
+var
+  Mantissa, Quotient, Remainder: UInt64;
+  Shift, I: Integer;
+begin
+  // |x| = m 2^(e - 1075) for the exponent field e, so 1 / |x| in units of
+  // 2^-1074, the subnormal step, is 2^(2149 - e) / m: below 2^52 once
+  // rounded, or exactly 2^52 for 2^-1022.
+  Mantissa := (ABits and FRACTION_MASK) or (UInt64(1) shl 52);
+  Shift := 2149 - Integer((ABits shr 52) and EXPONENT_FIELD);
+  // Long division of 2^Shift by m, one bit at a time.
+  Quotient := 0;
+  Remainder := 1;
+  for I := 1 to Shift do
+  begin
+    Remainder := Remainder shl 1;
+    Quotient := Quotient shl 1;
+    if Remainder >= Mantissa then
+    begin
+      Remainder := Remainder - Mantissa;
+      Quotient := Quotient or 1;
+    end;
+  end;
+  // Round half to even.
+  if (Remainder shl 1 > Mantissa) or
+     ((Remainder shl 1 = Mantissa) and ((Quotient and 1) <> 0)) then
+    Inc(Quotient);
+  Result := BitsToDouble(Quotient or (ABits and SIGN_BIT));
+end;
+
 {$IFDEF FPC}
   {$POP}
 {$ENDIF}
@@ -703,14 +739,18 @@ begin
   // ES2026 §6.1.6.1.3 step 13: implementation-approximated exponentiation.
   // x * x, the square root and 1 / x are each one correctly rounded IEEE 754
   // operation; V8 answers 2 and 0.5 with the first two. FinitePower is within
-  // 0.54 ULP, which for exponent -1 misses the correctly rounded 1 / x for
-  // about one base in a thousand.
+  // 0.54 ULP and missed the correctly rounded 1 / x for 196 of 200,000
+  // sampled bases.
   if AExponent = 2.0 then
     Exit(ABase * ABase);
   if AExponent = 0.5 then
     Exit(Sqrt(ABase));
   if AExponent = -1.0 then
+  begin
+    if (DoubleToBits(ABase) and ABS_MASK) >= TWO_POW_1022 then
+      Exit(LargeBaseReciprocal(DoubleToBits(ABase)));
     Exit(1.0 / ABase);
+  end;
   Result := FinitePower(ABase, AExponent);
 end;
 
