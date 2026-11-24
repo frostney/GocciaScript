@@ -7,6 +7,8 @@ writes every compiled Script and module to a bytecode file (G2.Artifact), reads 
 runs. A file whose totals differ between the two runs, or whose round trip is rejected ("artifact round trip: ...
 rejected") or crashes, is a gap in the format, the reader or the verifier.
 
+A reclamation test (RECLAIM) may pass fewer of its tests after the round trip.
+
 Prints one line per such file, "BAD <file>: <what>", and "TIMEOUT <file>" for one whose round-trip run outlasted
 TIMEOUT_S, then "OK tests (<n> files)" when no file is BAD. Exits 1 when one is.
 
@@ -19,6 +21,10 @@ JOBS = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 PATHS = sys.argv[3:] or ['tests']
 EXTS = ('.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts')
 TIMEOUT_S = 120
+# Tests that a dropped value is reclaimed while its frame is suspended or alive. A bytecode file's suspensions keep
+# every register (the verifier drops the compiler's live counts, which it cannot check), so after a round trip such
+# a file may pass fewer of its tests, never more, with the same total.
+RECLAIM = re.compile(r'(-released|releases-dead-registers)\.[a-z]+$')
 MEM_KB = 4000000  # address-space cap, as the reference runs have
 
 
@@ -65,6 +71,9 @@ def check(path):
     if tripped['status'] == 'crash':
         return path, 'round trip failed (rc %s): %s' % (tripped['rc'], tripped['msg'])
     key = lambda r: (r.get('status'), r.get('passed'), r.get('failed'), r.get('total'), r.get('suiteError'))
+    if (RECLAIM.search(path) and plain['status'] == tripped['status'] == 'done' and
+            plain['total'] == tripped['total'] and tripped['passed'] <= plain['passed']):
+        return path, None
     if key(plain) != key(tripped):
         return path, 'results differ: plain %s, round trip %s' % (key(plain), key(tripped))
     return path, None

@@ -4899,6 +4899,10 @@ begin
       DeclareMatchBindings(S.CatchPattern);
       MatchTest(ExcReg, S.CatchPattern, MissL);
     end;
+    { the binding has its copy and the pattern matched (a miss jumps past the block and rethrows from ExcReg):
+      nothing reads ExcReg again, so it is cleared, and an exception the block drops, or never bound, is
+      reclaimable while the block runs (a finally handler writes ExcReg again when it catches) }
+    Emit(Ins(opLoadUndef, ExcReg, 0, 0));
     HoistBlock(TList<TGocciaASTNode>(S.CatchBlock.Nodes));
     StmtList(S.CatchBlock.Nodes);
     if Length(MissL) > 0 then
@@ -7362,7 +7366,9 @@ begin
     begin
       { 15.5.5: an async generator's yield awaits its operand first }
       if FS.Tpl^.IsAsync then Emit(Ins(opAwait, R, R, 0));
-      Emit(Ins(opYield, Dest, R, 0));
+      { live across the yield: what was allocated before its operand, and Dest. The operand's register is read
+        before the frame suspends and not again, so the suspended frame does not keep what it yielded }
+      Emit(Ins(opYield, Dest, R, Max(Save, Dest + 1)));
     end;
     FreeTo(Save);
   end
@@ -7375,7 +7381,8 @@ begin
     Save := FS.FreeReg;
     R := AllocReg;
     ExprTo(TGocciaAwaitExpression(E).Operand, R);
-    Emit(Ins(opAwait, Dest, R, 0));
+    { as a yield's: the awaited value's register is not live across the suspension }
+    Emit(Ins(opAwait, Dest, R, Max(Save, Dest + 1)));
     FreeTo(Save);
   end
   else

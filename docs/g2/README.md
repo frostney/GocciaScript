@@ -375,7 +375,9 @@ A source phase import takes no companion.
 
 `G2_ARTIFACT_ROUNDTRIP=1` writes, reads and verifies every compiled Script and module before it runs;
 `scripts/g2/artifact-roundtrip-tests.py` runs `tests/` with and without it and reports any file whose totals
-differ or whose round trip is refused.
+differ or whose round trip is refused. A test that a dropped value is reclaimed while its frame is suspended
+(`*-released.js`, `releases-dead-registers`) may pass fewer of its tests after the round trip: compiled source
+keeps only the registers live across a `yield` or `await`, and a file's suspensions keep them all.
 
 ### GocciaBundler
 
