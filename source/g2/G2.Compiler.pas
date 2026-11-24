@@ -341,6 +341,11 @@ const
   NO_REG = $FFFF;
   { flags of a direct eval's caller binding (BuildEvalDesc) }
   efConst = 1; efLexical = 2; efSameFunc = 4; efVarLevel = 8; efParamEnv = 16; efFnName = 32; efInitialized = 64;
+  { a binding of a catch clause (Annex B.3.4: EvalDeclarationInstantiation does not count it as a conflict) }
+  efCatch = 128;
+  { a parameter under the body's own variable environment (10.2.11 step 28): an eval var of its name is a new
+    binding of that environment, which the body then reads instead }
+  efParamBinding = 256;
   RESERVED_HOME = 1;   { offsets after the parameters for non-arrow functions }
 
 type
@@ -354,6 +359,9 @@ type
     IsLexical, Initialized: Boolean;
     HoleNop: Integer;
     IsFnName: Boolean;   { a named function expression's own name: immutable, but assigning it is a TypeError only in strict code }
+    { a parameter of a function whose body has a variable environment of its own (HasBodyEvalEnv): the body reaches
+      it through that environment, where a non-strict eval's var of the same name shadows it }
+    IsParam: Boolean;
     { strict-types: the type every value stored in the binding must have (TYPE_*), 0 for none }
     LType: Byte;
   end;
@@ -367,6 +375,7 @@ type
     Captured: Boolean;
     IsFunctionTop: Boolean;
     IsSwitch: Boolean;   { a switch's case block: its declarations may be skipped, so reads are always checked }
+    IsCatch: Boolean;    { a catch clause's environment: its bindings do not conflict with an eval's vars (B.3.4) }
     { past 8 bindings, Find uses a hash index: slot -> binding index + 1 (bundles have scopes of thousands) }
     Index: array of Integer;
     function Find(const N: UnicodeString): Integer;
@@ -426,6 +435,9 @@ type
     NParamRegs: Integer;
     ParamWritten, ArgsEscaped: Boolean;
     NoNewTarget: Boolean;   { goal 4: the caller has no non-arrow function around it (new.target a SyntaxError) }
+    { goal 4: the eval's caller is a derived class constructor (or an arrow in one), so its this is checked as the
+      constructor checks it (opCheckThis: a ReferenceError before super()) }
+    DerivedThis: Boolean;
     UsingCapReg: Integer;   { the innermost using block's dispose capability register, -1 none }
     IsStaticBlock: Boolean;   { ClassStaticBlockStatementList: await is reserved in it }   { a field initializer or static block: arguments is a SyntaxError in it and its arrows }
     HomeReg, NewTargetReg: Integer;   { reserved registers, -1 for arrows }
@@ -437,6 +449,9 @@ type
     CurCol: Integer;
     VarRegs: array of Integer;   { per register: bindings of the open scopes that use it }
     IsEvalOuter: Boolean;   { goal 4: the stand-in for a direct eval's caller, its bindings the caller's }
+    { parameter expressions and a non-strict direct eval: the body's variable environment is an object of its own
+      ('%evalenvb'), between the parameters and the body (10.2.11 step 28) }
+    HasBodyEvalEnv: Boolean;
     CplP1: Integer;         { 1 + the register of the script's completion value (eval code, ReturnLast), 0 none }
     CplSkip: Boolean;       { the next expression statement is EvalStrictPrefix's directive }
     { module code: after each top-level statement the registers above the bindings are cleared, so a value a
@@ -479,6 +494,9 @@ type
     IsEvalCode: Boolean;
     EvalContext: Boolean;   { eval code or a ShadowRealm's evaluate: its early errors say so }
     ModImportNames: TStringList;    { goal 3: local names of imports (slot = index) }
+    { goal 4: a direct eval at a module's top level (or a function in its code), which reads the module's imports
+      through its cell table as the module does (ModImportNames from the caller's '%modimport' entries) }
+    EvalModImports: Boolean;
     ModPublish: TStringList;        { goal 3: exported local bindings (slot = imports + index) }
     ModDefault: TGocciaExportDefaultDeclaration;
     { 14.11 the with statements being compiled, innermost last: their object's hidden local, function, scope }
@@ -559,6 +577,8 @@ type
     function IsGlobalRef(const N: UnicodeString): Boolean;
     procedure StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
     procedure LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer; ForCall: Boolean = False);
+    { a module's imports are names here: the module's code, or a direct eval's at its top level }
+    function ModImportsVisible: Boolean;
     function ModImportSlot(const N: UnicodeString): Integer;
     procedure EmitModGet(Slot: Integer; Dest: Integer);
     procedure EmitModulePrologue;
@@ -627,6 +647,10 @@ type
     function EmitConstStore(const N: UnicodeString): Boolean;
     procedure EvalDeclarations(Nodes: TList<TGocciaASTNode>; Names: TStringList; Strict: Boolean);
     function EvalOuterFlags(const N: UnicodeString): Integer;
+    { goal 4: stores R to the variable-environment binding of N that a catch binding of the caller hides (B.3.4):
+      the caller's var ('%var N'), or the eval variable environment's when the caller has none. False when no catch
+      binding hides N }
+    function StoreEvalVarBinding(const N: UnicodeString; R: Integer): Boolean;
     procedure CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList);
     procedure CompileVarDecl(D: TGocciaVariableDeclaration);
     procedure CompileIf(S: TGocciaIfStatement);
@@ -819,6 +843,7 @@ begin
   Bindings[Count].Initialized := True;
   Bindings[Count].HoleNop := -1;
   Bindings[Count].LType := 0;
+  Bindings[Count].IsParam := False;
   Inc(Count);
   if Count <= 8 then Exit;
   if Count * 2 > Length(Index) then
@@ -1432,7 +1457,17 @@ begin
     if Found then
     begin
       if (F = WithFuncs[I]) and (WithKinds[I] = 2) then
-        Inside := EvalDepth[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] <= WithDepths[I]
+      begin
+        Inside := EvalDepth[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] <= WithDepths[I];
+        { a parameter under its function's body environment: that environment is asked first }
+        if Inside and (Copy(WithNames[I], 1, 9) = '%evalenvb') and
+           ((EvalFlags[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] and efParamBinding) <> 0) and
+           (EvalDepth[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] = WithDepths[I]) then
+          Inside := False;
+      end
+      else if (F = WithFuncs[I]) and (WithKinds[I] = 4) then
+        { the body's variable environment: inside it every binding of the function but its parameters }
+        Inside := not F.Scopes[S].Bindings[F.Scopes[S].Find(N)].IsParam
       else if (F = WithFuncs[I]) and (WithKinds[I] = 3) then
         { a with statement around the direct eval: the caller's bindings come innermost first, so one listed
           before the with's object is inside its body }
@@ -1470,7 +1505,7 @@ begin
       gives undefined }
     if ThisReg >= 0 then
     begin
-      if ForCall and (WithKinds[Idx[I]] in [1, 2]) then Emit(Ins(opLoadUndef, ThisReg, 0, 0))
+      if ForCall and (WithKinds[Idx[I]] in [1, 2, 4]) then Emit(Ins(opLoadUndef, ThisReg, 0, 0))
       else Emit(Ins(opMov, ThisReg, T, 0));
     end;
     SetLength(Ends, Length(Ends) + 1);
@@ -1576,7 +1611,7 @@ begin
       Exit;
     end;
   end;
-  if (Goal = 3) and (ModImportSlot(N) >= 0) then begin EmitModGet(ModImportSlot(N), Dest); Exit; end;
+  if ModImportsVisible and (ModImportSlot(N) >= 0) then begin EmitModGet(ModImportSlot(N), Dest); Exit; end;
   if (N = 'arguments') and ProfileArgumentsObject then
   begin
     F := FS;
@@ -1669,7 +1704,7 @@ end;
 function TCompiler.IsGlobalRef(const N: UnicodeString): Boolean;
 var R: Integer;
 begin
-  Result := not ResolveLocal(FS, N, R) and (ResolveUpval(FS, N) < 0) and not ((Goal = 3) and (ModImportSlot(N) >= 0)) and
+  Result := not ResolveLocal(FS, N, R) and (ResolveUpval(FS, N) < 0) and not (ModImportsVisible and (ModImportSlot(N) >= 0)) and
     not ((N = 'arguments') and ArgumentsBound) and (GLexIndex(AtomOf(N)) < 0) and
     ((WithCount = 0) or (WithsFor(N, WithIdxScratch) = 0));
 end;
@@ -1720,7 +1755,7 @@ begin
     Emit(Ins(opSetUpv, Src, U, 0));
     Exit;
   end;
-  if (Goal = 3) and (ModImportSlot(N) >= 0) then
+  if ModImportsVisible and (ModImportSlot(N) >= 0) then
   begin
     { an import binding is immutable (9.1.1.5.5 CreateImportBinding): a ReferenceError while its target is
       uninitialized, otherwise a TypeError (module code is strict) }
@@ -1893,9 +1928,9 @@ begin
   if (IsMethod or ObjMeth) and (ffSuperProp in R^.Flags) then T^.HomeReg := 0;
   for I := 0 to High(R^.Free) do
     { a module's import: read through the module's cell table (EmitModGet) }
-    if (ResolveUpval(FS, R^.Free[I]) < 0) and (Goal = 3) and (ModImportSlot(R^.Free[I]) >= 0) then
+    if (ResolveUpval(FS, R^.Free[I]) < 0) and ModImportsVisible and (ModImportSlot(R^.Free[I]) >= 0) then
       ResolveUpval(FS, '%modcells');
-  if (Goal = 3) and not Src.HaveImports and (ModImportNames <> nil) then
+  if ModImportsVisible and not Src.HaveImports and (ModImportNames <> nil) then
   begin
     SetLength(Src.ModImports, ModImportNames.Count);
     for I := 0 to ModImportNames.Count - 1 do Src.ModImports[I] := ModImportNames[I];
@@ -1945,7 +1980,7 @@ function TCompiler.CompileFunction(const Name: UnicodeString; const Params: TGoc
 var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop: Integer; Names, TopLex: TStringList; ObjMeth, NoArgs, StaticBlk: Boolean;
   Nodes: TList<TGocciaASTNode>; Skip: Integer; Ret: Integer;
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
-  K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames: TStringList;
+  K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames, BodyEnvParams: TStringList;
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
@@ -2261,6 +2296,36 @@ begin
     end;
     InParamInit := False;
     F.ParamAwait := False;
+    if SloppyEval and not T^.SimpleParams and not T^.IsStrict and not ((Outer <> nil) and Outer.IsEvalOuter) then
+    begin
+      { 10.2.11 step 28: with parameter expressions the body has a variable environment of its own, between the
+        parameters and the body; a non-strict eval in the body declares its vars there, so one named like a
+        parameter shadows it for the body only (the closures in the parameter list, compiled already, keep it).
+        The parameters are marked so the body asks that environment first (WithsFor, kind 4) }
+      BodyEnvParams := NewNameList;
+      try
+        for I := 0 to High(Params) do
+          if Params[I].IsPattern then PatternNames(Params[I].Pattern, BodyEnvParams)
+          else BodyEnvParams.Add(Params[I].Name);
+        for I := 0 to BodyEnvParams.Count - 1 do
+        begin
+          J := FS.Scopes[0].Find(BodyEnvParams[I]);
+          if J >= 0 then FS.Scopes[0].Bindings[J].IsParam := True;
+        end;
+      finally
+        BodyEnvParams.Free;
+      end;
+      F.HasBodyEvalEnv := True;
+      EnvName := '%evalenvb' + IntToStr(WithSerial);
+      Inc(WithSerial);
+      R := DeclareLocal(EnvName, False);
+      Tmp := AllocReg;
+      Emit(Ins(opNewObj, R, 0, 4));
+      Emit(Ins(opLoadNull, Tmp, 0, 0));
+      Emit(Ins(opSetProtoLit, R, Tmp, 0));
+      FreeTo(Tmp);
+      PushWithEntry(EnvName, FS, 0, 4, 0);
+    end;
     if DefaultSuperForward then
     begin
       // constructor(...args) { super(...args); }
@@ -2345,6 +2410,7 @@ begin
             Inc(FS.VarRegs[R]);
             Emit(Ins(opMov, R, FS.Scopes[0].Bindings[K].Reg, 0));
             FS.Scopes[0].Bindings[K].Reg := R;
+            FS.Scopes[0].Bindings[K].IsParam := False;
           end
           else if FS.Scopes[0].Find(Names[I]) < 0 then
           begin
@@ -2712,7 +2778,9 @@ begin
     if FS.Scopes[0].Bindings[J].Reg <> Src then Emit(Ins(opMov, FS.Scopes[0].Bindings[J].Reg, Src, 0));
     Exit;
   end;
-  { goal 4: the var binding is the caller's own, or one of its eval variable environment }
+  { goal 4: the var binding is the caller's own (under a catch binding: '%var N'), or one of its eval variable
+    environment }
+  if (FS.Parent <> nil) and FS.Parent.IsEvalOuter and StoreEvalVarBinding(FD.Name, Src) then Exit;
   if (FS.Parent <> nil) and FS.Parent.IsEvalOuter and (EvalVarEnv <> '') and
      ((EvalOuterFlags(FD.Name) < 0) or ((EvalOuterFlags(FD.Name) and efVarLevel) = 0)) then
   begin
@@ -2745,8 +2813,8 @@ function TCompiler.TopLevelBlockBindings: Boolean;
 var I, J, From: Integer;
 begin
   Result := False;
-  { isolated code (goal 0: a strict direct eval's) keeps its vars in registers too }
-  if Goal = 0 then From := 0 else From := 1;
+  { isolated code (goal 0: a strict direct eval's) and a module's top level keep their vars in registers too }
+  if Goal in [0, 3] then From := 0 else From := 1;
   for I := From to FS.ScopeCount - 1 do
     for J := 0 to FS.Scopes[I].Count - 1 do
       if (FS.Scopes[I].Bindings[J].Name <> '') and (FS.Scopes[I].Bindings[J].Name[1] <> '%') then Exit(True);
@@ -2764,7 +2832,20 @@ begin
   try
     { 19.2.1.1 step 5.a: no new.target outside a function }
     Add('%nonewtarget', 0, 0, 0);
-    if Goal = 0 then From := 0 else From := 1;
+    if Goal in [0, 3] then From := 0 else From := 1;
+    { a module's top level: its imports, read through its cell table ('%modcells', a register of the module
+      function), by slot }
+    if (Goal = 3) and (ModImportNames <> nil) then
+    begin
+      J := FS.Scopes[0].Find('%modcells');
+      if J >= 0 then
+      begin
+        MarkCaptured(FS, FS.Scopes[0].Bindings[J].Reg);
+        Add('%modcells', 0, FS.Scopes[0].Bindings[J].Reg, efSameFunc or efInitialized or efConst);
+        for I := 0 to ModImportNames.Count - 1 do
+          Add('%modimport ' + IntToStr(I) + ' ' + ModImportNames[I], 0, 0, 0);
+      end;
+    end;
     for I := FS.ScopeCount - 1 downto From do
     begin
       Sc := FS.Scopes[I];
@@ -2784,6 +2865,7 @@ begin
             FS.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
         end
         else Fl := Fl or efInitialized;
+        if Sc.IsCatch then Fl := Fl or efCatch;
         if (I = 0) and not Sc.Bindings[J].IsLexical then Fl := Fl or efVarLevel;
         MarkCaptured(FS, Sc.Bindings[J].Reg);
         Add(Sc.Bindings[J].Name, 0, Sc.Bindings[J].Reg, Fl);
@@ -2803,7 +2885,7 @@ begin
 end;
 
 function TCompiler.BuildEvalDesc: UnicodeString;
-var Seen: TStringList; I, J, U, Fl, D: Integer; F: TFuncState; Sc: TScope;
+var Seen: TStringList; I, J, U, Fl, D, VJ: Integer; F: TFuncState; Sc: TScope;
   procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer; Depth: Integer = 0);
   begin
     if Prof <> nil then Prof.Count(ccDirectEvalRecordProbes);
@@ -2828,6 +2910,12 @@ begin
       Seen.Add('%nonewtarget');
       Add('%nonewtarget', 0, 0, 0);
     end;
+    { a derived constructor's this (or an arrow's in one): the eval code checks it before reading it }
+    if InDerivedCtor then
+    begin
+      Seen.Add('%derivedthis');
+      Add('%derivedthis', 0, 0, 0);
+    end;
     if (F <> nil) and not F.IsEvalOuter and (F.Parent <> nil) then
     begin
       if F.HomeReg >= 0 then F.HomeUsed := True;
@@ -2843,7 +2931,10 @@ begin
       begin
         { as %arguments: a function the eval code declares has an arguments object of its own }
         Fl := efVarLevel or efInitialized;
-        if InParamInit then Fl := Fl or efParamEnv;
+        if InParamInit then Fl := Fl or efParamEnv
+        { the arguments object is the parameters' (10.2.11 step 22.f): under the body's own variable environment an
+          eval's var arguments is a new binding of that environment }
+        else if FS.HasBodyEvalEnv then Fl := efInitialized or efParamBinding;
         Seen.Add('%arguments');
         Add('%arguments', 0, FS.ArgsReg, Fl);
       end;
@@ -2868,14 +2959,28 @@ begin
             FS.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
         end
         else Fl := Fl or efInitialized;
+        if Sc.IsCatch then Fl := Fl or efCatch;
         if (I = 0) and not Sc.Bindings[J].IsLexical then
         begin
           Fl := Fl or efVarLevel;
           { the parameters, while their initializers run: a var of the eval may not share their names }
           if InParamInit and (Sc.Bindings[J].Name <> '') and (Sc.Bindings[J].Name[1] <> '%') then Fl := Fl or efParamEnv;
         end;
+        { a parameter under the body's own variable environment: an eval in the body declares a new binding }
+        if Sc.Bindings[J].IsParam and not InParamInit then Fl := (Fl and not efVarLevel) or efParamBinding;
         MarkCaptured(FS, Sc.Bindings[J].Reg);
         Add(Sc.Bindings[J].Name, 0, Sc.Bindings[J].Reg, Fl);
+        { a catch binding over a var of the function (B.3.4): the eval's functions are that var's, as '%var N' }
+        if Sc.IsCatch and (I > 0) and (Sc.Bindings[J].Name <> '') and (Sc.Bindings[J].Name[1] <> '%') then
+        begin
+          VJ := FS.Scopes[0].Find(Sc.Bindings[J].Name);
+          if (VJ >= 0) and not FS.Scopes[0].Bindings[VJ].IsLexical and (Seen.IndexOf('%var ' + Sc.Bindings[J].Name) < 0) then
+          begin
+            Seen.Add('%var ' + Sc.Bindings[J].Name);
+            MarkCaptured(FS, FS.Scopes[0].Bindings[VJ].Reg);
+            Add('%var ' + Sc.Bindings[J].Name, 0, FS.Scopes[0].Bindings[VJ].Reg, efSameFunc or efVarLevel or efInitialized);
+          end;
+        end;
       end;
     end;
     { the enclosing functions' bindings, as this function's upvalues; Depth: functions out from the caller }
@@ -2903,6 +3008,11 @@ begin
             if Sc.Bindings[J].IsConst then Fl := Fl or efConst;
             if Sc.Bindings[J].HoleNop >= 0 then F.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
           end;
+          if Sc.Bindings[J].IsParam then Fl := Fl or efParamBinding;
+          { eval code that shares its caller's variable environment (sloppy, at its top level): the caller's own
+            bindings keep the flags the caller described them with, so a nested eval meets the same conflicts }
+          if F.IsEvalOuter and (D = 1) and not FS.Tpl^.IsStrict and (EvalDepth[Sc.Bindings[J].Reg] = 0) then
+            Fl := EvalFlags[Sc.Bindings[J].Reg];
           if F.IsEvalOuter then Add(Sc.Bindings[J].Name, 1, U, Fl, D - 1 + EvalDepth[Sc.Bindings[J].Reg])
           else Add(Sc.Bindings[J].Name, 1, U, Fl, D);
         end;
@@ -2913,6 +3023,24 @@ begin
   finally
     Seen.Free;
   end;
+end;
+
+function TCompiler.StoreEvalVarBinding(const N: UnicodeString; R: Integer): Boolean;
+var Fl, U: Integer;
+begin
+  Fl := EvalOuterFlags(N);
+  Result := (Fl >= 0) and ((Fl and efCatch) <> 0);
+  if not Result then Exit;
+  if EvalOuterFlags('%var ' + N) >= 0 then
+  begin
+    U := ResolveUpval(FS, '%var ' + N);
+    if U >= 0 then begin Emit(Ins(opSetUpv, R, U, 0)); Exit; end;
+  end;
+  if EvalVarEnv = '' then Exit(False);
+  U := AllocReg;
+  LoadIdentStatic(EvalVarEnv, U);
+  Emit(Ins(opWithSet, U, R, AtomConst(N)));
+  FreeTo(U);
 end;
 
 { goal 4: the ef* flags of the caller's binding N, -1 when the caller has none }
@@ -2960,7 +3088,14 @@ begin
       end;
       if (Fl and efParamEnv) <> 0 then
         raise EEarlySyntaxError.Create('Identifier ''' + N + ''' has already been declared');
-      if ((Fl and efLexical) <> 0) and ((Fl and efSameFunc) <> 0) then
+      { a catch binding over a var of the function (B.3.4): that var is the binding, no new one }
+      if ((Fl and efCatch) <> 0) and (EvalOuterFlags('%var ' + N) >= 0) then
+      begin
+        if Names.IndexOf(N) >= 0 then Names.Delete(Names.IndexOf(N));
+        EvalSkipLocal.Add(N);
+        Continue;
+      end;
+      if ((Fl and efLexical) <> 0) and ((Fl and efSameFunc) <> 0) and ((Fl and efCatch) = 0) then
       begin
         { a B.3.2 function name only stays unhoisted }
         if (AnnexBFuncs <> nil) and (Names.IndexOf(N) >= 0) and (VarOnly.IndexOf(N) < 0) then
@@ -3174,10 +3309,11 @@ begin
       end;
       if not ResolveLocal(FS, FD.Name, R) then
       begin
-        { goal 4: a direct eval's function bound in its caller's variable environment }
+        { goal 4: a direct eval's function bound in its caller's variable environment: the caller's var, also
+          under a catch binding of the same name (B.3.4, '%var N'), or the eval variable environment's }
         R := FS.FreeReg; AllocReg;
         EmitClosure(R, T);
-        StoreIdent(FD.Name, R, True);
+        if not StoreEvalVarBinding(FD.Name, R) then StoreIdent(FD.Name, R, True);
         FreeTo(R);
         Continue;
       end;
@@ -4893,6 +5029,7 @@ begin
     { 14.15.3: the statement's value is the catch block's, UpdateEmpty(C, undefined) }
     if FS.CplP1 <> 0 then Emit(Ins(opLoadUndef, FS.CplP1 - 1, 0, 0));
     PushScope;
+    FS.Scopes[FS.ScopeCount - 1].IsCatch := True;
     if S.CatchParam <> '' then
     begin
       R := DeclareLocal(S.CatchParam, False);
@@ -5251,6 +5388,10 @@ var F: TFuncState;
 begin
   F := FS;
   while (F.Parent <> nil) and F.IsArrow do F := F.Parent;
+  { eval code: its caller's (BuildEvalDesc's %derivedthis), whether the walk stopped at the eval code or at the
+    stand-in for its caller }
+  if F.IsEvalOuter then Exit(F.DerivedThis);
+  if (F.Parent <> nil) and F.Parent.IsEvalOuter then Exit(F.Parent.DerivedThis);
   Result := F.Tpl^.IsClassCtor and F.Tpl^.IsDerived;
 end;
 
@@ -5970,7 +6111,7 @@ begin
             R := FS.FreeReg; AllocReg;
             if not ResolveLocal(FS, TGocciaIdentifierExpression(E.Operand).Name, K) and
                (ResolveUpval(FS, TGocciaIdentifierExpression(E.Operand).Name) < 0) and
-               ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
+               (not ModImportsVisible or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
                not ((TGocciaIdentifierExpression(E.Operand).Name = 'arguments') and ArgumentsBound) then
               Emit(Ins(opTypeofGlobal, Dest, 0, NewIC(TGocciaIdentifierExpression(E.Operand).Name)))
             else begin LoadIdentStatic(TGocciaIdentifierExpression(E.Operand).Name, R); Emit(Ins(opTypeof, Dest, R, 0)); end;
@@ -5985,7 +6126,7 @@ begin
         end
         else if (E.Operand is TGocciaIdentifierExpression) and not ResolveLocal(FS, TGocciaIdentifierExpression(E.Operand).Name, R)
            and (ResolveUpval(FS, TGocciaIdentifierExpression(E.Operand).Name) < 0) and
-           ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
+           (not ModImportsVisible or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
            { a function's arguments object (no binding of the name, ArgumentsBound) }
            not ((TGocciaIdentifierExpression(E.Operand).Name = 'arguments') and ArgumentsBound) then
           Emit(Ins(opTypeofGlobal, Dest, 0, NewIC(TGocciaIdentifierExpression(E.Operand).Name)))
@@ -6245,7 +6386,9 @@ begin
     else EvalHint := Ord((FS.Parent = nil) and (Goal in [1, 2])) * 2 + 1;
     { in function code the eval code gets the call site's bindings }
     if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1
-    else if (Goal in [0, 1, 2]) and TopLevelBlockBindings then EvalDescConst := AtomConst(BuildEvalDescTop) + 1;
+    else if ((Goal in [0, 1, 2]) and TopLevelBlockBindings) or (Goal = 3) then
+      { (a module's top level always: its this is undefined, and its imports are its names) }
+      EvalDescConst := AtomConst(BuildEvalDescTop) + 1;
   end;
   if E.Optional then ChainAdd(EmitJ(opJNullish, Base, 0));
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
@@ -6418,7 +6561,7 @@ begin
       FreeTo(T);
     end;
   end;
-  if ResolveLocal(FS, N, R) or (ResolveUpval(FS, N) >= 0) or ((Goal = 3) and (ModImportSlot(N) >= 0)) or
+  if ResolveLocal(FS, N, R) or (ResolveUpval(FS, N) >= 0) or (ModImportsVisible and (ModImportSlot(N) >= 0)) or
      ((N = 'arguments') and ArgumentsBound) then
     Emit(Ins(opLoadFalse, Dest, 0, 0))
   else
@@ -7904,6 +8047,11 @@ begin
   RequestColumns[High(Requests)] := Column;
 end;
 
+function TCompiler.ModImportsVisible: Boolean;
+begin
+  Result := (Goal = 3) or EvalModImports;
+end;
+
 function TCompiler.ModImportSlot(const N: UnicodeString): Integer;
 begin
   if ModImportNames = nil then Exit(-1);
@@ -8264,6 +8412,15 @@ begin
       C.ModImportNames.UseLocale := False;
       C.ModImportNames.CaseSensitive := True;
       for I := 0 to High(St^.Src.ModImports) do C.ModImportNames.Add(St^.Src.ModImports[I]);
+    end
+    else if St^.Src.HaveImports then
+    begin
+      { a function of eval code at a module's top level: the module's imports, as the eval code saw them }
+      C.EvalModImports := True;
+      C.ModImportNames := TStringList.Create;
+      C.ModImportNames.UseLocale := False;
+      C.ModImportNames.CaseSensitive := True;
+      for I := 0 to High(St^.Src.ModImports) do C.ModImportNames.Add(St^.Src.ModImports[I]);
     end;
     OT^.IsStrict := St^.IsStrict;
     { an arrow's this in a derived constructor: checked until super() (InDerivedCtor) }
@@ -8388,8 +8545,28 @@ begin
         Fields := Entry.Split([#2]);
         if Fields[0] = '%noargs' then Outer.NoArguments := True;
         if Fields[0] = '%nonewtarget' then Outer.NoNewTarget := True;
+        if Fields[0] = '%derivedthis' then Outer.DerivedThis := True;
+        if Copy(Fields[0], 1, 11) = '%modimport ' then
+        begin
+          { the module's import of local name N at slot S ('%modimport S N') }
+          Ser := Pos(' ', Copy(Fields[0], 12, MaxInt));
+          if (Ser > 0) and TryStrToInt(Copy(Fields[0], 12, Ser - 1), P1) then
+          begin
+            if C.ModImportNames = nil then
+            begin
+              C.ModImportNames := TStringList.Create;
+              C.ModImportNames.UseLocale := False;
+              C.ModImportNames.CaseSensitive := True;
+            end;
+            while C.ModImportNames.Count <= P1 do C.ModImportNames.Add('');
+            C.ModImportNames[P1] := Copy(Fields[0], 12 + Ser, MaxInt);
+            C.EvalModImports := True;
+          end;
+        end;
         { this code's own hidden with and eval environment names come after the caller's }
         if (Copy(Fields[0], 1, 8) = '%evalenv') and TryStrToInt(Copy(Fields[0], 9, 20), Ser) and (Ser >= C.WithSerial) then
+          C.WithSerial := Ser + 1;
+        if (Copy(Fields[0], 1, 9) = '%evalenvb') and TryStrToInt(Copy(Fields[0], 10, 20), Ser) and (Ser >= C.WithSerial) then
           C.WithSerial := Ser + 1;
         if (Copy(Fields[0], 1, 5) = '%with') and TryStrToInt(Copy(Fields[0], 6, 20), Ser) and (Ser >= C.WithSerial) then
           C.WithSerial := Ser + 1;
@@ -8412,7 +8589,9 @@ begin
         the names no binding of its function (or one inside it) does }
       for D := 64 downto 0 do
       begin
-        for I := 0 to Outer.Scopes[0].Count - 1 do
+        { (a function's body environment and its parameters' at the same depth: the body's, listed first, is asked
+          first and is the caller's variable environment) }
+        for I := Outer.Scopes[0].Count - 1 downto 0 do
           if (Copy(Outer.Scopes[0].Bindings[I].Name, 1, 8) = '%evalenv') and (C.EvalDepth[Outer.Scopes[0].Bindings[I].Reg] = D) then
           begin
             C.PushWithEntry(Outer.Scopes[0].Bindings[I].Name, Outer, 0, 2, D);
