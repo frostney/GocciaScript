@@ -6438,7 +6438,14 @@ end;
 function XDeletePrim(Base, KeyV: TValue; Key: PStr; Strict: Boolean; var Res: Boolean): Boolean; noinline;
 var W: TValue; Ok: Boolean;
 begin
-  if IsNullish(Base) then Exit(ThrowTypeError('Cannot convert undefined or null to object'));
+  { the message of a read on a nullish base, naming the key as a read names it, as the suite expects }
+  if IsNullish(Base) then
+  begin
+    if Key = nil then Exit(ThrowNullishBase(Base, KeyV, False));
+    if Base = VNull then
+      Exit(ThrowTypeError('Cannot read properties of null (reading ''' + StrToUnicode(Key) + ''')'));
+    Exit(ThrowTypeError('Cannot read properties of undefined (reading ''' + StrToUnicode(Key) + ''')'));
+  end;
   PushRoot(KeyV);
   Ok := ToObjectHook(Base, W);
   KeyV := RootAt(TempTop - 1);
