@@ -4420,33 +4420,22 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
     throw new Error(`Bare bytecode class-receiver field eval super probe exited ${classReceiver.exitCode}: ${classReceiver.stderr.toString()}`);
   if (normalizeLineEndings(classReceiver.stdout.toString()).trim() !== classReceiverExpected)
     throw new Error(`Bare bytecode class-receiver field eval super got: ${classReceiver.stdout.toString()}`);
-  // `yield` and `await` in a field initializer are early errors in ECMAScript,
-  // but the parser accepts them inside a generator or async function. Such an
-  // initializer stays inline so the suspension still belongs to that function
-  // instead of to a <static field> function that cannot suspend.
-  const suspendingSource = [
-    "const o = { *g() { class C { static x = yield 1; static y = 'b'; } return C.x + C.y; } };",
-    "const it = o.g();",
-    "print(JSON.stringify(it.next()));",
-    "print(JSON.stringify(it.next(5)));",
-    "const run = async () => { class C { static x = await Promise.resolve(2); } return C.x; };",
-    "run().then((v) => print('await ' + v));",
-    "",
-  ].join("\n");
-  const suspendingExpected = [
-    '{"value":1,"done":false}',
-    '{"value":"5b","done":true}',
-    "await 2",
-  ].join("\n");
-  const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
-    stdin: new TextEncoder().encode(suspendingSource),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (suspending.exitCode !== 0)
-    throw new Error(`Bare bytecode suspending static initializer probe exited ${suspending.exitCode}: ${suspending.stderr.toString()}`);
-  if (normalizeLineEndings(suspending.stdout.toString()).trim() !== suspendingExpected)
-    throw new Error(`Bare bytecode suspending static initializer got: ${suspending.stdout.toString()}`);
+  // A field initializer is parsed with neither [Yield] nor [Await] (ES2026
+  // §15.7.1), so `yield` and `await` there are SyntaxErrors even inside a
+  // generator or async function, as V8 reports them.
+  for (const [label, suspendingSource] of [
+    ["yield", "const o = { *g() { class C { static x = yield 1; } return C.x; } };\n"],
+    ["await", "const run = async () => { class C { static x = await Promise.resolve(2); } return C.x; };\n"],
+  ] as const) {
+    const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+      stdin: new TextEncoder().encode(suspendingSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const text = suspending.stdout.toString() + suspending.stderr.toString();
+    if (suspending.exitCode === 0 || !text.includes("SyntaxError"))
+      throw new Error(`Bare bytecode ${label} in a static field initializer should be a SyntaxError, got exit ${suspending.exitCode}: ${text}`);
+  }
 });
 
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {

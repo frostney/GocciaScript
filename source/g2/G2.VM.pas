@@ -318,8 +318,11 @@ function AbortInterrupted: Boolean;
 { a native loop whose trip count the script controls (a length up to 2^53 - 1): the poll of a spent limit, as a back
   edge polls it. True to go on, False with the abort (or the memory refusal) pending. The loop allocates nothing the
   memory limit counts (a UnicodeString, index atoms) or nothing at all, so without it neither the deadline nor the
-  memory limit ends the run }
+  memory limit ends the run. Each poll is one step of an instruction limit, as GocciaScript charges a native loop's
+  element (the chokepoint rule of Goccia.Timeout): a budget ends the loop as a deadline does }
 function PollInterrupt: Boolean; inline;
+{ the poll's charge of a spent instruction limit: the abort pending, False }
+function AbortInstructions: Boolean;
 const
   { the longest string a native builder makes (V8's String::kMaxLength): longer is RangeError 'Invalid string length' }
   MAX_STRING_LENGTH = 536870888;
@@ -663,8 +666,19 @@ begin
   Result := False;
 end;
 
+function AbortInstructions: Boolean;
+begin
+  XAbort(2);
+  Result := False;
+end;
+
 function PollInterrupt: Boolean;
 begin
+  if InstrCounted then
+  begin
+    Dec(InstrLeft);
+    if InstrLeft < 0 then Exit(AbortInstructions);
+  end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;
 

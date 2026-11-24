@@ -1102,6 +1102,8 @@ begin
   if not RelIdx(Arg(Args, Argc, 3), Len, Len, Fin) then Exit(False);
   while K < Fin do
   begin
+    { a length up to 2^53 - 1: each index is a step a deadline or an instruction limit ends }
+    if not PollInterrupt then Exit(False);
     if FastArr(Args[0]) and (K < ObjOf(Args[0])^.Elements^.Len) then
       ValueArrayStore(ObjOf(Args[0])^.Elements, K, Arg(Args, Argc, 1))
     else if not SetIdx(Args[0], K, Arg(Args, Argc, 1)) then Exit(False);
