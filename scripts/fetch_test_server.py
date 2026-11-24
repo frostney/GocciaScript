@@ -22,10 +22,12 @@ When an IPv6 port file is supplied, also serves on ::1 if available.
 """
 
 import errno
+import faulthandler
 import os
 import http.server
 import json
 import socket
+import socketserver
 import sys
 import threading
 
@@ -152,7 +154,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-class IPv6HTTPServer(http.server.HTTPServer):
+class LoopbackHTTPServer(http.server.HTTPServer):
+    def server_bind(self):
+        # HTTPServer asks DNS for a display name even for a numeric address.
+        # These loopback fixtures must be ready without a reverse lookup.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+class IPv6HTTPServer(LoopbackHTTPServer):
     address_family = socket.AF_INET6
 
 
@@ -199,12 +209,15 @@ def main():
         print("Usage: python3 fetch_test_server.py <port-file>", file=sys.stderr)
         sys.exit(1)
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    ipv6 = start_ipv6(sys.argv[2]) if len(sys.argv) > 2 else None
-    port = server.server_address[1]
-
-    with open(sys.argv[1], "w") as f:
-        f.write(str(port))
+    # Preserve evidence if setup stalls before the shell sees the port file.
+    faulthandler.dump_traceback_later(15)
+    try:
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
+        ipv6 = start_ipv6(sys.argv[2]) if len(sys.argv) > 2 else None
+        with open(sys.argv[1], "w") as f:
+            f.write(str(server.server_address[1]))
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
     try:
         server.serve_forever()
