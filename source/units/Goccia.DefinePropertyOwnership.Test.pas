@@ -48,6 +48,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
+  Goccia.Modules.Resolver,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.TestSetup,
@@ -180,6 +181,9 @@ type
     Completed: Boolean;
     { Anything else that ended the trial: a failure of the test itself. }
     Unexpected: Boolean;
+    { The class of what ended it, in a short string so that nothing of it
+      outlives the trial's runtime. }
+    RaisedClass: ShortString;
     BlocksSeen: Int64;
     constructor Create(const AAbortAtBlock: Int64; const AInScript: Boolean;
       const AScript: string = SCRIPT_DEFINITIONS);
@@ -1166,7 +1170,10 @@ begin
         on E: TGocciaAbortError do
           Aborted := True;
         on E: Exception do
+        begin
           Unexpected := True;
+          RaisedClass := E.ClassName;
+        end;
       end;
     finally
       AbortAtBlock := 0;
@@ -1324,8 +1331,10 @@ begin
   Run.Free;
   Leaked := RunOnce(0, True, Run, SCRIPT_UNRESOLVED_IMPORT);
   try
+    // The run reached the import and failed there, not before it.
     Expect<Boolean>(Run.Completed).ToBe(False);
-    Expect<Boolean>(Run.Unexpected).ToBe(True);
+    Expect<string>(string(Run.RaisedClass))
+      .ToBe(TGocciaModuleResolutionError.ClassName);
     Expect<Int64>(Leaked).ToBe(0);
   finally
     Run.Free;

@@ -4701,7 +4701,6 @@ begin
         ModuleContext.CompatibilityNonStrictMode := False;
         if Assigned(FModuleLoader) then
         begin
-          EntryRequestedModules := TGocciaModuleList.Create;
           EntryModule := TGocciaModule.Create(
             EntryModulePath(FModuleLoader, FSourcePath));
           { Stamp the entry with its file's modification time, as the
@@ -4729,26 +4728,31 @@ begin
             ModuleContext.ModuleEnvironmentInitialized := True;
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
               ModuleScope, FModuleLoader, False);
-            EvaluateEntryRequestedModulesInSourceOrder(
-              PipelineResult.ProgramNode, FModuleLoader, FSourcePath,
-              ModuleScope, EntryRequestedModules);
-            RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
-              ModuleScope, FModuleLoader, True);
-            SavedVMGlobalScope := FVM.GlobalScope;
-            FVM.GlobalScope := ModuleScope;
+            { The requested modules live from their evaluation to the drain
+              of their evaluation promises, and are freed whichever way that
+              ends: an import that does not resolve, link or evaluate, or a
+              stop, raises out of it. }
+            EntryRequestedModules := TGocciaModuleList.Create;
             try
-              DrainEntryRequestedModuleEvaluationPromises(
-                EntryRequestedModules, EntryModule);
+              EvaluateEntryRequestedModulesInSourceOrder(
+                PipelineResult.ProgramNode, FModuleLoader, FSourcePath,
+                ModuleScope, EntryRequestedModules);
+              RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
+                ModuleScope, FModuleLoader, True);
+              SavedVMGlobalScope := FVM.GlobalScope;
+              FVM.GlobalScope := ModuleScope;
+              try
+                DrainEntryRequestedModuleEvaluationPromises(
+                  EntryRequestedModules, EntryModule);
+              finally
+                FVM.GlobalScope := SavedVMGlobalScope;
+              end;
             finally
-              FVM.GlobalScope := SavedVMGlobalScope;
+              FreeAndNil(EntryRequestedModules);
             end;
           except
             on E: Exception do
             begin
-              { The list is freed by the evaluation's finally below, which
-                a failure here never reaches: an import that does not
-                resolve, link or evaluate, or a stop. }
-              FreeAndNil(EntryRequestedModules);
               FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
               EntryModuleEvaluationStarted := False;
               FModuleLoader.FailEntryModule(EntryModule, E);
@@ -4826,7 +4830,6 @@ begin
         finally
           if EntryModuleEvaluationStarted and Assigned(FModuleLoader) then
             FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
-          EntryRequestedModules.Free;
           if Assigned(GC) then
             GC.RemoveTempRoot(ModuleScope);
         end;
