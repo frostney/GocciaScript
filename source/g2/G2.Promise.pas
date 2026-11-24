@@ -215,6 +215,22 @@ begin
   PopRoots(1);
 end;
 
+{ 27.2.1.9 HostPromiseRejectionTracker(P, "handle"): a tracked promise that has a handler now is forgotten, so the
+  list no longer keeps it and its reason alive. Its entry becomes undefined: the marks the host took
+  (RejectionMark) keep naming the same entries. }
+procedure UntrackRejection(P: TValue); noinline;
+var I: Integer; E: PValueArray;
+begin
+  if not SameEngine(RejectedRootedGen) or not IsObject(Rejected) then Exit;
+  E := ObjOf(Rejected)^.Elements;
+  for I := Integer(E^.Len) - 1 downto 0 do
+    if E^.Data[I] = P then
+    begin
+      E^.Data[I] := VUndefined;
+      Exit;
+    end;
+end;
+
 function TakeUnhandledRejection(var Reason: TValue): Boolean;
 var I, N: Integer; P: TValue;
 begin
@@ -224,7 +240,7 @@ begin
   for I := 0 to N - 1 do
   begin
     P := ObjOf(Rejected)^.Elements^.Data[I];
-    if (ObjOf(P)^.OFlags and 1) = 0 then
+    if IsObject(P) and ((ObjOf(P)^.OFlags and 1) = 0) then
     begin
       Reason := ObjOf(P)^.Aux1;
       Exit(True);
@@ -519,6 +535,8 @@ begin
   end
   else
     EnqueueJob(jkReaction, RootAt(TempTop - 1), O^.Aux1, MkInt(O^.Pad));
+  O := ObjOf(RootAt(TempTop - 2));
+  if (O^.Pad = psRejected) and ((O^.OFlags and 1) = 0) then UntrackRejection(RootAt(TempTop - 2));
   ObjOf(RootAt(TempTop - 2))^.OFlags := ObjOf(RootAt(TempTop - 2))^.OFlags or 1;
   PopRoots(2);
 end;
@@ -1046,6 +1064,22 @@ begin
   begin
     { the default handlers pass the value or the reason on }
     CapSettle(VA(RootAt(TempTop - 2))^.Data[3], Ord(State = psRejected), RootAt(TempTop - 1));
+  end
+  else if IsObject(H) and not (ObjOf(H)^.OKind in [okNative, okProxy, okBound]) then
+  begin
+    { a handler written in script: the call copies the value into the handler's frame before it allocates, and the
+      job lets go of it there, so a handler that drops its parameter lets a collection reclaim it (27.2.2.1
+      NewPromiseReactionJob). A native, bound or proxy handler keeps it rooted for the whole call. }
+    V := RootAt(TempTop - 1);
+    PopRoots(1);
+    Ok := CallValue(H, VUndefined, @V, 1, R);
+    V := VUndefined;
+    if not Ok then R := TakePending;
+    Cap := VA(RootAt(TempTop - 1))^.Data[3];
+    CapSettle(Cap, Ord(not Ok), R);
+    if Pending <> VUndefined then Pending := VUndefined;
+    PopRoots(1);
+    Exit;
   end
   else
   begin
