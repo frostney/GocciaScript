@@ -1735,7 +1735,7 @@ end;
 procedure ImportFulfilled(Data: Integer);
 var I: Integer; M: TModRec; NS: TValue;
 begin
-  I := Data and $3FFFFF;
+  I := Data and $1FFFFF;
   M := Mods[IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1])];
   if (Data and $800000) <> 0 then NS := GetDeferredNamespace(M) else NS := GetNamespace(M);
   SettleImport(I, True, NS);
@@ -1752,7 +1752,7 @@ end;
 function ImportDepFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I, N: Integer;
 begin
-  I := NativeData and $3FFFFF;
+  I := NativeData and $1FFFFF;
   N := IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]) - 1;
   ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 2, MkInt(N));
   if N = 0 then ImportFulfilled(NativeData);
@@ -1764,7 +1764,7 @@ function ImportRejectedFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean
 var E: TValue;
 begin
   if Argc >= 1 then E := Args[1] else E := VUndefined;
-  SettleImport(NativeData and $3FFFFF, False, E);
+  SettleImport(NativeData and $1FFFFF, False, E);
   Res := VUndefined;
   Result := True;
 end;
@@ -1790,14 +1790,16 @@ begin
   Result := True;
   { NativeData read once: the loading and linking below run other natives }
   Data := NativeData;
-  I := Data and $3FFFFF;
+  I := Data and $1FFFFF;
   Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
   { a host module's import loads modules for the host }
   HostLoading := HostOwnedReferrer(Ref);
   try
     ImportComputed := (Data and $400000) <> 0;
-    Loaded := LoadAndLink(ResolveRequest(Spec, Ref), M);
+    { the source phase (Source Phase Imports, ContinueDynamicImport): the module loaded, not linked or evaluated }
+    if (Data and $200000) <> 0 then Loaded := LoadModule(ResolveRequest(Spec, Ref), M)
+    else Loaded := LoadAndLink(ResolveRequest(Spec, Ref), M);
   finally
     HostLoading := False;
   end;
@@ -1820,6 +1822,25 @@ begin
       PopRoots(1);
     end;
     SettleImport(I, False, R);
+    Exit;
+  end;
+  if (Data and $200000) <> 0 then
+  begin
+    { GetModuleSource(): the module's source object, the same one each time; a SyntaxError for a module that has
+      none }
+    if HasModuleSource(M) then
+    begin
+      PushRoot(ModuleSourceOf(M));
+      SettleImport(I, True, RootAt(TempTop - 1));
+      PopRoots(1);
+    end
+    else
+    begin
+      ThrowError('SyntaxError', 'Module source is not available for "' + Spec + '"');
+      R := Pending;
+      Pending := VUndefined;
+      SettleImport(I, False, R);
+    end;
     Exit;
   end;
   ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 1, MkInt(M.Id));
@@ -1915,7 +1936,9 @@ begin
     PopRoots(1);
     Exit(Reject);
   end;
-  if Ph = 1 then
+  { import.source() of a JavaScript module: loaded in the job, its GetModuleSource is a SyntaxError unless the
+    host gives JavaScript modules sources (HasModuleSource), as for a typed module }
+  if (Ph = 1) and (AType <> '') then
   begin
     ThrowError('SyntaxError', 'Module source is not available for "' + StrToUnicode(StrOf(RootAt(TempTop - 1))) + '"');
     PopRoots(1);
@@ -1933,6 +1956,7 @@ begin
   if Length(ImportStacks) <= Idx then SetLength(ImportStacks, Idx + 16);
   ImportStacks[Idx] := StackFramesNow;
   if Ph = 2 then Idx := Idx or $800000;
+  if Ph = 1 then Idx := Idx or $200000;
   { a specifier computed at run time, for the host's read policy (G2.VM ImportComputed) }
   if ImportComputed then Idx := Idx or $400000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
