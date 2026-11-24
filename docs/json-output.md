@@ -12,6 +12,8 @@
 
 When running with `--output=json`, GocciaScript wraps every execution result in a structured JSON envelope. This is useful for programmatic consumers and embedding scenarios.
 
+Parse warnings (such as the JSX-in-`.js` notice) are not printed in these modes, for the entry file or for any module it imports, so they never come ahead of the envelope. An embedder that prints to the same stream mutes the warnings with `TGocciaEngine.SuppressWarnings`, which reaches the module loader. The setting reaches the loaders the engine creates for a modules manifest, an isolated config module and a `ShadowRealm` when each is built, so a `ShadowRealm` created before the setting changes keeps the value it was created with.
+
 The `memory` block has two different scopes:
 
 - `memory.gc` reports the GocciaScript GC's approximate managed-object accounting. It tracks `TGCManagedObject.InstanceSize`, not all memory held by strings, dynamic arrays, or the FreePascal runtime. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`.

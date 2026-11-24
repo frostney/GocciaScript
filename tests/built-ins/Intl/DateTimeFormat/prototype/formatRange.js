@@ -56,6 +56,74 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(() => dtf.formatRange(NaN, 0)).toThrow(RangeError);
     expect(() => dtf.formatRange(0, NaN)).toThrow(RangeError);
   });
+
+  test("names the eras of a numeric iso8601 range across eras", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    // ICU names the eras of a range that crosses them, though none was asked for.
+    expect(result).toContain("BC");
+    expect(result).toContain("AD");
+  });
+
+  test("names the months of an iso8601 range whose pattern picks another width", () => {
+    const dtf = new Intl.DateTimeFormat("zh", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(2020, 0, 1), Date.UTC(2020, 1, 1));
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    // Some ICU versions format this range with abbreviated months, not the
+    // narrow ones asked for; which width they pick varies by version.
+    const months = (result.replaceAll("2020", "").match(/\d+/g) ?? []).map(Number);
+    expect(months).toEqual([1, 2]);
+  });
+
+  test("adds no era to an iso8601 range across eras whose fields show none", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    expect(result).not.toContain("BC");
+    expect(result).not.toContain("AD");
+  });
+
+  test("leaves no blank era in an iso8601 range across eras with narrow months", () => {
+    const dtf = new Intl.DateTimeFormat("es", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    // A blank era leaves its spaces behind: " 101 E 4 –  2000 E 1".
+    expect(result).toBe(result.trim());
+    expect(/\s\s/.test(result)).toBe(false);
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange Temporal inputs", () => {

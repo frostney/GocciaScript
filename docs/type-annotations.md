@@ -57,9 +57,10 @@ class Registry {
   build(): { name: string } & { size: number } { return { name: "box", size: 2 }; }
 }
 
-// Template literal types
+// Template literal types, also in call and constructor type arguments
 const id: `id-${number}` = "id-42";
 const also = "id-42" as `id-${number}`;
+const user = load<`user-${string}`>(key);
 
 // Definite assignment assertions (require an annotation, forbid an initializer)
 let pending!: number;
@@ -153,6 +154,8 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   const idOf = <T extends { id: number }>(v: T): number => v.id;
   ```
 
+  A `<` after a callee opens call or constructor type arguments only where TypeScript reads it that way: the list closes before `(` or a template, and holds nothing that cannot be type syntax. So `a < b > (c)` is a generic call here, while `a < f() > (c)` and ``a < `x${b + 1}` > (c)`` stay comparisons. A list with a template literal type that has substitutions, such as `` `user-${string}` ``, is erased only when the whole list reads as types: names with type arguments, literals, `keyof`, `typeof`, `readonly`, `infer`, unions, intersections, conditional types, indexed access, arrays, tuples, object types of property signatures, function, generic function and constructor types, import types and templates whose substitutions are such types. Any other list with a template keeps the comparison reading, even where TypeScript would read a rarer type form: a mapped type, a constrained `infer U extends T`, a destructured or computed name, an import type with attributes, a negative number beside the template at the top of the list, or a generic function type written straight after the list's `<` (`f<<T>() => T>`, which lexes as a shift; write `f< <T>() => T>`). A typed tag after `new`, ``new tag<T>`text` ``, is not read either.
+
 - **`.js`, `.jsx`, `.tsx`, `.mjs`** — JSX is recognised, so a bare `<T>` or `<T extends U>` is read as a JSX element. Generic arrows still parse when the type parameter list cannot be mistaken for a tag, which means a trailing comma, a default, or more than one parameter:
 
   ```javascript
@@ -162,6 +165,13 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   ```
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
+
+  An element's tag can carry type arguments, as in TypeScript's `.tsx`. They are erased, in every extension above, so the element is the same call it is without them. A tag name followed by `<` always opens type arguments, because no type parameter list is written that way. As in TypeScript, a `<` on the line after an expression continues that expression, so `a` followed by `<b<c>d` on the next line is a comparison. The JSX transformer does not parse statements, so it reads every line break after a name, literal, `)`, `]` or `}` that way, including after `if (ok)`, `else` or a block: there a typed element that starts a statement is written in parentheses or after a `;`. A closing tag takes none.
+
+  ```javascript
+  const choice = <Select<Option> items={options} />;
+  const list = <List<number>>{items}</List>;
+  ```
 
 ## Arrow Return Types in Conditionals
 

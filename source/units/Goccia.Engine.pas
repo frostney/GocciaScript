@@ -303,6 +303,7 @@ type
     procedure SetForInLoopsEnabled(const AValue: Boolean);
     procedure SetExperimentalJSModuleSourceEnabled(const AValue: Boolean);
     procedure SetWarningUnsupportedFeatures(const AValue: Boolean);
+    procedure SetSuppressWarnings(const AValue: Boolean);
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -376,9 +377,12 @@ type
       (last expression value, or undefined). }
     procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
       var AContext: TGocciaEvaluationContext);
+    { AKeepsCompletionValue: the entry, whose completion value Execute
+      reports; an imported module keeps none. }
     function CompileModuleProgram(const AProgram: TGocciaProgram;
       const AFilePath: string; const ANonStrictMode,
-      AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
+      AArgumentsObjectEnabled, AKeepsCompletionValue: Boolean):
+      TGocciaBytecodeModule;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
@@ -497,9 +501,11 @@ type
       when ASourcePath is its source path, else the loader reads the module
       under its read policy, and ASource (AHasSource) is what loading it
       would record. AAsCompiledEntry: the engine's own source, compiled as
-      CompileModule compiles it. }
+      CompileModule compiles it. AKeepsCompletionValue: a module that was
+      Execute's entry, compiled keeping its completion value. }
     function CompileModuleForSnapshot(const ASourcePath: string;
-      const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+      const AIsHostOwned, AAsCompiledEntry, AKeepsCompletionValue: Boolean;
+      out AHasSource: Boolean;
       out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
@@ -681,7 +687,10 @@ type
     { The bytecode VM this engine runs on; a heap snapshot releases its idle
       scratch (ADR 0148). }
     property VM: TGocciaVM read FVM;
-    property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
+    { Mutes the entry's parse warnings and, through the module loader, those of
+      every module it imports. }
+    property SuppressWarnings: Boolean
+      read FSuppressWarnings write SetSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
     { ADR 0148: the extension that owns the run's host calls; one of this
@@ -2800,7 +2809,8 @@ begin
     Exit;
   end;
   BytecodeModule := CompileModuleProgram(AProgram, AContext.CurrentFilePath,
-    AContext.NonStrictMode, AContext.Scope.EffectiveArgumentsObjectEnabled);
+    AContext.NonStrictMode, AContext.Scope.EffectiveArgumentsObjectEnabled,
+    AContext.IsEntryModule);
   AContext.CompiledModule := BytecodeModule;
   InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
     AContext.Realm);
@@ -2810,7 +2820,8 @@ end;
   life. }
 function TGocciaEngine.CompileModuleProgram(const AProgram: TGocciaProgram;
   const AFilePath: string; const ANonStrictMode,
-  AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
+  AArgumentsObjectEnabled, AKeepsCompletionValue: Boolean):
+  TGocciaBytecodeModule;
 var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
@@ -2824,6 +2835,11 @@ begin
     Compiler.GlobalBackedTopLevel := True;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
+    // Only the entry's completion value is reported (Execute's result,
+    // runScript's); an imported module has none to keep alive. A snapshot
+    // records which module was the entry, so a restore compiles each the
+    // same way (CompileModuleForSnapshot).
+    Compiler.DiscardsCompletionValue := not AKeepsCompletionValue;
     Compiler.StrictTypes := FStrictTypes;
     Compiler.NonStrictMode := ANonStrictMode;
     Compiler.ArgumentsObjectEnabled := AArgumentsObjectEnabled;
@@ -2846,7 +2862,8 @@ end;
   loader's setting, or the engine's for its own source. The snapshot names
   the bytecode by its hash, so a module compiled differently is refused. }
 function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
-  const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+  const AIsHostOwned, AAsCompiledEntry, AKeepsCompletionValue: Boolean;
+  out AHasSource: Boolean;
   out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
 var
   ParseResult: TGocciaSourcePipelineResult;
@@ -2878,7 +2895,7 @@ begin
       SourcePipelineOptions(stModule));
     try
       Result := CompileModuleProgram(ParseResult.ProgramNode, FSourcePath,
-        False, cfArgumentsObject in FCompatibility);
+        False, cfArgumentsObject in FCompatibility, AKeepsCompletionValue);
     finally
       ParseResult.Free;
     end;
@@ -2888,7 +2905,7 @@ begin
     AIsHostOwned, ASource);
   try
     Result := CompileModuleProgram(ProgramNode, ASourcePath, False,
-      FModuleLoader.ArgumentsObjectEnabled);
+      FModuleLoader.ArgumentsObjectEnabled, AKeepsCompletionValue);
   finally
     ProgramNode.Free;
   end;
@@ -4678,6 +4695,7 @@ begin
         ModuleContext.Realm := FRealm;
         ModuleContext.Scope := ModuleScope;
         ModuleContext.CurrentFilePath := FSourcePath;
+        ModuleContext.IsEntryModule := True;
         ModuleContext.CurrentModule := nil;
         ModuleContext.NonStrictMode := False;
         ModuleContext.CompatibilityNonStrictMode := False;
@@ -4703,7 +4721,7 @@ begin
               ModuleScope);
             InstantiateModuleFunctions(PipelineResult.ProgramNode,
               ModuleContext);
-            EntryModule.SnapshotKind := mskSource;
+            EntryModule.SnapshotKind := mskEntrySource;
             EntryModule.CompiledModule := ModuleContext.CompiledModule;
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
@@ -5134,6 +5152,13 @@ begin
   FWarningUnsupportedFeatures := AValue;
   if Assigned(FModuleLoader) then
     FModuleLoader.WarningUnsupportedFeatures := AValue;
+end;
+
+procedure TGocciaEngine.SetSuppressWarnings(const AValue: Boolean);
+begin
+  FSuppressWarnings := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.SuppressWarnings := AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);

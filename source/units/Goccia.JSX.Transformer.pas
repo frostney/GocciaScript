@@ -55,7 +55,10 @@ type
   TGocciaJSXTransformer = class
   private
     type
-      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
+      // ltkLineBreak is a line break after an expression's end: it reads as
+      // an operator, since a statement may start on the next line, but the
+      // expression may also go on there.
+      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak);
       TScanContext = (scSource, scAttributes, scChildren, scExpression);
       TForHeader = record
         Depth: Integer;
@@ -85,6 +88,9 @@ type
     FCollectTokens: Boolean;
     FTokens: TGocciaJSXTokenArray;
     FTokenCount: Integer;
+    // Where the last type argument list that did not close stopped scanning.
+    // A list that starts before it would stop there too (IsJSXStart).
+    FTypeArgumentsScannedTo: Integer;
 
     function Peek: Char; {$IFDEF FPC}inline;{$ENDIF}
     function PeekAt(const AOffset: Integer): Char; {$IFDEF FPC}inline;{$ENDIF}
@@ -136,6 +142,12 @@ type
 
     procedure TransformJSXElement;
     function ReadJSXTagName: string;
+    function SkipTriviaAt(const AIndex: Integer): Integer;
+    function SkipQuotedAt(const AIndex, ADepth: Integer): Integer;
+    function JSXTypeArgumentsStart(const AIndex: Integer): Integer;
+    function JSXTypeArgumentsEnd(const AStart: Integer;
+      out AStoppedAt: Integer): Integer;
+    procedure CopyJSXTypeArguments(const ATagName: string);
     procedure EmitJSXAttributes(const ALeadingNewlines: Integer;
       out AHadAttributes: Boolean);
     procedure EmitJSXChildren(const ATagName: string);
@@ -837,12 +849,12 @@ end;
 
 function TGocciaJSXTransformer.IsJSXContext: Boolean;
 begin
-  Result := FLastTokenKind in [ltkNone, ltkOperator];
+  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak];
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
 var
-  Index: Integer;
+  Index, TypeArgumentsStart, StoppedAt: Integer;
   Tail: Char;
 begin
   if not IsJSXContext then
@@ -867,6 +879,32 @@ begin
     Inc(Index);
     while (Index <= Length(FSource)) and IsIdentifierPart(FSource[Index]) do
       Inc(Index);
+  end;
+
+  // `<Foo<string> ...`: the tag's type arguments, which only a list that
+  // closes, followed by what may follow a tag, is taken for. They are looked
+  // for only where `<` cannot go on with an expression. After a line break
+  // that follows an expression's end it can, as TypeScript reads it: `a` and
+  // `<b<c>d` on the next line is a comparison. Elsewhere a list that does
+  // not close is a syntax error whatever follows, so the starts its scan
+  // passed over need not be scanned again.
+  TypeArgumentsStart := JSXTypeArgumentsStart(Index);
+  if TypeArgumentsStart > 0 then
+  begin
+    if (FLastTokenKind = ltkLineBreak) or
+       (TypeArgumentsStart < FTypeArgumentsScannedTo) then
+      Exit(False);
+    Index := JSXTypeArgumentsEnd(TypeArgumentsStart, StoppedAt);
+    if Index = 0 then
+    begin
+      FTypeArgumentsScannedTo := StoppedAt;
+      Exit(False);
+    end;
+    Index := SkipTriviaAt(Index);
+    if Index > Length(FSource) then
+      Exit(False);
+    Tail := FSource[Index];
+    Exit(IsIdentifierStart(Tail) or CharInSet(Tail, ['{', '/', '>']));
   end;
 
   if Index > Length(FSource) then
@@ -971,6 +1009,218 @@ begin
     NoteToken(jtkJSXIdentifier, SegmentStart, FPos);
   end;
   Result := SB.ToString;
+end;
+
+// The index of the first character at or after AIndex that is not whitespace
+// or part of a comment.
+function TGocciaJSXTransformer.SkipTriviaAt(const AIndex: Integer): Integer;
+begin
+  Result := AIndex;
+  while Result <= Length(FSource) do
+  begin
+    if CharInSet(FSource[Result], [' ', #9, #10, #13]) then
+      Inc(Result)
+    else if (FSource[Result] = '/') and (Result < Length(FSource)) and
+            (FSource[Result + 1] = '/') then
+    begin
+      while (Result <= Length(FSource)) and (FSource[Result] <> #10) do
+        Inc(Result);
+    end
+    else if (FSource[Result] = '/') and (Result < Length(FSource)) and
+            (FSource[Result + 1] = '*') then
+    begin
+      Inc(Result, 2);
+      while (Result < Length(FSource)) and
+            not ((FSource[Result] = '*') and (FSource[Result + 1] = '/')) do
+        Inc(Result);
+      Inc(Result, 2);
+    end
+    else
+      Exit;
+  end;
+end;
+
+// The index after the string or template that opens at AIndex, or 0 when it
+// does not close: a quote's string ends at a line break. A template's
+// substitutions are skipped whole, with the strings, templates and comments
+// inside them, so a closing brace or a backtick in one does not end the
+// template. ADepth bounds how deep substitutions nest.
+function TGocciaJSXTransformer.SkipQuotedAt(const AIndex,
+  ADepth: Integer): Integer;
+var
+  Quote, C: Char;
+  BraceDepth: Integer;
+begin
+  if ADepth > MAX_JSX_DEPTH then
+    Exit(0);
+  Quote := FSource[AIndex];
+  Result := AIndex + 1;
+  while Result <= Length(FSource) do
+  begin
+    C := FSource[Result];
+    if C = '\' then
+      Inc(Result, 2)
+    else if C = Quote then
+      Exit(Result + 1)
+    else if (Quote <> '`') and (C = #10) then
+      Exit(0)
+    else if (Quote = '`') and (C = '$') and (Result < Length(FSource)) and
+            (FSource[Result + 1] = '{') then
+    begin
+      Inc(Result, 2);
+      BraceDepth := 1;
+      while (Result <= Length(FSource)) and (BraceDepth > 0) do
+      begin
+        C := FSource[Result];
+        if CharInSet(C, ['''', '"', '`']) then
+        begin
+          Result := SkipQuotedAt(Result, ADepth + 1);
+          if Result = 0 then
+            Exit;
+          Continue;
+        end;
+        if (C = '/') and (Result < Length(FSource)) and
+           CharInSet(FSource[Result + 1], ['/', '*']) then
+        begin
+          Result := SkipTriviaAt(Result);
+          Continue;
+        end;
+        if C = '{' then
+          Inc(BraceDepth)
+        else if C = '}' then
+          Dec(BraceDepth);
+        Inc(Result);
+      end;
+    end
+    else
+      Inc(Result);
+  end;
+  Result := 0;
+end;
+
+// Where the type arguments after a tag name at AIndex open, as in
+// `<Foo<string> />`, past whitespace and comments: the index of their `<`,
+// or 0 when there are none.
+function TGocciaJSXTransformer.JSXTypeArgumentsStart(
+  const AIndex: Integer): Integer;
+begin
+  Result := SkipTriviaAt(AIndex);
+  if (Result > Length(FSource)) or (FSource[Result] <> '<') then
+    Result := 0;
+end;
+
+{ Where the type argument list that opens at AStart, a `<`, ends: the index
+  after its matching `>`, or 0 when it does not close, with AStoppedAt where
+  the search stopped. A `>` in a function type's `=>`, a string, a template
+  or a comment does not count. A `;` or a closing bracket outside every
+  bracket the list opened ends the search, so a `<` that opens no list costs
+  a scan of its own statement, not of the rest of the file. }
+function TGocciaJSXTransformer.JSXTypeArgumentsEnd(const AStart: Integer;
+  out AStoppedAt: Integer): Integer;
+var
+  Index, Depth, BracketDepth, QuotedEnd: Integer;
+  C: Char;
+begin
+  Result := 0;
+  Index := AStart;
+  Depth := 0;
+  BracketDepth := 0;
+  try
+    while Index <= Length(FSource) do
+    begin
+      C := FSource[Index];
+      if (C = '/') and (Index < Length(FSource)) and
+         CharInSet(FSource[Index + 1], ['/', '*']) then
+      begin
+        Index := SkipTriviaAt(Index);
+        Continue;
+      end;
+      case C of
+        '''', '"', '`':
+          begin
+            QuotedEnd := SkipQuotedAt(Index, 0);
+            if QuotedEnd = 0 then
+              Exit;
+            Index := QuotedEnd;
+            Continue;
+          end;
+        '=':
+          if (Index < Length(FSource)) and (FSource[Index + 1] = '>') then
+            Inc(Index);
+        '<':
+          Inc(Depth);
+        '>':
+          begin
+            Dec(Depth);
+            if Depth = 0 then
+              Exit(Index + 1);
+          end;
+        '(', '[', '{':
+          Inc(BracketDepth);
+        ')', ']', '}':
+          begin
+            Dec(BracketDepth);
+            if BracketDepth < 0 then
+              Exit;
+          end;
+        ';':
+          if BracketDepth = 0 then
+            Exit;
+      end;
+      Inc(Index);
+    end;
+  finally
+    AStoppedAt := Index;
+  end;
+end;
+
+{ An element's type arguments are TypeScript's to check and erased at run
+  time. They are copied, with the comments and line breaks before them, to
+  where the type arguments of the factory call go, `createElement<string>(`,
+  so the parser reads them as the type syntax they are (it accepts type
+  arguments after text a preprocessor wrote in any file, see
+  TGocciaParser.TryCollectCallExpressionTypeArguments) and every token and
+  comment in them keeps its place in the file. }
+procedure TGocciaJSXTransformer.CopyJSXTypeArguments(const ATagName: string);
+var
+  ListEnd, StoppedAt, QuotedEnd: Integer;
+  C: Char;
+begin
+  ListEnd := JSXTypeArgumentsEnd(JSXTypeArgumentsStart(FPos), StoppedAt);
+  if ListEnd = 0 then
+    RaiseJSXError(Format('JSX: Unterminated type arguments in <%s>',
+      [ATagName]));
+
+  AddIdentityMapping;
+  while FPos < ListEnd do
+  begin
+    C := CurrentChar;
+    if CharInSet(C, ['''', '"', '`']) then
+      QuotedEnd := SkipQuotedAt(FPos, 0)
+    else if (C = '/') and CharInSet(PeekAt(1), ['/', '*']) then
+      QuotedEnd := SkipTriviaAt(FPos)
+    else
+      QuotedEnd := 0;
+    if QuotedEnd > 0 then
+    begin
+      // Strings, templates and comments are copied as they are.
+      while (FPos < QuotedEnd) and (FPos < ListEnd) do
+      begin
+        C := CurrentChar;
+        CopyChar;
+        if C = #10 then
+          AddIdentityMapping;
+      end;
+      Continue;
+    end;
+    CopyChar;
+    if C = #10 then
+      AddIdentityMapping
+    else if (C = '<') and (CurrentChar = '<') then
+      // `<<T>(x: T) => T>` opens a list with a generic function type, and
+      // the lexer would read the two angles as a shift.
+      Emit(' ');
+  end;
 end;
 
 function TGocciaJSXTransformer.EscapeJSString(const AText: string): string;
@@ -1100,12 +1350,15 @@ begin
     end;
 
     { An element is rewritten whole, so nothing inside the factory call is a
-      copy of anything. Its two edges still correspond exactly, and anchoring
-      them is what lets a statement whose text ends at an element — a `const`
-      with no semicolon, an expression statement closed by ASI — report the
-      range it actually covers. }
+      copy of anything but its type arguments. Its two edges still correspond
+      exactly, and anchoring them is what lets a statement whose text ends at
+      an element — a `const` with no semicolon, an expression statement
+      closed by ASI — report the range it actually covers. }
     FOriginRuns.NoteAnchor(FOutput.Length, StartOffset - 1);
-    EmitMapped(FFactoryName + '(', StartLine, StartColumn);
+    EmitMapped(FFactoryName, StartLine, StartColumn);
+    if not IsFragment and (JSXTypeArgumentsStart(FPos) > 0) then
+      CopyJSXTypeArguments(TagName);
+    Emit('(');
 
     if IsFragment then
     begin
@@ -1804,7 +2057,7 @@ begin
           CopyLineComment
         else if PeekAt(1) = '*' then
           CopyBlockComment
-        else if FLastTokenKind in [ltkNone, ltkOperator] then
+        else if IsJSXContext then
           CopyRegexLiteral
         else
         begin
@@ -2069,13 +2322,19 @@ begin
 
     // A line break may start a statement, so it reads as an operator —
     // except at the top level of a for header, where none can start and the
-    // token before still decides what `of` is.
+    // token before still decides what `of` is. After an expression's end it
+    // is ltkLineBreak, since the expression may also go on.
     if C = #10 then
     begin
       CopyChar;
       AddIdentityMapping;
       if not InForHeader then
-        FLastTokenKind := ltkOperator;
+      begin
+        if FLastTokenKind in [ltkExpressionEnd, ltkLineBreak] then
+          FLastTokenKind := ltkLineBreak
+        else
+          FLastTokenKind := ltkOperator;
+      end;
       Continue;
     end;
 
@@ -2086,7 +2345,12 @@ begin
         CopyChar;
       AddIdentityMapping;
       if not InForHeader then
-        FLastTokenKind := ltkOperator;
+      begin
+        if FLastTokenKind in [ltkExpressionEnd, ltkLineBreak] then
+          FLastTokenKind := ltkLineBreak
+        else
+          FLastTokenKind := ltkOperator;
+      end;
       Continue;
     end;
 

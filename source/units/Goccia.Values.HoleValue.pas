@@ -102,6 +102,7 @@ uses
   Generics.Strings,
 
   Goccia.Constants.TypeNames,
+  Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.Timeout;
 
@@ -215,9 +216,17 @@ begin
     while AElements.Count < ACount do
     begin
       AElements.Add(TGocciaHoleValue.HoleValue);
-      if (AElements.Count and 1023) = 0 then
-        CheckExecutionTimeout;
+      if ((AElements.Count - StartCount) and 1023) = 0 then
+      begin
+        // A thousand holes added are a thousand units of work: the deadline,
+        // the instruction budget and a host's abort all reach this loop.
+        CheckExecutionTimeoutNow;
+        SpendInstructions(1024);
+      end;
     end;
+    // The holes after the last full batch.
+    if ((AElements.Count - StartCount) and 1023) <> 0 then
+      SpendInstructions((AElements.Count - StartCount) and 1023);
   except
     AElements.Count := StartCount;
     raise;

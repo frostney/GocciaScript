@@ -28,6 +28,7 @@ type
     procedure TestCompleteUTF8LengthHoldsBackASplitCharacter;
     procedure TestCompleteUTF8LengthIgnoresMalformedTails;
     procedure TestRedirectedOutputWritesUTF8Bytes;
+    procedure TestUnpairedSurrogatesAreReplaced;
     procedure TestConsoleOutputGoesToTheWriter;
     procedure TestConsoleOutputJoinsCharactersSplitAcrossFlushes;
     procedure TestConsoleOutputFlushesEachLine;
@@ -100,6 +101,8 @@ end;
 
 procedure TConsoleOutputTests.SetupTests;
 begin
+  Test('Output replaces unpaired surrogates and preserves pairs and NUL',
+    TestUnpairedSurrogatesAreReplaced);
   Test('CompleteUTF8Length keeps text that ends on a character boundary',
     TestCompleteUTF8LengthKeepsWholeCharacters);
   Test('CompleteUTF8Length holds back a character split at the end',
@@ -118,6 +121,28 @@ begin
     TestConsoleOutputWritesAnIncompleteTailOnClose);
   Test('A failed console write sets IOResult',
     TestConsoleWriterFailureSetsIOResult);
+end;
+
+procedure TConsoleOutputTests.TestUnpairedSurrogatesAreReplaced;
+var
+  Text: UnicodeString;
+  Expected: RawByteString;
+begin
+  // Build at run time so FPC cannot fold the conversion of a constant.
+  Text := Copy('a' + #$D800 + 'b' + #$DC00 + #$DC00#$D800 +
+    #$D83D#$DE00 + #0 + '?', 1, 11);
+  Expected := RawBytes([$61, $EF, $BF, $BD, $62, $EF, $BF, $BD,
+    $EF, $BF, $BD, $EF, $BF, $BD, $F0, $9F, $98, $80, $00, $3F]);
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeRedirected, RecordWrite);
+  Write(FTarget, Text);
+  Expect<Boolean>(TargetFileBytes = Expected).ToBe(True);
+  CloseTarget;
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
+  Write(FTarget, Text);
+  CloseFile(FTarget);
+  Expect<Boolean>(Written = Expected).ToBe(True);
 end;
 
 procedure TConsoleOutputTests.BeforeEach;

@@ -160,6 +160,31 @@ describe("ast.parse with expressions: type syntax", () => {
     expect(find(call, "StringLiteral")).toBeDefined();
   });
 
+  test("a template literal type in call and constructor type arguments is a type, and an expression template is not", () => {
+    const result = parseTypes(
+      "const id = load<`crate-${number}`>(shelf);\nconst box = new Box<`t${Kind}`, Crate>();\nconst cmp = a < `x${1 + 2}` > (c);\n",
+    );
+    const call = find(result.root, "CallExpression");
+    const construct = find(result.root, "NewExpression");
+
+    expect(shapeOf(result, call)).toEqual([
+      "Identifier(load)",
+      "TSTypeParameterInstantiation(<`crate-${number}`>)",
+      "Identifier(shelf)",
+    ]);
+    expect(treeOf(result, find(call, "TSTemplateLiteralType"))).toEqual([
+      "TSTemplateLiteralType(`crate-${number}`)",
+      "TSNumberKeyword(number)",
+    ]);
+    expect(shapeOf(result, find(construct, "TSTypeParameterInstantiation"))).toEqual([
+      "TSTemplateLiteralType(`t${Kind}`)",
+      "TSTypeReference(Crate)",
+    ]);
+    expect(findAll(result.root, "TemplateLiteral").map((node) => text(result, node))).toEqual([
+      "`x${1 + 2}`",
+    ]);
+  });
+
   test("the type arguments of a call inside another call's arguments stay with their own call", () => {
     const result = parseTypes("pack<Box>(wrap<Paper>(item));\n");
     const calls = findAll(result.root, "CallExpression");
@@ -589,6 +614,74 @@ describe("ast.parse with expressions: type syntax", () => {
       ": string",
       ": Element",
     ]);
+  });
+
+  test("with jsx on, an element's type arguments are its first child", () => {
+    const source =
+      "const view = <Select<Map<string, () => void>, 'a' | \"b\"> value={v}><Item<-1> /></Select>;\n";
+    for (const fileName of ["view.tsx", "view.jsx", "view.js", "view.mjs"]) {
+      const result = parseTypes(source, { jsx: true, fileName });
+      const [outer, inner] = findAll(result.root, "JSXElement");
+
+      expect(text(result, outer)).toBe(source.slice(source.indexOf("<Select"), source.lastIndexOf(";")));
+      expect(shapeOf(result, outer)).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "Identifier(v)",
+        "JSXElement(<Item<-1> />)",
+      ]);
+      expect(treeOf(result, outer.children[0])).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "TSTypeReference(Map<string, () => void>)",
+        "TSTypeParameterInstantiation(<string, () => void>)",
+        "TSStringKeyword(string)",
+        "TSFunctionType(() => void)",
+        "TSTypeAnnotation(=> void)",
+        "TSVoidKeyword(void)",
+        "TSUnionType('a' | \"b\")",
+        "TSLiteralType('a')",
+        "StringLiteral('a')",
+        "TSLiteralType(\"b\")",
+        "StringLiteral(\"b\")",
+      ]);
+      expect(treeOf(result, inner)).toEqual([
+        "JSXElement(<Item<-1> />)",
+        "TSTypeParameterInstantiation(<-1>)",
+        "TSLiteralType(-1)",
+        "NumericLiteral(1)",
+      ]);
+      expect(all(result.root).filter((node) => node.kind === "Identifier").map((node) => text(result, node)))
+        .toEqual(["v"]);
+    }
+  });
+
+  test("with jsx on, a list that opens with a generic function type is measured in the file", () => {
+    const source = "const view = <Select<<T>(x: T) => T, '<<'> v={1} />;\n";
+    const result = parseTypes(source, { jsx: true, fileName: "view.tsx" });
+
+    expect(treeOf(result, find(result.root, "TSTypeParameterInstantiation"))).toEqual([
+      "TSTypeParameterInstantiation(<<T>(x: T) => T, '<<'>)",
+      "TSFunctionType(<T>(x: T) => T)",
+      "TSTypeParameterDeclaration(<T>)",
+      "TSTypeParameter(T)",
+      "Parameter(x: T)",
+      "TSTypeAnnotation(: T)",
+      "TSTypeReference(T)",
+      "TSTypeAnnotation(=> T)",
+      "TSTypeReference(T)",
+      "TSLiteralType('<<')",
+      "StringLiteral('<<')",
+    ]);
+  });
+
+  test("with jsx on, an empty, unclosed or closing-tag type argument list is a SyntaxError", () => {
+    for (const source of [
+      "const e = <F<> />;\n",
+      "const e = <F<string\n",
+      "const e = (<F<string a={1} />);\n",
+      "const e = <F<string>></F<string>>;\n",
+    ]) {
+      expect(() => parseTypes(source, { jsx: true, fileName: "view.tsx" })).toThrow(SyntaxError);
+    }
   });
 
   test("children nest inside their parent and siblings do not overlap", () => {

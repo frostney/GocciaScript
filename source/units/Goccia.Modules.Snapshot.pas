@@ -85,6 +85,9 @@ const
   RECORD_SOURCE = 1;
   RECORD_DATA = 2;
   RECORD_ENTRY_COMPILED = 3;
+  // The entry TGocciaEngine.Execute evaluated as a module: compiled as
+  // RECORD_SOURCE is, but keeping its completion value.
+  RECORD_ENTRY_SOURCE = 4;
   // What a key held for a restored record costs, charged before it is kept.
   KEY_ENTRY_BYTES = 96;
   // What a restored record and its bookkeeping hold before its payload: the
@@ -121,7 +124,9 @@ end;
 
 function TGocciaModuleSnapshotRecords.SchemaVersion: Word;
 begin
-  Result := 1;
+  // 2: RECORD_ENTRY_SOURCE, the entry Execute evaluated, which version 1
+  // wrote as RECORD_SOURCE and compiled keeping its completion value.
+  Result := 2;
 end;
 
 procedure TGocciaModuleSnapshotRecords.ListRecords(
@@ -150,7 +155,8 @@ begin
         if Modules[I].SnapshotKind = mskNone then
           AWriter.Refuse('the module ' + Modules[I].Path + ', which a ' +
             'host or a runtime module loader built');
-        if (Modules[I].SnapshotKind in [mskSource, mskEntryCompiled]) and
+        if (Modules[I].SnapshotKind in [mskSource, mskEntrySource,
+            mskEntryCompiled]) and
            not (Modules[I].CompiledModule is TGocciaBytecodeModule) then
           AWriter.Refuse('the module ' + Modules[I].Path + ', whose ' +
             'bytecode the engine does not keep');
@@ -176,10 +182,12 @@ begin
   Module := TGocciaModule(ARecord);
   AWriter.WriteStr(Module.Path);
   AWriter.WriteBool(Module.IsHostOwned);
-  if Module.SnapshotKind in [mskSource, mskEntryCompiled] then
+  if Module.SnapshotKind in [mskSource, mskEntrySource, mskEntryCompiled] then
   begin
     if Module.SnapshotKind = mskEntryCompiled then
       AWriter.WriteU8(RECORD_ENTRY_COMPILED)
+    else if Module.SnapshotKind = mskEntrySource then
+      AWriter.WriteU8(RECORD_ENTRY_SOURCE)
     else
       AWriter.WriteU8(RECORD_SOURCE);
     AWriter.WriteStr(TGocciaBytecodeModule(Module.CompiledModule).SourcePath);
@@ -206,7 +214,7 @@ end;
   diagnostics) went with the restore that read them. }
 function EnsureCompiled(const AReader: TGocciaHeapSnapshotReader;
   const AEngine: TGocciaEngine; const APath, ASourcePath, AHash: string;
-  const AIsHostOwned, AAsCompiledEntry: Boolean;
+  const AIsHostOwned, AAsCompiledEntry, AKeepsCompletionValue: Boolean;
   const ASources: TList<TGocciaModuleSnapshotSource>;
   const ACompiledHere: TList<TObject>;
   out ACompiledNow: Boolean): TGocciaBytecodeModule;
@@ -230,7 +238,7 @@ begin
   begin
     try
       Compiled := AEngine.CompileModuleForSnapshot(ASourcePath, AIsHostOwned,
-        AAsCompiledEntry, HasSource, Source);
+        AAsCompiledEntry, AKeepsCompletionValue, HasSource, Source);
     except
       // The run's limits end the restore as they end any work, and a
       // refusal is the restore's own.
@@ -281,7 +289,7 @@ begin
   Kind := AReader.ReadU8;
   Compiled := nil;
   case Kind of
-    RECORD_SOURCE, RECORD_ENTRY_COMPILED:
+    RECORD_SOURCE, RECORD_ENTRY_SOURCE, RECORD_ENTRY_COMPILED:
       begin
         SourcePath := AReader.ReadStr;
         Hash := AReader.ReadStr;
@@ -322,8 +330,8 @@ begin
       // the record then keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
-        IsHostOwned, Kind = RECORD_ENTRY_COMPILED, FSources, FCompiledHere,
-        CompiledNow);
+        IsHostOwned, Kind = RECORD_ENTRY_COMPILED, Kind = RECORD_ENTRY_SOURCE,
+        FSources, FCompiledHere, CompiledNow);
       HasStamp := HasStamp and CompiledNow and
         (SourcePath <> FEngine.SourcePath);
     end;
@@ -340,6 +348,8 @@ begin
   case Kind of
     RECORD_SOURCE:
       Module.SnapshotKind := mskSource;
+    RECORD_ENTRY_SOURCE:
+      Module.SnapshotKind := mskEntrySource;
     RECORD_ENTRY_COMPILED:
       Module.SnapshotKind := mskEntryCompiled;
   else

@@ -173,6 +173,7 @@ begin
   FEngine := TGocciaEngine.Create('<shadow-realm>', FSource,
     AParentEngine.Capabilities);
   FEngine.ProjectRoot := AParentEngine.ProjectRoot;
+  FEngine.SuppressWarnings := AParentEngine.SuppressWarnings;
   FEngine.HostEnvironment.ConfigureAsChildOf(
     AParentEngine.HostEnvironment);
   FEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine);

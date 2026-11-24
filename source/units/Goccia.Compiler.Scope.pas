@@ -161,6 +161,18 @@ type
     FNextSlot: Integer;
     FMaxSlot: UInt16;
     FRegionPeakSlot: Integer;
+    FAwaitCount: Integer;
+    // The code index of each OP_AWAIT whose registers no clear has covered
+    // yet, in emission order; only the first FUnclearedAwaitCount count.
+    FUnclearedAwaitCodes: array of Integer;
+    FUnclearedAwaitCount: Integer;
+    FAwaitTailNode: TObject;
+    FAwaitTailDiscard: Integer;
+    FJumpCount: Integer;
+    FYieldClearedLo: Integer;
+    FYieldClearedHi: Integer;
+    FYieldClearedJumpStart: Integer;
+    FYieldClearedJumpEnd: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -300,6 +312,44 @@ type
     // start) and folds that peak into the enclosing region.
     function BeginRegisterRegion: Integer;
     function EndRegisterRegion(const ASavedPeak: Integer): Integer;
+    // How many jumps (any instruction with a jump operand) this scope's code
+    // has emitted: code between two equal counts runs straight through.
+    procedure NoteJumpEmitted; {$IFDEF FPC}inline;{$ENDIF}
+    property JumpCount: Integer read FJumpCount;
+    // The registers the last yield cleared before it suspended, [Lo, Hi),
+    // with the jump counts at the start of its operand and at its clear.
+    // They hold nothing unless allocated since, which raises Lo. An enclosing
+    // yield need not clear them again when every path to it ran that clear:
+    // no jump was emitted in its own operand outside the inner yield's
+    // (YieldClearedOnEveryPath).
+    procedure NoteYieldCleared(const ALo, AHi, AJumpStart, AJumpEnd: Integer);
+    function YieldClearedOnEveryPath(const AJumpStart: Integer): Boolean;
+    function YieldClearedHolds(const ASlot: Integer): Boolean;
+    property YieldClearedHi: Integer read FYieldClearedHi;
+
+    // How many OP_AWAIT instructions this scope's code has emitted. A
+    // statement that emitted one has suspended the frame, which is where a
+    // register it left holding an awaited container or promise stays
+    // reachable for as long as the frame lives.
+    procedure NoteAwaitEmitted(const ACodeIndex: Integer);
+    property AwaitCount: Integer read FAwaitCount;
+    // The awaits whose registers are still to be cleared: a statement or a
+    // branch notes the count at its start, and if it has grown by its end,
+    // clears the dead registers and forgets them again (ForgetUnclearedAwaits).
+    property UnclearedAwaitCount: Integer read FUnclearedAwaitCount;
+    // The code index of uncleared await AIndex, 0-based in emission order.
+    function UnclearedAwaitCode(const AIndex: Integer): Integer;
+    procedure ForgetUnclearedAwaits(const AMark: Integer);
+    // The expression an expression statement ends with on every path, so a
+    // short-circuit or conditional branch of it, or the part of an optional
+    // chain after its first `?.`, is the last thing that path runs: such a
+    // branch clears what its awaits left itself, inside the branch, instead
+    // of the statement clearing on every path. AwaitTailDiscard is the
+    // register the statement discards its value in, cleared with them, or -1.
+    procedure SetAwaitTail(const ANode: TObject; const ADiscard: Integer);
+    procedure SetAwaitTailNode(const ANode: TObject);
+    function IsAwaitTail(const ANode: TObject): Boolean;
+    property AwaitTailDiscard: Integer read FAwaitTailDiscard;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     // True when one of the locals, suspended or not, holds register ASlot.
@@ -675,6 +725,15 @@ begin
   FNextSlot := 0;
   FMaxSlot := 0;
   FRegionPeakSlot := 0;
+  FAwaitCount := 0;
+  FUnclearedAwaitCount := 0;
+  FAwaitTailNode := nil;
+  FAwaitTailDiscard := -1;
+  FJumpCount := 0;
+  FYieldClearedLo := 0;
+  FYieldClearedHi := 0;
+  FYieldClearedJumpStart := -1;
+  FYieldClearedJumpEnd := -1;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -1170,6 +1229,47 @@ begin
     FMaxSlot := UInt16(FNextSlot);
   if FNextSlot > FRegionPeakSlot then
     FRegionPeakSlot := FNextSlot;
+  // A register allocated again may be written: it is no longer known clear.
+  if FNextSlot > FYieldClearedLo then
+    FYieldClearedLo := FNextSlot;
+end;
+
+procedure TGocciaCompilerScope.NoteAwaitEmitted(const ACodeIndex: Integer);
+begin
+  Inc(FAwaitCount);
+  if FUnclearedAwaitCount >= Length(FUnclearedAwaitCodes) then
+    SetLength(FUnclearedAwaitCodes, FUnclearedAwaitCount * 2 + 4);
+  FUnclearedAwaitCodes[FUnclearedAwaitCount] := ACodeIndex;
+  Inc(FUnclearedAwaitCount);
+end;
+
+function TGocciaCompilerScope.UnclearedAwaitCode(
+  const AIndex: Integer): Integer;
+begin
+  Result := FUnclearedAwaitCodes[AIndex];
+end;
+
+procedure TGocciaCompilerScope.ForgetUnclearedAwaits(const AMark: Integer);
+begin
+  if AMark < FUnclearedAwaitCount then
+    FUnclearedAwaitCount := AMark;
+end;
+
+procedure TGocciaCompilerScope.SetAwaitTail(const ANode: TObject;
+  const ADiscard: Integer);
+begin
+  FAwaitTailNode := ANode;
+  FAwaitTailDiscard := ADiscard;
+end;
+
+procedure TGocciaCompilerScope.SetAwaitTailNode(const ANode: TObject);
+begin
+  FAwaitTailNode := ANode;
+end;
+
+function TGocciaCompilerScope.IsAwaitTail(const ANode: TObject): Boolean;
+begin
+  Result := Assigned(ANode) and (FAwaitTailNode = ANode);
 end;
 
 function TGocciaCompilerScope.BeginRegisterRegion: Integer;
@@ -1184,6 +1284,32 @@ begin
   Result := FRegionPeakSlot;
   if ASavedPeak > FRegionPeakSlot then
     FRegionPeakSlot := ASavedPeak;
+end;
+
+procedure TGocciaCompilerScope.NoteJumpEmitted;
+begin
+  Inc(FJumpCount);
+end;
+
+procedure TGocciaCompilerScope.NoteYieldCleared(const ALo, AHi, AJumpStart,
+  AJumpEnd: Integer);
+begin
+  FYieldClearedLo := ALo;
+  FYieldClearedHi := AHi;
+  FYieldClearedJumpStart := AJumpStart;
+  FYieldClearedJumpEnd := AJumpEnd;
+end;
+
+function TGocciaCompilerScope.YieldClearedOnEveryPath(
+  const AJumpStart: Integer): Boolean;
+begin
+  Result := (FYieldClearedJumpStart = AJumpStart) and
+    (FYieldClearedJumpEnd = FJumpCount);
+end;
+
+function TGocciaCompilerScope.YieldClearedHolds(const ASlot: Integer): Boolean;
+begin
+  Result := (ASlot >= FYieldClearedLo) and (ASlot < FYieldClearedHi);
 end;
 
 procedure TGocciaCompilerScope.FreeRegister;

@@ -290,6 +290,9 @@ type
     FPendingNewTarget: TGocciaValue;
     FCurrentNewTarget: TGocciaValue;
     FCurrentAsyncPromise: TGocciaPromiseValue;
+    // The argument of a call made through CallOneArgOwned, until the callee's
+    // first frame holds it.
+    FOwnedArgument: TGocciaValue;
     FGlobalBackedTopLevel: Boolean;
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
@@ -738,6 +741,11 @@ type
       const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
+    // Clears ACount registers of the caller's window at absolute index
+    // AAbsoluteIndex (in FRegisterStack) that hold objects: the receiver and
+    // arguments of a call whose callee has copied them (ADR 0181).
+    procedure ReleaseCallerRegisters(const AAbsoluteIndex, ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure HandOffOwnedArgument;
     procedure NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
       const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
@@ -1053,6 +1061,17 @@ begin
   if APolls^.InstructionLimitActive then
     CheckInstructionLimitState(
       PGocciaInstructionLimitState(APolls^.InstructionLimitState));
+end;
+
+{ One element of a spread of a native array: the polls an armed run makes,
+  and a unit of the instruction budget, which no dispatched instruction has
+  counted. }
+procedure SpendSpreadBudget(const APolls: PGocciaThreadPolls);
+begin
+  if APolls^.InstructionLimitActive then
+    IncrementInstructionCounterState(
+      PGocciaInstructionLimitState(APolls^.InstructionLimitState));
+  RunArmedPolls(APolls);
 end;
 
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
@@ -2512,6 +2531,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallOneArgOwned(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
@@ -2607,6 +2627,12 @@ type
     FState: TGocciaBytecodeGeneratorState;
     FResumeKind: TGocciaBytecodeGeneratorResumeKind;
     FResumeValue: TGocciaRegister;
+    // True while TGocciaVMAsyncAwaitContinuationValue.HandleReaction resumes
+    // this continuation with the running job's argument: only then may the
+    // resume point let go of that argument's queued root, because any other
+    // resume (a guest's own next() call, say) leaves the job's native code
+    // holding it.
+    FResumedByAwaitJob: Boolean;
     FResumeRegister: UInt16;
     FReturnSentinel: TGocciaValue;
     FReturnValue: TGocciaValue;
@@ -2705,7 +2731,7 @@ type
     procedure HandleYield(const AValue: TGocciaRegister;
       const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
-      const AContinuationIP: Integer);
+      const AContinuationIP: Integer; const ATempOperand: Boolean);
     procedure HandleYieldDelegate(const AIterable: TGocciaRegister;
       const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
@@ -4456,12 +4482,22 @@ end;
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYield(
   const AValue: TGocciaRegister; const AResumeRegister: UInt16;
   const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
-  const APrevCovLine: UInt32; const AContinuationIP: Integer);
+  const APrevCovLine: UInt32; const AContinuationIP: Integer;
+  const ATempOperand: Boolean);
 begin
   ClearDelegateState;
   CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
     AResumeRegister, AContinuationIP);
   SignalYield(AValue, 0);
+  // The operand register is the resume register (OP_YIELD's A and B are the
+  // same), a temporary holding only the yielded value: a next() writes the
+  // sent value over it before any instruction runs, and a throw() or
+  // return() abandons the yield expression, so the resumed body never reads
+  // the copy. Left there it would keep the yielded value reachable for as
+  // long as the generator stays suspended, after its consumer has dropped
+  // it. The value travels on in FPendingYieldValue and the suspension.
+  if ATempOperand and (AResumeRegister < FContinuationRegisterCount) then
+    FContinuationRegisters[AResumeRegister] := RegisterUndefined;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.SignalYield(
@@ -5227,8 +5263,13 @@ begin
   FVM.FCurrentAsyncPromise := FPromise;
   try
     try
-      ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done,
-        @Suspended);
+      FContinuation.FResumedByAwaitJob := True;
+      try
+        ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done,
+          @Suspended);
+      finally
+        FContinuation.FResumedByAwaitJob := False;
+      end;
       // The body awaited again: its next await's reaction resumes it.
       if Suspended then
         Exit;
@@ -5282,7 +5323,12 @@ begin
         end;
       end
       else if FAsyncGeneratorResult then
-        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
+      begin
+        // AwaitValue runs jobs. A yielded value is no longer kept by the
+        // suspended frame (HandleYield), so it is rooted here meanwhile.
+        AddTempRootIfNeeded(ResultRoot, ResultValue);
+        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done));
+      end
       else if Done then
         FPromise.Resolve(ResultValue);
     except
@@ -6522,6 +6568,23 @@ begin
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
     VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0)));
+end;
+
+function TGocciaBytecodeFunctionValue.CallOneArgOwned(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // The first frame this call sets up is the callee's own: it takes AArg0 into
+  // its registers and then lets the running job's root on it go
+  // (TGocciaVM.HandOffOwnedArgument). A callee that sets up no frame at all
+  // leaves the root to the job, and the field is cleared either way. A
+  // generator with a parameter preamble runs it in that first frame, which is
+  // fine: the generator object keeps the argument itself.
+  FVM.FOwnedArgument := AArg0;
+  try
+    Result := CallOneArg(AArg0, AThisValue);
+  finally
+    FVM.FOwnedArgument := nil;
+  end;
 end;
 
 function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
@@ -10080,6 +10143,11 @@ begin
     grkObject:
       if AKey.ObjectValue is TGocciaStringLiteralValue then
         Result := TGocciaStringLiteralValue(AKey.ObjectValue).Value
+      else if AKey.ObjectValue is TGocciaNumberLiteralValue then
+        // VM number fast paths retain boxed primitives such as negative zero.
+        // Read the numeric payload directly; diagnostic formatting must not
+        // invoke guest coercion on object keys.
+        Result := FormatDouble(TGocciaNumberLiteralValue(AKey.ObjectValue).Value)
       else if AKey.ObjectValue is TGocciaSymbolValue then
         Result := TGocciaSymbolValue(AKey.ObjectValue).ToDisplayString.Value
       else
@@ -10337,8 +10405,10 @@ begin
       try
         Polls := @GThreadPolls;
         repeat
+          // A native iterator's steps are work no instruction counts: spend the
+          // budget as the spread of a native array does.
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             Result.Elements.Add(NextResult);
@@ -10388,7 +10458,7 @@ begin
         Polls := @GThreadPolls;
         repeat
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           CallArgs := AcquireArguments;
           try
             NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -10479,7 +10549,12 @@ begin
           (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
       if Polls^.Any <> 0 then
-        RunArmedPolls(Polls);
+      begin
+        // The spread of a huge array is native work no instruction counts, so
+        // it spends the budget itself (the chokepoint rule in Goccia.Timeout).
+        // Out of line, so that the unarmed loop is the code it always was.
+        SpendSpreadBudget(Polls);
+      end;
       Target.Add(ArrayIteratorValueAt(SourceArray, I));
       Inc(I);
     end;
@@ -10570,8 +10645,9 @@ begin
       try
         Polls := @GThreadPolls;
         repeat
+          // Native iterator steps spend the budget, as in IterableToArray.
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             AArray.Elements.Add(NextResult);
@@ -10593,7 +10669,7 @@ begin
       Polls := @GThreadPolls;
       repeat
         if Polls^.Any <> 0 then
-          RunArmedPolls(Polls);
+          SpendSpreadBudget(Polls);
         CallArgs := AcquireArguments;
         try
           NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -16595,6 +16671,31 @@ begin
     Inc(FShimLoad^.OtherFrames);
 end;
 
+procedure TGocciaVM.HandOffOwnedArgument;
+var
+  Argument: TGocciaValue;
+begin
+  Argument := FOwnedArgument;
+  FOwnedArgument := nil;
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(Argument);
+end;
+
+procedure TGocciaVM.ReleaseCallerRegisters(const AAbsoluteIndex,
+  ACount: Integer);
+var
+  Registers, Limit: PGocciaRegister;
+begin
+  Registers := @FRegisterStack[AAbsoluteIndex];
+  Limit := Registers + ACount;
+  while Registers < Limit do
+  begin
+    if Registers^.Kind = grkObject then
+      Registers^.Kind := grkUndefined;
+    Inc(Registers);
+  end;
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
   const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -16686,6 +16787,15 @@ begin
     FRegisters[0] := AThisValue;
     for I := 0 to AArgCount - 1 do
       FRegisters[I + 1] := FArguments[I];
+    // A frame that never reads its argument window gets the empty one the
+    // branch above gives it, once an arena had to grow: the window the
+    // arguments were staged in would otherwise keep them reachable after the
+    // callee drops its parameters.
+    if Template.ArgumentWindowUnread and (AArgCount > 0) then
+    begin
+      FillChar(FArguments[0], AArgCount * SizeOf(TGocciaRegister), 0);
+      FArgCount := 0;
+    end;
   end;
   FCurrentClosure := AClosure;
   if Assigned(AClosure.GlobalScope) then
@@ -17042,6 +17152,7 @@ var
   ApplyArgRegisters: array[0..2] of TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   CalleeIsBytecodeFunction: Boolean;
+  CallerArgIndex: Integer;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
@@ -17340,6 +17451,8 @@ begin
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+      if Assigned(FOwnedArgument) then
+        HandOffOwnedArgument;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then
@@ -17372,15 +17485,45 @@ begin
               if GActiveBytecodeGenerator.FIgnoreNextResume then
                 GActiveBytecodeGenerator.FIgnoreNextResume := False
               else
+              begin
                 SetRegisterRaw(GActiveBytecodeGenerator.FResumeRegister,
                   GActiveBytecodeGenerator.FResumeValue);
+                // The register holds the value now. The generator marks
+                // FResumeValue for as long as it lives, and the job that
+                // resumed it roots its argument until the job ends, so both
+                // would keep an awaited value reachable after the program has
+                // dropped it, until the next suspension. Only the await job's
+                // own resume lets go (FResumedByAwaitJob).
+                if GActiveBytecodeGenerator.FResumedByAwaitJob then
+                begin
+                  GActiveBytecodeGenerator.FResumedByAwaitJob := False;
+                  if (GActiveBytecodeGenerator.FResumeValue.Kind = grkObject) and
+                     Assigned(TGocciaMicrotaskQueue.Instance) then
+                    TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
+                      GActiveBytecodeGenerator.FResumeValue.ObjectValue);
+                  GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+                end;
+              end;
             end;
           bgrkThrow:
-            HandleExceptionUnwind(
-              RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
-              InitialFrameStackCount, InitialClosedNumericFrameCount,
-              SavedHandlerCount,
-              Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            begin
+              HandleExceptionUnwind(
+                RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
+                InitialFrameStackCount, InitialClosedNumericFrameCount,
+                SavedHandlerCount,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              // The handler's register holds the thrown value now (see the
+              // bgrkNext case above for why both holders are let go).
+              if GActiveBytecodeGenerator.FResumedByAwaitJob then
+              begin
+                GActiveBytecodeGenerator.FResumedByAwaitJob := False;
+                if (GActiveBytecodeGenerator.FResumeValue.Kind = grkObject) and
+                   Assigned(TGocciaMicrotaskQueue.Instance) then
+                  TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
+                    GActiveBytecodeGenerator.FResumeValue.ObjectValue);
+                GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+              end;
+            end;
           bgrkReturn:
             begin
               GActiveBytecodeGenerator.FReturnValue :=

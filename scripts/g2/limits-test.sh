@@ -67,7 +67,7 @@ for k in 1 2 3; do
   "$G2" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
 done
 
-# --max-memory (ADR 0181): a full collection that leaves more live than the limit refuses at the next back edge or
+# --max-memory (ADR 0184): a full collection that leaves more live than the limit refuses at the next back edge or
 # call with a catchable RangeError; a script that refuses to free anything after eight refusals in a row ends as a
 # spent limit does (the message names the live bytes, which vary). Compiled loops poll for it at their back edges.
 R='Uncaught RangeError: Allocation failed: GC heap size exceeds the configured memory limit'

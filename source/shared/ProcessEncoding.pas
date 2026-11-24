@@ -38,9 +38,11 @@ implementation
 
 {$IF DEFINED(MSWINDOWS)}
 uses
+  SysUtils,
   Windows,
 
-  ConsoleOutput;
+  ConsoleOutput,
+  TextEncoding;
 
 const
   { At most as many UTF-16 code units as UTF-8 bytes: a one-byte to
@@ -104,7 +106,55 @@ begin
   Result := True;
 end;
 
+var
+  GPlatformUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
+    var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
+
+{ UTF-8 text from UTF-16: ASCII copied as it is, anything else through
+  TextEncoding, so an unpaired surrogate becomes U+FFFD as on Linux and macOS
+  (this unit's own string manager there); other code pages keep the RTL's
+  conversion. }
+procedure OutputUnicode2AnsiMove(ASource: PUnicodeChar;
+  var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
+var
+  Target: PAnsiChar;
+  I: SizeInt;
+  Text: UnicodeString;
+  Bytes: TBytes;
+begin
+  if (ACodePage = CP_UTF8) or (ACodePage = CP_ASCII) then
+  begin
+    I := 0;
+    while (I < ALength) and (Ord(ASource[I]) <= $7F) do
+      Inc(I);
+    if I = ALength then
+    begin
+      SetLength(ADest, ALength);
+      Target := PAnsiChar(ADest);
+      for I := 0 to ALength - 1 do
+        Target[I] := AnsiChar(Ord(ASource[I]));
+      SetCodePage(ADest, ACodePage, False);
+      Exit;
+    end;
+  end;
+  if ACodePage = CP_UTF8 then
+  begin
+    // Keeps the explicit length, NULs included, and calls no other RTL
+    // conversion from inside the string manager's own callback.
+    SetString(Text, ASource, ALength);
+    Bytes := EncodeUTF8WithReplacement(Text);
+    SetLength(ADest, Length(Bytes));
+    if Length(Bytes) > 0 then
+      Move(Bytes[0], ADest[1], Length(Bytes));
+    SetCodePage(ADest, CP_UTF8, False);
+    Exit;
+  end;
+  GPlatformUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
+end;
+
 initialization
+  GPlatformUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
+  WideStringManager.Unicode2AnsiMoveProc := OutputUnicode2AnsiMove;
   SetMultiByteConversionCodePage(CP_UTF8);
   SetMultiByteRTLFileSystemCodePage(CP_UTF8);
   // A GUI application's StdOut and StdErr show a message box, and its other

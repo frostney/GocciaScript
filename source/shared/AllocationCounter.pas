@@ -18,6 +18,13 @@ procedure StartCountingAllocations;
 // since StartCountingAllocations.
 function StopCountingAllocations: Int64;
 
+// The bytes the blocks of the last count asked for: the size of each GetMem
+// and AllocMem and the new size of each ReAllocMem. A string grown by one
+// append at a time asks for its whole length again on every append, so these
+// grow with the square of its length while the count of blocks grows only
+// with the number of appends.
+function CountedAllocationBytes: Int64;
+
 implementation
 
 uses
@@ -26,23 +33,27 @@ uses
 var
   PreviousManager: TMemoryManager;
   AllocationCount: Int64;
+  AllocationBytes: Int64;
   Counting: Boolean;
 
 function CountingGetMem(ASize: PtrUInt): Pointer;
 begin
   Inc(AllocationCount);
+  Inc(AllocationBytes, ASize);
   Result := PreviousManager.GetMem(ASize);
 end;
 
 function CountingAllocMem(ASize: PtrUInt): Pointer;
 begin
   Inc(AllocationCount);
+  Inc(AllocationBytes, ASize);
   Result := PreviousManager.AllocMem(ASize);
 end;
 
 function CountingReAllocMem(var APointer: Pointer; ASize: PtrUInt): Pointer;
 begin
   Inc(AllocationCount);
+  Inc(AllocationBytes, ASize);
   Result := PreviousManager.ReAllocMem(APointer, ASize);
 end;
 
@@ -58,6 +69,7 @@ begin
   CountingManager.AllocMem := @CountingAllocMem;
   CountingManager.ReAllocMem := @CountingReAllocMem;
   AllocationCount := 0;
+  AllocationBytes := 0;
   Counting := True;
   SetMemoryManager(CountingManager);
 end;
@@ -69,6 +81,11 @@ begin
   SetMemoryManager(PreviousManager);
   Counting := False;
   Result := AllocationCount;
+end;
+
+function CountedAllocationBytes: Int64;
+begin
+  Result := AllocationBytes;
 end;
 
 end.

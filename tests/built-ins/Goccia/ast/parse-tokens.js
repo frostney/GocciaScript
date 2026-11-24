@@ -441,6 +441,62 @@ describe("ast.parse tokens", () => {
     expect(uncovered(result)).toEqual([]);
   });
 
+  test("with jsx on, an element's type arguments are tokens in the file, comments included", () => {
+    const source = [
+      "const el = <List /* a */ <",
+      "  // b",
+      "  Map<string, () => void>, 'x'",
+      "> /* c */ items={v} />;",
+      "",
+    ].join("\n");
+    for (const fileName of ["a.tsx", "a.jsx", "a.js", "a.mjs"]) {
+      const result = parse(source, { jsx: true, fileName, tokens: true });
+
+      expect(lexed(source, { jsx: true, fileName })).toEqual([
+        ["Keyword", "const"],
+        ["Identifier", "el"],
+        ["Punctuator", "="],
+        ["Punctuator", "<"],
+        ["JSXIdentifier", "List"],
+        ["BlockComment", "/* a */"],
+        ["Punctuator", "<"],
+        ["LineComment", "// b"],
+        ["Identifier", "Map"],
+        ["Punctuator", "<"],
+        ["Identifier", "string"],
+        ["Punctuator", ","],
+        ["Punctuator", "("],
+        ["Punctuator", ")"],
+        ["Punctuator", "=>"],
+        ["Keyword", "void"],
+        ["Punctuator", ">"],
+        ["Punctuator", ","],
+        ["StringLiteral", "'x'"],
+        ["Punctuator", ">"],
+        ["BlockComment", "/* c */"],
+        ["JSXIdentifier", "items"],
+        ["Punctuator", "="],
+        ["Punctuator", "{"],
+        ["Identifier", "v"],
+        ["Punctuator", "}"],
+        ["Punctuator", "/"],
+        ["Punctuator", ">"],
+        ["Punctuator", ";"],
+      ]);
+      expect(uncovered(result)).toEqual([]);
+    }
+  });
+
+  test("with jsx on, a `>`, brace or backtick in a type argument's string or template does not end the list", () => {
+    const source = "const el = <Outer><F<{ a: '>' }, `t${`}`}`> v={1} /></Outer>;\n";
+    const result = parse(source, { jsx: true, fileName: "a.tsx", tokens: true });
+
+    expect(textsOf(source, "JSXIdentifier", { jsx: true, fileName: "a.tsx" })).toEqual([
+      "Outer", "F", "v", "Outer",
+    ]);
+    expect(uncovered(result)).toEqual([]);
+  });
+
   test("with jsx on, an element inside an attribute expression is measured in the file", () => {
     const source = "const el = <Box icon={<Icon name=\"x\" />} />;\n";
 
@@ -503,6 +559,18 @@ describe("ast.parse tokens", () => {
       ["Identifier", "B"],
       ["TemplateTail", "}c`"],
       ["Punctuator", ";"],
+    ]);
+  });
+
+  test("a template literal type in call and constructor type arguments is tokens in the file", () => {
+    const source = "const id = load<`crate-${number}`>(shelf);\nconst box = new Box<`t${Kind}`, Crate>();\n";
+    const result = parse(source, { fileName: "types.ts", tokens: true });
+
+    expect(uncovered(result)).toEqual([]);
+    expect(textsOf(source, "TemplateHead", { fileName: "types.ts" })).toEqual(["`crate-${", "`t${"]);
+    expect(textsOf(source, "TemplateTail", { fileName: "types.ts" })).toEqual(["}`", "}`"]);
+    expect(textsOf(source, "Identifier", { fileName: "types.ts" })).toEqual([
+      "id", "load", "number", "shelf", "box", "Box", "Kind", "Crate",
     ]);
   });
 

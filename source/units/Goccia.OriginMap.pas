@@ -101,7 +101,9 @@ type
 
     { The original offset for a generated one. Returns True when the answer is
       exact — the offset fell on a run — and False when it fell in a gap and
-      was rounded outward per ABias. }
+      was rounded outward per ABias. An end offset at the start of a copy
+      that no run before it reaches ends the synthesized text before the
+      copy, so it is in a gap. }
     function Map(const AGeneratedOffset: Integer;
       const ABias: TGocciaOriginBias; out AOriginalOffset: Integer): Boolean;
 
@@ -254,11 +256,24 @@ begin
     which is what a start wants; an end walks back over the runs that merely
     touch this boundary. }
   if ABias = obEnd then
+  begin
     while (Index > 0) and
           (FRuns.Items[Index].GeneratedStart = AGeneratedOffset) and
           (FRuns.Items[Index - 1].GeneratedStart +
            FRuns.Items[Index - 1].Length = AGeneratedOffset) do
       Dec(Index);
+
+    { An end at the start of a copy that no run before it reaches ends the
+      synthesized text before the copy, not the copy. It is in a gap, and
+      rounds up to where the copy begins. An anchor there would have been
+      found above, which is how a rewritten construct keeps an exact end. }
+    if (AGeneratedOffset > 0) and (FRuns.Items[Index].Length > 0) and
+       (FRuns.Items[Index].GeneratedStart = AGeneratedOffset) then
+    begin
+      AOriginalOffset := FRuns.Items[Index].OriginalStart;
+      Exit;
+    end;
+  end;
 
   if AGeneratedOffset <=
      FRuns.Items[Index].GeneratedStart + FRuns.Items[Index].Length then

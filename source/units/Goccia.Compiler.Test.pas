@@ -184,6 +184,7 @@ type
     procedure TestLogicalInitializerWork;
     procedure TestDirectEvalRecordWork;
     procedure TestNewTypeArgumentWork;
+    procedure TestTemplateTypeArgumentWork;
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestMatchBindingNameChecksScale;
@@ -211,6 +212,16 @@ type
     procedure TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
+    procedure TestTailAwaitBranchClearsInsideBranch;
+    procedure TestNestedYieldsClearLinearly;
+    procedure TestDeepBodyParametersMayBeDropped;
+    procedure TestYieldInitializerClearsItsTemporary;
+    function CompileModuleCode(const ASource: string;
+      const ALinked, ADiscardsCompletionValue: Boolean;
+      const ALabels: Boolean = False): TGocciaBytecodeModule;
+    procedure TestModuleTopLevelStatementsClearTheirRegisters;
+    procedure TestImportedModuleKeepsNoCompletionValue;
+    procedure TestModuleTopLevelAwaitBranchClearsOnce;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
@@ -367,6 +378,8 @@ begin
   Test('Right-nested logical initializers use linear folding work', TestLogicalInitializerWork);
   Test('Direct eval records use linear name lookup work', TestDirectEvalRecordWork);
   Test('Constructor type argument probes use linear token work', TestNewTypeArgumentWork);
+  Test('Type argument probes over templates use linear token work',
+    TestTemplateTypeArgumentWork);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
   Test('Match-pattern binding-name checks scale with the bindings',
@@ -483,6 +496,20 @@ begin
     TestOtherFunctionKindsReturnWithoutAwait);
   Test('for await close awaits the return result',
     TestForAwaitCloseAwaitsReturnResult);
+  Test('a skippable await in a statement''s tail clears inside its branch',
+    TestTailAwaitBranchClearsInsideBranch);
+  Test('nested yields clear each scratch register once',
+    TestNestedYieldsClearLinearly);
+  Test('a body nested past the parameter scan bound may drop its parameter',
+    TestDeepBodyParametersMayBeDropped);
+  Test('a yield initializer leaves no copy in its temporary',
+    TestYieldInitializerClearsItsTemporary);
+  Test('a module''s top-level statements clear the registers they used',
+    TestModuleTopLevelStatementsClearTheirRegisters);
+  Test('an imported module keeps no completion value',
+    TestImportedModuleKeepsNoCompletionValue);
+  Test('a module''s top-level await branch clears its registers once',
+    TestModuleTopLevelAwaitBranchClearsOnce);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
@@ -815,6 +842,418 @@ begin
     if Assigned(Result) then
       Exit(Result);
   end;
+end;
+
+// An expression statement that awaits clears the registers its awaits left
+// (line 0, which coverage does not count). When the await sits in a branch the
+// statement ends with (`&&`, `||`, `??`, `?:`, the part of an optional chain
+// after its `?.`), the clear is inside that branch, between the jump that
+// skips it and the jump's target, so a path that skips the await pays
+// nothing. An await in a nested arrow is that arrow's own, and an await the
+// statement always reaches still clears.
+procedure TTestCompiler.TestTailAwaitBranchClearsInsideBranch;
+
+  function ClearPCs(const ATemplate: TGocciaFunctionTemplate): TArray<Integer>;
+  var
+    PC, Count: Integer;
+  begin
+    Count := 0;
+    SetLength(Result, ATemplate.CodeCount);
+    for PC := 0 to ATemplate.CodeCount - 1 do
+      if (DecodeOp(ATemplate.GetInstruction(PC)) = Ord(OP_LOAD_UNDEFINED)) and
+         Assigned(ATemplate.DebugInfo) and
+         (ATemplate.DebugInfo.GetLineForPC(UInt32(PC)) = 0) then
+      begin
+        Result[Count] := PC;
+        Inc(Count);
+      end;
+    SetLength(Result, Count);
+  end;
+
+  procedure CheckSource(const ASource: string; const AJumpOp: TGocciaOpCode);
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    PC, JumpPC, Target, Prefix: Integer;
+    Instruction: UInt32;
+    Clears: TArray<Integer>;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_AWAIT);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if not Assigned(Func) then
+        Exit;
+      JumpPC := -1;
+      for PC := 0 to Func.CodeCount - 1 do
+        if DecodeOp(Func.GetInstruction(PC)) = Ord(AJumpOp) then
+        begin
+          JumpPC := PC;
+          Break;
+        end;
+      Expect<Boolean>(JumpPC >= 0).ToBe(True);
+      if JumpPC < 0 then
+        Exit;
+      Instruction := Func.GetInstruction(JumpPC);
+      Prefix := 0;
+      if (JumpPC > 0) and
+         (DecodeOp(Func.GetInstruction(JumpPC - 1)) = Ord(OP_WIDE)) then
+        Prefix := Integer(Func.GetInstruction(JumpPC - 1));
+      Target := JumpPC + 1 + DecodeJumpOffset(Instruction, UInt32(Prefix),
+        JumpOperandOf(DecodeOp(Instruction)));
+      Clears := ClearPCs(Func);
+      Expect<Boolean>(Length(Clears) > 0).ToBe(True);
+      for PC := 0 to High(Clears) do
+        Expect<Boolean>((Clears[PC] > JumpPC) and (Clears[PC] < Target))
+          .ToBe(True);
+    finally
+      Module.Free;
+    end;
+  end;
+
+  procedure CheckShape(const AStatement: string; const AJumpOp: TGocciaOpCode);
+  begin
+    CheckSource('const run = async (ready, f, a, b) => {' + LineEnding +
+      '  ' + AStatement + LineEnding + '};', AJumpOp);
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  CheckShape('ready && await f(a, b);', OP_JUMP_IF_FALSE);
+  CheckSource('class C extends Object {' + LineEnding +
+    '  async m(f, a, b) {' + LineEnding +
+    '    super.n?.(a, await f(a, b));' + LineEnding +
+    '  }' + LineEnding + '}', OP_JUMP_IF_NULLISH);
+  CheckShape('ready || await f(a, b);', OP_JUMP_IF_TRUE);
+  CheckShape('ready ?? await f(a, b);', OP_JUMP_IF_NOT_NULLISH);
+  CheckShape('ready ? await f(a, b) : 0;', OP_JUMP_IF_FALSE);
+  CheckShape('ready ? 0 : await f(a, b);', OP_JUMP);
+  CheckShape('ready?.m(await f(a, b));', OP_JUMP_IF_NULLISH);
+  CheckShape('ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
+  CheckShape('delete ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
+  CheckShape('a, ready && await f(a, b);', OP_JUMP_IF_FALSE);
+  CheckShape('ready && (a ?? await f(a, b));', OP_JUMP_IF_FALSE);
+
+  // The arrow's await does not make the statement around it clear.
+  Module := CompileSource('const run = async (ready, f, a, b) => {' +
+    LineEnding + '  ready && f(async () => { await f(a, b); });' +
+    LineEnding + '};');
+  try
+    Expect<Integer>(Length(ClearPCs(Module.TopLevel.GetFunction(0))))
+      .ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // An await the statement always reaches clears on its one path.
+  Module := CompileSource('const run = async (ready, f, a, b) => {' +
+    LineEnding + '  f(a, b, await f(a, b));' + LineEnding + '};');
+  try
+    Expect<Boolean>(
+      Length(ClearPCs(FindFunctionWithOp(Module.TopLevel, OP_AWAIT))) > 0)
+      .ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// A yield clears the registers its operand left above the live ones before it
+// suspends, and an enclosing yield does not clear them again, so yields nested
+// through array literals emit clears in proportion to their depth, also with
+// a branch at the innermost level.
+procedure TTestCompiler.TestNestedYieldsClearLinearly;
+
+  function ClearsAtDepth(const ADepth: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Source: string;
+    I: Integer;
+  begin
+    Source := 'flag ? yield 0 : 1';
+    for I := 1 to ADepth do
+      Source := '[yield ' + Source + ']';
+    Module := CompileSource('const holder = { *g(flag) { ' + Source +
+      '; } };');
+    try
+      Result := CountOpRecursive(Module.TopLevel, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Shallow, Deep: Integer;
+begin
+  Shallow := ClearsAtDepth(10);
+  Deep := ClearsAtDepth(40);
+  // Linear growth: a few clears per level, not a level's worth per level.
+  Expect<Boolean>(Deep - Shallow <= 3 * 30).ToBe(True);
+end;
+
+// Module source compiled as the engine compiles it: ALinked as a module the
+// loader links (its bindings in the module's environment record), otherwise
+// as a global-backed script top level.
+function TTestCompiler.CompileModuleCode(const ASource: string;
+  const ALinked, ADiscardsCompletionValue: Boolean;
+  const ALabels: Boolean): TGocciaBytecodeModule;
+var
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  SourceLines: TStringList;
+  ParserOptions: TGocciaParserOptions;
+begin
+  Lexer := TGocciaLexer.Create(ASource, '<module>');
+  SourceLines := CreateTextLines(ASource);
+  Parser := TGocciaParser.CreateFromLexer(Lexer, '<module>', SourceLines);
+  ParserOptions := Parser.Options;
+  ParserOptions.ModuleSource := True;
+  ParserOptions.LabelStatementsEnabled := ALabels;
+  Parser.ApplyOptions(ParserOptions);
+  ProgramNode := Parser.Parse;
+  Compiler := TGocciaCompiler.Create('<module>');
+  try
+    Compiler.GlobalBackedTopLevel := True;
+    Compiler.PreinitializedTopLevelFunctions := ALinked;
+    Compiler.AsyncTopLevel := ProgramNode.HasTopLevelAwait;
+    Compiler.DiscardsCompletionValue := ADiscardsCompletionValue;
+    Result := Compiler.Compile(ProgramNode);
+  finally
+    Compiler.Free;
+    ProgramNode.Free;
+    Parser.Free;
+    SourceLines.Free;
+    Lexer.Free;
+  end;
+end;
+
+// The clears a statement emits for the registers it left take line 0, which
+// coverage does not count. The prologue before the first statement, which
+// also has no line, initializes registers rather than clearing them.
+function UncountedClears(const ATemplate: TGocciaFunctionTemplate): Integer;
+var
+  PC: Integer;
+  InBody: Boolean;
+begin
+  Result := 0;
+  InBody := False;
+  if not Assigned(ATemplate.DebugInfo) then
+    Exit;
+  for PC := 0 to ATemplate.CodeCount - 1 do
+    if ATemplate.DebugInfo.GetLineForPC(UInt32(PC)) > 0 then
+      InBody := True
+    else if InBody and
+       (DecodeOp(ATemplate.GetInstruction(PC)) = Ord(OP_LOAD_UNDEFINED)) then
+      Inc(Result);
+end;
+
+// A linked module reads its bindings by name into registers above the live
+// ones, so each top-level statement clears the registers it used once it
+// ends, awaited or not. A loop at the top level clears once after itself, as
+// any loop does, and nothing inside its body: the statements in it are not
+// top-level ones. A global-backed script top level is unchanged.
+procedure TTestCompiler.TestModuleTopLevelStatementsClearTheirRegisters;
+const
+  READ_AND_DROP =
+    'let b = globalThis.holder.value;' + LineEnding +
+    'const n = b.byteLength;' + LineEnding +
+    'b = null;' + LineEnding;
+  TOP_LEVEL_DECLARATIONS =
+    'let total = 0;' + LineEnding +
+    'const b = globalThis.holder.value;' + LineEnding;
+  TOP_LEVEL_LOOP =
+    'for (const i of globalThis.holder.items) { total += b.byteLength; }' +
+    LineEnding;
+var
+  Module: TGocciaBytecodeModule;
+  WithoutLoop: Integer;
+begin
+  Module := CompileModuleCode(READ_AND_DROP, True, True);
+  try
+    Expect<Boolean>(UncountedClears(Module.TopLevel) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+  Module := CompileModuleCode(READ_AND_DROP, False, False);
+  try
+    Expect<Integer>(UncountedClears(Module.TopLevel)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  // A top-level loop adds no line-0 clear: its own clear, mapped to the
+  // loop's line, runs once after it, and its body's statements clear nothing.
+  Module := CompileModuleCode(TOP_LEVEL_DECLARATIONS, True, True);
+  try
+    WithoutLoop := UncountedClears(Module.TopLevel);
+  finally
+    Module.Free;
+  end;
+  Module := CompileModuleCode(TOP_LEVEL_DECLARATIONS + TOP_LEVEL_LOOP, True,
+    True);
+  try
+    Expect<Integer>(UncountedClears(Module.TopLevel)).ToBe(WithoutLoop);
+  finally
+    Module.Free;
+  end;
+end;
+
+// An imported module has no completion value (ES2026 §16.2.1.7.3.2
+// ExecuteModule), so an awaited expression statement leaves nothing in the
+// register its top level returns. An entry keeps it there: hosts report it.
+procedure TTestCompiler.TestImportedModuleKeepsNoCompletionValue;
+
+  function AwaitsIntoReturnRegister(const ADiscards: Boolean): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Top: TGocciaFunctionTemplate;
+    PC, ReturnRegister: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    Module := CompileModuleCode('await globalThis.holder.make();' +
+      LineEnding + 'const after = 1;', True, ADiscards);
+    try
+      Top := Module.TopLevel;
+      ReturnRegister := -1;
+      for PC := Top.CodeCount - 1 downto 0 do
+        if DecodeOp(Top.GetInstruction(PC)) = Ord(OP_RETURN) then
+        begin
+          ReturnRegister := DecodeA(Top.GetInstruction(PC));
+          Break;
+        end;
+      for PC := 0 to Top.CodeCount - 1 do
+      begin
+        Instruction := Top.GetInstruction(PC);
+        if (DecodeOp(Instruction) = Ord(OP_AWAIT)) and
+           (DecodeA(Instruction) = ReturnRegister) then
+          Inc(Result);
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(AwaitsIntoReturnRegister(False)).ToBe(1);
+  Expect<Integer>(AwaitsIntoReturnRegister(True)).ToBe(0);
+end;
+
+// A top-level statement of module code clears at its end on every path, so
+// an await in a branch it ends with does not clear in that branch as well,
+// and a labeled one clears only after its break targets: each register gets
+// one line-0 clear, for an imported module and an entry.
+procedure TTestCompiler.TestModuleTopLevelAwaitBranchClearsOnce;
+
+  // Whether a register gets a second line-0 clear after the prologue.
+  function ClearsARegisterTwice(const ASource: string;
+    const ADiscards: Boolean): Boolean;
+  var
+    Module: TGocciaBytecodeModule;
+    Top: TGocciaFunctionTemplate;
+    PC: Integer;
+    Seen: array of Boolean;
+    InBody: Boolean;
+    Instruction: UInt32;
+  begin
+    Result := False;
+    Module := CompileModuleCode(ASource, True, ADiscards, True);
+    try
+      Top := Module.TopLevel;
+      SetLength(Seen, Top.MaxRegisters + 1);
+      InBody := False;
+      for PC := 0 to Top.CodeCount - 1 do
+      begin
+        Instruction := Top.GetInstruction(PC);
+        if Top.DebugInfo.GetLineForPC(UInt32(PC)) > 0 then
+          InBody := True
+        else if InBody and
+           (DecodeOp(Instruction) = Ord(OP_LOAD_UNDEFINED)) then
+        begin
+          if Seen[DecodeA(Instruction)] then
+            Result := True;
+          Seen[DecodeA(Instruction)] := True;
+        end;
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+
+const
+  BRANCH = 'globalThis.flag ? ' +
+    'await globalThis.f(globalThis.a, globalThis.b) : 0;';
+  LABELED = 'label: await globalThis.f(globalThis.a, globalThis.b);';
+begin
+  Expect<Boolean>(ClearsARegisterTwice(BRANCH, True)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(BRANCH, False)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(LABELED, True)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(LABELED, False)).ToBe(False);
+end;
+
+// A lexical binding initialized by a yield is compiled through a temporary,
+// which is cleared before the initializer runs and right after the move into
+// the binding, so the binding holds the only copy.
+procedure TTestCompiler.TestYieldInitializerClearsItsTemporary;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  PC, Source: Integer;
+  Instruction, NextInstruction: UInt32;
+  Found: Boolean;
+begin
+  Module := CompileSource('const holder = { *g() { let sent = yield 0; ' +
+    'sent = null; yield 1; } };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_YIELD);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if not Assigned(Func) then
+      Exit;
+    Found := False;
+    for PC := 0 to Func.CodeCount - 2 do
+    begin
+      Instruction := Func.GetInstruction(PC);
+      if DecodeOp(Instruction) <> Ord(OP_MOVE) then
+        Continue;
+      Source := DecodeB(Instruction);
+      NextInstruction := Func.GetInstruction(PC + 1);
+      if (DecodeOp(NextInstruction) = Ord(OP_LOAD_UNDEFINED)) and
+         (DecodeA(NextInstruction) = Source) then
+        Found := True;
+    end;
+    Expect<Boolean>(Found).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// ParametersSurviveBody walks a function body recursively and gives up past a
+// nesting bound, so a body the parser accepts cannot exhaust a small native
+// stack there; giving up means the callee may drop its parameter, which only
+// costs the caller's copies their release.
+procedure TTestCompiler.TestDeepBodyParametersMayBeDropped;
+
+  function FlagFor(const ADepth: Integer): Boolean;
+  var
+    Module: TGocciaBytecodeModule;
+    Body: string;
+    I: Integer;
+  begin
+    Body := 'a';
+    for I := 1 to ADepth do
+      Body := '[' + Body + ']';
+    Module := CompileSource('const f = (a) => ' + Body + ';');
+    try
+      Result := Module.TopLevel.GetFunction(0).ParametersMayBeDropped;
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(FlagFor(10)).ToBe(False);
+  Expect<Boolean>(FlagFor(400)).ToBe(True);
 end;
 
 // ES2026 §14.10.1 step 3: the value is awaited while the try is still
@@ -1783,6 +2222,28 @@ begin
       False, FileName);
     Large := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 200) + '0;',
       False, FileName);
+    ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
+  end;
+end;
+
+{ A TypeScript comparison chain, with templates or without: each probe's
+  first read as type syntax is bounded, and a failed scan still decides the
+  scans from the '<' tokens after it. }
+procedure TTestCompiler.TestTemplateTypeArgumentWork;
+const
+  LINKS: array[0..5] of string = (
+    'x < ', 'x < `${x}` < ', 'x < `${x + 1}` < ', 'new X < ',
+    'new X < `${x}` < ', 'new X < [`${x + 1}`] < ');
+var
+  Small, Large: TGocciaCompileCounters;
+  Link: string;
+begin
+  for Link in LINKS do
+  begin
+    Small := SourceCompileCounters('const f = (X, x) => ' +
+      DupeString(Link, 100) + 'f(x);', False, 'probe.ts');
+    Large := SourceCompileCounters('const f = (X, x) => ' +
+      DupeString(Link, 200) + 'f(x);', False, 'probe.ts');
     ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
   end;
 end;

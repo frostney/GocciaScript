@@ -696,6 +696,7 @@ begin
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
+        Parser.PreprocessorOriginMap := PreprocessorOriginMap;
         BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
         ParserOptions.DetectModuleGoal := AOptions.SourceType = stDetect;
         ParserOptions.ScriptAwaitFallback := AScriptAwaitFallback;
@@ -999,6 +1000,7 @@ begin
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
+        Parser.PreprocessorOriginMap := OriginMap;
         ConfigureParser(Parser, AOptions);
         try
           try

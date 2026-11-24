@@ -74,7 +74,7 @@ The memory limit is always in force: `--max-memory`, else half of physical memor
 build). Under a limit the nursery is no larger than the room the old space leaves below it, so the collection that
 tests the limit runs before the heap can pass it. A full collection that leaves more live than the limit refuses at
 the next back edge or call with a catchable `RangeError: Allocation failed: GC heap size exceeds the configured
-memory limit` ([ADR 0181](../adr/0181-g2-refuses-memory-at-the-next-safe-point.md)). At a call with at least 1,024
+memory limit` ([ADR 0184](../adr/0184-g2-refuses-memory-at-the-next-safe-point.md)). At a call with at least 1,024
 frames on the stack it is `RangeError: Maximum call stack size exceeded` with the stack-memory suggestion. A script
 can catch it, drop what it holds and go on. Eight refusals in a row that free nothing end the run as a spent limit
 does, with `Fatal error: Live heap of N bytes exceeds the memory limit of M bytes` (exit 1; GocciaRunner's JSON report
@@ -411,7 +411,7 @@ bound is G2's own, not the old loader's 10,000, since a bound keeps the JIT off.
 of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass except
 three. G2 has no proper tail calls, so 100,000 nested strict tail calls under `--max-stack=1000` overflow. The two
 memory-budget sections test the old collector's allocation gate: G2 refuses at the next safe point
-([ADR 0181](../adr/0181-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
+([ADR 0184](../adr/0184-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
 nothing on G2.
 
 ### GocciaFuzzHarness

@@ -555,7 +555,7 @@ threadvar
   LimitHeapBytes: Int64;
   { the host abort's message (AbortKind 4) }
   HostAbortText: UnicodeString;
-  { the memory limit's catchable refusal (ADR 0181): a full collection left the heap over HeapCeiling, and the next
+  { the memory limit's catchable refusal (ADR 0184): a full collection left the heap over HeapCeiling, and the next
     back edge or call throws a RangeError the script can catch (MemRefusePending). MemStrikeBytes is what the last
     refusal's collection left, MemStrikes how many refusals in a row left no less: past MEM_STRIKES_MAX the limit
     ends the run as a spent one (AbortKind 3). A collection that ends within the limit clears both

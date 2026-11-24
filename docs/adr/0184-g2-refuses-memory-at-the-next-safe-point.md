@@ -1,4 +1,4 @@
-# 0181 - On G2 the memory limit refuses with a catchable RangeError at the next back edge or call
+# 0184 - On G2 the memory limit refuses with a catchable RangeError at the next back edge or call
 
 **Date:** 2026-11-21
 **Area:** `gc`, `g2`, `sandbox`

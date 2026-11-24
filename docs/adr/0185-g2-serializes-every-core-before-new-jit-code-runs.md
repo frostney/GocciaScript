@@ -1,4 +1,4 @@
-# 0182 - G2 serializes every core before code its JIT wrote runs
+# 0185 - G2 serializes every core before code its JIT wrote runs
 
 **Date:** 2026-11-22
 **Area:** `g2`, `jit`

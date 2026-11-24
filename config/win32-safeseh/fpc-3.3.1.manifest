@@ -225,7 +225,7 @@ source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 72f8ac923c9c
 source-nonseh ../../source/units/Goccia.VM.pas b8c0fec9d90bcaad0165a7507995132c52f6dcedd77f6ce1d677355837025818 .text.n_goccia.vm$_$tgocciabytecodegeneratorobjectvalue_$__$$_prepareawaithandlers$h9gealwgpaoa
 source-nonseh ../../source/units/Goccia.VM.pas 31e56cc1f8f3c03fcf0001831b875a500d29f0dad6a985529ef4558756a4ace4 .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
 source-nonseh ../../source/units/Goccia.VM.pas fd70f78698e1b13d2b1be1f793b4758337f46f054d41bf31a5bc522ff462e88d .text.n_goccia.vm$_$tgocciavm_$__$$_tryunwindtohandler$hintxuwbyh4l
-source-nonseh ../../source/units/Goccia.VM.pas 9bc54f040f8461ad570052a51b25d519f79a0150108a72efc33cea40060c65db .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 9a2fc6fa62e2b2517241ff1c4ed4c68587503e49479e1f534addfa0f1c4eb9ca .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas d663249918661b2d20a5ebb9381931462a5c1c7a196d8f2b2893978c4555ff23 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas cad009adcd12916f019cd4beab91faf396c2bd8ac039f537baa651e98eb459d3 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas 9a7b06c7265311de1ab31b2d29480e3626b62e0198be84efd74bf3a33e152072 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
@@ -240,6 +240,7 @@ source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 1050ae68095dd52ef2
 source-nonseh ../../source/shared/PESafeSEH.Test.pas cb3cfa2d8461eaa717413a629706af3b37fbc90644decda2e6de80a866b23052 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
 source-nonseh ../../source/shared/PESafeSEH.Test.pas 88727df35e64d65145eedfb433cb363fe02b29e5570f57b0b0b845748a1d3dc8 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
 source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas cbf92d05e38f075923e8831477570a73bc61728acb9f497766242f9926d1e3d6 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$hz1z1piekcdc
+source-nonseh ../../source/units/Goccia.MicrotaskQueue.Test.pas b09ef745b3136a38328c92bc47eada6327f31f1f5bbfe5e620fc5c1c0188245e .text.n_p$goccia.microtaskqueue.test$_$tcollectinghandler_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandler$formal
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal
 

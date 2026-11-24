@@ -231,8 +231,10 @@ a payload:
 
 - **The header** names the record: its path, the keys the loader caches it
   under, whether the host owns it, and for a source module the source path
-  and bytecode hash of the code the engine compiled it to. The reader reads
-  every header before it allocates any object.
+  and bytecode hash of the code the engine compiled it to, and whether it was
+  the entry `Execute` evaluated, which is compiled keeping its completion
+  value where an imported module keeps none ([ADR 0183](adr/0183-module-code-clears-each-top-level-statement-and-imports-keep-no-completion-value.md)).
+  The reader reads every header before it allocates any object.
 - **The payload** is the record's state: its environment, its export
   bindings (local, forwarded from another record, or a value), its exports
   table, its star and ambiguous export names, its namespace object, its

@@ -44,6 +44,18 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 // accepted.
 function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 
+// True when the function whose parameters are AParams and whose body is ABody
+// can never write a parameter: every parameter is a plain identifier with no
+// default, and the body holds no assignment to an identifier, no increment or
+// decrement of one, no destructuring assignment, no direct eval, no suspension
+// point, and no function, class or other form the allowlist does not name.
+// A call that passes a value as an argument leaves it in the caller's
+// registers, and only a callee that can write the parameter can drop its own
+// reference to the value (ADR 0181). ABody is the body statement, or the
+// expression of an arrow function.
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+
 // One result per parameter, computed by a single accumulating syntax walk.
 // True when nothing evaluated up to the end of the initializer of a simple
 // parameter can read or write that parameter's binding: no
@@ -70,6 +82,13 @@ function ParameterInitializersAvoidOwnBindings(
 function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
   const AName: string): Boolean;
 
+// InitializerAvoidsOwnBinding, and no yield outside a nested function: a
+// yield suspends the frame with the binding's register still holding what
+// the initializer, or an earlier block, left there, because
+// YIELD_FLAG_TEMP_OPERAND hands the yielded value out through a temporary.
+function InitializerLeavesHoleUnobservable(
+  const AInitializer: TGocciaExpression; const AName: string): Boolean;
+
 // Whether ANames holds AName.
 function NameListContains(const ANames: TArray<string>;
   const AName: string): Boolean;
@@ -77,10 +96,11 @@ function NameListContains(const ANames: TArray<string>;
 // The let and const bindings declared by the statements that open a function
 // body or a block, up to the first statement of another kind, whose TDZ hole
 // nothing can observe: no initializer evaluated before a binding's own
-// declaration has completed can reach it, by InitializerAvoidsOwnBinding. The
-// caller rules out a body or block with hoisted function declarations, which
-// exist from its entry and could reach the binding from a call in an
-// initializer, and coverage. Such a binding needs no hole on entry, because
+// declaration has completed can reach it, by InitializerAvoidsOwnBinding, and
+// none of them yields, which would suspend the frame with the slot still
+// holding what an earlier block left there. The caller rules out a body or
+// block with hoisted function declarations, which exist from its entry and
+// could reach the binding from a call in an initializer, and coverage. Such a binding needs no hole on entry, because
 // its declaration initializes it before anything can read it. A block is
 // entered afresh on each iteration of a loop around it, and a closure an
 // earlier iteration created reaches that iteration's binding, never the new
@@ -105,6 +125,9 @@ const
   // right-leaning expression would otherwise be walked a quadratic number of
   // times. A subtree larger than this keeps the copy.
   OPERAND_NODE_BUDGET = 64;
+  // ParametersSurviveBody's nesting bound: a body nested deeper is assumed to
+  // write a parameter, which only costs the caller's copies their release.
+  PARAMETER_SCAN_MAX_DEPTH = 256;
 
 type
   TScan = record
@@ -112,11 +135,21 @@ type
     RejectLocalWrites: Boolean;
     // Nodes left to visit; negative means unlimited.
     Budget: Integer;
+    // How deep the walk may nest, 0 for no bound, and how deep it is now. A
+    // proof over a whole function body sets it: a body the parser accepts can
+    // nest deeper than a small native stack lets a recursive walk go.
+    MaxDepth: Integer;
+    Depth: Integer;
     // Empty for the loop and operand proofs. For the initializer proofs, the
     // binding name no node may reach; an arrow or function
     // expression is then accepted when its source text cannot name the
     // binding.
     AvoidName: string;
+    // True for the entry-hole proof: a yield suspends the frame while the
+    // binding's slot still holds what an earlier block left in it, because
+    // YIELD_FLAG_TEMP_OPERAND hands the yielded value out through a temporary
+    // instead of writing it there.
+    RejectYields: Boolean;
     // The parameter-list proof accumulates references once across the prefix.
     // Other proofs leave these nil and keep their single-name predicate.
     SeenNames: TUnicodeStringList;
@@ -408,7 +441,7 @@ begin
     Result := not AScan.RejectLocalWrites and
       ScanNode(AScan, TGocciaAwaitExpression(AExpr).Operand)
   else if Kind = TGocciaYieldExpression then
-    Result := not AScan.RejectLocalWrites and
+    Result := not AScan.RejectLocalWrites and not AScan.RejectYields and
       ScanNode(AScan, TGocciaYieldExpression(AExpr).Operand)
   else if Kind = TGocciaDestructuringAssignmentExpression then
     Result := not AScan.RejectLocalWrites and
@@ -454,7 +487,10 @@ begin
   if Kind = TGocciaExpressionStatement then
     Result := ScanNode(AScan, TGocciaExpressionStatement(AStmt).Expression)
   else if Kind = TGocciaVariableDeclaration then
-    Result := ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
+    // A `var` can redeclare a parameter, which then writes its register.
+    Result := not (AScan.RejectLocalWrites and
+        TGocciaVariableDeclaration(AStmt).IsVar) and
+      ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
   else if Kind = TGocciaBlockStatement then
   begin
     Block := TGocciaBlockStatement(AStmt);
@@ -485,7 +521,11 @@ begin
   else if Kind = TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(AStmt);
-    Result := not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
+    // The head writes its target on every iteration: an assignment target
+    // (`for (b of xs)`) or a `var` that redeclares a name.
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForOf.AssignmentTarget) or ForOf.IsVar)) and
+      not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
       not ForOf.IsAwaitUsing and ScanPattern(AScan, ForOf.BindingPattern) and
       ScanPattern(AScan, ForOf.AssignmentTarget) and
       ScanNode(AScan, ForOf.Iterable) and ScanNode(AScan, ForOf.Body);
@@ -493,7 +533,9 @@ begin
   else if Kind = TGocciaForInStatement then
   begin
     ForIn := TGocciaForInStatement(AStmt);
-    Result := ScanPattern(AScan, ForIn.BindingPattern) and
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForIn.AssignmentTarget) or ForIn.IsVar)) and
+      ScanPattern(AScan, ForIn.BindingPattern) and
       ScanPattern(AScan, ForIn.AssignmentTarget) and
       ScanNode(AScan, ForIn.ObjectExpression) and ScanNode(AScan, ForIn.Body);
   end
@@ -538,6 +580,12 @@ begin
     Exit(False);
   if AScan.Budget > 0 then
     Dec(AScan.Budget);
+  if AScan.MaxDepth > 0 then
+  begin
+    if AScan.Depth >= AScan.MaxDepth then
+      Exit(False);
+    Inc(AScan.Depth);
+  end;
 
   if ANode is TGocciaExpression then
     Result := ScanExpression(AScan, TGocciaExpression(ANode))
@@ -545,6 +593,9 @@ begin
     Result := ScanStatement(AScan, TGocciaStatement(ANode))
   else
     Result := False;
+
+  if AScan.MaxDepth > 0 then
+    Dec(AScan.Depth);
 end;
 
 function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
@@ -567,6 +618,24 @@ begin
   Scan.Budget := OPERAND_NODE_BUDGET;
   Scan.AvoidName := '';
   Result := ScanNode(Scan, AExpr);
+end;
+
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+var
+  Scan: TScan;
+  I: Integer;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsRest or AParams[I].IsPattern or
+       Assigned(AParams[I].DefaultValue) then
+      Exit(False);
+  Scan := Default(TScan);
+  Scan.RejectLocalWrites := True;
+  Scan.Budget := -1;
+  Scan.MaxDepth := PARAMETER_SCAN_MAX_DEPTH;
+  Scan.AvoidName := '';
+  Result := ScanNode(Scan, ABody);
 end;
 
 function ParameterInitializersAvoidOwnBindings(
@@ -634,6 +703,21 @@ begin
   Result := ScanNode(Scan, AInitializer);
 end;
 
+function InitializerLeavesHoleUnobservable(
+  const AInitializer: TGocciaExpression; const AName: string): Boolean;
+var
+  Scan: TScan;
+begin
+  Scan := Default(TScan);
+  Scan.RejectLocalWrites := False;
+  Scan.RejectYields := True;
+  Scan.Budget := -1;
+  Scan.AvoidName := AName;
+  if AName = '' then
+    Exit(False);
+  Result := ScanNode(Scan, AInitializer);
+end;
+
 function NameListContains(const ANames: TArray<string>;
   const AName: string): Boolean;
 var
@@ -672,9 +756,12 @@ begin
       SetLength(Initializers, InitCount + 1);
       Initializers[InitCount] := Decl.Variables[J].Initializer;
       Inc(InitCount);
+      // A yield in this or an earlier initializer, however deeply nested,
+      // suspends the frame with the binding's slot still holding what an
+      // earlier block left in it, so the entry hole stays.
       Unobservable := True;
       for K := 0 to InitCount - 1 do
-        if not InitializerAvoidsOwnBinding(Initializers[K],
+        if not InitializerLeavesHoleUnobservable(Initializers[K],
            Decl.Variables[J].Name) then
         begin
           Unobservable := False;
