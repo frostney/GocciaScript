@@ -246,7 +246,7 @@ procedure HostFreeAddrInfo(AInfo: PHTTPAddrInfo); stdcall;
   external 'ws2_32.dll' name 'freeaddrinfo';
 function HostInetNtop(AFamily: Integer; ASource: Pointer;
   ADestination: PAnsiChar; ASize: NativeUInt): PAnsiChar; stdcall;
-  external 'ws2_32.dll' name 'InetNtopA';
+  external 'ws2_32.dll' name 'inet_ntop';
 function WSAPoll(ADescriptors: PHTTPPollFD; ACount: Cardinal;
   ATimeoutMilliseconds: Integer): Integer; stdcall;
   external 'ws2_32.dll' name 'WSAPoll';
