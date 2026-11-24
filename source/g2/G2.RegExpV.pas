@@ -19,6 +19,9 @@ procedure InitRegExp;
 { the spec layer in prelude/regexp.js: after every other built-in }
 procedure InitRegExpPrelude;
 function CreateRegExp(Pattern, Flags: PStr; var Res: TValue): Boolean;
+{ the thread's compiled patterns and legacy match state, freed when its engine ends (EngineDone): a host that runs
+  each file on a thread of its own would otherwise leave them behind with every thread }
+procedure RegExpDone;
 
 implementation
 
@@ -1168,6 +1171,16 @@ begin
   end;
   Cache.Free;
   Compiled := nil;
+end;
+
+procedure RegExpDone;
+begin
+  FreeCompiledPatterns;
+  if Legacy <> nil then Dispose(Legacy);
+  Legacy := nil;
+  RegExpShape := nil;
+  MatchShape := nil;
+  IntactShape := nil;
 end;
 
 procedure InitRegExp;

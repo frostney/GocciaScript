@@ -85,6 +85,7 @@ begin
   HeapDone;
   FreeAllTemplates;
   FreeLazySources;
+  RegExpDone;
 end;
 
 function EngineRunScript(const Source, FileName: UnicodeString; var Err: UnicodeString): Boolean;
