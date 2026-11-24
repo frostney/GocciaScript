@@ -4354,6 +4354,12 @@ end;
 
 function ReentryTooDeep: Boolean; forward;
 
+threadvar
+  { set by Execute's `new` of a built-in, taken by the CallValue it reaches: that call skips the native stack guard,
+    as a call of a built-in from bytecode does (the built-in's own calls are guarded), so `new RegExp` on a deep stack
+    gets to report its own limit (a pattern nested too deep for the stack left is a SyntaxError) }
+  NativeGuardOff: Boolean;
+
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
   P: PValue; SavedTop: Integer;
@@ -4366,7 +4372,8 @@ begin
       begin
         { a native that calls a native that calls it again (join of an array nested 10,000 deep: join, ToString,
           toString, join) recurses on the native stack, which ends before the value stack does }
-        if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+        if NativeGuardOff then NativeGuardOff := False
+        else if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
         SavedTop := StackTop;
         Base := StackTop;
         if Base + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -4720,8 +4727,8 @@ end;
   script; the common case here, the rest in PushBytecodeFrameFull }
 threadvar
   { the lowest native stack address native code may enter the interpreter at (a native's call into a function nests
-    Execute on the native stack): NativeStackLimit's, 0 where the bounds are unknown; ReentryFloorSet once it is
-    found }
+    Execute on the native stack): REENTRY_HEADROOM above G2.Core's native stack guard, 0 where the bounds are
+    unknown; ReentryFloorSet once it is found }
   ReentryFloor: PtrUInt;
   ReentryFloorSet: Boolean;
   { PushBytecodeFrame's floor, REENTRY_BACKSTOP_SLACK below ReentryFloor (0 where the bounds are unknown) }
@@ -4732,13 +4739,20 @@ const
     Construct, GeneratorResume) refuse at the floor, so a push here only meets this backstop through a native path
     that skipped them; it stays within G2.Core's NATIVE_STACK_MARGIN }
   REENTRY_BACKSTOP_SLACK = 256 * 1024;
+  { how far above the native stack guard (G2.Core NativeStackLow, where a built-in's call is refused) re-entering
+    the interpreter is refused: the code that catches a refused re-entry (a generator resume refused before its body
+    ran, a callback refused) still calls built-ins, such as promise.catch, that need no re-entry }
+  REENTRY_HEADROOM = 128 * 1024;
 
 { whether the native stack is below the re-entry floor: a native that calls back into code that calls the native
   again recurses on the native stack, which ends before the frames do, so it is refused with a RangeError (pending)
   before it overflows }
 procedure SetReentryFloor;
 begin
-  ReentryFloor := NativeStackLimit;
+  { G2.Core's guard, not NativeStackBounds' NativeStackLimit (a smaller reserve): a re-entry is refused above the
+    point where a built-in's call is }
+  ReentryFloor := NativeGuardLimit;
+  if ReentryFloor <> 0 then ReentryFloor := ReentryFloor + REENTRY_HEADROOM;
   if ReentryFloor > REENTRY_BACKSTOP_SLACK then ReentryBackstop := ReentryFloor - REENTRY_BACKSTOP_SLACK
   else ReentryBackstop := 0;
   ReentryFloorSet := True;
@@ -9526,7 +9540,10 @@ LReload:
               goto LReload;
             end;
             { native or bound constructor }
-            if not Construct(VA, @R[A + 2], Argc, VA, V) then goto LThrow;
+            NativeGuardOff := O^.OKind = okNative;
+            Ok := Construct(VA, @R[A + 2], Argc, VA, V);
+            NativeGuardOff := False;
+            if not Ok then goto LThrow;
             R[A] := V;
             Continue;
           end;

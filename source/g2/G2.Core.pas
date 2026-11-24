@@ -512,6 +512,8 @@ procedure StackGuardInit;
 { True once less than the margin of the native stack is left: a native recursion (a Proxy without traps around a
   prototype cycle, a chain of bound functions) then throws a RangeError instead of overflowing the stack }
 function NativeStackLow: Boolean; noinline;
+{ the address below which NativeStackLow is True (0: unguarded) }
+function NativeGuardLimit: PtrUInt;
 { the guard moved Bytes further down the margin (a realm's set-up, which runs to a fixed depth); the old guard,
   for NativeGuardRestore }
 function NativeGuardLend(Bytes: PtrUInt): PtrUInt; noinline;
@@ -631,6 +633,9 @@ end;
 const
   { what the native stack keeps for the error path and the runtime once the guard trips }
   NATIVE_STACK_MARGIN = 512 * 1024;
+  { how far above the guard the shared nesting checks refuse: G2.VM's REENTRY_HEADROOM (128 KiB) and 64 KiB more for
+    the frames between a parse and the re-entry that runs it }
+  NESTING_CHECK_HEADROOM = 192 * 1024;
 
 threadvar
   NativeStackLimit: PtrUInt;   { 0: unguarded }
@@ -644,7 +649,13 @@ var Low, Size: NativeUInt;
 begin
   NativeStackLimit := 0;
   if TryGetThreadStackBounds(Low, Size) and (Size > 2 * NATIVE_STACK_MARGIN) then
+  begin
     NativeStackLimit := Low + NATIVE_STACK_MARGIN;
+    { the shared parser's and pattern compiler's nesting checks (Goccia.NestingLimit): above G2.VM's re-entry floor
+      (REENTRY_HEADROOM above this guard), with room to run what they produce, so code nested too deep for the stack
+      left is a SyntaxError where it is parsed, not a RangeError when it runs }
+    SetNativeStackLimit(NativeStackLimit + NESTING_CHECK_HEADROOM);
+  end;
 end;
 
 function NativeGuardLend(Bytes: PtrUInt): PtrUInt;
@@ -656,6 +667,11 @@ end;
 procedure NativeGuardRestore(Old: PtrUInt);
 begin
   NativeStackLimit := Old;
+end;
+
+function NativeGuardLimit: PtrUInt;
+begin
+  Result := NativeStackLimit;
 end;
 
 function NativeStackLow: Boolean;

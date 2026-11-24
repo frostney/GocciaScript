@@ -383,14 +383,22 @@ begin
   if Result then Text := JSONQuoted(StrToUnicode(StrOf(S)));
 end;
 
-{ "    at name (source:line:column)": the first frame line of a stack text }
+{ "    at name (source:line:column)": the first located frame line of a stack text (a built-in's "at name (native)"
+  line before it names the built-in that raised the error, and has no location) }
 procedure FirstFrameOf(const Stack: UnicodeString; var R: TG2RunResult);
 var P, Open, Close, C1, C2: Integer; Loc: UnicodeString;
 begin
   P := Pos(#10'    at ', Stack);
-  if P = 0 then Exit;
-  Close := P + 1;
-  while (Close <= Length(Stack)) and (Stack[Close] <> #10) do Inc(Close);
+  while True do
+  begin
+    if P = 0 then Exit;
+    Close := P + 1;
+    while (Close <= Length(Stack)) and (Stack[Close] <> #10) do Inc(Close);
+    if Copy(Stack, Close - 9, 9) <> ' (native)' then Break;
+    { the next frame line, if any }
+    if (Close > Length(Stack)) or (Copy(Stack, Close, 8) <> #10'    at ') then Exit;
+    P := Close;
+  end;
   Dec(Close);
   if (Close <= P) or (Stack[Close] <> ')') then Exit;
   Open := Close;

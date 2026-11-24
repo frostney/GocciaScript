@@ -21,6 +21,11 @@ function NativeStackPosition: NativeUInt;
 // stack above it on a stack smaller than four reserves. 0 when the bounds of
 // the thread's stack cannot be found. Found once per thread.
 function NativeStackLimit: NativeUInt;
+// Sets the calling thread's NativeStackLimit, for an engine that keeps its own
+// floors on the stack (G2.Core's StackGuardInit): the checks of the shared
+// parser and pattern compiler (Goccia.NestingLimit) then refuse where that
+// engine could no longer run what they produce.
+procedure SetNativeStackLimit(const ALimit: NativeUInt);
 
 implementation
 
@@ -360,6 +365,12 @@ begin
   if StackSize < 4 * Reserve then
     Reserve := StackSize div 4;
   Result := StackLow + Reserve;
+end;
+
+procedure SetNativeStackLimit(const ALimit: NativeUInt);
+begin
+  GNativeStackLimit := ALimit;
+  GNativeStackLimitFound := True;
 end;
 
 function NativeStackLimit: NativeUInt;
