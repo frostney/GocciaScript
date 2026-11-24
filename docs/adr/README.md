@@ -193,5 +193,6 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0181 — A callee that can drop a parameter releases the caller's copies of its arguments](0181-a-callee-that-can-drop-a-parameter-releases-the-callers-copies.md)
 - [0182 — Linux thread stack bounds come from pthread_getattr_np](0182-linux-thread-stack-bounds-come-from-pthread-getattr-np.md)
 - [0183 — Module code clears what each top-level statement left, and an imported module keeps no completion value](0183-module-code-clears-each-top-level-statement-and-imports-keep-no-completion-value.md)
-- [0184 — On G2 the memory limit refuses with a catchable RangeError at the next back edge or call](0184-g2-refuses-memory-at-the-next-safe-point.md)
-- [0185 — G2 serializes every core before code its JIT wrote runs](0185-g2-serializes-every-core-before-new-jit-code-runs.md)
+- [0184 — A definition takes its descriptor on every exit](0184-a-definition-takes-its-descriptor-on-every-exit.md)
+- [0185 — On G2 the memory limit refuses with a catchable RangeError at the next back edge or call](0185-g2-refuses-memory-at-the-next-safe-point.md)
+- [0186 — G2 serializes every core before code its JIT wrote runs](0186-g2-serializes-every-core-before-new-jit-code-runs.md)

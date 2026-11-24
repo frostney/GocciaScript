@@ -855,17 +855,37 @@ begin
     ADescriptor.HasWritableField and ADescriptor.Writable;
 end;
 
+// Moves a dense element into the property map, so a definition with
+// attributes a dense slot cannot hold validates against it. APending is the
+// definition's descriptor, which it owns (ADR 0184): a refused growth of the
+// map frees the element's new descriptor there and APending here.
 procedure MaterializeDenseArrayElement(
   const AArray: TGocciaArrayValue;
   const AName: string;
-  const AIndex: Integer);
+  const AIndex: Integer;
+  const APending: TGocciaPropertyDescriptor);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   if (AIndex >= 0) and (AIndex < AArray.FElements.Count) and
      (AArray.FElements[AIndex] <> TGocciaHoleValue.HoleValue) and
      not AArray.FProperties.ContainsKey(AName) then
   begin
-    AArray.FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-      AArray.FElements[AIndex], [pfEnumerable, pfConfigurable, pfWritable]));
+    // The growth gate can collect, and it roots the array and the element's
+    // new descriptor but not the definition's pending one.
+    Roots.Initialize;
+    try
+      try
+        APending.PushRoots(Roots);
+        AArray.FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+          AArray.FElements[AIndex], [pfEnumerable, pfConfigurable, pfWritable]));
+      except
+        APending.Free;
+        raise;
+      end;
+    finally
+      Roots.Clear;
+    end;
     AArray.FElements[AIndex] := TGocciaHoleValue.HoleValue;
   end;
 end;
@@ -4170,7 +4190,6 @@ end;
 procedure TGocciaArrayValue.SetProperty(const AName: string; const AValue: TGocciaValue);
 var
   Index: Int64;
-  Desc: TGocciaPropertyDescriptorData;
 begin
   if TryParseArrayElementIndex(AName, Index) then
     SetIndexNamed(AName, Index, AValue)
@@ -4182,14 +4201,9 @@ begin
 
     // §10.4.2.1 → OrdinarySet → OrdinarySetWithOwnDescriptor step 3e:
     // own writable data property ⇒ [[DefineOwnProperty]](P, {[[Value]]: V})
-    Desc := TGocciaPropertyDescriptorData.CreatePartial(AValue, [],
-      [pdfValue]);
-    try
-      DefineProperty(PROP_LENGTH, Desc);
-    except
-      Desc.Free;
-      raise;
-    end;
+    // DefineProperty takes the descriptor on every exit (ADR 0184).
+    DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.CreatePartial(
+      AValue, [], [pdfValue]));
   end
   else
   begin
@@ -4357,25 +4371,27 @@ begin
 end;
 
 // ES2026 §10.4.2.1 ArrayDefineOwnProperty(A, P, Desc)
-// Mirrors the throwing variant of TGocciaObjectValue.DefineProperty: does NOT
-// take ownership of ADescriptor on failure — the caller (e.g., the
-// Object.defineProperty wrapper) catches the exception and frees the descriptor
-// itself. Routing through the boolean TryDefineProperty would cause a
-// double-free here because that variant frees on validation failure and the
-// outer caller would free again from its `except` clause.
+// The throwing variant of TGocciaObjectValue.DefineProperty: takes ADescriptor
+// on every exit, a throw included (ADR 0184).
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Index: Int64;
   OldCount: Integer;
   DescriptorRoots: TGocciaActiveRootFrame;
+  LengthApplied: Boolean;
 begin
   if AName = PROP_LENGTH then
   begin
-    // §10.4.2.4 ArraySetLength(A, Desc)
-    if not TryApplyArrayLengthDescriptor(Self, ADescriptor) then
+    // §10.4.2.4 ArraySetLength(A, Desc). Converting the value can run guest
+    // code and throw a RangeError.
+    try
+      LengthApplied := TryApplyArrayLengthDescriptor(Self, ADescriptor);
+    finally
+      ADescriptor.Free;
+    end;
+    if not LengthApplied then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
-    ADescriptor.Free;
     Exit;
   end;
 
@@ -4383,8 +4399,11 @@ begin
   begin
     NoteIndexedOwnProperty(AName);
     if (Index >= FLength) and not FLengthWritable then
+    begin
+      ADescriptor.Free;
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
+    end;
 
     if CanStoreDenseElementIndex(Index, FElements.Count) and
        (Index < FElements.Count) and
@@ -4402,7 +4421,7 @@ begin
         ADescriptor.Free;
         Exit;
       end;
-      MaterializeDenseArrayElement(Self, AName, Integer(Index));
+      MaterializeDenseArrayElement(Self, AName, Integer(Index), ADescriptor);
     end;
 
     if FProperties.ContainsKey(AName) then
@@ -4414,8 +4433,11 @@ begin
     end;
 
     if not Extensible then
+    begin
+      ADescriptor.Free;
       ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
         SSuggestObjectNotExtensible);
+    end;
 
     if CanStoreDenseElementIndex(Index, FElements.Count) and
        CanCreateDenseArrayElement(ADescriptor) then
@@ -4424,8 +4446,10 @@ begin
       // and a property descriptor is a plain class the collector does not
       // trace — so between here and the store the value is reachable from
       // nowhere. Hand it to the gate, which roots it for the duration.
+      // The memory limit, a deadline, a budget or a host's abort can end the
+      // extension, which then frees ADescriptor, the definition's.
       ExtendElementsWithHoles(FElements, Int64(Index) + 1,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
+        TGocciaPropertyDescriptorData(ADescriptor).Value, ADescriptor);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -4437,7 +4461,7 @@ begin
     // missing/defaulted attributes keep their spec values.
     // The holes come first: extending polls the deadline, the instruction
     // budget and a host's abort, and a raise there must find nothing
-    // published (the descriptor still belongs to the caller, which frees it).
+    // published (and frees the descriptor, which the definition owns).
     // No pending value: the gate's owner push covers what the array holds.
     OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
@@ -4446,13 +4470,19 @@ begin
       // what it holds while the gate of the extension may collect.
       DescriptorRoots.Initialize;
       try
-        ADescriptor.PushRoots(DescriptorRoots);
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        try
+          ADescriptor.PushRoots(DescriptorRoots);
+          ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        except
+          ADescriptor.Free;
+          raise;
+        end;
       finally
         DescriptorRoots.Clear;
       end;
     end;
     try
+      // Takes ADescriptor whatever happens.
       inherited DefineProperty(AName, ADescriptor);
     except
       FElements.Count := OldCount;
@@ -4513,7 +4543,7 @@ begin
         ADescriptor.Free;
         Exit(True);
       end;
-      MaterializeDenseArrayElement(Self, AName, Integer(Index));
+      MaterializeDenseArrayElement(Self, AName, Integer(Index), ADescriptor);
     end;
 
     if FProperties.ContainsKey(AName) then
@@ -4535,15 +4565,10 @@ begin
     begin
       // Same post-gate descriptor read as the DefineProperty arm above, and
       // the same reason the value has to reach the gate.
-      try
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1,
-          TGocciaPropertyDescriptorData(ADescriptor).Value);
-      except
-        // The caller handed the descriptor over and does not free it on a
-        // raise (a deadline, a budget or a host's abort ends the extension).
-        ADescriptor.Free;
-        raise;
-      end;
+      // The caller handed the descriptor over and does not free it on a
+      // raise (a deadline, a budget or a host's abort ends the extension).
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1,
+        TGocciaPropertyDescriptorData(ADescriptor).Value, ADescriptor);
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -4568,7 +4593,6 @@ begin
         except
           // The caller handed the descriptor over and does not free it on a
           // raise.
-          DescriptorRoots.Clear;
           ADescriptor.Free;
           raise;
         end;

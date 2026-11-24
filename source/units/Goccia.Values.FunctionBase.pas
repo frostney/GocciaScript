@@ -67,7 +67,8 @@ type
     function GetFunctionName: string; virtual;
     function GetSourceText: string; virtual;
     // APending and APendingValue are what the caller is about to store: they
-    // are rooted while the intrinsic's value is allocated.
+    // are rooted while the intrinsic's value is allocated. APending belongs to
+    // a definition, which takes it on every exit, so a raise here frees it.
     procedure MaterializeIntrinsicProperty(const AName: string;
       const APending: TGocciaPropertyDescriptor = nil;
       const APendingValue: TGocciaValue = nil);
@@ -967,16 +968,25 @@ begin
   // by nothing but the caller.
   Roots.Initialize;
   try
-    Roots.Add(Self);
-    if Assigned(APending) then
-      APending.PushRoots(Roots);
-    Roots.Add(APendingValue);
-    if AName = PROP_LENGTH then
-      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
-    else
-      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+    try
+      Roots.Add(Self);
+      if Assigned(APending) then
+        APending.PushRoots(Roots);
+      Roots.Add(APendingValue);
+      if AName = PROP_LENGTH then
+        FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+          TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
+      else
+        FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+    except
+      // The value's allocation polls the deadline, the instruction budget and
+      // a host's abort, and the memory limit can refuse it or the map's
+      // growth: the definition owns APending (ADR 0184).
+      if Assigned(APending) then
+        APending.Free;
+      raise;
+    end;
   finally
     Roots.Clear;
   end;

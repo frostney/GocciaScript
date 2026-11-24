@@ -28,6 +28,7 @@ uses
   SysUtils,
 
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
@@ -274,12 +275,47 @@ begin
     SetMappedValue(Index, AValue);
 end;
 
+// The copy of a lazy descriptor the mapping is applied from. Cloning one runs
+// its factory, which can collect and can throw before the inherited
+// definition takes ADescriptor: the arguments object and what ADescriptor
+// holds stay rooted across it, and a throw frees ADescriptor, which the
+// definition owns (ADR 0184).
+function CloneLazyForDefine(const AArguments: TGocciaObjectValue;
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(AArguments);
+      ADescriptor.PushRoots(Roots);
+      Result := ClonePropertyDescriptor(ADescriptor);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
+  end;
+end;
+
+// Only a lazy descriptor runs code when it is copied.
+function CloneForDefine(const AArguments: TGocciaObjectValue;
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  if ADescriptor is TGocciaLazyPropertyDescriptorData then
+    Result := CloneLazyForDefine(AArguments, ADescriptor)
+  else
+    Result := ClonePropertyDescriptor(ADescriptor);
+end;
+
 procedure TGocciaMappedArgumentsObjectValue.DefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
-  MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
+  MappingDescriptor := CloneForDefine(Self, ADescriptor);
   try
     inherited DefineProperty(AName, ADescriptor);
     ApplyDefineMapping(AName, MappingDescriptor);
@@ -293,7 +329,7 @@ function TGocciaMappedArgumentsObjectValue.TryDefineProperty(
 var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
-  MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
+  MappingDescriptor := CloneForDefine(Self, ADescriptor);
   try
     Result := inherited TryDefineProperty(AName, ADescriptor);
     if Result then

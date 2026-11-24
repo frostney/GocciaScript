@@ -777,12 +777,17 @@ begin
 end;
 
 // ES2026 §7.1.21 CanonicalNumericIndexString(argument)
-function TryCanonicalNumericIndexString(const AName: string;
-  out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
+type
+  TCanonicalNumericKey = (cnkNotNumeric, cnkNumeric, cnkNeedsRoundTrip);
+
+{ CanonicalNumericIndexString as far as it goes without allocating: every
+  name but the ones only Number::toString's round trip can decide. }
+function ClassifyCanonicalNumericIndexString(const AName: string;
+  out ANumericIndex: Double; out AIsNegativeZero: Boolean): TCanonicalNumericKey;
 begin
   AIsNegativeZero := False;
   if TryFastCanonicalIntegerIndex(AName, ANumericIndex) then
-    Exit(True);
+    Exit(cnkNumeric);
 
   // A canonical numeric string is "-0" or Number::toString of some Number
   // (ES2026 §6.1.6.1.20), which starts with a digit or "-", or is "Infinity"
@@ -790,20 +795,33 @@ begin
   // named reads `length`, `byteLength`, `fill`, ... pay no number parse.
   ANumericIndex := 0;
   if AName = '' then
-    Exit(False);
+    Exit(cnkNotNumeric);
   case AName[1] of
     '0'..'9', '-', 'I', 'N':;
   else
-    Exit(False);
+    Exit(cnkNotNumeric);
   end;
 
   if AName = '-0' then
   begin
     AIsNegativeZero := True;
-    Exit(True);
+    Exit(cnkNumeric);
   end;
+  Result := cnkNeedsRoundTrip;
+end;
 
-  Result := RoundTripsAsCanonicalNumericString(AName, ANumericIndex);
+function TryCanonicalNumericIndexString(const AName: string;
+  out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
+begin
+  case ClassifyCanonicalNumericIndexString(AName, ANumericIndex,
+    AIsNegativeZero) of
+    cnkNumeric:
+      Result := True;
+    cnkNeedsRoundTrip:
+      Result := RoundTripsAsCanonicalNumericString(AName, ANumericIndex);
+  else
+    Result := False;
+  end;
 end;
 
 function TGocciaTypedArrayValue.GetElementAsValue(const AIndex: Integer): TGocciaValue;
@@ -1358,36 +1376,89 @@ begin
   Result := True;
 end;
 
+// The round trip through Number::toString that decides a definition's
+// remaining possibly numeric names allocates a string: a deadline, a budget,
+// a host's abort or the memory limit can stop it, and its reservation can
+// collect. The array and what ADescriptor holds stay rooted across it, and a
+// raise frees ADescriptor, which the definition owns (ADR 0184).
+function TypedArrayKeyRoundTripForDefine(const AArray: TGocciaTypedArrayValue;
+  const AName: string; out ANumericIndex: Double;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(AArray);
+      ADescriptor.PushRoots(Roots);
+      Result := RoundTripsAsCanonicalNumericString(AName, ANumericIndex);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
+  end;
+end;
+
+// CanonicalNumericIndexString for a definition: only a name the round trip
+// decides pays for the frame.
+function TypedArrayKeyForDefine(const AArray: TGocciaTypedArrayValue;
+  const AName: string; out ANumericIndex: Double; out AIsNegativeZero: Boolean;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  case ClassifyCanonicalNumericIndexString(AName, ANumericIndex,
+    AIsNegativeZero) of
+    cnkNumeric:
+      Result := True;
+    cnkNeedsRoundTrip:
+      Result := TypedArrayKeyRoundTripForDefine(AArray, AName, ANumericIndex,
+        ADescriptor);
+  else
+    Result := False;
+  end;
+end;
+
 // ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc)
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaTypedArrayValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 var
   IsNegativeZero: Boolean;
   NumericIndex: Double;
+  Defined: Boolean;
 begin
-  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  if TypedArrayKeyForDefine(Self, AName, NumericIndex, IsNegativeZero,
+     ADescriptor) then
   begin
-    if TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
-      IsNegativeZero, ADescriptor) then
-    begin
+    // Writing the value converts it, which can run guest code and throw; the
+    // definition takes ADescriptor on every exit (ADR 0184).
+    try
+      Defined := TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
+        IsNegativeZero, ADescriptor);
+    finally
       ADescriptor.Free;
-      Exit;
     end;
-    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
-      SSuggestCannotDeleteNonConfigurable);
+    if not Defined then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+    Exit;
   end;
 
   inherited DefineProperty(AName, ADescriptor);
 end;
 
 // ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc) — boolean variant
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 function TGocciaTypedArrayValue.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   IsNegativeZero: Boolean;
   NumericIndex: Double;
 begin
-  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  if TypedArrayKeyForDefine(Self, AName, NumericIndex, IsNegativeZero,
+     ADescriptor) then
   begin
     try
       Result := TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,

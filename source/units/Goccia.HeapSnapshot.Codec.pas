@@ -3098,13 +3098,8 @@ begin
         Refuse('an unknown property kind');
         Descriptor := nil;
       end;
-      // Owned by the map once added; freed here if adding it raised.
-      try
-        AObject.Properties.Add(Key, Descriptor);
-      except
-        Descriptor.Free;
-        raise;
-      end;
+      // Owned by the map once added; a refused growth frees it there.
+      AObject.Properties.Add(Key, Descriptor);
     end;
   finally
     Seen.Free;
