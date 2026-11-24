@@ -30,6 +30,9 @@ procedure InstallHostHooks;
 procedure InitTest262Engine(CannotBlock: Boolean);
 { the engine InitTest262Engine made, ended: a thread that runs another case after it makes a new one }
 procedure DoneTest262Engine;
+{ --deterministic for the engine InitTest262Engine made: time frozen at the epoch in UTC, and Math.random from the
+  portable seeded stream (Goccia.HostEnvironment), a realm $262.createRealm makes forking its creator's stream }
+procedure SetTest262Deterministic;
 { one run on the engine InitTest262Engine made: the harness files in order, then TestFile }
 function RunTest262Case(const Harness: array of string; const TestFile: string; Strict, IsModule: Boolean): TG2T262Outcome;
 { what the run's print calls printed, a line each }
@@ -41,12 +44,60 @@ implementation
 
 uses
   Classes, SysUtils, G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Eval, G2.Promise, G2.Atomics, G2.Agent,
-  G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins, Goccia.ThreadCleanupRegistry;
+  G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins, Goccia.ThreadCleanupRegistry, Goccia.HostEnvironment;
 
 {$I G2.Test262Host.inc}
 
 threadvar
   PrintBuf: UnicodeString;   { (per thread: a runner without fork runs cases on several threads) }
+
+type
+  { the realms' Math.random streams under --deterministic: realm 0 the seeded root, a created realm's a fork of its
+    creator's (the host environment of the new realm forks the creator's stream, and its Math.random forks that, as
+    the old engine's test262 host did, so runs keep their values) }
+  TT262Randoms = class
+    Streams: array of IGocciaHostRandom;
+    Forks: array of Integer;
+    function Next(Realm: Integer; out D: Double): Boolean;
+    procedure Created(Creator, Realm: Integer);
+  end;
+
+threadvar
+  T262Randoms: TT262Randoms;
+
+function TT262Randoms.Next(Realm: Integer; out D: Double): Boolean;
+begin
+  if (Realm >= Length(Streams)) or (Streams[Realm] = nil) then Created(0, Realm);
+  D := Streams[Realm].NextDouble;
+  Result := True;
+end;
+
+procedure TT262Randoms.Created(Creator, Realm: Integer);
+begin
+  if Realm >= Length(Streams) then
+  begin
+    SetLength(Streams, Realm + 1);
+    SetLength(Forks, Realm + 1);
+  end;
+  Inc(Forks[Creator]);
+  Streams[Realm] := Streams[Creator].Fork(Forks[Creator]).Fork(1);
+end;
+
+procedure SetTest262Deterministic;
+var Rs: TT262Randoms;
+begin
+  SetClockOverride(TGocciaHostEnvironment.DeterministicEpochNanoseconds / 1000000,
+    TGocciaHostEnvironment.DeterministicMonotonicNanoseconds / 1000000);
+  TimeZoneOverride := TGocciaHostEnvironment.DeterministicTimeZone;
+  T262Randoms.Free;
+  T262Randoms := nil;
+  T262Randoms := TT262Randoms.Create;
+  SetLength(T262Randoms.Streams, 1);
+  SetLength(T262Randoms.Forks, 1);
+  T262Randoms.Streams[0] := TGocciaSeededHostRandom.Create(TGocciaHostEnvironment.DeterministicSeed);
+  Rs := T262Randoms;
+  HostRandom := Rs.Next;
+end;
 
 function Test262PrintText: UnicodeString;
 begin
@@ -184,8 +235,9 @@ function Host_CreateRealm(Args: PValue; Argc: Integer; var Res: TValue): Boolean
 var R, Old: Integer; T: PFuncTemplate; Err: UnicodeString; Clo: TValue;
 begin
   if HostHarnessSrc = '' then Exit(ThrowTypeError('createRealm needs the $262.js harness'));
-  if not CreateRealm(R) then Exit(False);
   Old := CurRealm;
+  if not CreateRealm(R) then Exit(False);
+  if T262Randoms <> nil then T262Randoms.Created(Old, R);
   SwitchRealm(R);
   InstallHostHooks;
   Result := ParseAndCompile(HostHarnessSrc, '$262.js', False, T, Err, 1);
@@ -239,6 +291,12 @@ procedure DoneTest262Engine;
 begin
   LimitsDisarm;
   EngineDone;
+  if T262Randoms <> nil then
+  begin
+    HostRandom := nil;
+    T262Randoms.Free;
+    T262Randoms := nil;
+  end;
 end;
 
 type
@@ -354,6 +412,8 @@ end;
 procedure G2Test262ThreadvarCleanup;
 begin
   PrintBuf := '';
+  T262Randoms.Free;
+  T262Randoms := nil;
 end;
 
 initialization

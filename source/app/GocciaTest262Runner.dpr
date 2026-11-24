@@ -1890,6 +1890,7 @@ begin
   try
     HeapCeiling := FOptions.MaxMemoryBytes;
     InitTest262Engine(False);
+    if FOptions.HostEvalDeterministic then SetTest262Deterministic;
     Outcome := RunTest262Case([HostPath], ProbePath, False,
       FOptions.HostEvalModule);
     Write(UTF8Encode(Test262PrintText));
