@@ -4,7 +4,6 @@
 1 tests/built-ins/Date/error-stack.js
 2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRange.js
 2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRangeToParts.js
-1 tests/built-ins/Intl/DisplayNames/prototype/of.js
 1 tests/built-ins/ShadowRealm/timer-realm-isolation.js
 3 tests/language/classes/deep-implicit-constructor-chain.js
 17 tests/language/explicit-resource-management/await-using-dispose-timing.js

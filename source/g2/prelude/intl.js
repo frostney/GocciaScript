@@ -381,17 +381,29 @@
     return collationsList;
   }
   var timeZonesList = null;
-  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES and the codes the host ICU adds, such
-  // as ICU 78's XCG
+  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES, the codes the host ICU adds and names,
+  // and those of RECENT_CURRENCY_NAMES_EN
   var currenciesList = null;
+  // CLDR's English names of the newest ISO 4217 currencies, which the data of older ICUs (ICU 74) does not name; an
+  // ICU that names them still wins
+  var RECENT_CURRENCY_NAMES_EN = rec();
+  RECENT_CURRENCY_NAMES_EN.XCG = "Caribbean guilder";
+  RECENT_CURRENCY_NAMES_EN.ZWG = "Zimbabwean Gold";
+  // the display name of a currency code (upper case) in a locale, or undefined
+  function currencyDisplayName(locale, code, style) {
+    var name = intlOp(16, locale, code, "currency", style);
+    if (name === undefined && (locale === "en" || locale.slice(0, 3) === "en-")) name = RECENT_CURRENCY_NAMES_EN[code];
+    return name;
+  }
   function availableCurrencies() {
     if (currenciesList === null) {
       var list = listCopy(CURRENCIES), icu = intlOp(18);
       if (icu !== undefined)
         for (var i = 0; i < icu.length; i++) {
           var code = asciiUpper(icu[i]);
-          if (intlOp(16, "en", code, "currency", "long") !== undefined) append(list, code);
+          if (currencyDisplayName("en", code, "long") !== undefined) append(list, code);
         }
+      for (var rc in RECENT_CURRENCY_NAMES_EN) append(list, rc);
       currenciesList = list;
     }
     return currenciesList;
@@ -1853,7 +1865,7 @@
     var s = slotsOf(this, "DisplayNames", "Intl.DisplayNames.prototype.of");
     code = ToString(code);
     code = CanonicalCodeForDisplayNames(s.type, code);
-    var name = intlOp(16, s.locale, code, s.type, s.style);
+    var name = s.type === "currency" ? currencyDisplayName(s.locale, code, s.style) : intlOp(16, s.locale, code, s.type, s.style);
     if (name !== undefined) return name;
     return s.fallback === "code" ? code : undefined;
   } }.of);
