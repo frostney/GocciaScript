@@ -453,7 +453,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `bash scripts/valgrind/strip-debug-symbols.sh build/GocciaTestRunner`, then `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
@@ -465,10 +465,13 @@ will not create one; against a missing directory it fails with
 such as macOS the message is `Can't create assembler file: …` instead).
 
 `scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
-Pascal runtime's `IndexByte` and `IndexWord`, whose aligned 16-byte loads can
-read past the end of a buffer and ignore what they find there. The file's
-header explains the over-read and what the suppression gives up, including the
-undefined values it hides inside those two routines.
+Pascal runtime's `IndexByte` and `IndexWord`, and on FPC 3.3.1 also
+`CompareByte` and `CompareWord`, whose 16-byte loads can read past the end of
+a buffer and ignore what they find there. The file explains the over-read and
+what the suppression gives up, including the undefined values it hides inside
+those routines. Run `bash scripts/valgrind/strip-debug-symbols.sh <binary>`
+first: FPC 3.3.1's debugging symbols otherwise give frames inside these
+routines names no suppression can follow.
 
 Valgrind runs one thread of a process at a time. Under `--jobs` the pool's
 workers wait for each other, and its watchdog abandons workers that are only

@@ -25,9 +25,9 @@
 # same, and for 3.3.1's. Its IndexByte first reads 16 bytes unaligned (movdqu)
 # when they lie in the buffer's page (the page offset is at most 4080), which
 # reads past a short buffer's end but not into another page, and keeps a match
-# only below the length; its IndexWord keeps the 3.2 algorithm, aligned loads
-# only, with its registers reassigned. The job warns when it runs another
-# version.
+# only below the length (see the 3.3.1 records below); its IndexWord keeps the
+# 3.2 algorithm, aligned loads only, with its registers reassigned. The job
+# warns when it runs another version.
 {
    fpc-rtl-indexbyte-aligned-overread
    Memcheck:Cond
@@ -37,4 +37,38 @@
    fpc-rtl-indexword-aligned-overread
    Memcheck:Cond
    fun:SYSTEM_$$_INDEXWORD$*
+}
+#
+# FPC 3.3.1 (x86_64) also compares and searches short buffers with unaligned
+# 16-byte loads. CompareByte (2 to 15 bytes) and CompareWord (2 to 7 words)
+# load 16 bytes of each buffer when neither load leaves its page, and keep a
+# difference only below the length; IndexByte loads its first 16 bytes the same
+# way. A load past a block's end is an Addr16 report for Memcheck, where 3.2's
+# aligned loads were not (an aligned partial load is accepted), and the branch
+# on the compared bytes a Cond report. Neither result depends on the bytes past
+# the length, as above.
+{
+   fpc-rtl-indexbyte-unaligned-overread
+   Memcheck:Addr16
+   fun:SYSTEM_$$_INDEXBYTE$*
+}
+{
+   fpc-rtl-comparebyte-overread
+   Memcheck:Addr16
+   fun:SYSTEM_$$_COMPAREBYTE$*
+}
+{
+   fpc-rtl-comparebyte-overread-cond
+   Memcheck:Cond
+   fun:SYSTEM_$$_COMPAREBYTE$*
+}
+{
+   fpc-rtl-compareword-overread
+   Memcheck:Addr16
+   fun:SYSTEM_$$_COMPAREWORD$*
+}
+{
+   fpc-rtl-compareword-overread-cond
+   Memcheck:Cond
+   fun:SYSTEM_$$_COMPAREWORD$*
 }

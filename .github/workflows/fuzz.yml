@@ -371,6 +371,9 @@ jobs:
             fi
           done
           replay=(build/fuzz/heap-snapshot-replay/*)
+          # Valgrind names frames by real routines only without the
+          # debugging symbols (scripts/valgrind/strip-debug-symbols.sh).
+          bash scripts/valgrind/strip-debug-symbols.sh build/GocciaFuzzHarness
           for f in "${replay[@]:0:60}"; do
             if ! valgrind --tool=memcheck --error-exitcode=42 \
                 --suppressions=scripts/valgrind/fpc-rtl.supp -q \
@@ -564,9 +567,12 @@ jobs:
           fpc_version=$(fpc -iV)
           case "$fpc_version" in
             3.2.2|3.2.4|3.3.1) ;;
-            *) echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's, 3.2.4's and 3.3.1's IndexByte and IndexWord; this job runs FPC $fpc_version" ;;
+            *) echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's, 3.2.4's and 3.3.1's runtime routines; this job runs FPC $fpc_version" ;;
           esac
           shards=$(nproc)
+          # Valgrind names frames by real routines only without the
+          # debugging symbols (scripts/valgrind/strip-debug-symbols.sh).
+          bash scripts/valgrind/strip-debug-symbols.sh build/GocciaTestRunner
           # The runner's own file discovery and native per-file times.
           ./build/GocciaTestRunner -P tests --no-progress --silent \
             --output=build/memcheck-plan.json > /dev/null
@@ -633,6 +639,7 @@ jobs:
           fi
           fpc @config.cfg -Facmem -O- -gw -gl -FUbuild/compiled/targets/gcstress-memcheck \
             -obuild/GCStressMemcheck source/units/Goccia.GCStress.Test.pas
+          bash scripts/valgrind/strip-debug-symbols.sh build/GCStressMemcheck
           GOCCIA_GC_STRESS_FREE=1 valgrind --tool=memcheck --error-exitcode=42 \
             --suppressions=scripts/valgrind/fpc-rtl.supp \
             --errors-for-leak-kinds=none --leak-check=no \
