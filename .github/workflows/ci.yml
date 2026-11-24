@@ -316,6 +316,11 @@ jobs:
           if [ "$JOBS" -gt 4 ]; then JOBS=4; fi
           python3 .github/scripts/compile-programs.py --jobs "$JOBS" "$CPU" "$OS" -- $EXTRA_FLAGS
 
+      - name: Fetch ICU for Windows
+        # Windows' icu.dll lacks part of ICU's C API, so a Windows build carries
+        # ICU's own (pinned) beside its binaries; a no-op for other targets.
+        run: bash scripts/fetch-windows-icu.sh ${{ matrix.target }} build
+
       - name: Stage build artifacts
         # -Xs already strips the ELF and PE binaries. Only Mach-O needs the
         # extra pass, and stripping a PE file rewrites its timestamp and

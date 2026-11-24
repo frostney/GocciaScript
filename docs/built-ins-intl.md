@@ -27,7 +27,11 @@ Implements the [ECMA-402 Internationalization API](https://developer.mozilla.org
 |----------|---------|-------|
 | macOS | `libicucore` | Ships with the OS; available on all supported macOS versions |
 | Linux | `libicui18n` | Typically provided by the `libicu` or `icu` system package |
-| Windows | `icu.dll` | Available on Windows 10 1903+ (shared with Temporal timezone support) |
+| Windows | `icuin79.dll`, `icuuc79.dll`, `icudt79.dll` | ICU's own build, shipped beside the executables ([ADR 0189](adr/0189-windows-builds-carry-icu-s-own-libraries.md)); the system `icu.dll` (Windows 10 1903+) is the fallback |
+
+On Windows, GocciaScript loads the newest `icuin<major>.dll` and `icuuc<major>.dll` (major 70 or later) found beside the executable or on `PATH`, and falls back to the system's `icu.dll`. Windows' `icu.dll` exports only part of ICU's C API: without `udtitvfmt_formatCalendarToResult`, `formatRange` cannot keep the proleptic Gregorian calendar before 1582. Release archives and CI builds for Windows carry ICU 79.1, fetched and checked by `scripts/fetch-windows-icu.sh`, with ICU's license as `ICU-LICENSE.txt`.
+
+`Intl.supportedValuesOf("currency")` lists the currencies `Intl.DisplayNames` names in the loaded data (ECMA-402 §6.4 AvailableCanonicalCurrencies), so it follows the ICU in use: ICU 79 no longer names CNX, for example.
 
 The embedded CLDR data is generated from upstream CLDR JSON distributions and linked as a FreePascal `.res` resource. This keeps locale data available in single-binary builds even when system ICU cannot provide the requested data. Define `GOCCIA_INTL_NO_EMBEDDED_CLDR` at compile time to omit the embedded fallback.
 

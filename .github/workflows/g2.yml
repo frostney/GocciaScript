@@ -323,6 +323,11 @@ jobs:
           name: g2-${{ matrix.target }}
           path: build/
 
+      - name: Fetch ICU for Windows
+        # ICU's own Windows build beside the runner, as ci.yml's artifacts carry
+        # it; a no-op for other targets.
+        run: bash scripts/fetch-windows-icu.sh ${{ matrix.target }} build
+
       - name: Make the runner executable
         if: runner.os != 'Windows'
         run: chmod +x build/GocciaTestRunner
