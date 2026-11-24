@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Checks a G2 run against its list of known failures (scripts/g2/known-failures).
 
-  check-known-failures.py suite RESULTS.json [LIST]     GocciaTestRunner --output JSON
-  check-known-failures.py test262 RESULTS.json [LIST]   GocciaTest262Runner --output JSON
+  check-known-failures.py suite RESULTS.json [LIST] [--platform TARGET]     GocciaTestRunner --output JSON
+  check-known-failures.py test262 RESULTS.json [LIST] [--platform TARGET]   GocciaTest262Runner --output JSON
+
+--platform TARGET (such as x86_64-win64) adds the list known-failures/KIND-TARGET.txt, when there is one, to the
+main list: the failures only that platform has. Paths are compared with forward slashes.
 
 suite: fails when a test file not on the list fails, or a listed file fails more tests than the list says.
 test262: fails when a (mode, id) run not on the list does not pass, or a run the list names is missing.
@@ -28,7 +31,7 @@ def check_suite(results, known):
     seen = set()
     bad = 0
     for r in results['results']:
-        path = r['fileName']
+        path = r['fileName'].replace('\\', '/')
         n = r['failed'] + r.get('suiteErrors', 0)
         seen.add(path)
         allowed = expected.get(path, 0)
@@ -48,7 +51,7 @@ def check_suite(results, known):
 
 def check_test262(results, known):
     expected = {(mode, test) for mode, test in known}
-    runs = {(r['mode'], r['id']): r for r in results['results']}
+    runs = {(r['mode'], r['id'].replace('\\', '/')): r for r in results['results']}
     bad = 0
     for key, r in sorted(runs.items()):
         if r['status'] != 'PASS' and key not in expected:
@@ -66,13 +69,34 @@ def check_test262(results, known):
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ('suite', 'test262'):
+    args = sys.argv[1:]
+    platform = None
+    if '--platform' in args:
+        i = args.index('--platform')
+        if i + 1 >= len(args):
+            print(__doc__)
+            return 2
+        platform = args[i + 1]
+        del args[i:i + 2]
+    if len(args) < 2 or args[0] not in ('suite', 'test262'):
         print(__doc__)
         return 2
-    kind, results_path = sys.argv[1], sys.argv[2]
-    list_path = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, 'known-failures', kind + '.txt')
+    kind, results_path = args[0], args[1]
+    list_path = args[2] if len(args) > 2 else os.path.join(HERE, 'known-failures', kind + '.txt')
     results = json.load(open(results_path, encoding='utf-8'))
     known = read_list(list_path)
+    if platform:
+        extra = os.path.join(os.path.dirname(list_path), '%s-%s.txt' % (kind, platform))
+        if os.path.exists(extra):
+            if kind == 'suite':
+                # a file both lists name fails as many tests as the two counts together
+                counts = {}
+                for count, path in known + read_list(extra):
+                    counts[path] = counts.get(path, 0) + int(count)
+                known = [(str(count), path) for path, count in counts.items()]
+            else:
+                known = known + read_list(extra)
+            print('with %s' % os.path.relpath(extra))
     bad = check_suite(results, known) if kind == 'suite' else check_test262(results, known)
     print('%s: %d new failure(s) against %s' % (kind, bad, os.path.relpath(list_path)))
     return 1 if bad else 0

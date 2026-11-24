@@ -651,17 +651,60 @@ end;
 { The compiler arguments of a G2 program. G2 always compiles optimized: its code
   is not written for the dev build's range, overflow and assertion checks. A
   dev build keeps line information instead of stripping it. }
-function G2Args(const ASource, AUnitDirectory, AOutput, ATarget: string): TStringArray;
+{ FPC_TARGET_CPU and FPC_TARGET_OS name another platform than the one build.pas runs on: a G2 program is then
+  built for the host first, to make its prelude snapshot (which does not depend on the platform), then for the
+  target with it }
+function G2CrossBuild: Boolean;
+var
+  Cpu, OS: string;
+begin
+  Cpu := LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU'));
+  OS := LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
+  Result := ((Cpu <> '') and (Cpu <> LowerCase({$I %FPCTARGETCPU%}))) or
+    ((OS <> '') and (OS <> LowerCase({$I %FPCTARGETOS%})));
+end;
+
+{ AOutput with .exe when the build (the host's when AHost) makes a Windows executable }
+function G2Executable(const AOutput: string; AHost: Boolean): string;
+var
+  OS: string;
+begin
+  OS := LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
+  if AHost or (OS = '') then
+    OS := LowerCase({$I %FPCTARGETOS%});
+  Result := AOutput;
+  if ((OS = 'win32') or (OS = 'win64')) and (ExtractFileExt(Result) = '') then
+    Result := Result + '.exe';
+end;
+
+{ AHost: the host build of a cross build (no target options, no G2_FPC_FLAGS) }
+function G2Args(const ASource, AUnitDirectory, AOutput, ATarget: string; AHost: Boolean = False): TStringArray;
 var
   Args: TStringList;
+  Extra, Word: string;
   J: Integer;
 begin
   Args := TStringList.Create;
   try
-    if GetEnvironmentVariable('FPC_TARGET_CPU') <> '' then
-      Args.Add('-P' + GetEnvironmentVariable('FPC_TARGET_CPU'));
-    if GetEnvironmentVariable('FPC_TARGET_OS') <> '' then
-      Args.Add('-T' + GetEnvironmentVariable('FPC_TARGET_OS'));
+    if not AHost then
+    begin
+      if GetEnvironmentVariable('FPC_TARGET_CPU') <> '' then
+        Args.Add('-P' + GetEnvironmentVariable('FPC_TARGET_CPU'));
+      if GetEnvironmentVariable('FPC_TARGET_OS') <> '' then
+        Args.Add('-T' + GetEnvironmentVariable('FPC_TARGET_OS'));
+      { the target's library options (CI's link libraries and SDK paths), space-separated }
+      Extra := GetEnvironmentVariable('G2_FPC_FLAGS') + ' ';
+      Word := '';
+      for J := 1 to Length(Extra) do
+        if Extra[J] = ' ' then
+        begin
+          if Word <> '' then
+            Args.Add(Word);
+          Word := '';
+        end
+        else
+          Word := Word + Extra[J];
+    end;
     Args.Add('-O4');
     Args.Add('-OoNOFASTMATH');
     Args.Add('-dPRODUCTION');
@@ -727,10 +770,10 @@ end;
 
 { As CompileWithStaleRetry, with G2's arguments }
 function CompileG2Program(const ASource, AUnitDirectory, AOutput, ALabel: string;
-  out AOutputText: string): Boolean;
+  out AOutputText: string; AHost: Boolean = False): Boolean;
 begin
   CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
+  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
   if Result or not HasStaleArtifactSignature(AOutputText) then
     Exit;
   WriteLn('FPC reported a stale-state error for ', ALabel, '; retrying once from a clean unit directory. The first attempt:');
@@ -738,7 +781,7 @@ begin
   WriteLn(AOutputText);
   RemoveCompiledArtifacts(AUnitDirectory);
   CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
+  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
 end;
 
 { Runs the stage-1 engine to snapshot its compiled preludes (G2.Snapshot) into G2.PreludeSnapshot.inc; True when
@@ -855,10 +898,11 @@ begin
 end;
 
 { Builds ASource as a G2 program: the preludes generated, stage 1 compiled, its compiled preludes snapshot, and
-  the program compiled again when the snapshot changed }
+  the program compiled again when the snapshot changed. A cross build (G2CrossBuild) makes the snapshot with a
+  host build of the program (build/g2/host), then compiles the target once with it. }
 procedure BuildG2Program(const ASource, ATarget, AOutput: string);
 var
-  UnitDir, Output: string;
+  UnitDir, Output, HostOutput, TargetOutput: string;
 begin
   WriteLn('');
   WriteLn('Building ', AOutput, ' (G2)...');
@@ -868,6 +912,23 @@ begin
   UnitDir := TargetUnitOutputDirectory(ATarget);
   if BuildMode <> bmProd then
     UnitDir := UnitDir + '-dev';
+  if G2CrossBuild then
+  begin
+    ForceDirectories('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host');
+    HostOutput := G2Executable('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host' +
+      DirectorySeparator + ExtractFileName(AOutput), True);
+    if not CompileG2Program(ASource, UnitDir + '-host', HostOutput, ATarget, Output, True) then
+      PrintBuildFailureAndExit(Output, HostOutput + ' build failed');
+    SnapshotG2Preludes(HostOutput, ATarget);
+    { the target's own unit cache: units compiled for another platform }
+    UnitDir := UnitDir + '-' + LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU')) + '-' +
+      LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
+    TargetOutput := G2Executable(AOutput, False);
+    if not CompileG2Program(ASource, UnitDir, TargetOutput, ATarget, Output) then
+      PrintBuildFailureAndExit(Output, TargetOutput + ' build failed');
+    WriteLn(TargetOutput, ' built successfully');
+    Exit;
+  end;
   if not CompileG2Program(ASource, UnitDir, AOutput, ATarget, Output) then
     PrintBuildFailureAndExit(Output, AOutput + ' build failed');
   CheckG2ThreadVarRelocations(UnitDir);

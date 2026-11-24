@@ -1,11 +1,17 @@
 name: G2
 
-# The G2 engine (source/g2, docs/g2/README.md) and the apps built on it, on
-# Linux x86-64, the only platform G2 runs on so far.
+# The G2 engine (source/g2, docs/g2/README.md) and the apps built on it.
 #
-# Each job builds the targets it runs, so the three run side by side. The JS
-# suite and test262 are checked against scripts/g2/known-failures: a run fails
-# on a failure not on its list, and reports a listed one that now passes.
+# On Linux x86-64 each job builds the targets it runs, so the three run side
+# by side. The JS suite and test262 are checked against
+# scripts/g2/known-failures: a run fails on a failure not on its list, and
+# reports a listed one that now passes.
+#
+# The other targets (as ci.yml's): platform-build cross-compiles the test
+# runners on Linux, or builds them on macOS for Darwin, and platform-test runs
+# the JS suite on the target's own runner against the shared list plus the
+# target's own (known-failures/suite-<target>.txt). Only Linux x86-64 has the
+# JIT; the other targets run the interpreter.
 
 on:
   push:
@@ -186,3 +192,165 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
           path: g2-grammar-findings/
+
+  platform-build:
+    name: G2 build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # The aarch64 targets join once FPC_VERSION carries fpc-toolchain patch
+    # 0131: 3.3.1-b6 forms a tbz past its 32 KiB reach in the old runtime's
+    # interpreter loop, which the apps still link, and the assembler refuses
+    # it. x86_64-darwin builds on an Intel runner, where it is the host.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-darwin
+            cpu: x86_64
+            os: darwin
+            runner: macos-15-intel
+          - target: x86_64-win64
+            cpu: x86_64
+            os: win64
+            runner: ubuntu-latest
+          - target: i386-win32
+            cpu: i386
+            os: win32
+            runner: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+          targets: ${{ matrix.target }}
+
+      # As ci.yml: the aarch64 Linux build links against Ubuntu 18.04's glibc.
+      - name: Restore Linux link libraries
+        id: link-libs
+        if: matrix.target == 'aarch64-linux'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: link-libs
+          key: link-libs-aarch64-linux-3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158
+
+      - name: Download Linux link libraries
+        if: matrix.target == 'aarch64-linux' && steps.link-libs.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all/Linux_AArch64_Ubuntu_1804.zip" \
+            -o "$RUNNER_TEMP/link-libs.zip"
+          echo "3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158  $RUNNER_TEMP/link-libs.zip" | sha256sum -c -
+          mkdir -p link-libs
+          unzip -qo "$RUNNER_TEMP/link-libs.zip" -d link-libs
+
+      - name: Build GocciaTestRunner on G2
+        # build.pas builds a cross target twice: for the host, to make the
+        # prelude snapshot, then for the target with it.
+        env:
+          FPC_TARGET_CPU: ${{ matrix.cpu }}
+          FPC_TARGET_OS: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            linux)
+              LIBDIR=$(find "$PWD/link-libs" -name "libc.so" -exec dirname {} \; | head -1)
+              export G2_FPC_FLAGS="-Xd -Fl${LIBDIR}"
+              ;;
+            darwin)
+              SDK_ROOT="$(xcrun --show-sdk-path)"
+              export G2_FPC_FLAGS="-Fl${SDK_ROOT}/usr/lib -k-F${SDK_ROOT}/System/Library/Frameworks"
+              ;;
+          esac
+          ./build.pas --prod g2testrunner
+
+      - name: Upload the build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: g2-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: build/g2/GocciaTestRunner*
+
+  platform-test:
+    name: JavaScript suite on G2 (${{ matrix.target }})
+    needs: platform-build
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-darwin
+            runner: macos-15-intel
+          - target: x86_64-win64
+            runner: windows-latest
+          - target: i386-win32
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Download the build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: g2-${{ matrix.target }}
+          path: build/g2/
+
+      - name: Make the runner executable
+        if: runner.os != 'Windows'
+        run: chmod +x build/g2/GocciaTestRunner
+
+      - name: Build FFI fixture library
+        if: runner.os != 'Windows'
+        run: ./fixtures/ffi/build.sh
+
+      - name: Set up MSYS2 (MINGW32)
+        if: matrix.target == 'i386-win32'
+        uses: msys2/setup-msys2@e9898307ac31d1a803454791be09ab9973336e1c # v2
+        with:
+          msystem: MINGW32
+          install: mingw-w64-i686-gcc
+
+      - name: Build FFI fixture library (Windows 32-bit)
+        if: matrix.target == 'i386-win32'
+        shell: msys2 {0}
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
+      - name: Build FFI fixture library (Windows 64-bit)
+        if: matrix.target == 'x86_64-win64'
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
+      - name: Run all JavaScript tests
+        # The run exits nonzero for the known failures; the next step decides.
+        run: |
+          status=0
+          build/g2/GocciaTestRunner -P tests --silent --no-progress \
+            --output=g2-test-results.json || status=$?
+          echo "GocciaTestRunner exit status: $status"
+
+      - name: Check against the known failures
+        # Windows runners name it python
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" scripts/g2/check-known-failures.py suite g2-test-results.json --platform ${{ matrix.target }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: g2-test-results-${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: g2-test-results.json

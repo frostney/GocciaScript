@@ -57,6 +57,15 @@ an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard a
 skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out,
 so it still builds with FPC 3.2.
 
+G2 builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
+i386. Only Linux x86-64 has the JIT (`G2JIT` in `G2.Checks.inc`): it emits code for the System V calling convention
+and reads threadvars `%fs`-relative. The other targets run the interpreter. With `FPC_TARGET_CPU` and
+`FPC_TARGET_OS` naming another platform, `build.pas` builds a G2 program for the host first (`build/g2/host`) to
+make its prelude snapshot, which holds the same bytes on every platform, then builds the target once with it;
+`G2_FPC_FLAGS` adds the target's library options. aarch64 needs fpc-toolchain patch 0131 (a `tbz` or `tbnz` the
+peephole optimizer forms past its 32 KiB reach), in the build after `3.3.1-b6`. Without `fork` (Windows),
+GocciaTest262Runner runs each case on a thread of its own, bounded by the engine's deadline instead of a kill.
+
 ### Execution limits
 
 The host takes GocciaRunner's limits: `--timeout=` (500ms, 5s, 2m or milliseconds), `--max-instructions=N`,
@@ -474,9 +483,12 @@ every collection. `scripts/g2/artifact-roundtrip-tests.py` and `scripts/g2/artif
 holds the expected lines.
 
 `.github/workflows/g2.yml` runs part of this in CI on every pull request and on pushes to `main` and `feat/g2-**`,
-with FPC `3.3.1-b6` on Linux x86-64; the rest of CI stays on its FPC 3.2.4 build until the old runtime is removed.
-Its three jobs build what they run: GocciaTestRunner over `tests/` with `--heap-snapshots`, GocciaTest262Runner over
-the pinned test262, and the limits test, both bytecode-file tests and a 1,000-case grammar fuzz campaign.
+with FPC `3.3.1-b6`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
+`tests/` with `--heap-snapshots`, GocciaTest262Runner over the pinned test262, and the limits test, both
+bytecode-file tests and a 1,000-case grammar fuzz campaign. `platform-build` builds GocciaTestRunner for
+x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner, against
+the shared list plus the target's own (`known-failures/suite-<target>.txt`). The aarch64 targets join once
+`FPC_VERSION` has the `tbz` fix named above.
 `scripts/g2/check-known-failures.py` holds the suite and test262 to `scripts/g2/known-failures`: a failure not on the
 list fails the job, and a listed one that now passes is reported, so the lists only shrink. The digests, GC stress
 and the benchmarks stay with the local gate, which needs the bundles under `G2_WT_DIR` and `G2_JS_DIR`.
