@@ -9627,9 +9627,11 @@ LReload:
           if (I shr 40) = 1 then VA := R[A + 1] else VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
           if not IsConstructorV(VA) then begin ThrowTypeError('Super constructor is not a constructor'); goto LThrow; end;
           StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
-          if (ObjOf(VA)^.OKind = okFunction) and not MultiRealmAny then
+          if (ObjOf(VA)^.OKind = okFunction) and (not MultiRealmAny or (FnRealm(ObjOf(VA)) = CurRealm)) then
           begin
-            { a bytecode parent's frame, in this Execute (XSuperPush; its return binds this) }
+            { a bytecode parent's frame, in this Execute (XSuperPush; its return binds this). A parent of another
+              realm goes through Construct, which switches to it; one of this realm stays here once any thread has a
+              second realm too, or a chain of default constructors would recurse on the native stack }
             J := XSuperPush(VA, A, Argc);
             if J < 0 then goto LThrow;
             if J > 0 then goto LReload;
