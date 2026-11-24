@@ -126,12 +126,12 @@ Cost, as callgrind instruction counts of a production `GocciaRunner`:
 
 | Workload | Base | After | Change |
 | --- | ---: | ---: | ---: |
-| 150,000 `Object.defineProperty` and `Reflect.defineProperty` calls on fresh objects | 4,646.47 M | 4,633.78 M | -0.27% |
-| 20,000 classes with statics, and a function's `name` defined | 1,961.82 M | 1,956.71 M | -0.26% |
-| `Object.fromEntries` of 200,000 keys, 20,000 small `JSON.parse` objects | 8,709.89 M | 8,712.53 M | +0.03% |
-| 180,000 array element and `length` definitions | 7,728.04 M | 7,729.30 M | +0.02% |
+| 150,000 `Object.defineProperty` and `Reflect.defineProperty` calls on fresh objects | 4,646.47 M | 4,636.53 M | -0.21% |
+| 20,000 classes with statics, and a function's `name` defined | 1,961.82 M | 1,957.81 M | -0.20% |
+| `Object.fromEntries` of 200,000 keys, 20,000 small `JSON.parse` objects | 8,709.89 M | 8,713.41 M | +0.04% |
+| 180,000 array element and `length` definitions | 7,728.04 M | 7,730.02 M | +0.03% |
 
-Store-heavy work costs at most 0.03% more, and `Object.defineProperty` no
+Store-heavy work costs at most 0.04% more, and `Object.defineProperty` no
 longer opens a frame of its own around the call. A first version that freed
 through a frame at each store that had to grow a map, and around each array
 element's extension, measured +0.5% to +1.0% on the same workloads.
