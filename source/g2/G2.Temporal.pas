@@ -2,7 +2,8 @@ unit G2.Temporal;
 { Temporal: the spec's operations and objects are written in JS (prelude/temporal.js -> G2.Temporal.inc) and
   snapshotted; this unit gives the prelude what JS cannot reach: the clock, the time zone database and the system
   time zone. Zones come as TZif files from GOCCIA_TZDIR or /usr/share/zoneinfo, the zone and link names from that
-  directory's tzdata.zi, as in Goccia (ADR 0034); the prelude parses them and caches each zone. }
+  directory's tzdata.zi, as in Goccia (ADR 0034); without them (Windows, a macOS without tzdata.zi) from the tz
+  data the binary embeds (Goccia.Temporal.TimeZoneData). The prelude parses them and caches each zone. }
 {$mode delphiunicode}{$H+}
 {$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
@@ -20,7 +21,8 @@ implementation
 
 uses
   {$IFDEF UNIX}BaseUnix, {$ENDIF}SysUtils, Classes, BigInteger, G2.Bytecode, G2.VM, G2.BigIntV,
-  G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar, Goccia.Temporal.TimeZone;
+  G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar, Goccia.Temporal.TimeZone,
+  Goccia.Temporal.TimeZoneData;
 
 {$I G2.Temporal.inc}
 
@@ -71,6 +73,36 @@ begin
   Result := True;
 end;
 
+{ the embedded tz data's file for zone Name, as FileBytes gives a file; undefined when it has none }
+function EmbeddedZoneBytes(const Name: string): TValue;
+var B: TBytes; S: UnicodeString; I: Integer;
+begin
+  Result := VUndefined;
+  if not TryGetEmbeddedTimeZoneFile(Name, B) then Exit;
+  SetLength(S, Length(B));
+  for I := 0 to High(B) do S[I + 1] := WideChar(B[I]);
+  Result := StrFromUnicode(S);
+end;
+
+{ the embedded tz data's names as tzdata.zi lines: a name whose primary identifier is another is a link to it }
+function EmbeddedZoneIndex: TValue;
+var Names: TEmbeddedTimeZoneFileNameArray; Text: TStringBuilder; I: Integer; Primary: string;
+begin
+  Result := VUndefined;
+  if not TryGetEmbeddedTimeZoneFileNames(Names) or (Length(Names) = 0) then Exit;
+  Text := TStringBuilder.Create;
+  try
+    for I := 0 to High(Names) do
+      if TryKnownPrimaryTimeZoneIdentifier(Names[I], Primary) and (Primary <> Names[I]) then
+        Text.Append('L ').Append(Primary).Append(' ').Append(Names[I]).Append(#10)
+      else
+        Text.Append('Z ').Append(Names[I]).Append(#10);
+    Result := StrFromUnicode(UnicodeString(Text.ToString));
+  finally
+    Text.Free;
+  end;
+end;
+
 { tzData(name): the zone's TZif file; only names made of the characters of IANA zone names, so no path can
   leave the zone directory }
 function Temporal_TzData(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -87,7 +119,10 @@ begin
     if not (CharInSet(C, ['A'..'Z', 'a'..'z', '0'..'9', '/', '_', '-', '+', '.'])) then Exit;
   end;
   if EnvZoneDir <> '' then Res := FileBytes(EnvZoneDir + string(Name));
+  {$IFDEF UNIX}
   if Res = VUndefined then Res := FileBytes(SYSTEM_ZONE_DIR + string(Name));
+  {$ENDIF}
+  if Res = VUndefined then Res := EmbeddedZoneBytes(string(Name));
 end;
 
 { tzIndex(): the zone directory's tzdata.zi (its Z and L lines name every zone and link) }
@@ -95,7 +130,10 @@ function Temporal_TzIndex(Args: PValue; Argc: Integer; var Res: TValue): Boolean
 begin
   Res := VUndefined;
   if EnvZoneDir <> '' then Res := FileBytes(EnvZoneDir + 'tzdata.zi');
+  {$IFDEF UNIX}
   if Res = VUndefined then Res := FileBytes(SYSTEM_ZONE_DIR + 'tzdata.zi');
+  {$ENDIF}
+  if Res = VUndefined then Res := EmbeddedZoneIndex;
   Result := True;
 end;
 
@@ -112,9 +150,12 @@ begin
   begin
     {$IFDEF UNIX}
     S := fpReadLink('/etc/localtime');
-    {$ENDIF}
     P := Pos('zoneinfo/', S);
     if P > 0 then S := Copy(S, P + Length('zoneinfo/'), MaxInt) else S := '';
+    {$ELSE}
+    { the system's zone as GocciaScript names it (Windows' zone mapped to its IANA name) }
+    S := GetSystemTimeZoneId;
+    {$ENDIF}
   end;
   if S <> '' then Res := StrFromUnicode(UnicodeString(S));
 end;

@@ -76,7 +76,23 @@
     return exportList(out);
   };
   formats['.json'] = (text) => shared.jsonExports(JSON.parse(text));
-  const textAsset = (text, path) => {
+  // a text asset's line breaks as LF (a CRLF or a lone CR), as GocciaScript normalizes them: a checkout on
+  // Windows writes CRLF
+  const toLF = (text) => {
+    if (text.indexOf('\r') < 0) return text;
+    let out = '';
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c !== '\r') out += c;
+      else {
+        out += '\n';
+        if (text[i + 1] === '\n') i++;
+      }
+    }
+    return out;
+  };
+  const textAsset = (raw, path) => {
+    const text = toLF(raw);
     const slash = lastSlash(path);
     const fileName = path.slice(slash + 1);
     const metadata = Object.freeze({ kind: 'text', path, fileName, extension: extensionOf(path),

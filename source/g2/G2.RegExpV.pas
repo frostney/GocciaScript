@@ -837,24 +837,42 @@ const
     out-of-memory abort }
   ReplaceMaxLen = 536870888;
 
-function Substitute(const Rep, Subject: UnicodeString; Caps: PInteger; Base, N: Integer;
-  const NG: TGocciaRegExpNamedGroups): UnicodeString;
+{ walks the replacement template: with Dest nil it only counts the result's length (Len), else it writes the
+  result there (Len characters, the count a first walk gave) }
+procedure SubstituteWalk(const Rep, Subject: UnicodeString; Caps: PInteger; Base, N: Integer;
+  const NG: TGocciaRegExpNamedGroups; Dest: PWideChar; out Len: Int64);
 var I, G, K, J, MS, ME: Integer; C: WideChar; Name: UnicodeString; Found: Boolean;
+
+  { Count characters of S from its 1-based index From }
+  procedure Put(const S: UnicodeString; From, Count: Integer);
+  begin
+    if From < 1 then begin Inc(Count, From - 1); From := 1; end;
+    if Count > Length(S) - From + 1 then Count := Length(S) - From + 1;
+    if Count <= 0 then Exit;
+    if Dest <> nil then Move(S[From], Dest[Len], Count * SizeOf(WideChar));
+    Inc(Len, Count);
+  end;
+
+  procedure PutChar(Ch: WideChar);
+  begin
+    if Dest <> nil then Dest[Len] := Ch;
+    Inc(Len);
+  end;
+
 begin
-  Result := '';
+  Len := 0;
   MS := Caps[Base]; ME := Caps[Base + 1];
   I := 1;
   while I <= Length(Rep) do
   begin
-    if Length(Result) > ReplaceMaxLen then Exit;   { the caller sees the length and throws }
     C := Rep[I];
     if (C = '$') and (I < Length(Rep)) then
     begin
       case Rep[I + 1] of
-        '$': begin Result := Result + '$'; Inc(I, 2); Continue; end;
-        '&': begin Result := Result + Copy(Subject, MS + 1, ME - MS); Inc(I, 2); Continue; end;
-        '`': begin Result := Result + Copy(Subject, 1, MS); Inc(I, 2); Continue; end;
-        '''': begin Result := Result + Copy(Subject, ME + 1, MaxInt); Inc(I, 2); Continue; end;
+        '$': begin PutChar('$'); Inc(I, 2); Continue; end;
+        '&': begin Put(Subject, MS + 1, ME - MS); Inc(I, 2); Continue; end;
+        '`': begin Put(Subject, 1, MS); Inc(I, 2); Continue; end;
+        '''': begin Put(Subject, ME + 1, Length(Subject) - ME); Inc(I, 2); Continue; end;
         '0'..'9':
           begin
             G := Ord(Rep[I + 1]) - 48;
@@ -867,7 +885,7 @@ begin
             if (G >= 1) and (G <= N) then
             begin
               if Caps[Base + G * 2] >= 0 then
-                Result := Result + Copy(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
+                Put(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
               Inc(I, K);
               Continue;
             end;
@@ -884,7 +902,7 @@ begin
                 if not Found and (UnicodeString(NG[J].Name) = Name) and (Caps[Base + NG[J].Index * 2] >= 0) then
                 begin
                   G := NG[J].Index;
-                  Result := Result + Copy(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
+                  Put(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
                   Found := True;
                 end;
               Inc(I, K + 2);
@@ -893,9 +911,24 @@ begin
           end;
       end;
     end;
-    Result := Result + C;
+    PutChar(C);
     Inc(I);
   end;
+end;
+
+{ the substitution, appended to Out_; False when Out_ would pass ReplaceMaxLen (nothing appended): the result's
+  length is counted first, so an expansion past the limit allocates nothing (on a heap whose realloc copies,
+  building it piece by piece was quadratic) }
+function AppendSubstitution(var Out_: UnicodeString; const Rep, Subject: UnicodeString; Caps: PInteger;
+  Base, N: Integer; const NG: TGocciaRegExpNamedGroups): Boolean;
+var Len, Written: Int64; At: Integer;
+begin
+  SubstituteWalk(Rep, Subject, Caps, Base, N, NG, nil, Len);
+  if Int64(Length(Out_)) + Len > ReplaceMaxLen then Exit(False);
+  At := Length(Out_);
+  SetLength(Out_, At + Len);
+  if Len > 0 then SubstituteWalk(Rep, Subject, Caps, Base, N, NG, @Out_[At + 1], Written);
+  Result := True;
 end;
 
 { 22.2.6.11 for an unmodified RegExp: every match is recorded first, then the replacements are made (a
@@ -1021,7 +1054,8 @@ begin
       Out_ := Out_ + StrToUnicode(StrOf(SV));
     end
     else
-      Out_ := Out_ + Substitute(Rep, Subject, Caps, I * (N + 1) * 2, N, NG);
+      if not AppendSubstitution(Out_, Rep, Subject, Caps, I * (N + 1) * 2, N, NG) then
+        Exit(ThrowError('RangeError', 'Invalid string length'));
     if Length(Out_) > ReplaceMaxLen then Exit(ThrowError('RangeError', 'Invalid string length'));
     Pos_ := En;
   end;

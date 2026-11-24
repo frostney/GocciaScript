@@ -578,17 +578,10 @@ begin
   else Result := CallValue(Args[0], Arg(Args, Argc, 1), nil, 0, Res);
 end;
 
-function MaterializeArrayLike(Args: TArgs): Boolean;
-var LenV, V: TValue; D: Double; N, I: Integer; A: PObj;
+{ Args[0] replaced by an array of its first N elements, each read with [[Get]] }
+function MaterializeArrayLikeN(Args: TArgs; N: Integer): Boolean;
+var V: TValue; I: Integer; A: PObj;
 begin
-  if IsNullish(Args[0]) then Exit(ThrowTypeError('Array.prototype method called on null or undefined'));
-  if IsString(Args[0]) then N := StrOf(Args[0])^.Len
-  else
-  begin
-    if not GetV(Args[0], AtomLength, LenV) then Exit(False);
-    if not ToNumberV(LenV, D) then Exit(False);
-    if IsNaN(D) or (D < 0) then N := 0 else N := Trunc(Min(D, 100000000));
-  end;
   A := NewArray(N, N);
   PushRoot(MkPtr(A));
   for I := 0 to N - 1 do
@@ -599,6 +592,20 @@ begin
   Args[0] := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
+end;
+
+function MaterializeArrayLike(Args: TArgs): Boolean;
+var LenV: TValue; D: Double; N: Integer;
+begin
+  if IsNullish(Args[0]) then Exit(ThrowTypeError('Array.prototype method called on null or undefined'));
+  if IsString(Args[0]) then N := StrOf(Args[0])^.Len
+  else
+  begin
+    if not GetV(Args[0], AtomLength, LenV) then Exit(False);
+    if not ToNumberV(LenV, D) then Exit(False);
+    if IsNaN(D) or (D < 0) then N := 0 else N := Trunc(Min(D, 100000000));
+  end;
+  Result := MaterializeArrayLikeN(Args, N);
 end;
 
 { the RangeError for a list of arguments made from an array-like longer than MAX_ARGUMENTS_LIST_LENGTH }
@@ -616,7 +623,13 @@ begin
   if not IsObject(L) then Exit(ThrowTypeError('CreateListFromArrayLike called on non-object'));
   if (ObjOf(L)^.Elements = nil) and (ObjOf(L)^.OKind <> okArray) then
   begin
-    if not MaterializeArrayLike(@Args[2]) then Exit(False);
+    { 7.3.20 step 2 LengthOfArrayLike, once: a length past the limit throws before any element is read (reading
+      them first took 100,000,000 [[Get]]s and 800 MB for an array-like of length 2 ** 31) }
+    if not GetV(L, AtomLength, LenV) or not ToNumberV(LenV, D) then Exit(False);
+    if IsNaN(D) or (D <= 0) then N := 0
+    else if D > MAX_ARGUMENTS_LIST_LENGTH then Exit(ArgumentsTooLong('Function.prototype.apply', D))
+    else N := Trunc(D);
+    if not MaterializeArrayLikeN(@Args[2], N) then Exit(False);
     L := Args[2];
   end;
   A := ObjOf(L);

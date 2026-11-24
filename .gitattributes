@@ -15,3 +15,6 @@
 # Mark generated Pascal data so review tools can collapse it
 source/generated/** linguist-generated=true
 source/generated/*.res binary
+
+# a fixture whose CRLF and CR line breaks the test reads: kept as written on every checkout
+tests/language/modules/helpers/crlf-note.txt -text

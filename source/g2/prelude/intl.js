@@ -354,6 +354,15 @@
   def(Intl, "getCanonicalLocales", { getCanonicalLocales(locales) { return CanonicalizeLocaleList(locales); } }.getCanonicalLocales);
   var CALENDARS = ["buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic", "gregory", "hebrew", "indian",
     "islamic-civil", "islamic-tbla", "islamic-umalqura", "iso8601", "japanese", "persian", "roc"];
+  // ICU's collation names that differ from their BCP 47 types (the legacy names ICU still lists on some hosts,
+  // such as Windows' ICU: gb2312han, nine characters, is not a valid type)
+  function collationType(c) {
+    if (c === "phonebook") return "phonebk";
+    if (c === "traditional") return "trad";
+    if (c === "dictionary") return "dict";
+    if (c === "gb2312han") return "gb2312";
+    return c;
+  }
   var collationsList = null;
   function availableCollations() {
     if (collationsList === null) {
@@ -362,7 +371,7 @@
         var a = intlOp(5, probe[i]);
         for (var j = 0; j < a.length; j++) {
           var c = a[j];
-          if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
+          c = collationType(c);
           if (c !== "standard" && c !== "search" && listIndexOf(set, c) < 0) append(set, c);
         }
       }
@@ -1075,7 +1084,7 @@
     var a = intlOp(5, s.locale), r = [];
     for (var i = 0; i < a.length; i++) {
       var c = a[i];
-      if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
+      c = collationType(c);
       if (c !== "standard" && c !== "search" && listIndexOf(r, c) < 0) append(r, c);
     }
     listSort(r);
@@ -1496,7 +1505,7 @@
     var a = intlOp(5, locale), r = [null];
     for (var i = 0; i < a.length; i++) {
       var c = a[i];
-      if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
+      c = collationType(c);
       if (c !== "standard" && c !== "search" && listIndexOf(r, c) < 0) append(r, c);
     }
     return r;
