@@ -1479,7 +1479,9 @@ begin
   for I := 1 to Argc do
   begin
     if not NumArg(Args, Argc, I, D) then Exit(False);
-    Codes[I - 1] := Word(Trunc(D) and $FFFF);
+    { 7.1.8 ToUint16: NaN and the infinities give 0, a finite value its integer modulo 2^16 (Trunc of an infinity or a
+      value past Int64 is the CPU's: x86 gives the low bits of 2^63, aarch64 saturates) }
+    Codes[I - 1] := Word(DoubleToUint32Mod(D) and $FFFF);
   end;
   S := NewString(Argc);
   for I := 1 to Argc do StrChars(S)[I - 1] := WideChar(Codes[I - 1]);

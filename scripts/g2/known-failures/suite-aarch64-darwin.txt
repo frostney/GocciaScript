@@ -1,0 +1,3 @@
+# GocciaTestRunner on G2, aarch64-darwin: the failures only this target has, added to suite.txt (same format).
+# macOS's libm pow rounds a subnormal result differently from glibc's (one ulp)
+1 tests/language/expressions/arithmetic/exponential.js
