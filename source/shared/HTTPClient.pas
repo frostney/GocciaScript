@@ -174,8 +174,10 @@ var
   configuration as other programs. The field order follows the platform ABI. }
 type
   PHTTPAddrInfo = ^THTTPAddrInfo;
+  {$IFDEF FPC}
   {$PUSH}
   {$PACKRECORDS C}
+  {$ENDIF}
   THTTPAddrInfo = record
     ai_flags: Integer;
     ai_family: Integer;
@@ -197,7 +199,9 @@ type
     {$ENDIF}
     ai_next: PHTTPAddrInfo;
   end;
+  {$IFDEF FPC}
   {$POP}
+  {$ENDIF}
 
 {$IFDEF UNIX}
 type
@@ -226,14 +230,18 @@ type
   TSocketAddress6 = TSockAddrIn6;
   PSocketAddress6 = ^TSocketAddress6;
   PHTTPPollFD = ^THTTPPollFD;
+  {$IFDEF FPC}
   {$PUSH}
   {$PACKRECORDS C}
+  {$ENDIF}
   THTTPPollFD = record
     fd: TSocket;
     events: SmallInt;
     revents: SmallInt;
   end;
+  {$IFDEF FPC}
   {$POP}
+  {$ENDIF}
 
 const
   POLLOUT = $0010; // Winsock POLLWRNORM
@@ -247,6 +255,11 @@ procedure HostFreeAddrInfo(AInfo: PHTTPAddrInfo); stdcall;
 function HostInetNtop(AFamily: Integer; ASource: Pointer;
   ADestination: PAnsiChar; ASize: NativeUInt): PAnsiChar; stdcall;
   external 'ws2_32.dll' name 'inet_ntop';
+{ Delphi's RTL wrapper takes a sockaddr record. Import the native
+  pointer ABI so the kernel gets the whole IPv6 address and its length. }
+function HostConnect(ASocket: TSocket; AAddress: PSockAddr;
+  ALength: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'connect';
 function WSAPoll(ADescriptors: PHTTPPollFD; ACount: Cardinal;
   ATimeoutMilliseconds: Integer): Integer; stdcall;
   external 'ws2_32.dll' name 'WSAPoll';
@@ -491,7 +504,7 @@ begin
   Result := fpConnect(ASocket, SockAddr, AddrLength);
   {$ENDIF}
   {$IFDEF MSWINDOWS}
-  Result := WinSock2.connect(ASocket, SockAddr, AddrLength);
+  Result := HostConnect(ASocket, SockAddr, AddrLength);
   {$ENDIF}
 end;
 

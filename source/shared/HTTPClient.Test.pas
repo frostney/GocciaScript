@@ -175,7 +175,7 @@ end;
 
 { A TCP listener on an ephemeral loopback port. }
 function CreateLoopbackListener(out APort: Word;
-  const ARequestedPort: Word = 0): cint;
+  const ARequestedPort: Word = 0; const AListen: Boolean = True): cint;
 var
   Address: TInetSockAddr;
   AddressLength: TSockLen;
@@ -189,7 +189,7 @@ begin
   Address.sin_addr := StrToNetAddr('127.0.0.1');
   AddressLength := SizeOf(Address);
   if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
-     (fpListen(Result, 1) <> 0) or
+     (AListen and (fpListen(Result, 1) <> 0)) or
      (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
   begin
     CloseSocket(Result);
@@ -2581,30 +2581,39 @@ var
   Server: TKeepAliveServer;
   IPv4Listener: cint;
   IPv4Port: Word;
+  DenyIPv4: Boolean;
 begin
-  Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE], True);
-  try
-    IPv4Listener := CreateLoopbackListener(IPv4Port, Server.Port);
+  for DenyIPv4 := False to True do
+  begin
+    Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE], True);
     try
-      Gate := THopGate.Create;
+      { With a grant, bind IPv4 without listening so it fails and IPv6
+        wins the race. Without a grant, a listening IPv4 socket would
+        reveal any connection attempted before the denial. }
+      IPv4Listener := CreateLoopbackListener(IPv4Port, Server.Port, DenyIPv4);
       try
-        Gate.DenyAddressCheck := 1;
-        Policy := DefaultHTTPPolicy;
-        Policy.HostCheck := Gate.Check;
-        Expect<string>(FetchKeepAlive(Server, Policy, False, 'localhost'))
-          .ToBe('200|ok');
-        Server.WaitFor;
-        Expect<string>(Gate.CheckedAddresses).ToBe('127.0.0.1;::1;::1;');
-        Expect<Integer>(Server.Connections).ToBe(1);
-        Expect<Boolean>(HasPendingInput(IPv4Listener)).ToBe(False);
+        Gate := THopGate.Create;
+        try
+          if DenyIPv4 then
+            Gate.DenyAddressCheck := 1;
+          Policy := DefaultHTTPPolicy;
+          Policy.HostCheck := Gate.Check;
+          Expect<string>(FetchKeepAlive(Server, Policy, False, 'localhost'))
+            .ToBe('200|ok');
+          Server.WaitFor;
+          Expect<string>(Gate.CheckedAddresses).ToBe('127.0.0.1;::1;::1;');
+          Expect<Integer>(Server.Connections).ToBe(1);
+          if DenyIPv4 then
+            Expect<Boolean>(HasPendingInput(IPv4Listener)).ToBe(False);
+        finally
+          Gate.Free;
+        end;
       finally
-        Gate.Free;
+        CloseSocket(IPv4Listener);
       end;
     finally
-      CloseSocket(IPv4Listener);
+      Server.Free;
     end;
-  finally
-    Server.Free;
   end;
 end;
 {$ENDIF}
