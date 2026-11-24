@@ -102,6 +102,11 @@ function ParseConfigFile(const APath: string): TConfigEntryArray;
 procedure ApplyConfigFile(const APath: string;
   const AOptions: TOptionArray);
 
+{ The entries of a JSON5 config text: the JSON reader's shape (scalars, flat
+  arrays, one level of nested objects) with JSON5's syntax. Not registered by
+  default; a program registers it for the .json5 extension. }
+function ParseJSON5Config(const AContent: string): TConfigEntryArray;
+
 { Walk up from AStartDirectory looking for a configuration file.
   At each directory level, tries every combination of
   ABaseNames x AExtensions in the order given (extensions are the
@@ -419,6 +424,18 @@ var
   Parser: TConfigJSONParser;
 begin
   Parser := TConfigJSONParser.Create;
+  try
+    Result := Parser.Parse(AContent);
+  finally
+    Parser.Free;
+  end;
+end;
+
+function ParseJSON5Config(const AContent: string): TConfigEntryArray;
+var
+  Parser: TConfigJSONParser;
+begin
+  Parser := TConfigJSONParser.Create(JSONParserJSON5Capabilities);
   try
     Result := Parser.Parse(AContent);
   finally

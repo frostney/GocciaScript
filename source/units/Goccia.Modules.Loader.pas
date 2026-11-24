@@ -486,6 +486,7 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.ModuleResolver,
+  Goccia.Modules.Errors,
   Goccia.NativeLimits,
   Goccia.Packages.Address,
   Goccia.Packages.Store,

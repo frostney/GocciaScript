@@ -82,14 +82,6 @@ type
     function ReadsHostFileSystem: Boolean; virtual;
   end;
 
-  TGocciaUnavailableModuleContentProvider = class(TGocciaModuleContentProvider)
-  public
-    function Exists(const APath: string): Boolean; override;
-    function LoadContent(const APath: string): TGocciaModuleContent; override;
-    function TryGetLastModified(const APath: string;
-      out ALastModified: TDateTime): Boolean; override;
-  end;
-
   TGocciaFileSystemModuleContentProvider = class(TGocciaModuleContentProvider)
   public
     function Exists(const APath: string): Boolean; override;
@@ -120,7 +112,6 @@ uses
   TextEncoding,
   TextSemantics,
 
-  Goccia.Modules.Errors,
   Goccia.NativeLimits,
   Goccia.TextFiles;
 
@@ -234,34 +225,6 @@ begin
 end;
 
 { TGocciaUnavailableModuleContentProvider }
-
-function TGocciaUnavailableModuleContentProvider.Exists(
-  const APath: string): Boolean;
-begin
-  Result := False;
-end;
-
-function TGocciaUnavailableModuleContentProvider.LoadContent(
-  const APath: string): TGocciaModuleContent;
-begin
-  { An embedder that runs untrusted source without installing a provider must
-    not get an RTL exception through its engine boundary, so the refusal is
-    reported to source as a plain Error carrying a stable code. LoadContentBytes
-    inherits this: the base implementation calls LoadContent first.
-
-    APath is deliberately dropped: it is the resolved address, which the default
-    resolver expands against the host filesystem, and this refusal is reported
-    to potentially untrusted source. See Goccia.Modules.Errors. }
-  Result := nil;
-  ThrowModuleLoadingUnsupported;
-end;
-
-function TGocciaUnavailableModuleContentProvider.TryGetLastModified(
-  const APath: string; out ALastModified: TDateTime): Boolean;
-begin
-  ALastModified := 0;
-  Result := False;
-end;
 
 { TGocciaFileSystemModuleContentProvider }
 

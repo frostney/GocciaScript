@@ -4,9 +4,6 @@ unit Goccia.ScriptLoader.Globals;
 
 interface
 
-uses
-  Goccia.Values.Primitives;
-
 type
   TScriptLoaderGlobalPair = record
     Key: string;
@@ -14,7 +11,6 @@ type
   end;
 
 function ParseGlobalPair(const AArg: string): TScriptLoaderGlobalPair;
-function ParseInlineGlobalValue(const AValueText: string): TGocciaValue;
 function IsStructuredGlobalsFile(const APath: string): Boolean;
 function IsJSON5GlobalsFile(const APath: string): Boolean;
 function IsTOMLGlobalsFile(const APath: string): Boolean;
@@ -27,7 +23,6 @@ uses
   SysUtils,
 
   Goccia.FileExtensions,
-  Goccia.JSON,
   Goccia.TextFiles;
 
 function ParseGlobalPair(const AArg: string): TScriptLoaderGlobalPair;
@@ -40,23 +35,6 @@ begin
 
   Result.Key := Copy(AArg, 1, SeparatorIndex - 1);
   Result.ValueText := Copy(AArg, SeparatorIndex + 1, MaxInt);
-end;
-
-function ParseInlineGlobalValue(const AValueText: string): TGocciaValue;
-var
-  Parser: TGocciaJSONParser;
-begin
-  Parser := TGocciaJSONParser.Create;
-  try
-    try
-      Result := Parser.Parse(AValueText);
-    except
-      on Exception do
-        Result := TGocciaStringLiteralValue.Create(AValueText);
-    end;
-  finally
-    Parser.Free;
-  end;
 end;
 
 function IsStructuredGlobalsFile(const APath: string): Boolean;

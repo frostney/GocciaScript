@@ -11,8 +11,7 @@ uses
   SandboxShell,
   SandboxVirtualFileSystem,
 
-  Goccia.HostEnvironment,
-  Goccia.Values.Primitives;
+  Goccia.HostEnvironment;
 
 const
   DEFAULT_SANDBOX_BYTE_QUOTA = 16 * 1024 * 1024;
@@ -120,8 +119,8 @@ type
     Diff: string;
     DiffRequested: Boolean;
     { A nested run's completion value, copied into the calling program's
-      realm; nil for the root run. }
-    ResultValue: TGocciaValue;
+      realm (the old engine's TGocciaValue); nil for the root run. }
+    ResultValue: TObject;
     { The same copy for an engine whose values cannot outlive their thread
       (G2): encoded by the child (G2.Sandbox EncodeSandboxValue), decoded in
       the calling program's realm. }
@@ -196,6 +195,9 @@ function SandboxFailureKindName(
   const AKind: TGocciaSandboxFailureKind): string;
 
 implementation
+
+uses
+  NumericText;
 
 const
   SANDBOX_FAILURE_KIND_NAMES: array[TGocciaSandboxFailureKind] of string = (
@@ -518,7 +520,7 @@ function TimestampMillisecondsText(const AValue: TDateTime): string;
 var
   FormatSettings: TFormatSettings;
 begin
-  FormatSettings := InvariantFormatSettings;
+  FormatSettings := CreateInvariantFormatSettings;
   Result := FloatToStr(SandboxDateTimeToUnixMilliseconds(AValue),
     FormatSettings);
 end;

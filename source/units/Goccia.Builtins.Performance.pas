@@ -57,6 +57,8 @@ implementation
 uses
   Math,
 
+  NumberBits,
+
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,

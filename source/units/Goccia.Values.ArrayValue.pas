@@ -156,6 +156,7 @@ uses
   Math,
   SysUtils,
 
+  NumberBits,
   NumericText,
   StringBuffer,
   StringJoin,

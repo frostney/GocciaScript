@@ -958,7 +958,6 @@ var
   I: Integer;
   Start: Int64;
   Timing: TCLIJSONTiming;
-  Memory: TCLIJSONMemoryMeasurement;
   MemoryStats: TCLIJSONMemoryStats;
   FileMemory: array of TCLIJSONMemoryStats;
   HeapStart: THeapStatus;
@@ -1042,7 +1041,6 @@ begin
       FCoverageMain := nil;
     if Assigned(FCoverageMain) then
       InitCriticalSection(FCoverageLock);
-    BeginCLIJSONMemoryMeasurement(Memory);
     HeapStart := GetHeapStatus;
     Start := GetNanoseconds;
     ResetPendingInlineSnapshots;
@@ -1060,7 +1058,6 @@ begin
       on E: Exception do
         RecordSnapshotFinalizationFailure('Snapshot finalization failed: ' + E.Message);
     end;
-    MemoryStats := FinishCLIJSONMemoryMeasurement(Memory);
     { the files' engines ran on threads of their own: the report sums their memory }
     SetLength(FileMemory, Length(FResults));
     for I := 0 to High(FResults) do

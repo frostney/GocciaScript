@@ -23,6 +23,10 @@ const
     'bytecode is the only execution mode, so drop the option';
   EXECUTION_MODE_REMOVED_CONFIG_HINT =
     'bytecode is the only execution mode, so drop the key';
+  { --max-stack's default as the help states it: the old engine's
+    (Goccia.StackLimit applies it); G2 counts to its own deepest bound
+    unless --max-stack is given }
+  DEFAULT_MAX_STACK_DEPTH = 2200;
 
 type
   TGocciaCompatibilityFlagDescriptor = record
@@ -253,9 +257,7 @@ uses
   Classes,
   SysUtils,
 
-  CLI.Parser,
-
-  Goccia.StackLimit;
+  CLI.Parser;
 
 const
   ENGINE_FIXED_OPTION_COUNT = 18;

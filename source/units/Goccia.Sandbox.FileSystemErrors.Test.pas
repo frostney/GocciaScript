@@ -13,6 +13,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Sandbox.FileSystemErrors,
+  Goccia.Sandbox.FileSystemErrorValues,
   Goccia.TestSetup,
   Goccia.Values.ObjectValue;
 

@@ -16,6 +16,7 @@ uses
   Goccia.Bytecode.Profile.Options,
   CLI.ConfigFile,
   Goccia.CLI.Application,
+  Goccia.CLI.EngineApplication,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
@@ -45,7 +46,7 @@ type
     CreateParents: Boolean;
   end;
 
-  TBundlerApp = class(TGocciaCLIApplication)
+  TBundlerApp = class(TGocciaCLIEngineApplication)
   private
     FOutputPath: TStringOption;
     FSourceMap: TStringOption;

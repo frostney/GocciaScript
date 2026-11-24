@@ -5,9 +5,7 @@ unit Goccia.Sandbox.FileSystemErrors;
 interface
 
 uses
-  SandboxVirtualFileSystem,
-
-  Goccia.Values.ObjectValue;
+  SandboxVirtualFileSystem;
 
 type
   { A sandbox filesystem error as Node names it: the code (ENOENT), its
@@ -18,8 +16,8 @@ type
     Description: string;
   end;
 
-{ The engine-independent parts, for an engine that builds the error object
-  itself. }
+{ The engine-independent parts; Goccia.Sandbox.FileSystemErrorValues builds
+  the old engine's error object from them. }
 function SandboxFileSystemErrorDefinition(const AException: ESandboxFsError):
   TSandboxFileSystemErrorDefinition;
 { "CODE: description, operation 'path'", and " -> 'destination'" when
@@ -29,23 +27,13 @@ function SandboxFileSystemErrorMessage(
   const AOperation, APath, ADestination: string;
   const AHasDestination: Boolean): string;
 
-function CreateSandboxFileSystemError(const AException: ESandboxFsError;
-  const AOperation, APath: string): TGocciaObjectValue; overload;
-function CreateSandboxFileSystemError(const AException: ESandboxFsError;
-  const AOperation, APath, ADestination: string): TGocciaObjectValue; overload;
-
 implementation
 
 uses
 {$IFDEF UNIX}
   BaseUnix,
 {$ENDIF}
-  SysUtils,
-
-  Goccia.Constants.ErrorNames,
-  Goccia.Constants.PropertyNames,
-  Goccia.Values.ErrorHelper,
-  Goccia.Values.Primitives;
+  SysUtils;
 
 const
 {$IFDEF MSWINDOWS}
@@ -146,42 +134,6 @@ begin
     ADefinition.Description, AOperation, APath]);
   if AHasDestination then
     Result := Result + Format(' -> ''%s''', [ADestination]);
-end;
-
-function CreateSandboxFileSystemErrorInternal(
-  const AException: ESandboxFsError; const AOperation, APath,
-  ADestination: string; const AHasDestination: Boolean): TGocciaObjectValue;
-var
-  Definition: TSandboxFileSystemErrorDefinition;
-begin
-  Definition := SandboxFileSystemErrorDefinition(AException);
-  Result := CreateErrorObject(ERROR_NAME,
-    SandboxFileSystemErrorMessage(Definition, AOperation, APath, ADestination,
-      AHasDestination));
-  Result.AssignProperty(PROP_CODE,
-    TGocciaStringLiteralValue.Create(Definition.Code));
-  Result.AssignProperty(PROP_ERRNO,
-    TGocciaNumberLiteralValue.Create(Definition.Errno));
-  Result.AssignProperty(PROP_PATH, TGocciaStringLiteralValue.Create(APath));
-  Result.AssignProperty(PROP_SYSCALL,
-    TGocciaStringLiteralValue.Create(AOperation));
-  if AHasDestination then
-    Result.AssignProperty(PROP_DEST,
-      TGocciaStringLiteralValue.Create(ADestination));
-end;
-
-function CreateSandboxFileSystemError(const AException: ESandboxFsError;
-  const AOperation, APath: string): TGocciaObjectValue;
-begin
-  Result := CreateSandboxFileSystemErrorInternal(AException, AOperation,
-    APath, '', False);
-end;
-
-function CreateSandboxFileSystemError(const AException: ESandboxFsError;
-  const AOperation, APath, ADestination: string): TGocciaObjectValue;
-begin
-  Result := CreateSandboxFileSystemErrorInternal(AException, AOperation,
-    APath, ADestination, True);
 end;
 
 end.

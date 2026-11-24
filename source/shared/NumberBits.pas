@@ -14,8 +14,16 @@ function BitsToDouble(const ABits: UInt64): Double; {$IFDEF FPC}inline;{$ENDIF}
 function SingleToBits(const AValue: Single): UInt32; {$IFDEF FPC}inline;{$ENDIF}
 function BitsToSingle(const ABits: UInt32): Single; {$IFDEF FPC}inline;{$ENDIF}
 function IsNegativeZero(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+// Int64 -> Double widening that avoids FPC Delphi-mode bit-pattern casts and
+// Single-precision expression promotion on some targets.
+function Int64ToDouble(const AValue: Int64): Double; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
+
+function Int64ToDouble(const AValue: Int64): Double;
+begin
+  Result := AValue;
+end;
 
 function DoubleToBits(const AValue: Double): UInt64;
 begin

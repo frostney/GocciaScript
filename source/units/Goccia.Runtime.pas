@@ -192,6 +192,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.Modules.ContentProvider,
+  Goccia.Modules.Errors,
   Goccia.TextFiles,
   Goccia.Values.ArrayValue;
 

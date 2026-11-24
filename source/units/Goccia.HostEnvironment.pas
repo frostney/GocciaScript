@@ -128,10 +128,10 @@ implementation
 uses
   SysUtils,
 
+  NumberBits,
   TimingUtils,
 
-  Goccia.Temporal.TimeZone,
-  Goccia.Utils;
+  Goccia.Temporal.TimeZone;
 
 const
   SPLITMIX64_INCREMENT = UInt64($9E3779B97F4A7C15);

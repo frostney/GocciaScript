@@ -8,6 +8,21 @@ unit Goccia.URI;
 
 interface
 
+uses
+  SysUtils;
+
+type
+  { a malformed URI or percent-encoding, where no engine has set URIErrorHook }
+  EGocciaURIError = class(Exception);
+  TGocciaURIErrorProc = procedure(const AMessage, ASuggestion: string);
+
+var
+  { Raises the URIError of malformed input (ES2026 §19.2.6.5 Encode, §19.2.6.6
+    Decode): the engine that calls the encoders sets this (the old engine's
+    Goccia.Values.ErrorHelper), so the unit stays free of any engine's
+    values. }
+  URIErrorHook: TGocciaURIErrorProc = nil;
+
 const
   { RFC 8089 — the scheme of the URLs import.meta.url carries for host
     files. }
@@ -43,14 +58,18 @@ function IsFileURL(const AText: string): Boolean;
 implementation
 
 uses
-  SysUtils,
-
   StringBuffer,
   TextEncoding,
 
   Goccia.Error.Messages,
-  Goccia.Error.Suggestions,
-  Goccia.Values.ErrorHelper;
+  Goccia.Error.Suggestions;
+
+procedure ThrowURIError(const AMessage, ASuggestion: string);
+begin
+  if Assigned(URIErrorHook) then
+    URIErrorHook(AMessage, ASuggestion);
+  raise EGocciaURIError.Create(AMessage);
+end;
 
 const
   HEX_DIGITS = '0123456789ABCDEF';

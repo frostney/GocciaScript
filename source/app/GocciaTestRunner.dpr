@@ -19,6 +19,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Bytecode.Binary,
   Goccia.CLI.Application,
+  Goccia.CLI.EngineApplication,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
@@ -54,6 +55,7 @@ uses
   Goccia.VM.Exception,
   Goccia.Builtins.TestingLibrary,
   Goccia.Builtins.Testing.Snapshots,
+  Goccia.CLI.JSON.EngineReporter,
   Goccia.CLI.JSON.Reporter,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
@@ -191,7 +193,7 @@ type
     FinalizationError: string;
   end;
 
-  TTestRunnerApp = class(TGocciaCLIApplication)
+  TTestRunnerApp = class(TGocciaCLIEngineApplication)
   private
     FNoProgress: TFlagOption;
     FNoResults: TFlagOption;

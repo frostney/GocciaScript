@@ -107,8 +107,13 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Diagnostics.SourceRegistry,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
+  Goccia.NativeLimits,
+  Goccia.Temporal.TimeZone,
+  Goccia.URI,
   Goccia.Values.Error,
   Goccia.Values.ObjectPropertyDescriptor;
 
@@ -533,5 +538,73 @@ begin
   end;
   raise TGocciaThrowValue.Create(ErrorValue, ASuggestion, True);
 end;
+
+{ Goccia.Temporal.TimeZone's reject disambiguation, as this engine's RangeError }
+procedure ThrowTemporalDisambiguationError(const AMessage: string);
+begin
+  ThrowRangeError(AMessage);
+end;
+
+{ Goccia.URI's malformed input, as this engine's URIError }
+procedure ThrowURIErrorWithSuggestion(const AMessage, ASuggestion: string);
+begin
+  ThrowURIError(AMessage, ASuggestion);
+end;
+
+{ Goccia.NativeLimits' side for this engine (TNativeLimitsRuntime) }
+procedure NativeLimitsThrowRangeError(const AMessage, ASuggestion: string);
+begin
+  if ASuggestion <> '' then
+    ThrowRangeError(AMessage, ASuggestion)
+  else
+    ThrowRangeError(AMessage);
+end;
+
+procedure NativeLimitsReserveBytes(const ABytes: Int64);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
+  if not GC.TryReserveExternalBytes(ABytes) then
+    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+end;
+
+procedure NativeLimitsReleaseBytes(const ABytes: Int64);
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.ReleaseExternalBytes(ABytes);
+end;
+
+procedure NativeLimitsCheckStringResultBytes(const ABytes: Int64);
+var
+  GC: TGarbageCollector;
+begin
+  // The joins that call this hold no value their receiver and arguments do
+  // not root, so a collection frees only what nothing reaches. The stress
+  // switch makes every ask the collecting safe point it is near the ceiling,
+  // as RequireNativeBytes does.
+  GC := TGarbageCollector.Instance;
+  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
+    GC.CollectForMemoryPressure(nil, True);
+  if CanAllocateNativeBytes(ABytes) then
+    Exit;
+  if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
+    Exit;
+  ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+end;
+
+initialization
+  NativeLimitsRuntime.ThrowRangeError := @NativeLimitsThrowRangeError;
+  NativeLimitsRuntime.ReserveBytes := @NativeLimitsReserveBytes;
+  NativeLimitsRuntime.ReleaseBytes := @NativeLimitsReleaseBytes;
+  NativeLimitsRuntime.CheckStringResultBytes :=
+    @NativeLimitsCheckStringResultBytes;
+  TemporalDisambiguationError := @ThrowTemporalDisambiguationError;
+  URIErrorHook := @ThrowURIErrorWithSuggestion;
 
 end.

@@ -5,6 +5,9 @@ unit Goccia.Modules.Errors;
 interface
 
 uses
+  SysUtils,
+
+  Goccia.Modules.ContentProvider,
   Goccia.Values.ObjectValue;
 
 const
@@ -45,6 +48,17 @@ function CreateModuleLoadingUnsupportedError: TGocciaObjectValue;
   exception cross the embedder's engine boundary. }
 procedure ThrowModuleLoadingUnsupported;
 
+type
+  { The content provider of an engine no host gave one: every load raises the
+    Error above. }
+  TGocciaUnavailableModuleContentProvider = class(TGocciaModuleContentProvider)
+  public
+    function Exists(const APath: string): Boolean; override;
+    function LoadContent(const APath: string): TGocciaModuleContent; override;
+    function TryGetLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean; override;
+  end;
+
 implementation
 
 uses
@@ -67,6 +81,34 @@ procedure ThrowModuleLoadingUnsupported;
 begin
   raise TGocciaThrowValue.Create(CreateModuleLoadingUnsupportedError,
     SSuggestConfigureModuleContentProvider);
+end;
+
+function TGocciaUnavailableModuleContentProvider.Exists(
+  const APath: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaUnavailableModuleContentProvider.LoadContent(
+  const APath: string): TGocciaModuleContent;
+begin
+  { An embedder that runs untrusted source without installing a provider must
+    not get an RTL exception through its engine boundary, so the refusal is
+    reported to source as a plain Error carrying a stable code. LoadContentBytes
+    inherits this: the base implementation calls LoadContent first.
+
+    APath is deliberately dropped: it is the resolved address, which the default
+    resolver expands against the host filesystem, and this refusal is reported
+    to potentially untrusted source. See Goccia.Modules.Errors. }
+  Result := nil;
+  ThrowModuleLoadingUnsupported;
+end;
+
+function TGocciaUnavailableModuleContentProvider.TryGetLastModified(
+  const APath: string; out ALastModified: TDateTime): Boolean;
+begin
+  ALastModified := 0;
+  Result := False;
 end;
 
 end.

@@ -16,6 +16,11 @@ type
   protected
     procedure Execute; virtual; abstract;
     procedure HandleError(const AException: Exception); virtual;
+    { The process is about to free the application with AExitCode as its
+      status (RunApplication, on every path out of Run). Default: nothing. }
+    class procedure ProcessEnding(const AExitCode: LongInt); virtual;
+    { The application is freed; the process ends after this. Default: nothing. }
+    class procedure ProcessEnded; virtual;
     property Name: string read FName;
   public
     constructor Create(const AName: string); virtual;
@@ -30,12 +35,8 @@ uses
   CLI.Options,
 
   Goccia.Error,
-  Goccia.Error.Detail,
   Goccia.Modules.Resolver,
-  Goccia.Terminal.Colors,
-  Goccia.Threading,
-  Goccia.Values.Error,
-  Goccia.VM.Exception;
+  Goccia.Terminal.Colors;
 
 constructor TGocciaApplication.Create(const AName: string);
 begin
@@ -50,14 +51,16 @@ begin
   UseColor := IsColorTerminal;
   if AException is TGocciaError then
     WriteLn(FormatHostErrorDiagnostic(TGocciaError(AException), UseColor))
-  else if AException is TGocciaThrowValue then
-    WriteLn(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil,
-      UseColor, 0, TGocciaThrowValue(AException).Suggestion))
-  else if AException is EGocciaBytecodeThrow then
-    WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue,
-      '', nil, UseColor, 0, EGocciaBytecodeThrow(AException).Suggestion))
   else
     WriteLn('Error: ', AException.Message);
+end;
+
+class procedure TGocciaApplication.ProcessEnding(const AExitCode: LongInt);
+begin
+end;
+
+class procedure TGocciaApplication.ProcessEnded;
+begin
 end;
 
 function TGocciaApplication.Run: Integer;
@@ -90,24 +93,12 @@ begin
   try
     Result := App.Run;
   finally
-    { A worker a thread pool abandoned may still be running its file, and
-      that reads this application's objects and the process-wide runtime:
-      end the process before App.Free and unit finalization can free them
-      under it, on every path out of Run. The report is already written. }
     if Result <> 0 then
-      EndProcessIfWorkerAbandoned(Result)
+      AClass.ProcessEnding(Result)
     else
-      EndProcessIfWorkerAbandoned(ExitCode);
+      AClass.ProcessEnding(ExitCode);
     App.Free;
-    { Every engine is gone by now. Shutting the main thread's runtime down
-      destroys what its collector still manages, as each worker's does when
-      it exits, so a run ends with nothing left allocated (#1592). That
-      includes the process-wide singletons (primitives, well-known symbols,
-      the array hole), whose cached pointers are not reset: this is the
-      process's last runtime, and no engine may start after it (ADR 0143).
-      A worker a thread pool abandoned still runs and reads those values, so
-      then the runtime is left to the process exit. }
-    ShutdownMainThreadRuntime;
+    AClass.ProcessEnded;
   end;
 end;
 

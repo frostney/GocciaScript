@@ -116,13 +116,11 @@ implementation
 uses
   FileUtils,
 
+  Goccia.DataTree,
+  Goccia.DataTree.JSON,
   Goccia.Execution.CallSite,
   Goccia.FileExtensions,
-  Goccia.GarbageCollector,
-  Goccia.JSON,
-  Goccia.TextFiles,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.TextFiles;
 
 const
   PROJECT_CONFIG_FILE_NAME = 'goccia.json';
@@ -442,63 +440,51 @@ var
   Address: TGocciaProviderAddress;
   AddressError, DeclaringImportMap: string;
   ImportMapBaseDirectory, ImportMapDirectory, ImportMapPath, Key: string;
-  NormalizedKey, NormalizedValue: string;
-  Parser: TGocciaJSONParser;
-  ParsedValue, ImportsValue, Value: TGocciaValue;
-  ImportsObject, ImportMapObject: TGocciaObjectValue;
+  NormalizedKey, NormalizedValue, Target: string;
+  Tree: TGocciaDataTree;
+  ImportsNode, ValueNode: TGocciaDataNode;
 begin
   ImportMapPath := ExpandHostFileName(APath);
   if not HostFileExists(ImportMapPath) then
     raise Exception.Create('Import map not found: ' + ImportMapPath);
 
-  Parser := TGocciaJSONParser.Create;
+  Tree := ParseJSONDataTree(ReadImportMapText(ImportMapPath));
   try
-    ParsedValue := Parser.Parse(ReadImportMapText(ImportMapPath));
-  finally
-    Parser.Free;
-  end;
+    if not Assigned(Tree.Root) or (Tree.Root.Kind <> dnkObject) then
+      raise Exception.Create('Import map must be a top-level JSON object.');
 
-  if not (ParsedValue is TGocciaObjectValue) then
-    raise Exception.Create('Import map must be a top-level JSON object.');
-
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(ParsedValue);
-  try
-    ImportMapObject := TGocciaObjectValue(ParsedValue);
-    ImportsValue := ImportMapObject.GetProperty(IMPORTS_PROPERTY_NAME);
-    if (not Assigned(ImportsValue)) or
-       (ImportsValue is TGocciaUndefinedLiteralValue) then
+    if not Tree.Root.HasProperty(IMPORTS_PROPERTY_NAME) then
       Exit;
-    if not (ImportsValue is TGocciaObjectValue) then
+    ImportsNode := Tree.Root.GetProperty(IMPORTS_PROPERTY_NAME);
+    if ImportsNode.Kind <> dnkObject then
       raise Exception.Create('Import map "imports" field must be a JSON object.');
 
-    ImportsObject := TGocciaObjectValue(ImportsValue);
     ImportMapDirectory := IncludeTrailingPathDelimiter(
       ExtractFilePath(ImportMapPath));
     ImportMapBaseDirectory := NormalizeImportMapBaseDirectory(
       ImportMapDirectory);
 
-    for Key in ImportsObject.GetOwnPropertyKeys do
+    for Key in ImportsNode.OwnKeys do
     begin
-      Value := ImportsObject.GetProperty(Key);
-      if not (Value is TGocciaStringLiteralValue) then
+      ValueNode := ImportsNode.GetProperty(Key);
+      if ValueNode.Kind <> dnkString then
         raise Exception.CreateFmt(
           'Import map entry "%s" must map to a string address.', [Key]);
+      Target := ValueNode.StringValue;
 
       if HasImportMapTrailingSlash(Key) and
-         not HasImportMapTrailingSlash(TGocciaStringLiteralValue(Value).Value) then
+         not HasImportMapTrailingSlash(Target) then
         raise Exception.CreateFmt(
           'Import map entry "%s" ends with "/" so its address must also end with "/".',
           [Key]);
 
       NormalizedKey := NormalizeImportMapPath(Key, ImportMapBaseDirectory);
-      if IsProviderAddress(TGocciaStringLiteralValue(Value).Value) then
+      if IsProviderAddress(Target) then
       begin
         { A provider entry is recorded, not resolved: its package is granted
           and materialized when an import first resolves through it, so a
           run that never imports it needs no grant. }
-        if not TryParseProviderAddress(TGocciaStringLiteralValue(Value).Value,
-           Address, AddressError) then
+        if not TryParseProviderAddress(Target, Address, AddressError) then
           raise Exception.CreateFmt(
             'Import map entry "%s" has an invalid provider address: %s',
             [Key, AddressError]);
@@ -509,24 +495,22 @@ begin
             [Key, Address.PackageKey, DeclaringImportMap]);
         FProviderImportMaps.AddOrSetValue(Address.NormalizedPackageKey,
           ImportMapPath);
-        AddAlias(NormalizedKey, TGocciaStringLiteralValue(Value).Value);
+        AddAlias(NormalizedKey, Target);
         Continue;
       end;
 
-      if not (IsAbsoluteImportMapPath(TGocciaStringLiteralValue(Value).Value) or
-              IsRelativeImportMapPath(TGocciaStringLiteralValue(Value).Value)) then
+      if not (IsAbsoluteImportMapPath(Target) or
+              IsRelativeImportMapPath(Target)) then
         raise Exception.CreateFmt(
           'Import map entry "%s" must use an absolute or relative file path ' +
           'address, or a provider address (github:<owner>/<repo>@<ref>).',
           [Key]);
 
-      NormalizedValue := NormalizeImportMapPath(
-        TGocciaStringLiteralValue(Value).Value, ImportMapBaseDirectory);
+      NormalizedValue := NormalizeImportMapPath(Target, ImportMapBaseDirectory);
       AddAlias(NormalizedKey, NormalizedValue);
     end;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(ParsedValue);
+    Tree.Free;
   end;
 end;
 

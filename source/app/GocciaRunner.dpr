@@ -18,6 +18,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.EngineApplication,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
@@ -61,6 +62,7 @@ uses
   Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
+  Goccia.CLI.JSON.EngineReporter,
   Goccia.CLI.JSON.Reporter,
   Goccia.SourcePipeline,
   Goccia.SourceMap,
@@ -131,7 +133,7 @@ type
   TScriptLoaderJSONFileResultArray = array[0..MaxInt div SizeOf(TScriptLoaderJSONFileResult) - 1] of TScriptLoaderJSONFileResult;
   PScriptLoaderJSONFileResultArray = ^TScriptLoaderJSONFileResultArray;
 
-  TRunnerApp = class(TGocciaCLIApplication)
+  TRunnerApp = class(TGocciaCLIEngineApplication)
   private
     FOutputPath: TStringOption;
     FSilent: TFlagOption;
@@ -836,7 +838,7 @@ procedure PrintJSONError(const E: Exception; const AReport: TScriptExecutionRepo
 var
   ErrorInfo: TCLIJSONErrorInfo;
 begin
-  ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+  ErrorInfo := EngineExceptionToCLIJSONErrorInfo(E);
   if ErrorInfo.FileName = '' then
     ErrorInfo.FileName := ADefaultFileName;
   WriteLn(BuildCLIScriptErrorJSON(ADefaultFileName, CapturedOutputText(ACapture),
@@ -1327,7 +1329,7 @@ begin
           Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement)
         else
           Report.MemoryStats := DefaultCLIJSONMemoryStats;
-        ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+        ErrorInfo := EngineExceptionToCLIJSONErrorInfo(E);
         if ErrorInfo.FileName = '' then
           ErrorInfo.FileName := AFileName;
         Result.StdoutText := CapturedStdoutText(Capture);
@@ -1387,7 +1389,7 @@ begin
       FillChar(Timing, SizeOf(Timing), 0);
       Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
       Timing.ExecuteTimeNanoseconds := Timing.TotalTimeNanoseconds;
-      ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+      ErrorInfo := EngineExceptionToCLIJSONErrorInfo(E);
       if ErrorInfo.FileName = '' then
         ErrorInfo.FileName := AFileName;
       Result.FileName := AFileName;
@@ -1565,7 +1567,7 @@ begin
       if IsJsonOutput then
       begin
         JSONResults := PScriptLoaderJSONFileResultArray(AData);
-        ErrorInfo := ExceptionToCLIJSONErrorInfo(E);
+        ErrorInfo := EngineExceptionToCLIJSONErrorInfo(E);
         if ErrorInfo.FileName = '' then
           ErrorInfo.FileName := AFileName;
         FillChar(Timing, SizeOf(Timing), 0);
@@ -2476,7 +2478,7 @@ begin
      ConfigRequestsSandbox then
     WriteLn(ErrOutput, 'Error: ', AException.Message)
   else if IsJsonOutput then
-    WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),
+    WriteLn(BuildCLIScriptErrorJSON('', '', '', '', EngineExceptionToCLIJSONErrorInfo(AException),
       Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats, 1, 1,
       IsCompactJsonOutput))
   else

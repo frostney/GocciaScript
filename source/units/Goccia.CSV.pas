@@ -61,6 +61,7 @@ uses
   Classes,
 
   BOM,
+  CSVFields,
   TextSemantics,
 
   Goccia.GarbageCollector;
@@ -460,25 +461,8 @@ end;
 
 class function TGocciaCSVStringifier.EscapeField(const AValue: string;
   const ADelimiter: Char): string;
-var
-  NeedsQuoting: Boolean;
-  I: Integer;
 begin
-  NeedsQuoting := False;
-  for I := 1 to Length(AValue) do
-  begin
-    if (AValue[I] = ADelimiter) or (AValue[I] = '"') or
-       (AValue[I] = #10) or (AValue[I] = #13) then
-    begin
-      NeedsQuoting := True;
-      Break;
-    end;
-  end;
-
-  if NeedsQuoting then
-    Result := '"' + StringReplace(AValue, '"', '""', [rfReplaceAll]) + '"'
-  else
-    Result := AValue;
+  Result := EscapeCSVField(AValue, ADelimiter);
 end;
 
 class function TGocciaCSVStringifier.Stringify(const AData: TGocciaValue;

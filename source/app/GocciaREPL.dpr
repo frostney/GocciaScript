@@ -12,6 +12,7 @@ uses
   Goccia.Application,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.EngineApplication,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
@@ -43,7 +44,7 @@ const
   REPL_FILE_NAME = 'REPL';
 
 type
-  TREPLApp = class(TGocciaCLIApplication)
+  TREPLApp = class(TGocciaCLIEngineApplication)
   private
     FTiming: TFlagOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);

@@ -181,6 +181,7 @@ uses
   Goccia.RegExp.Runtime,
   Goccia.RegExp.VM,
   Goccia.Sandbox.FileSystemErrors,
+  Goccia.Sandbox.FileSystemErrorValues,
   Goccia.Sandbox.Search,
   Goccia.Shims,
   Goccia.UncatchableFault,
@@ -2312,7 +2313,7 @@ begin
   Obj.SetProperty('stderr',
     TGocciaStringLiteralValue.Create(RunResult.ErrorOutput));
   if Assigned(RunResult.ResultValue) then
-    Obj.SetProperty('result', RunResult.ResultValue)
+    Obj.SetProperty('result', TGocciaValue(RunResult.ResultValue))
   else
     Obj.SetProperty('result', TGocciaNullLiteralValue.NullValue);
   if RunResult.ErrorMessage <> '' then

@@ -77,7 +77,6 @@ uses
   Goccia.NativeLimits,
   Goccia.RegExp.&Program,
   Goccia.RegExp.Engine,
-  Goccia.RegExp.Runtime,
   Goccia.RegExp.VM;
 
 const

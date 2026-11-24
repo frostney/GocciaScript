@@ -15,6 +15,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.EngineApplication,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
@@ -39,6 +40,7 @@ uses
   Goccia.RuntimeProfiles.BenchmarkRunner,
   Goccia.Scope,
   Goccia.ScriptLoader.Input,
+  Goccia.CLI.JSON.EngineReporter,
   Goccia.CLI.JSON.Reporter,
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
@@ -201,7 +203,7 @@ begin
 end;
 
 type
-  TBenchmarkRunnerApp = class(TGocciaCLIApplication)
+  TBenchmarkRunnerApp = class(TGocciaCLIEngineApplication)
   private
     FNoProgress: TFlagOption;
     FProfileDeterministic: TFlagOption;

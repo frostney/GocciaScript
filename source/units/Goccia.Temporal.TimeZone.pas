@@ -4,9 +4,23 @@ unit Goccia.Temporal.TimeZone;
 
 interface
 
+uses
+  SysUtils;
+
 type
   TTemporalTimeZoneDisambiguation = (ttzdCompatible, ttzdEarlier, ttzdLater, ttzdReject);
   TTemporalTimeZoneIdentifierArray = array of string;
+  { a local date-time the reject disambiguation cannot place, where no engine
+    has set TemporalDisambiguationError }
+  ETemporalDisambiguationError = class(Exception);
+  TTemporalDisambiguationErrorProc = procedure(const AMessage: string);
+
+var
+  { Raises the RangeError of a local date-time the reject disambiguation
+    cannot place (LocalDateTimeToEpochMillisecondsWithDisambiguation): the
+    engine that calls it sets this (the old engine's Goccia.Values.ErrorHelper),
+    so the unit itself stays free of any engine's values. }
+  TemporalDisambiguationError: TTemporalDisambiguationErrorProc = nil;
 
 function GetSystemTimeZoneId: string;
 {$IFNDEF LAKON}
@@ -56,8 +70,6 @@ implementation
   with the full implementation. }
 
 uses
-  SysUtils,
-
   CriticalSections,
 
   Goccia.Temporal.Utils;
@@ -146,15 +158,12 @@ end;
 {$ELSE}
 
 uses
-  SysUtils,
-
   CriticalSections,
   TextEncoding,
 
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Values.ErrorHelper,
   TimeZoneInformationFile,
   {$IFDEF UNIX}
   BaseUnix,
@@ -2089,8 +2098,12 @@ begin
 end;
 
 procedure ThrowDisambiguationRangeError;
+const
+  MESSAGE = 'Temporal local date-time is ambiguous or does not exist in the time zone';
 begin
-  ThrowRangeError('Temporal local date-time is ambiguous or does not exist in the time zone');
+  if Assigned(TemporalDisambiguationError) then
+    TemporalDisambiguationError(MESSAGE);
+  raise ETemporalDisambiguationError.Create(MESSAGE);
 end;
 
 function LocalDateTimeToEpochMilliseconds(const AYear, AMonth, ADay, AHour,

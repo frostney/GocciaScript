@@ -44,6 +44,25 @@ type
     (NativeErrorsPlain), for that engine to throw as a RangeError. }
   ENativeDepthLimit = class(Exception);
 
+  { The old engine's side of these checks (Goccia.Values.ErrorHelper sets it
+    once, for every thread): its RangeError, and its collector's charge for
+    native bytes. Without one (no old engine in the program) the checks raise
+    the plain exceptions above and charge nothing. }
+  TNativeLimitsRuntime = record
+    { raises the engine's RangeError with AMessage (and ASuggestion) }
+    ThrowRangeError: procedure(const AMessage, ASuggestion: string);
+    { charges ABytes to the running thread's collector; raises its
+      RangeError when they do not fit }
+    ReserveBytes: procedure(const ABytes: Int64);
+    ReleaseBytes: procedure(const ABytes: Int64);
+    { StringJoin's gate past the TOO_LONG_RESULT_BYTES test: collects when
+      that may make room for ABytes, else raises the engine's RangeError }
+    CheckStringResultBytes: procedure(const ABytes: Int64);
+  end;
+
+var
+  NativeLimitsRuntime: TNativeLimitsRuntime;
+
 threadvar
   NativeBytesHook: TNativeBytesHook;
   { Another engine (G2) runs on this thread: EnterNativeDataDepth refuses
@@ -57,11 +76,8 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
-  Goccia.MemoryLimit,
-  Goccia.Timeout,
-  Goccia.Values.ErrorHelper;
+  Goccia.Timeout;
 
 threadvar
   GNativeDataDepth: Integer;
@@ -72,9 +88,9 @@ begin
   try
     if GNativeDataDepth > MAX_NATIVE_DATA_DEPTH then
     begin
-      if NativeErrorsPlain then
+      if NativeErrorsPlain or not Assigned(NativeLimitsRuntime.ThrowRangeError) then
         raise ENativeDepthLimit.Create(SErrorMaxCallStackExceeded);
-      ThrowRangeError(SErrorMaxCallStackExceeded);
+      NativeLimitsRuntime.ThrowRangeError(SErrorMaxCallStackExceeded, '');
     end;
     CheckNativeWork;
   except
@@ -105,16 +121,15 @@ begin
      ((AElementSize > 0) and
       (AElementCount > MAX_NATIVE_ALLOCATION_BYTES div AElementSize)) then
   begin
-    if Assigned(NativeBytesHook) then
+    if Assigned(NativeBytesHook) or
+       not Assigned(NativeLimitsRuntime.ThrowRangeError) then
       raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
-    ThrowRangeError(SErrorMemoryLimitExceeded);
+    NativeLimitsRuntime.ThrowRangeError(SErrorMemoryLimitExceeded, '');
   end;
   Result := AElementCount * AElementSize;
 end;
 
 procedure ReserveNativeBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
   if ABytes <= 0 then
     Exit;
@@ -124,16 +139,11 @@ begin
       raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
     Exit;
   end;
-  GC := TGarbageCollector.Instance;
-  if not Assigned(GC) then
-    Exit;
-  if not GC.TryReserveExternalBytes(ABytes) then
-    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  if Assigned(NativeLimitsRuntime.ReserveBytes) then
+    NativeLimitsRuntime.ReserveBytes(ABytes);
 end;
 
 procedure ReleaseNativeBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
   if Assigned(NativeBytesHook) then
   begin
@@ -141,29 +151,20 @@ begin
       NativeBytesHook(ABytes, False);
     Exit;
   end;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and (ABytes > 0) then
-    GC.ReleaseExternalBytes(ABytes);
+  if (ABytes > 0) and Assigned(NativeLimitsRuntime.ReleaseBytes) then
+    NativeLimitsRuntime.ReleaseBytes(ABytes);
 end;
 
 procedure CheckStringResultBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
   if ABytes = TOO_LONG_RESULT_BYTES then
-    ThrowRangeError(SErrorInvalidStringLength);
-  // The joins that call this hold no value their receiver and arguments do
-  // not root, so a collection frees only what nothing reaches. The stress
-  // switch makes every ask the collecting safe point it is near the ceiling,
-  // as RequireNativeBytes does.
-  GC := TGarbageCollector.Instance;
-  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
-    GC.CollectForMemoryPressure(nil, True);
-  if CanAllocateNativeBytes(ABytes) then
-    Exit;
-  if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
-    Exit;
-  ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  begin
+    if not Assigned(NativeLimitsRuntime.ThrowRangeError) then
+      raise ENativeMemoryLimit.Create(SErrorInvalidStringLength);
+    NativeLimitsRuntime.ThrowRangeError(SErrorInvalidStringLength, '');
+  end;
+  if Assigned(NativeLimitsRuntime.CheckStringResultBytes) then
+    NativeLimitsRuntime.CheckStringResultBytes(ABytes);
 end;
 
 procedure ChargeJoinBytes(const ABytes: Int64);

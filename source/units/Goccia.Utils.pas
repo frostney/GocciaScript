@@ -8,10 +8,6 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Values.Primitives;
 
-// Int64 -> Double widening that avoids FPC Delphi-mode bit-pattern casts and
-// Single-precision expression promotion on some targets.
-function Int64ToDouble(const AValue: Int64): Double; {$IFDEF FPC}inline;{$ENDIF}
-
 // ES2026 §7.1.6 ToIntegerOrInfinity — extract integer arg with default.
 // Returns Trunc(ToNumber(AArgs[AIndex])) or ADefault if index out of range.
 function ToIntegerFromArgs(const AArgs: TGocciaArgumentsCollection; const AIndex: Integer = 0; const ADefault: Integer = 0): Integer; {$IFDEF FPC}inline;{$ENDIF}
@@ -94,11 +90,6 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase;
-
-function Int64ToDouble(const AValue: Int64): Double;
-begin
-  Result := AValue;
-end;
 
 // ToIntegerValue precedes its callers below so FPC can inline-expand it.
 function ToIntegerValue(const AValue: TGocciaValue): Integer;

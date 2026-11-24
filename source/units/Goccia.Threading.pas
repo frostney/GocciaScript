@@ -340,6 +340,7 @@ uses
   TimingUtils,
 
   Goccia.CallStack,
+  Goccia.CLI.JSON.EngineReporter,
   Goccia.Coverage,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
