@@ -1695,6 +1695,8 @@ begin
   begin
     PushRoot(UsingIt);
     if not CreateFromThis(Args[0], 0, False, A) then begin PopRoots(1); Exit(False); end;
+    { the method from its root: CreateFromThis allocates, and a collection moves a young function }
+    UsingIt := RootAt(Base);
     TempRoots[Base] := A;
     { 7.4.4 GetIteratorFromMethod }
     if not CallValue(UsingIt, Args[1], nil, 0, It) then begin PopRoots(1); Exit(False); end;

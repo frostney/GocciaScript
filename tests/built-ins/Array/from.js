@@ -181,6 +181,19 @@ describe.runIf(typeof Goccia !== "undefined")("Array.from across a collection", 
     },
   });
 
+  test("calls a young @@iterator after the constructor collects", () => {
+    class Collecting {
+      constructor() {
+        Goccia.gc();
+      }
+    }
+    // a fresh @@iterator: the collection inside the constructor moves it
+    const result = Array.from.call(Collecting, { *[Symbol.iterator]() { yield "kept"; } });
+    expect(result instanceof Collecting).toBe(true);
+    expect(result[0]).toBe("kept");
+    expect(result.length).toBe(1);
+  });
+
   test("rethrows the mapFn error after return() collects", () => {
     let caught = null;
     try {
