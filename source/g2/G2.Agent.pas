@@ -24,7 +24,7 @@ procedure InitAgentHost;
 implementation
 
 uses
-  G2.Engine, G2.Shared, G2.Atomics, G2.Promise;
+  G2.Engine, G2.Shared, G2.Atomics, G2.Promise, Goccia.ThreadCleanupRegistry;
 
 type
   TArgs = PValue;
@@ -179,57 +179,62 @@ end;
 procedure TAgentThread.Execute;
 var Err: UnicodeString; G, Sab, CbArgs: array[0..1] of TValue; R: TValue; B: PSharedBlock; Id: Double;
 begin
-  CurrentAgent := Self;
-  HeapCeiling := Ceiling;
   try
-    EngineInit;
+    CurrentAgent := Self;
+    HeapCeiling := Ceiling;
     try
-      AddRoot(@BroadcastCallback); AddRoot(@AgentObj);
-      BroadcastCallback := VUndefined;
-      AgentObj := MkPtr(NewPlainObject(ObjectProto, 8));
-      DefineNative(AgentObj, 'receiveBroadcast', Agent_ReceiveBroadcast, 1);
-      DefineNative(AgentObj, 'report', Agent_Report, 1);
-      DefineNative(AgentObj, 'leaving', Agent_Leaving, 0);
-      DefineNative(AgentObj, 'sleep', Agent_Sleep, 1);
-      DefineNative(AgentObj, 'monotonicNow', Agent_MonotonicNow, 0);
-      G[0] := MkPtr(NewPlainObject(ObjectProto, 4));
-      PushRoot(G[0]);
-      DefineOwn(RootAt(TempTop - 1), AtomOf('agent'), AgentObj, pfDefault);
-      DefineOwn(GlobalObj, AtomOf('$262'), RootAt(TempTop - 1), pfHidden);
-      PopRoots(1);
-      if EngineRunScript(Source, '<agent>', Err) and IsCallable(BroadcastCallback) then
-      begin
-        { wait for the broadcast }
-        repeat
-          EnterCriticalSection(AgentLock);
-          if HasMsg then
-          begin
-            B := MsgBlock; Id := MsgId; HasMsg := False; TookMsg := True;
-            LeaveCriticalSection(AgentLock);
-            Break;
-          end;
-          LeaveCriticalSection(AgentLock);
-          RTLEventWaitFor(MsgEvent, 100);
-        until False;
-        Sab[0] := WrapSharedBlock(B);
-        ReleaseBlock(B);   { the agent's own object holds its reference now }
-        PushRoot(Sab[0]);
-        CbArgs[0] := RootAt(TempTop - 1);
-        CbArgs[1] := MkNumber(Id);
-        { an async callback may wait (Atomics.waitAsync): the host loop settles its waiters }
-        if CallValue(BroadcastCallback, VUndefined, @CbArgs[0], 2, R) then
-          if RunMicrotasks then RunHostLoop;
+      EngineInit;
+      try
+        AddRoot(@BroadcastCallback); AddRoot(@AgentObj);
+        BroadcastCallback := VUndefined;
+        AgentObj := MkPtr(NewPlainObject(ObjectProto, 8));
+        DefineNative(AgentObj, 'receiveBroadcast', Agent_ReceiveBroadcast, 1);
+        DefineNative(AgentObj, 'report', Agent_Report, 1);
+        DefineNative(AgentObj, 'leaving', Agent_Leaving, 0);
+        DefineNative(AgentObj, 'sleep', Agent_Sleep, 1);
+        DefineNative(AgentObj, 'monotonicNow', Agent_MonotonicNow, 0);
+        G[0] := MkPtr(NewPlainObject(ObjectProto, 4));
+        PushRoot(G[0]);
+        DefineOwn(RootAt(TempTop - 1), AtomOf('agent'), AgentObj, pfDefault);
+        DefineOwn(GlobalObj, AtomOf('$262'), RootAt(TempTop - 1), pfHidden);
         PopRoots(1);
+        if EngineRunScript(Source, '<agent>', Err) and IsCallable(BroadcastCallback) then
+        begin
+          { wait for the broadcast }
+          repeat
+            EnterCriticalSection(AgentLock);
+            if HasMsg then
+            begin
+              B := MsgBlock; Id := MsgId; HasMsg := False; TookMsg := True;
+              LeaveCriticalSection(AgentLock);
+              Break;
+            end;
+            LeaveCriticalSection(AgentLock);
+            RTLEventWaitFor(MsgEvent, 100);
+          until False;
+          Sab[0] := WrapSharedBlock(B);
+          ReleaseBlock(B);   { the agent's own object holds its reference now }
+          PushRoot(Sab[0]);
+          CbArgs[0] := RootAt(TempTop - 1);
+          CbArgs[1] := MkNumber(Id);
+          { an async callback may wait (Atomics.waitAsync): the host loop settles its waiters }
+          if CallValue(BroadcastCallback, VUndefined, @CbArgs[0], 2, R) then
+            if RunMicrotasks then RunHostLoop;
+          PopRoots(1);
+        end;
+      finally
+        EngineDone;
       end;
-    finally
-      EngineDone;
+    except
+      on E: Exception do ;
     end;
-  except
-    on E: Exception do ;
+    EnterCriticalSection(AgentLock);
+    Done := True;
+    LeaveCriticalSection(AgentLock);
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
-  EnterCriticalSection(AgentLock);
-  Done := True;
-  LeaveCriticalSection(AgentLock);
 end;
 
 procedure InitAgentHost;

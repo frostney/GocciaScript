@@ -18,7 +18,7 @@ procedure InitJSON;
 implementation
 
 uses
-  SysUtils, Math, NumericText, G2.Core, G2.VM, G2.ObjModel, G2.BigIntV;
+  SysUtils, Math, NumericText, G2.Core, G2.VM, G2.ObjModel, G2.BigIntV, Goccia.ThreadCleanupRegistry;
 
 const
   okRawJSON = 28;   { 25.5.3 an object with [[IsRawJSON]]: frozen, null prototype, its rawJSON property }
@@ -916,4 +916,13 @@ begin
   PopRoots(1);
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2JSONThreadvarCleanup;
+begin
+  JSrc := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2JSONThreadvarCleanup);
 end.

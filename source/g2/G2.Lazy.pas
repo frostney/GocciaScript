@@ -92,7 +92,7 @@ procedure FreeLazySources;
 implementation
 
 uses
-  G2.Bytecode;
+  G2.Bytecode, Goccia.ThreadCleanupRegistry;
 
 threadvar
   AllSources: array of TLazySource;
@@ -214,6 +214,14 @@ begin
   Dispose(PLazyStub(P));
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2LazyThreadvarCleanup;
+begin
+  AllSources := nil;
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2LazyThreadvarCleanup);
   FreeLazyStubHook := @FreeLazyStub;
 end.

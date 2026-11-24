@@ -51,6 +51,7 @@ begin
     C^.Hdr.Kind := ckBigInt;
     C^.Hdr.Flags := cfPermanent or cfOld;
     C^.Hdr.Extra := 0;
+    AddPermanentCell(C);
   end
   else
     C := PBigCell(AllocCell(Size, ckBigInt));

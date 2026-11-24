@@ -33,7 +33,7 @@ procedure FetchDone;
 implementation
 
 uses
-  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Error.Suggestions, G2.VM, G2.Typed;
+  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Error.Suggestions, G2.VM, G2.Typed, Goccia.ThreadCleanupRegistry;
 
 const
   MAX_FETCH_WORKERS = 16;
@@ -586,4 +586,14 @@ begin
   Owner := nil;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2FetchThreadvarCleanup;
+begin
+  Caps := Default(TGocciaCapabilities);
+  Pendings := nil;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2FetchThreadvarCleanup);
 end.

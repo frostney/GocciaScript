@@ -71,7 +71,8 @@ uses
   G2.Embed,
   G2.HostAPI,
   G2.Sandbox,
-  G2.VM;
+  G2.VM,
+  Goccia.ThreadCleanupRegistry;
 
 const
   { the import map --add creates when the project has none }
@@ -220,45 +221,50 @@ var
   OwnsJit: Boolean;
   Start: Int64;
 begin
-  if FLoadSource then
-  begin
-    Start := GetNanoseconds;
+  try
+    if FLoadSource then
+    begin
+      Start := GetNanoseconds;
+      try
+        FSource := FApp.LoadEntrySource(FFileName);
+        FOwnsSource := True;
+      except
+        on E: Exception do
+        begin
+          if FApp.IsJsonOutput then
+            FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start)
+          else
+          begin
+            { GocciaRunner's RunScriptsParallel line for a file its worker could not run }
+            WriteLn('Error in ', FFileName, ': ', E.Message);
+            ExitCode := 1;
+          end;
+          Exit;
+        end;
+      end;
+    end;
+    OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
-      FSource := FApp.LoadEntrySource(FFileName);
-      FOwnsSource := True;
+      if OwnsJit then
+        JitTakeThread;
+      try
+        FApp.RunSource(FFileName, FSource, FReportIndex);
+      finally
+        if FOwnsSource then
+          FSource.Free;
+        if OwnsJit then
+          InterLockedExchange(JitOwned, 0);
+      end;
     except
       on E: Exception do
       begin
-        if FApp.IsJsonOutput then
-          FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start)
-        else
-        begin
-          { GocciaRunner's RunScriptsParallel line for a file its worker could not run }
-          WriteLn('Error in ', FFileName, ': ', E.Message);
-          ExitCode := 1;
-        end;
-        Exit;
+        FErrorClass := ExceptClass(E.ClassType);
+        FErrorMessage := E.Message;
       end;
     end;
-  end;
-  OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
-  try
-    if OwnsJit then
-      JitTakeThread;
-    try
-      FApp.RunSource(FFileName, FSource, FReportIndex);
-    finally
-      if FOwnsSource then
-        FSource.Free;
-      if OwnsJit then
-        InterLockedExchange(JitOwned, 0);
-    end;
-  except
-    on E: Exception do
-    begin
-      FErrorClass := ExceptClass(E.ClassType);
-      FErrorMessage := E.Message;
-    end;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 

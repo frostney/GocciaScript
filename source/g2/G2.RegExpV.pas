@@ -26,7 +26,7 @@ procedure RegExpDone;
 implementation
 
 uses
-  Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, G2.Regex, G2.Bytecode, G2.Snapshot;
+  Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, G2.Regex, G2.Bytecode, G2.Snapshot, Goccia.ThreadCleanupRegistry;
 
 {$I G2.RegExpPrelude.inc}
 
@@ -1344,4 +1344,16 @@ begin
   if S >= 0 then SpeciesOrig := GetSlot(ObjOf(RegExpCtorV), S) else SpeciesOrig := VUndefined;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2RegExpVThreadvarCleanup;
+begin
+  Compiled.Free;
+  Compiled := nil;
+  IntactKeys := nil;
+  IntactSlots := nil;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2RegExpVThreadvarCleanup);
 end.

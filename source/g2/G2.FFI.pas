@@ -31,7 +31,7 @@ uses
   SysUtils, Math,
   Goccia.CapabilityAudit, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.FFI.ABI, Goccia.FFI.Call, Goccia.FFI.LibraryGuard,
   Goccia.FFI.CallbackSlots, Goccia.FFI.Types, Goccia.FFI.UTF8String, Goccia.URI,
-  G2.Core, G2.Bytecode, G2.VM, G2.Eval, G2.Typed;
+  G2.Core, G2.Bytecode, G2.VM, G2.Eval, G2.Typed, Goccia.ThreadCleanupRegistry;
 
 const
   {$IFDEF DARWIN}
@@ -1861,4 +1861,21 @@ begin
   CbCloseFn := VUndefined;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2FFIThreadvarCleanup;
+begin
+  Caps := Default(TGocciaCapabilities);
+  Libs := nil;
+  Bounds := nil;
+  Descs := nil;
+  FieldRefs := nil;
+  Ties := nil;
+  Cbs := nil;
+  CallFailed := nil;
+  VATypes := nil;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2FFIThreadvarCleanup);
 end.

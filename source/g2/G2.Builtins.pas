@@ -2684,6 +2684,7 @@ begin
   PCell(C)^.Kind := ckSymbol;
   PCell(C)^.Flags := cfPermanent or cfOld;
   PCell(C)^.Extra := 0;
+  AddPermanentCell(C);
   Inc(SymbolCounter);
   PValue(C + 8)^ := MkPtr(AtomOf(Desc));
   PPointer(C + 16)^ := NewKeyAtom(Desc, kfSymbol);

@@ -75,7 +75,7 @@ function SharedNotify(Block: PSharedBlock; ByteIndex: Int64; Count: Int64): Int6
 implementation
 
 uses
-  Math;
+  Math, Goccia.ThreadCleanupRegistry;
 
 { ---------------- blocks ---------------- }
 
@@ -458,7 +458,16 @@ begin
   LeaveCriticalSection(WaitLock);
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2SharedThreadvarCleanup;
+begin
+  SharedObjs := nil;
+  SharedBlocks := nil;
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2SharedThreadvarCleanup);
   InitCriticalSection(WaitLock);
 
 finalization

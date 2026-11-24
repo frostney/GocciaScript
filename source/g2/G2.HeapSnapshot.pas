@@ -58,7 +58,7 @@ implementation
 
 uses
   Generics.Collections, Math, BigInteger, G2.VM, G2.ObjModel, G2.BigIntV, G2.Builtins, G2.Builtins3, G2.Eval,
-  G2.Modules;
+  G2.Modules, Goccia.ThreadCleanupRegistry;
 
 const
   SNAP_MAGIC = $31484732;   { '2GH1' }
@@ -1496,4 +1496,18 @@ begin
   EntryKnown := False;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2HeapSnapshotThreadvarCleanup;
+begin
+  Names.Free;
+  Names := nil;
+  NameIndex.Free;
+  NameIndex := nil;
+  EntryFile := '';
+  EntrySource := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2HeapSnapshotThreadvarCleanup);
 end.

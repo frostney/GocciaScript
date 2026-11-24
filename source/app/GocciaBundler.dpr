@@ -36,7 +36,8 @@ uses
   Goccia.TextFiles,
   G2.Embed,
 
-  FileUtils;
+  FileUtils,
+  Goccia.ThreadCleanupRegistry;
 
 type
   TBundlerOutput = record
@@ -92,15 +93,20 @@ type
 procedure TBundleThread.Execute;
 begin
   try
-    FApp.EmitPlannedFile(FIndex, FQuiet);
-  except
-    on E: Exception do
-    begin
-      FErrorClass := ExceptClass(E.ClassType);
-      FErrorMessage := E.Message;
-      if E is EG2BundleFailure then FErrorDetail := EG2BundleFailure(E).Detail
-      else FErrorDetail := E.Message;
+    try
+      FApp.EmitPlannedFile(FIndex, FQuiet);
+    except
+      on E: Exception do
+      begin
+        FErrorClass := ExceptClass(E.ClassType);
+        FErrorMessage := E.Message;
+        if E is EG2BundleFailure then FErrorDetail := EG2BundleFailure(E).Detail
+        else FErrorDetail := E.Message;
+      end;
     end;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 

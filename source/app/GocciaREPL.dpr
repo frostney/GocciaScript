@@ -33,7 +33,8 @@ uses
   Goccia.Version,
 
   G2.Embed,
-  G2.VM;
+  G2.VM,
+  Goccia.ThreadCleanupRegistry;
 
 const
   { the name an input is run and reported as (GocciaREPL.dpr's REPL_FILE_NAME) }
@@ -67,14 +68,19 @@ type
 procedure TG2REPLThread.Execute;
 begin
   try
-    JitTakeThread;
-    FApp.RunSession;
-  except
-    on E: Exception do
-    begin
-      FErrorClass := ExceptClass(E.ClassType);
-      FErrorMessage := E.Message;
+    try
+      JitTakeThread;
+      FApp.RunSession;
+    except
+      on E: Exception do
+      begin
+        FErrorClass := ExceptClass(E.ClassType);
+        FErrorMessage := E.Message;
+      end;
     end;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 

@@ -17,6 +17,8 @@ uses
   G2.Core, G2.Bytecode, G2.Artifact;
 
 procedure InitModules;
+{ frees this thread's module map with the engine it belongs to (EngineDone) }
+procedure ModulesDone;
 { 28.1.1 %AbstractModuleSource% of the running realm (made when asked: no module source exists yet) }
 function AbstractModuleSourceIntrinsic: TValue;
 { loads, links and evaluates the module at Path (the host's entry point); False with the error pending, Phase
@@ -147,7 +149,7 @@ implementation
 
 uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, G2.VM,
-  G2.Compiler, G2.Eval, G2.Promise;
+  G2.Compiler, G2.Eval, G2.Promise, Goccia.ThreadCleanupRegistry;
 
 const
   { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
@@ -2103,6 +2105,14 @@ begin
   JSModuleSourcesOn := On;
 end;
 
+procedure ModulesDone;
+var I: Integer;
+begin
+  if Mods <> nil then
+    for I := 0 to Mods.Count - 1 do Mods[I].Free;
+  FreeAndNil(Mods);
+end;
+
 procedure InitModules;
 begin
   NSDeferHook := @DeferEval;
@@ -2127,4 +2137,24 @@ begin
   ModSlotNameHook := @ModSlotName;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2ModulesThreadvarCleanup;
+begin
+  ProvidedArtifactBytes := '';
+  ModulesDone;
+  ImportStacks := nil;
+  ProvidedPath := '';
+  ProvidedSrc := '';
+  LoadFailPath := '';
+  ParseFailPath := '';
+  ParseFailName := '';
+  ParseFailSuggestion := '';
+  SitePath := '';
+  ProvidedArtifactPath := '';
+  ScriptImportKey := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2ModulesThreadvarCleanup);
 end.

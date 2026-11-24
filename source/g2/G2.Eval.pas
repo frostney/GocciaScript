@@ -64,7 +64,7 @@ implementation
 
 uses
   Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
-  G2.PreParse, G2.Lazy, G2.Snapshot, G2.Artifact, Goccia.Profiler.Compile;
+  G2.PreParse, G2.Lazy, G2.Snapshot, G2.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
 
 { the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
 procedure ExcludeHostSource(const FileName: UnicodeString);
@@ -1108,4 +1108,20 @@ begin
   PopRoots(1);
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2EvalThreadvarCleanup;
+begin
+  ModuleWarningEntry := '';
+  ParseErrorName := '';
+  ParseErrorSuggestion := '';
+  EntryWarningMessages := nil;
+  EntryWarningSuggestions := nil;
+  EntryWarningLines := nil;
+  EntryWarningColumns := nil;
+  ScriptImportSource := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2EvalThreadvarCleanup);
 end.

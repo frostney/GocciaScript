@@ -270,7 +270,7 @@ procedure ForgetRetiredShapes;
 implementation
 
 uses
-  Math;
+  Math, Goccia.ThreadCleanupRegistry;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
 begin
@@ -394,6 +394,14 @@ begin
   AllTemplates := nil;
   TemplateCount := 0;
 end;
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2BytecodeThreadvarCleanup;
+begin
+  AllTemplates := nil;
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2BytecodeThreadvarCleanup);
   ProtoChangeHook := @ForgetAddTransitions;
 end.

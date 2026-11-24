@@ -27,7 +27,7 @@ function G2OpcodeName(Op: Byte): string;
 implementation
 
 uses
-  SysUtils, TypInfo, Goccia.Profiler, G2.Core, G2.Bytecode, G2.VM;
+  SysUtils, TypInfo, Goccia.Profiler, G2.Core, G2.Bytecode, G2.VM, Goccia.ThreadCleanupRegistry;
 
 type
   TShadow = record
@@ -196,7 +196,15 @@ begin
   Prof := nil;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2ProfileThreadvarCleanup;
+begin
+  Shadow := nil;
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2ProfileThreadvarCleanup);
   ProfPushHook := OnPush;
   ProfStepHook := OnStep;
   ProfilerOpcodeName := G2OpcodeName;

@@ -35,7 +35,8 @@ uses
   G2.Embed,
   G2.Engine,
   G2.Profile,
-  G2.Test262;
+  G2.Test262,
+  Goccia.ThreadCleanupRegistry;
 
 const
   { Every top-level test262 category. annexB is part of the conformance
@@ -1285,19 +1286,24 @@ var
   UsesAgents: Boolean;
 begin
   try
-    UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
-  except
-    UsesAgents := False;
-  end;
-  if UsesAgents then
-    EnterCriticalSection(AgentRunLock);
-  try
-    FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
-  finally
+    try
+      UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
+    except
+      UsesAgents := False;
+    end;
     if UsesAgents then
-      LeaveCriticalSection(AgentRunLock);
+      EnterCriticalSection(AgentRunLock);
+    try
+      FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
+    finally
+      if UsesAgents then
+        LeaveCriticalSection(AgentRunLock);
+    end;
+    FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
-  FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
 end;
 
 { no fork: up to Jobs cases at a time, each on its own thread, each run bounded by its engine's deadline }

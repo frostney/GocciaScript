@@ -542,7 +542,7 @@ implementation
 
 uses
   {$IFDEF LINUX}Syscall, {$ENDIF}Classes, NumericText, NativeStackBounds, Goccia.Coverage, Goccia.Error.Messages,
-  Goccia.Error.Suggestions;
+  Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry;
 
 { ---------------- execution limits ---------------- }
 
@@ -10592,8 +10592,12 @@ end;
 {$ENDIF}
 
 procedure VMDone;
+var Atoms: PTypeofAtoms;
 begin
   JitEngineDone;
+  Atoms := TypeofAtoms;
+  if Atoms <> nil then Dispose(Atoms);
+  TypeofAtoms := nil;
   OSFree(VStack, STACK_MAX * SizeOf(TValue));
   VStack := nil; StackTop := 0;
   Frames := nil; FrameTop := 0; Handlers := nil; HandlerTop := 0;
@@ -10772,7 +10776,33 @@ begin
 end;
 {$ENDIF}
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2VMThreadvarCleanup;
+begin
+  Frames := nil;
+  Handlers := nil;
+  ExtraRoots := nil;
+  GLexCells := nil;
+  GLexNames := nil;
+  GLexConst := nil;
+  GLexHash := nil;
+  GVarHash := nil;
+  HostAbortText := '';
+  AuditSiteSource := '';
+  Realms := nil;
+  RealmValSlots := nil;
+  RealmPtrSlots := nil;
+  RealmIntSlots := nil;
+  InjectedGLex := nil;
+  SymbolKeys := nil;
+  PreludePrivAt := nil;
+  PreludePrivKey := nil;
+  CovFrameLine := nil;
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2VMThreadvarCleanup);
   BigIntegerAbortCheck := @BigAbortCheck;
   FreeJitStateHook := @FreeTemplateJitState;
   GCShapeSweepHook := @ForgetRetiredShapesVM;

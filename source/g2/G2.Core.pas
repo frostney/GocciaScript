@@ -367,6 +367,9 @@ function IntAtom(I: Int64): PStr;
 const
   kfSymbol = 1; kfPrivate = 2; kfInternal = 4;
 function NewKeyAtom(const Text: UnicodeString; Flags: Word): PStr;
+{ a permanent cell allocated outside the atom tables (a Symbol, a BigInt a snapshot holds): HeapDone frees it with
+  the engine's heap }
+procedure AddPermanentCell(P: Pointer);
 { the internal keys under which the global object holds the using-declaration helpers (G2.Disposal), for the
   compiler: 0 AddDisposableResource, 1 DisposeResources, 2 its async form }
 function UsingKey(I: Integer): PStr;
@@ -554,7 +557,7 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry;
 
 {$IFDEF MSWINDOWS}
 { (declared here: the Windows unit's names would hide SysUtils' in this unit) }
@@ -1673,6 +1676,15 @@ end;
 threadvar
   KeyAtoms: array of PStr;
   KeyAtomCount: Integer;
+  PermanentCells: array of Pointer;
+  PermanentCellCount: Integer;
+
+procedure AddPermanentCell(P: Pointer);
+begin
+  if PermanentCellCount >= Length(PermanentCells) then SetLength(PermanentCells, PermanentCellCount * 2 + 64);
+  PermanentCells[PermanentCellCount] := P;
+  Inc(PermanentCellCount);
+end;
 
 function KeyPayloadOffset(Len: Integer): SizeInt; inline;
 begin
@@ -2949,6 +2961,8 @@ begin
   FillChar(CharAtoms, SizeOf(CharAtoms), 0);
   for I := 0 to KeyAtomCount - 1 do FreeMem(KeyAtoms[I]);
   KeyAtoms := nil; KeyAtomCount := 0;
+  for I := 0 to PermanentCellCount - 1 do FreeMem(PermanentCells[I]);
+  PermanentCells := nil; PermanentCellCount := 0;
   for I := 0 to ShapeCount - 1 do ShapeRecFree(AllShapes[I]);
   AllShapes := nil; ShapeCount := 0;
   for I := 0 to RetiredCount - 1 do ShapeRecFree(RetiredShapes[I]);
@@ -2973,4 +2987,25 @@ begin
 end;
 
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2CoreThreadvarCleanup;
+begin
+  CurProfile := Default(TLangProfile);
+  TimeZoneOverride := '';
+  Pages := nil;
+  GrayStack := nil;
+  EphKeys := nil;
+  RememberedList := nil;
+  AtomTable := nil;
+  KeyAtoms := nil;
+  PermanentCells := nil;
+  AllShapes := nil;
+  RootShapes := nil;
+  RetiredShapes := nil;
+  RootHash := nil;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2CoreThreadvarCleanup);
 end.

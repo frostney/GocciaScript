@@ -95,7 +95,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.SourceSpan, Goccia.Types.LocalType, Goccia.Profiler.Compile, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.SourceSpan, Goccia.Types.LocalType, Goccia.Profiler.Compile, G2.VM, G2.Lazy, G2.PreParse, Goccia.ThreadCleanupRegistry;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -8712,4 +8712,17 @@ begin
   end;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2CompilerThreadvarCleanup;
+begin
+  ExprKinds := Default(TKindCache);
+  VarNameKinds := Default(TKindCache);
+  StmtKinds := Default(TKindCache);
+  HoistMaskCache := Default(TClassMaskCache);
+  EvalOuterDesc := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2CompilerThreadvarCleanup);
 end.

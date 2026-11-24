@@ -163,7 +163,7 @@ uses
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
-  G2.Fetch, G2.Sandbox, TimingUtils;
+  G2.Fetch, G2.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry;
 
 {$I G2.Testing.inc}
 {$I G2.Microbench.inc}
@@ -2528,7 +2528,29 @@ begin
   DurationNanoseconds := BenchDuration;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2HostAPIThreadvarCleanup;
+begin
+  BenchEntries := nil;
+  ReadPolicy.Free;
+  ReadPolicy := nil;
+  MockModules.Free;
+  MockModules := nil;
+  ReportJson := '';
+  ReportErr := '';
+  ResolveCandidate := '';
+  ImportSpecifiers.Free;
+  ImportSpecifiers := nil;
+  ShadowWarned.Free;
+  ShadowWarned := nil;
+  ManifestWritten := '';
+  ManifestPath := '';
+  GuestScopeDir := '';
+end;
+
 initialization
+  RegisterThreadvarCleanup(@G2HostAPIThreadvarCleanup);
   { SysUtils fills TrueBoolStrs and FalseBoolStrs on the first BoolToStr(B, True), without a lock: fill them here, on
     the main thread before any engine thread starts, so every later call only reads them }
   BoolToStr(True, True);

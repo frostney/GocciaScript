@@ -42,7 +42,7 @@ threadvar
 implementation
 
 uses
-  G2.Builtins2, G2.Promise;
+  G2.Builtins2, G2.Promise, Goccia.ThreadCleanupRegistry;
 
 threadvar
   SharedBufferProto: TValue;
@@ -655,4 +655,14 @@ begin
   end;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2AtomicsThreadvarCleanup;
+begin
+  AsyncDeadlines := nil;
+  AsyncLive := nil;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2AtomicsThreadvarCleanup);
 end.

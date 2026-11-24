@@ -46,7 +46,8 @@ uses
 
   G2.Embed,
   G2.HostAPI,
-  G2.VM;
+  G2.VM,
+  Goccia.ThreadCleanupRegistry;
 
 type
   TReportSpec = record
@@ -154,24 +155,29 @@ procedure TG2BenchThread.Execute;
 var
   OwnsJit: Boolean;
 begin
-  OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
   try
-    if OwnsJit then
-      JitTakeThread;
+    OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
-      FApp.RunBenchmarkFile(FIndex, FSource);
-    finally
-      if FOwnsSource then
-        FSource.Free;
       if OwnsJit then
-        InterLockedExchange(JitOwned, 0);
+        JitTakeThread;
+      try
+        FApp.RunBenchmarkFile(FIndex, FSource);
+      finally
+        if FOwnsSource then
+          FSource.Free;
+        if OwnsJit then
+          InterLockedExchange(JitOwned, 0);
+      end;
+    except
+      on E: Exception do
+      begin
+        FErrorClass := ExceptClass(E.ClassType);
+        FErrorMessage := E.Message;
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      FErrorClass := ExceptClass(E.ClassType);
-      FErrorMessage := E.Message;
-    end;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 

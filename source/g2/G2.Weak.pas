@@ -43,6 +43,8 @@ function TableDeleteNative(Args: PValue; Argc: Integer; var Res: TValue): Boolea
 
 { 9.10 ClearKeptObjects: at the start of each job }
 procedure ClearKeptObjects;
+{ frees this thread's weak-reference state and its tables, with the engine they belong to (EngineDone) }
+procedure WeakDone;
 { a FinalizationRegistry target died since the last cleanup job }
 function WeakCleanupPending: Boolean;
 { whether a FinalizationRegistry cell still waits on its target (a collection could find it dead) }
@@ -315,17 +317,23 @@ begin
   S^.Count := N;
 end;
 
+procedure WeakDone;
+var S: PWeakState; I: Integer;
+begin
+  S := WeakStateVar;
+  if S = nil then Exit;
+  for I := 0 to S^.TableCount - 1 do FreeTable(S^.Tables[I]);
+  S^.WatchHead.Free;
+  Dispose(S);
+  WeakStateVar := nil;
+end;
+
 function EnsureState: PWeakState;
 begin
   Result := WeakStateNow;
   if Result <> nil then Exit;
   { the previous engine's state on this thread: its values and roots went with that engine }
-  if WeakStateVar <> nil then
-  begin
-    WeakStateVar^.WatchHead.Free;
-    Dispose(WeakStateVar);
-    WeakStateVar := nil;
-  end;
+  WeakDone;
   FirstInEngine(WeakStateGen);
   New(Result);
   Result^.Count := 0;

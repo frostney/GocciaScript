@@ -41,7 +41,7 @@ implementation
 
 uses
   Classes, SysUtils, G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Eval, G2.Promise, G2.Atomics, G2.Agent,
-  G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins;
+  G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins, Goccia.ThreadCleanupRegistry;
 
 {$I G2.Test262Host.inc}
 
@@ -349,4 +349,13 @@ begin
   end;
 end;
 
+{ the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
+  finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
+procedure G2Test262ThreadvarCleanup;
+begin
+  PrintBuf := '';
+end;
+
+initialization
+  RegisterThreadvarCleanup(@G2Test262ThreadvarCleanup);
 end.
