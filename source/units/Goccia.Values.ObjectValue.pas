@@ -138,7 +138,8 @@ type
       abort at any allocation inside the call). A caller never frees a
       descriptor it passed, so one built inline in the call cannot leak. An
       override frees ADescriptor itself before anything it does ahead of the
-      inherited call raises (ADR 0184). }
+      inherited call raises. An EOutOfMemory from FPC's own allocator is
+      outside the contract (ADR 0184). }
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); virtual;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; virtual;
     procedure CreateDataPropertyOrThrow(const AName: string;
@@ -1793,6 +1794,10 @@ begin
   FSymbolDescriptors.Free;
   FSymbolInsertionOrder.Free;
   FProperties := AProperties.FProperties;
+  // The object owns the descriptors from here, so a refused growth frees the
+  // one it was storing, as in any object's map (ADR 0184).
+  if FProperties is TGocciaShapedPropertyMap then
+    TGocciaShapedPropertyMap(FProperties).KeepsRefusedValue := False;
   FSymbolDescriptors := AProperties.FSymbolDescriptors;
   FSymbolInsertionOrder := AProperties.FSymbolOrder;
   AProperties.FProperties := nil;

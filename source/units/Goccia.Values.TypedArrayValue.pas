@@ -1358,7 +1358,47 @@ begin
   Result := True;
 end;
 
+// CanonicalNumericIndexString for a definition. An integer index is decided
+// without allocating; any other name that may be numeric is decided by a
+// round trip through Number::toString, which allocates a string (a deadline,
+// a budget, a host's abort or the memory limit can stop it, and its
+// reservation can collect). That branch roots the array and what ADescriptor
+// holds, and frees ADescriptor, the definition's, if it raises (ADR 0184).
+function TypedArrayKeyForDefineSlow(const AArray: TGocciaTypedArrayValue;
+  const AName: string; out ANumericIndex: Double; out AIsNegativeZero: Boolean;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    try
+      Roots.Add(AArray);
+      ADescriptor.PushRoots(Roots);
+      Result := TryCanonicalNumericIndexString(AName, ANumericIndex,
+        AIsNegativeZero);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TypedArrayKeyForDefine(const AArray: TGocciaTypedArrayValue;
+  const AName: string; out ANumericIndex: Double; out AIsNegativeZero: Boolean;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  AIsNegativeZero := False;
+  if TryFastCanonicalIntegerIndex(AName, ANumericIndex) then
+    Exit(True);
+  Result := TypedArrayKeyForDefineSlow(AArray, AName, ANumericIndex,
+    AIsNegativeZero, ADescriptor);
+end;
+
 // ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc)
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaTypedArrayValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 var
@@ -1366,7 +1406,8 @@ var
   NumericIndex: Double;
   Defined: Boolean;
 begin
-  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  if TypedArrayKeyForDefine(Self, AName, NumericIndex, IsNegativeZero,
+     ADescriptor) then
   begin
     // Writing the value converts it, which can run guest code and throw; the
     // definition takes ADescriptor on every exit (ADR 0184).
@@ -1386,13 +1427,15 @@ begin
 end;
 
 // ES2026 §10.4.5.4 [[DefineOwnProperty]](P, Desc) — boolean variant
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 function TGocciaTypedArrayValue.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   IsNegativeZero: Boolean;
   NumericIndex: Double;
 begin
-  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  if TypedArrayKeyForDefine(Self, AName, NumericIndex, IsNegativeZero,
+     ADescriptor) then
   begin
     try
       Result := TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,

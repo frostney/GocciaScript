@@ -15,8 +15,10 @@ program Goccia.DefinePropertyOwnership.Test;
   built-in registration, and one that arrives while a script runs can land in
   any definition the script reaches. It runs on a worker thread, as a host
   does, arms the handle before the engine is built, and requests the abort
-  when that thread makes its Nth heap allocation, for every second N up to
-  the build's and the script's whole count. A request lands at the next value
+  when that thread makes its Nth heap allocation counted from the start of
+  one phase: the build (a trial ends once the engine exists) or the run of a
+  definition-heavy script on an engine built unstopped, for every second N up
+  to that phase's whole count in a clean trial. A request lands at the next value
   allocation, so every N from the block before it up to that allocation's own
   block stops the run at the same point: a definition's descriptor and the
   value that raises inside the definition are two blocks of that range, and
@@ -48,6 +50,7 @@ uses
   Goccia.Threading,
   Goccia.Threading.Init,
   Goccia.Timeout,
+  Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
@@ -59,7 +62,8 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
   Goccia.Values.StringObjectValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.Values.TypedArrayValue;
 
 const
   { Allocation-heavy definitions a script reaches: an intrinsic name or
@@ -139,6 +143,10 @@ type
     procedure TestRevokedProxyThrowFreesOnce;
     procedure TestProxyTrapRefusalFreesOnce;
     procedure TestSuccessfulDefinitionsFreeOnce;
+    procedure TestTypedArrayNumericKeyAbortFreesOnce;
+    procedure TestMappedArgumentsLazyCopyThrowFreesOnce;
+    procedure TestRestoredMapFreesRefusedValuesAgain;
+    function ThrowingFactory: TGocciaValue;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -159,6 +167,8 @@ type
   public
     Aborted: Boolean;
     Completed: Boolean;
+    { Anything else that ended the trial: a failure of the test itself. }
+    Unexpected: Boolean;
     BlocksSeen: Int64;
     constructor Create(const AAbortAtBlock: Int64; const AInScript: Boolean);
   end;
@@ -166,7 +176,7 @@ type
   TEmbedderAbortTests = class(TTestSuite)
   private
     function Sweep(const AInScript: Boolean; out ATrials, AAborted,
-      ALeakingTrials: Integer; out ALeakedBlocks: Int64): Int64;
+      ALeakingTrials, AUnexpected: Integer; out ALeakedBlocks: Int64): Int64;
     procedure TestControlRunLeavesNothing;
     procedure TestAbortAnywhereInTheBuildLeavesNothing;
     procedure TestAbortAnywhereInAScriptLeavesNothing;
@@ -445,6 +455,12 @@ begin
     TestProxyTrapRefusalFreesOnce);
   Test('successful definitions free the descriptor once',
     TestSuccessfulDefinitionsFreeOnce);
+  Test('an abort deciding a typed array''s numeric key frees the descriptor once',
+    TestTypedArrayNumericKeyAbortFreesOnce);
+  Test('a throwing copy of a lazy descriptor on mapped arguments frees it once',
+    TestMappedArgumentsLazyCopyThrowFreesOnce);
+  Test('a restored object''s map frees a refused value again',
+    TestRestoredMapFreesRefusedValuesAgain);
 end;
 
 procedure TOwnershipTests.BeforeEach;
@@ -916,6 +932,85 @@ begin
   Expect<Integer>(ArrayValue.Elements.Count).ToBe(1);
 end;
 
+function TOwnershipTests.ThrowingFactory: TGocciaValue;
+begin
+  ThrowTypeError('the factory refuses');
+  Result := nil;
+end;
+
+{ "1.5" is no integer index, so deciding whether it is a canonical numeric
+  string allocates its Number::toString. }
+procedure TOwnershipTests.TestTypedArrayNumericKeyAbortFreesOnce;
+var
+  TypedArray: TGocciaTypedArrayValue;
+  Descriptor: TCountedDescriptor;
+  Raised: string;
+begin
+  TypedArray := TGocciaTypedArrayValue.Create(takFloat64, 4);
+  Descriptor := Counted(TGocciaNumberLiteralValue.Create(2));
+  RequestAbortNow;
+  Raised := 'nothing';
+  try
+    TypedArray.DefineProperty('1.5', Descriptor);
+  except
+    on E: Exception do
+      Raised := RaisedName(E);
+  end;
+  ClearAbort;
+  Expect<string>(Raised).ToBe(TGocciaAbortError.ClassName);
+  Expect<Integer>(GFreed).ToBe(1);
+end;
+
+{ The mapped arguments object copies a definition's descriptor before the
+  inherited definition takes it; copying a lazy one runs its factory. }
+procedure TOwnershipTests.TestMappedArgumentsLazyCopyThrowFreesOnce;
+var
+  Args: TGocciaArgumentsCollection;
+  Arguments: TGocciaObjectValue;
+  Raised: string;
+begin
+  // Built in the realm the shared prototypes were made in.
+  SetCurrentRealm(FPreviousRealm);
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    Arguments := CreateMappedBytecodeArgumentsObject(Args, [],
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+    Raised := 'nothing';
+    try
+      Arguments.DefineProperty('x', TCountedLazyDescriptor.Create(
+        ThrowingFactory, [pfConfigurable, pfWritable]));
+    except
+      on E: Exception do
+        Raised := RaisedName(E);
+    end;
+  finally
+    Args.Free;
+    SetCurrentRealm(FRealm);
+  end;
+  Expect<string>(Raised).ToBe('throw');
+  Expect<Integer>(GFreed).ToBe(1);
+end;
+
+{ A heap snapshot restore builds the layout in a map that leaves refused
+  values to their owners; once installed it is the object's map like any. }
+procedure TOwnershipTests.TestRestoredMapFreesRefusedValuesAgain;
+var
+  Obj: TGocciaObjectValue;
+  Prepared: TGocciaRestoredOwnProperties;
+begin
+  Obj := TGocciaObjectValue.Create;
+  Obj.CreateDataPropertyOrThrow('a', TGocciaNumberLiteralValue.Create(1));
+  Prepared := Obj.PrepareOwnPropertiesForRestore(['a'], [nil], [], []);
+  try
+    Obj.CommitOwnPropertiesForRestore(Prepared);
+  finally
+    Prepared.Free;
+  end;
+  Expect<Boolean>(TGocciaShapedPropertyMap(Obj.Properties).KeepsRefusedValue)
+    .ToBe(False);
+  Expect<Boolean>(Obj.HasOwnProperty('a')).ToBe(True);
+end;
+
 { TAbortAtRun }
 
 constructor TAbortAtRun.Create(const AAbortAtBlock: Int64;
@@ -933,20 +1028,21 @@ var
   Handle: IGocciaAbortHandle;
 begin
   TrackThisThread := True;
-  BlocksOnThisThread := 0;
   AbortAtBlock := 0;
   InitThreadRuntime;
   try
-    // As a host that arms before it builds the engine.
-    Handle := CaptureAbortHandle;
-    AbortHandleToRequest := Pointer(Handle);
-    if not FInScript then
-      AbortAtBlock := FAbortAtBlock;
     Source := TStringList.Create;
     Runtime := nil;
     try
       try
         Source.Text := SCRIPT_DEFINITIONS;
+        // As a host that arms before it builds the engine. The count starts
+        // where the phase the trial stops in starts: the build, or the run.
+        Handle := CaptureAbortHandle;
+        AbortHandleToRequest := Pointer(Handle);
+        BlocksOnThisThread := 0;
+        if not FInScript then
+          AbortAtBlock := FAbortAtBlock;
         Runtime := TGocciaRuntime.Create('main.js', Source,
           TGocciaCapabilities.None);
         Runtime.Engine.SourceType := stModule;
@@ -954,12 +1050,14 @@ begin
         begin
           BlocksOnThisThread := 0;
           AbortAtBlock := FAbortAtBlock;
+          Runtime.Execute;
         end;
-        Runtime.Execute;
         Completed := True;
       except
         on E: TGocciaAbortError do
           Aborted := True;
+        on E: Exception do
+          Unexpected := True;
       end;
     finally
       AbortAtBlock := 0;
@@ -1013,6 +1111,7 @@ begin
   Leaked := RunOnce(0, False, Run);
   try
     Expect<Boolean>(Run.Completed).ToBe(True);
+    Expect<Boolean>(Run.Unexpected).ToBe(False);
     Expect<Int64>(Leaked).ToBe(0);
   finally
     Run.Free;
@@ -1022,7 +1121,8 @@ end;
 { Aborts at every SWEEP_STRIDE-th allocation from the first to the last one
   a clean run makes in that phase, and returns that count. }
 function TEmbedderAbortTests.Sweep(const AInScript: Boolean; out ATrials,
-  AAborted, ALeakingTrials: Integer; out ALeakedBlocks: Int64): Int64;
+  AAborted, ALeakingTrials, AUnexpected: Integer;
+  out ALeakedBlocks: Int64): Int64;
 var
   Run: TAbortAtRun;
   Leaked: Int64;
@@ -1037,6 +1137,7 @@ begin
   ATrials := 0;
   AAborted := 0;
   ALeakingTrials := 0;
+  AUnexpected := 0;
   ALeakedBlocks := 0;
   N := 1;
   while N <= Result do
@@ -1046,7 +1147,9 @@ begin
       Inc(ATrials);
       if Run.Aborted then
         Inc(AAborted);
-      if Leaked <> 0 then
+      if Run.Unexpected then
+        Inc(AUnexpected)
+      else if Leaked <> 0 then
       begin
         Inc(ALeakingTrials);
         Inc(ALeakedBlocks, Abs(Leaked));
@@ -1061,12 +1164,13 @@ end;
 procedure TEmbedderAbortTests.TestAbortAnywhereInTheBuildLeavesNothing;
 var
   Blocks: Int64;
-  Trials, Aborted, LeakingTrials: Integer;
+  Trials, Aborted, LeakingTrials, Unexpected: Integer;
   LeakedBlocks: Int64;
 begin
-  Blocks := Sweep(False, Trials, Aborted, LeakingTrials, LeakedBlocks);
-  // The sweep reached the engine build: most requests landed before the run
-  // finished.
+  Blocks := Sweep(False, Trials, Aborted, LeakingTrials, Unexpected,
+    LeakedBlocks);
+  Expect<Integer>(Unexpected).ToBe(0);
+  // The build alone: most requests landed before it finished.
   Expect<Boolean>(Blocks > 1000).ToBe(True);
   Expect<Boolean>(Aborted > Trials div 2).ToBe(True);
   Expect<Integer>(LeakingTrials).ToBe(0);
@@ -1076,10 +1180,12 @@ end;
 procedure TEmbedderAbortTests.TestAbortAnywhereInAScriptLeavesNothing;
 var
   Blocks: Int64;
-  Trials, Aborted, LeakingTrials: Integer;
+  Trials, Aborted, LeakingTrials, Unexpected: Integer;
   LeakedBlocks: Int64;
 begin
-  Blocks := Sweep(True, Trials, Aborted, LeakingTrials, LeakedBlocks);
+  Blocks := Sweep(True, Trials, Aborted, LeakingTrials, Unexpected,
+    LeakedBlocks);
+  Expect<Integer>(Unexpected).ToBe(0);
   Expect<Boolean>(Blocks > 100).ToBe(True);
   Expect<Boolean>(Aborted > Trials div 2).ToBe(True);
   Expect<Integer>(LeakingTrials).ToBe(0);

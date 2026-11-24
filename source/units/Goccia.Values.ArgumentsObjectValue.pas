@@ -274,12 +274,26 @@ begin
     SetMappedValue(Index, AValue);
 end;
 
+// The copy the mapping is applied from. Cloning a lazy descriptor runs its
+// factory, which can throw before the inherited definition takes ADescriptor:
+// the definition owns it (ADR 0184), so a throw frees it here.
+function CloneForDefine(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  try
+    Result := ClonePropertyDescriptor(ADescriptor);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+end;
+
 procedure TGocciaMappedArgumentsObjectValue.DefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
-  MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
+  MappingDescriptor := CloneForDefine(ADescriptor);
   try
     inherited DefineProperty(AName, ADescriptor);
     ApplyDefineMapping(AName, MappingDescriptor);
@@ -293,7 +307,7 @@ function TGocciaMappedArgumentsObjectValue.TryDefineProperty(
 var
   MappingDescriptor: TGocciaPropertyDescriptor;
 begin
-  MappingDescriptor := ClonePropertyDescriptor(ADescriptor);
+  MappingDescriptor := CloneForDefine(ADescriptor);
   try
     Result := inherited TryDefineProperty(AName, ADescriptor);
     if Result then

@@ -845,20 +845,31 @@ end;
 
 // A string index or "length" names a property the object reports without
 // storing it, built here for the comparison. Building it allocates a value,
-// so a deadline, a budget, a host's abort or the memory limit can stop it
-// before the definition decides anything; the definition owns ADescriptor
-// (ADR 0184) and frees it then.
+// whose reservation can collect and which a deadline, a budget, a host's
+// abort or the memory limit can stop before the definition decides anything:
+// the object and what ADescriptor holds stay rooted across it, and a raise
+// frees ADescriptor, which the definition owns (ADR 0184).
 function StringObjectExistingDescriptorForDefine(
+  const AObject: TGocciaStringObjectValue;
   const APrimitive: TGocciaStringLiteralValue; const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
   try
-    Result := CreateStringIndexDescriptor(APrimitive, AName);
-    if not Assigned(Result) then
-      Result := CreateStringLengthDescriptor(APrimitive, AName);
-  except
-    ADescriptor.Free;
-    raise;
+    try
+      Roots.Add(AObject);
+      ADescriptor.PushRoots(Roots);
+      Result := CreateStringIndexDescriptor(APrimitive, AName);
+      if not Assigned(Result) then
+        Result := CreateStringLengthDescriptor(APrimitive, AName);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -870,8 +881,8 @@ var
   ExistingDescriptor: TGocciaPropertyDescriptor;
   Compatible: Boolean;
 begin
-  ExistingDescriptor := StringObjectExistingDescriptorForDefine(FPrimitive,
-    AName, ADescriptor);
+  ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
+    FPrimitive, AName, ADescriptor);
   if Assigned(ExistingDescriptor) then
   begin
     Compatible := IsCompatibleStringDefineDescriptor(ExistingDescriptor,
@@ -894,8 +905,8 @@ function TGocciaStringObjectValue.TryDefineProperty(const AName: string;
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
-  ExistingDescriptor := StringObjectExistingDescriptorForDefine(FPrimitive,
-    AName, ADescriptor);
+  ExistingDescriptor := StringObjectExistingDescriptorForDefine(Self,
+    FPrimitive, AName, ADescriptor);
   if Assigned(ExistingDescriptor) then
   begin
     Result := IsCompatibleStringDefineDescriptor(ExistingDescriptor,

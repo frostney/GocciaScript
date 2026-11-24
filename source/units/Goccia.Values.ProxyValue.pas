@@ -2012,10 +2012,11 @@ begin
     end;
     if Assigned(Trap) then
     begin
-      Roots.Add(DescObj);
-      Args := TGocciaArgumentsCollection.Create;
+      Args := nil;
       try
         try
+          Roots.Add(DescObj);
+          Args := TGocciaArgumentsCollection.Create;
           Args.Add(FTarget);
           Args.Add(TGocciaStringLiteralValue.Create(AName));
           Args.Add(DescObj);
@@ -2074,10 +2075,11 @@ begin
     end;
     if Assigned(Trap) then
     begin
-      Roots.Add(DescObj);
-      Args := TGocciaArgumentsCollection.Create;
+      Args := nil;
       try
         try
+          Roots.Add(DescObj);
+          Args := TGocciaArgumentsCollection.Create;
           Args.Add(FTarget);
           Args.Add(ASymbol);
           Args.Add(DescObj);
@@ -2137,10 +2139,11 @@ begin
     end;
     if Assigned(Trap) then
     begin
-      Roots.Add(DescObj);
-      Args := TGocciaArgumentsCollection.Create;
+      Args := nil;
       try
         try
+          Roots.Add(DescObj);
+          Args := TGocciaArgumentsCollection.Create;
           Args.Add(FTarget);
           Args.Add(TGocciaStringLiteralValue.Create(AName));
           Args.Add(DescObj);
@@ -2198,10 +2201,11 @@ begin
     end;
     if Assigned(Trap) then
     begin
-      Roots.Add(DescObj);
-      Args := TGocciaArgumentsCollection.Create;
+      Args := nil;
       try
         try
+          Roots.Add(DescObj);
+          Args := TGocciaArgumentsCollection.Create;
           Args.Add(FTarget);
           Args.Add(ASymbol);
           Args.Add(DescObj);

@@ -196,12 +196,26 @@ begin
   RequireNativeBytes(ABytes);
 end;
 
+// The hole singleton's first use allocates it, and an allocation polls an
+// armed thread: a raise there frees what the caller handed over.
+procedure EnsureHoleValueHandingOver(const AHandedOver: TObject);
+begin
+  try
+    TGocciaHoleValue.HoleValue;
+  except
+    AHandedOver.Free;
+    raise;
+  end;
+end;
+
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
   const ACount: Int64; const APendingValue: TGocciaValue;
   const AHandedOver: TObject);
 var
   StartCount: Integer;
 begin
+  if Assigned(AHandedOver) and not Assigned(TGocciaHoleValue.FHoleValue) then
+    EnsureHoleValueHandingOver(AHandedOver);
   StartCount := AElements.Count;
   { Gate the whole extension up front.
     ACount comes from a JS-controlled length, so `arr.length = 1e9` asks for

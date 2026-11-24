@@ -4469,8 +4469,13 @@ begin
       // what it holds while the gate of the extension may collect.
       DescriptorRoots.Initialize;
       try
-        ADescriptor.PushRoots(DescriptorRoots);
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil, ADescriptor);
+        try
+          ADescriptor.PushRoots(DescriptorRoots);
+          ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        except
+          ADescriptor.Free;
+          raise;
+        end;
       finally
         DescriptorRoots.Clear;
       end;
@@ -4581,10 +4586,15 @@ begin
     begin
       DescriptorRoots.Initialize;
       try
-        ADescriptor.PushRoots(DescriptorRoots);
-        // The caller handed the descriptor over and does not free it on a
-        // raise.
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil, ADescriptor);
+        try
+          ADescriptor.PushRoots(DescriptorRoots);
+          ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        except
+          // The caller handed the descriptor over and does not free it on a
+          // raise.
+          ADescriptor.Free;
+          raise;
+        end;
       finally
         DescriptorRoots.Clear;
       end;

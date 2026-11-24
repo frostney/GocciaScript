@@ -63,14 +63,18 @@ and a caller never frees a descriptor it passed.
   frame that path already had or that only that path pays for:
   `MaterializeIntrinsicProperty` (function and class `name` and `length`),
   `MaterializeOwnLazyPropertyForDefine`, the String object's index descriptor,
-  the array length's value conversion, and the Proxy's trap lookup and call.
+  a typed array's non-integer numeric key, the array length's value
+  conversion, a dense element moved into the map, the mapped `arguments`
+  object's copy of a lazy descriptor, a deferred namespace's module
+  evaluation, and the Proxy's trap lookup and call. The ones that can collect
+  root what the descriptor holds across it.
 - A refused growth of a property map frees the descriptor the `Add` was
   storing, in the growth gate's existing frame
   (`TGocciaShapedPropertyMap.RequireStorageBytes`). That covers every store
   into an object's map, the registration helpers and the intrinsic seeding
   included. A map built from descriptors that something else still owns, a
   heap snapshot restore's, sets `KeepsRefusedValue` and leaves them to their
-  owners.
+  owners until the commit installs it, which clears the flag.
 - `ExtendElementsWithHoles` takes the defining descriptor as an object handed
   over and frees it if the extension raises, in the frames its gate and its
   long fill already have, so an array element definition gains none.
@@ -82,19 +86,26 @@ and a caller never frees a descriptor it passed.
 ## Consequences
 
 - An embedder may arm the abort handle before it builds the engine: a request
-  that lands during the build raises `TGocciaAbortError` out of the
-  constructor and leaves nothing allocated.
+  that lands during the build raises `TGocciaAbortError` from the engine's
+  constructor, and once the worker's runtime has shut down nothing the build
+  allocated is left.
 - `Goccia.DefinePropertyOwnership.Test` raises inside each implementation at
   each point that can raise and checks that the descriptor is freed exactly
-  once, and sweeps a host abort over every second heap allocation of an
-  engine build and of a script on a worker thread, with a tracking memory
-  manager that fails on any block left allocated. A request lands at the next
-  value allocation, so consecutive requests stop the run at the same point;
-  every leaking range before this change was at least two blocks wide.
+  once. It also sweeps a host abort over every second heap allocation of an
+  engine's construction, and separately of a definition-heavy script's run,
+  on a worker thread, with a tracking memory manager that fails on any block
+  left allocated after the thread's runtime shuts down. A request lands at
+  the next value allocation, so consecutive requests stop the run at the same
+  point; every leaking range before this change was at least two blocks wide.
+  The sweeps cover what that script and the build reach, not every
+  definition the engine has.
 - A new override frees its descriptor before anything it does ahead of the
   inherited call can raise. A new caller passes the descriptor and forgets it.
-- An `EOutOfMemory` from a map's or a list's own reallocation, below the
-  growth gate, is not covered.
+- An `EOutOfMemory` from FPC's own allocator (a descriptor's, a map's or a
+  list's block, a Proxy's argument list) is outside the contract: the process
+  is out of memory, which no limit of the engine reports, and a descriptor in
+  flight may leak then. A refused growth gate is the memory limit, and is
+  covered.
 
 Cost, as callgrind instruction counts of a production `GocciaRunner`:
 
