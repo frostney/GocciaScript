@@ -27,6 +27,7 @@ uses
   Goccia.JSON.Utils,
   Goccia.Profiler,
   Goccia.Profiler.Report,
+  Goccia.SourcePipeline,
   Goccia.TextFiles,
 
   G2.Core,
@@ -129,6 +130,8 @@ type
     HostEvalDeterministic: Boolean;
     HostEvalWarningUnsupportedFeatures: Boolean;
     HostEvalModule: Boolean;
+    { --source-type was given: otherwise the goal is the source's (ADR 0140), as GocciaRunner settles it }
+    HostEvalSourceTypeSet: Boolean;
   end;
 
   TTest262App = class;
@@ -554,6 +557,7 @@ begin
         FOptions.HostEvalModule := True
       else
         raise TParseError.Create('--source-type requires script or module');
+      FOptions.HostEvalSourceTypeSet := True;
     end
     else if (Argument = '--suite-dir') or
         StartsStr('--suite-dir=', Argument) then
@@ -952,12 +956,12 @@ begin
   Result := True;
 end;
 
-{ $262.js is G2's host object (scripts/g2/harness, run from the repository root); the rest are the suite's }
+{ $262.js is G2's host object, compiled into the test262 host (G2.Test262 takes it by name); the rest are the
+  suite's }
 function TTest262App.HarnessFilePath(const AName: string): string;
 begin
   if AName = '$262.js' then
-    Result := ExpandFileName('scripts' + PathDelim + 'g2' + PathDelim +
-      'harness' + PathDelim + AName)
+    Result := AName
   else
     Result := IncludeTrailingPathDelimiter(FOptions.SuiteDir) + 'harness' +
       PathDelim + AName;
@@ -1069,6 +1073,9 @@ begin
     Desc := Name + ': ' + Msg
   else
     Desc := Msg;
+  { where a thrown error was made, after its first line (a diagnostic; the message stays the first line) }
+  if AOutcome.Site <> '' then
+    Desc := Desc + #10 + string(AOutcome.Site);
   if Kind = 'harness' then
   begin
     AStatus := toWrapperInfra;
@@ -1115,7 +1122,11 @@ begin
     end
     else
     begin
-      AMessage := 'expected ' + AExpectedErrorType + ', got ' + Kind + ' ' + Name;
+      { a thrown error is named as it is; another outcome (a parse or resolution error) with its phase }
+      if Kind = 'throw' then
+        AMessage := 'expected ' + AExpectedErrorType + ', got ' + Name
+      else
+        AMessage := 'expected ' + AExpectedErrorType + ', got ' + Name + ' in the ' + Kind + ' phase';
       AResultDiagnostic := Copy(Desc, 1, 300);
     end;
     Exit;
@@ -1180,7 +1191,8 @@ begin
       for I := 0 to HarnessNames.Count - 1 do
       begin
         Harness[I] := HarnessFilePath(HarnessNames[I]);
-        if not FileExists(Harness[I]) then
+        { ($262.js is compiled in) }
+        if (HarnessNames[I] <> '$262.js') and not FileExists(Harness[I]) then
           raise Exception.Create('Missing harness include "' +
             HarnessNames[I] + '": ' + Harness[I]);
       end;
@@ -1805,9 +1817,41 @@ begin
   Result := Totals.Run - Totals.Passed;
 end;
 
-{ --eval-host: stdin run as a Script (or with --source-type=module a module, from a temporary file in the working
-  directory, which its imports resolve against) after the $262.js harness, on the test262 host. What print printed
-  goes to stdout on every exit path, an uncaught error to stderr with exit code 1. }
+{ Whether Source's goal is Module (ADR 0140, as GocciaRunner detects an entry's): an import or export declaration,
+  or top-level await, parsed with test262's compatibility flags. Source that does not parse either way is a Script
+  here, for the run to report its error. }
+function SourceDetectsModule(const ASource: string): Boolean;
+var
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  Result := False;
+  Options := TGocciaSourcePipeline.DefaultOptions;
+  Options.Compatibility := [cfASI, cfVar, cfFunction, cfTraditionalFor, cfWhileLoops, cfLooseEquality,
+    cfNonStrictMode, cfArgumentsObject, cfLabel, cfForIn];
+  Options.SourceType := stDetect;
+  Lines := CreateFileTextLines(ASource);
+  try
+    try
+      Parsed := TGocciaSourcePipeline.Parse(Lines, '<test262-host-eval>', Options);
+      try
+        Result := Parsed.SourceType = stModule;
+      finally
+        Parsed.Free;
+      end;
+    except
+      on Exception do
+        Result := False;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+{ --eval-host: stdin run after the $262.js harness on the test262 host, as a Script or a module (--source-type, else
+  the source's own goal); a module from a temporary file in the working directory, which its imports resolve
+  against. What print printed goes to stdout on every exit path, an uncaught error to stderr with exit code 1. }
 function TTest262App.RunHostEval: Integer;
 var
   Source, Line: string;
@@ -1822,6 +1866,8 @@ begin
     Source := Source + Line + #10;
   end;
   HostPath := HarnessFilePath('$262.js');
+  if not FOptions.HostEvalSourceTypeSet then
+    FOptions.HostEvalModule := SourceDetectsModule(Source);
   if FOptions.HostEvalModule then
     ProbePath := IncludeTrailingPathDelimiter(GetCurrentDir) +
       Format('.goccia-test262-host-eval-%d.mjs', [GetProcessID])

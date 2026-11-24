@@ -31,7 +31,7 @@ Largest performance gaps: generators (lazy-collections 0.67), float arithmetic o
 |---|---|
 | `source/g2/` | the engine: `G2.Core` (values, cells, shapes, GC), `G2.Compiler`, `G2.Bytecode`, `G2.VM`, `G2.ObjModel` and the built-in units; `g2.dpr` is the command-line host |
 | `source/g2/prelude/` | built-ins written in JavaScript (RegExp's spec layer, Set methods, iterator helpers, disposal, base64); compiled at start-up, snapshotted into the binary by the build |
-| `scripts/g2/` | build, gate, gcstress and wall-clock scripts; `run262.py` is the contract-4 test262 runner, `harness/$262.js` its host object |
+| `scripts/g2/` | build, gate, gcstress and wall-clock scripts; `run262.py` is the contract-4 test262 runner (its host object, `$262.js`, is `source/g2/prelude/test262host.js`) |
 | `docs/g2/` | this file and [design.md](design.md) |
 
 ## Build
@@ -402,8 +402,8 @@ sections of `scripts/test-cli-apps.ts` pass against the G2 runner and bundler.
 
 `./build.pas g2test262runner` builds `build/g2/GocciaTest262Runner` from `source/app/GocciaTest262RunnerG2.dpr`:
 the old runner's options, discovery, sharding, run modes, JSON report and per-test profiles (`--profile-dir`), on
-G2's test262 host (`G2.Test262`, which `g2 --test262` also runs). Run it from the repository root: `$262.js` is
-`scripts/g2/harness/$262.js`. Each run is a forked process with a fresh engine, killed at `--timeout` (G2's
+G2's test262 host (`G2.Test262`, which `g2 --test262` also runs). `$262.js`, the host object, is compiled in
+(`source/g2/prelude/test262host.js`), so the runner works from any directory. Each run is a forked process with a fresh engine, killed at `--timeout` (G2's
 test262 host has no cooperative timeout) and graded as `scripts/g2/run262.py` grades it; `--max-memory` is the
 child's heap limit. Its statuses match `run262.py`'s for every run of the suite. `--eval-host` runs stdin after
 `$262.js`, so a probe reaches the hooks as `$262`; the old runner's probes read its own `Goccia.test262` object,

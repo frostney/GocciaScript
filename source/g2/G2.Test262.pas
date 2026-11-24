@@ -1,6 +1,6 @@
 unit G2.Test262;
 { test262's host on G2, under GocciaScript's grading contract 4 (docs/test262.md): the hidden G2Host object that
-  scripts/g2/harness/$262.js turns into $262 (evalScript, gc, detachArrayBuffer, createRealm, IsHTMLDDA,
+  $262.js (source/g2/prelude/test262host.js, compiled in) turns into $262 (evalScript, gc, detachArrayBuffer, createRealm, IsHTMLDDA,
   AbstractModuleSource, the agent API), and one test run in this process. Each harness file runs as its own
   non-strict global Script in one realm, then the test file: a Script, prefixed with '"use strict";' and a newline
   in a strict run, or a module. GocciaTest262Runner (G2) forks a process per run and calls RunTest262Case in it;
@@ -18,6 +18,8 @@ type
     Name its class) }
   TG2T262Outcome = record
     Kind, Name, Message, FileName: UnicodeString;
+    { a thrown error's provenance, "    at source:line:column" where it was made, or '' }
+    Site: UnicodeString;
   end;
 
 { the hidden G2Host object of the running realm }
@@ -40,6 +42,8 @@ implementation
 uses
   Classes, SysUtils, G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Eval, G2.Promise, G2.Atomics, G2.Agent,
   G2.Engine, G2.TypedArrays, G2.Modules, G2.Builtins;
+
+{$I G2.Test262Host.inc}
 
 threadvar
   PrintBuf: UnicodeString;   { (per thread: a runner without fork runs cases on several threads) }
@@ -243,7 +247,7 @@ type
     O: TG2T262Outcome;
   end;
 
-procedure Done(const Kind, Name, Msg, F: UnicodeString);
+procedure Done(const Kind, Name, Msg, F: UnicodeString; const Site: UnicodeString = '');
 var E: ET262Outcome;
 begin
   E := ET262Outcome.Create('test262 outcome');
@@ -251,14 +255,16 @@ begin
   E.O.Name := Name;
   E.O.Message := Copy(Msg, 1, 400);
   E.O.FileName := F;
+  E.O.Site := Site;
   raise E;
 end;
 
 { the escaped value E's constructor name (data properties only) and message }
 procedure Thrown(E: TValue; const Kind: UnicodeString);
-var C, N, M, S: TValue; Name, Msg: UnicodeString;
+var C, N, M, S: TValue; Name, Msg, Site: UnicodeString;
 begin
-  Name := ''; Msg := '';
+  Name := ''; Msg := ''; Site := '';
+  if not ErrorStackProvenance(E, Site) then Site := '';
   if IsObject(E) then
   begin
     if DataProp(E, AtomConstructor, C) and IsObject(C) then
@@ -278,7 +284,7 @@ begin
     Pending := VUndefined;
     if ToStringV(E, S) and IsString(S) then Msg := StrToUnicode(StrOf(S));
   end;
-  Done(Kind, Name, Msg, '');
+  Done(Kind, Name, Msg, '', Site);
 end;
 
 procedure RunCase(const Harness: array of string; const TestFile: string; Strict, IsModule: Boolean);
@@ -286,8 +292,14 @@ var I, Phase: Integer; Src, Err: UnicodeString; T: PFuncTemplate; H: TValue;
 begin
   for I := 0 to High(Harness) do
   begin
-    if not ReadTest262Source(Harness[I], Src) then Done('harness', '', 'cannot read', UnicodeString(Harness[I]));
-    if ExtractFileName(Harness[I]) = '$262.js' then HostHarnessSrc := Src;
+    { $262.js is the host's own, compiled in (G2.Test262Host.inc); the others are the suite's files }
+    if ExtractFileName(Harness[I]) = '$262.js' then
+    begin
+      Src := Test262HostSrc;
+      HostHarnessSrc := Src;
+    end
+    else if not ReadTest262Source(Harness[I], Src) then
+      Done('harness', '', 'cannot read', UnicodeString(Harness[I]));
     if not ParseAndCompile(Src, UnicodeString(Harness[I]), False, T, Err, 1) then
       Done('harness', '', Err, UnicodeString(Harness[I]));
     if not (RunScript(T) and RunMicrotasks) then

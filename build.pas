@@ -28,7 +28,7 @@ const
     'g2benchrunner', 'g2bundler', 'g2test262runner', 'g2fuzzharness', 'g2loaderbare');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
-  G2_PRELUDES: array[0..22, 0..2] of string = (
+  G2_PRELUDES: array[0..23, 0..2] of string = (
     ('builtins5.js', 'G2.Builtins5.inc', 'Builtins5Src'),
     ('disposal.js', 'G2.Disposal.inc', 'DisposalSrc'),
     ('iterhelpers.js', 'G2.IterHelpers.inc', 'IterHelpersSrc'),
@@ -51,7 +51,8 @@ const
     ('asynchooks.js', 'G2.AsyncHooksPrelude.inc', 'AsyncHooksSrc'),
     ('events.js', 'G2.EventsPrelude.inc', 'EventsSrc'),
     ('timers.js', 'G2.TimersPrelude.inc', 'TimersSrc'),
-    ('sandbox.js', 'G2.SandboxPrelude.inc', 'SandboxSrc'));
+    ('sandbox.js', 'G2.SandboxPrelude.inc', 'SandboxSrc'),
+    ('test262host.js', 'G2.Test262Host.inc', 'Test262HostSrc'));
 
 var
   I: Integer;

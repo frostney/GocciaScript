@@ -383,10 +383,12 @@ threadvar
 function ThrowError(const Kind, Msg: UnicodeString): Boolean;
 function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
-{ gives the error E (just made) its stack property when the profile wants stack traces }
+{ gives the error E (just made) its stack property when the profile wants stack traces; otherwise (the
+  conformance host) only its provenance, the site it was made at }
 procedure AttachStack(E: TValue);
 { the stack an error object was made with (its .stack as the engine wrote it, whatever the script has done to the
-  property since): False for anything else, such as a plain object with a stack of its own }
+  property since), or under a profile without stack traces the line "    at source:line:column" of the site it was
+  made at: False for anything else, such as a plain object with a stack of its own }
 function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
 { an engine-made error's stack replaced by the engine (an import() failure takes its call's frames): the
   property and the provenance both; E rooted by the caller }
@@ -2100,9 +2102,23 @@ begin
 end;
 
 procedure AttachStack(E: TValue);
-var V: TValue; Name, Msg, Text: UnicodeString;
+var V: TValue; Name, Msg, Text, Src: UnicodeString; Line, Column: Integer;
 begin
-  if not ProfileStackTraces or not IsObject(E) then Exit;
+  if not IsObject(E) then Exit;
+  if not ProfileStackTraces then
+  begin
+    { the conformance host: no stack property (a test observes an error's own properties), only the provenance of
+      where the error was made, "    at source:line:column", for the host's diagnostics }
+    if (ObjOf(E)^.OKind = okError) and CallSiteNow(Src, Line, Column) then
+    begin
+      PushRoot(E);
+      PushRoot(StrFromUnicode('    at ' + Src + ':' + IntToStr(Line) + ':' + IntToStr(Column)));
+      ObjOf(RootAt(TempTop - 2))^.Aux2 := RootAt(TempTop - 1);
+      WriteBarrier(PCell(ObjOf(RootAt(TempTop - 2))), RootAt(TempTop - 1));
+      PopRoots(2);
+    end;
+    Exit;
+  end;
   { the first line as Error.prototype.toString would make it, from data properties only }
   Name := 'Error';
   if DataPropertyOf(ObjOf(E), AtomName, V) and IsString(V) then Name := StrToUnicode(StrOf(V));
@@ -2154,13 +2170,11 @@ begin
   PopRoots(2);
   AddProperty(O, AtomMessage, M, pfHidden);
   Result := MkPtr(O);
-  if ProfileStackTraces then
-  begin
-    PushRoot(Result);
-    AttachStack(Result);
-    Result := RootAt(TempTop - 1);
-    PopRoots(1);
-  end;
+  { the stack, or under a profile without stack traces the site it was made at (AttachStack) }
+  PushRoot(Result);
+  AttachStack(Result);
+  Result := RootAt(TempTop - 1);
+  PopRoots(1);
 end;
 
 function ThrowError(const Kind, Msg: UnicodeString): Boolean;
