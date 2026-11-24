@@ -1097,7 +1097,7 @@ begin
     else
     begin
       AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
-        Kind + ' ' + Name;
+        Name + ' in the ' + Kind + ' phase';
       AResultDiagnostic := Copy(Desc, 1, 300);
     end;
     Exit;
