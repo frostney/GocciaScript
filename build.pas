@@ -465,10 +465,64 @@ begin
     'targets' + DirectorySeparator + ATarget;
 end;
 
+function RemoveCompiledArtifacts(const ADirectory: string): Integer; forward;
+
+const
+  COMPILER_STAMP = 'compiler-identity.txt';
+
+var
+  GCompilerIdentity: string = '';
+
+{ The selected compiler's build identity and date (fpc -iWD, such as
+  "3.3.1+7 2026/11/24"), read once. FPC writes the same unit version for
+  every build of one release, so it reuses units another build of it made. }
+function CompilerIdentity: string;
+begin
+  if GCompilerIdentity = '' then
+  begin
+    if not RunCommand('fpc', ['-iWD'], GCompilerIdentity, [poRunIdle]) then
+      GCompilerIdentity := '';
+    GCompilerIdentity := Trim(GCompilerIdentity);
+    if GCompilerIdentity = '' then
+      GCompilerIdentity := 'unknown';
+  end;
+  Result := GCompilerIdentity;
+end;
+
+{ Creates ADirectory when missing. A directory whose units another compiler
+  build made, or that has no stamp, is emptied first: a switch between two
+  builds of one FPC release (3.3.1+6 to 3.3.1+7) otherwise links the old
+  build's objects, miscompiles and all. }
 function EnsureUnitOutputDirectory(const ADirectory: string): string;
+var
+  Stamp: TStringList;
+  StampPath, Previous: string;
 begin
   if not DirectoryExists(ADirectory) then
     ForceDirectories(ADirectory);
+  StampPath := IncludeTrailingPathDelimiter(ADirectory) + COMPILER_STAMP;
+  Stamp := TStringList.Create;
+  try
+    Previous := '';
+    if FileExists(StampPath) then
+    begin
+      Stamp.LoadFromFile(StampPath);
+      Previous := Trim(Stamp.Text);
+    end;
+    if Previous <> CompilerIdentity then
+    begin
+      if RemoveCompiledArtifacts(ADirectory) > 0 then
+        if Previous = '' then
+          WriteLn('No compiler stamp in ', ADirectory, ': compiling its units again with ', CompilerIdentity)
+        else
+          WriteLn('Units in ', ADirectory, ' were made by FPC ', Previous, ': compiling them again with ',
+            CompilerIdentity);
+      Stamp.Text := CompilerIdentity;
+      Stamp.SaveToFile(StampPath);
+    end;
+  finally
+    Stamp.Free;
+  end;
   Result := ADirectory;
 end;
 
@@ -961,8 +1015,8 @@ var
 begin
   if not RunCommand('fpc', ['-iV'], Version) or (CompareStr(Trim(Version), '3.3.1') < 0) then
   begin
-    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later; CI uses 3.3.1+6); found ', Trim(Version));
-    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+6)"');
+    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later; CI uses 3.3.1+7); found ', Trim(Version));
+    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+7)"');
     Halt(1);
   end;
 end;

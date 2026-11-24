@@ -129,6 +129,15 @@ targets from empty unit directories on purpose:
 ./build.pas --clean tests --test=TimingUtils
 ```
 
+Switching compilers needs no `--clean` either. FPC gives every build of one
+release the same unit version, so it would reuse the units another build of
+that release compiled (3.3.1+6's units under 3.3.1+7, miscompiles included).
+Each unit directory holds `compiler-identity.txt`, the `fpc -iWD` output of
+the compiler that filled it (such as `3.3.1+7 2026/11/24`). When the selected
+compiler's differs, or the file is missing, `build.pas` empties that directory
+first and prints `Units in <directory> were made by FPC <old>: compiling them
+again with <new>`.
+
 ### Website Checks Are Inert Without Its Dependencies
 
 The website has its own dependency tree, and its checks fail to load rather
