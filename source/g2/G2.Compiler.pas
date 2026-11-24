@@ -6140,7 +6140,19 @@ begin
 end;
 
 procedure TCompiler.CompileBinary(E: TGocciaBinaryExpression; Dest: Integer);
-var Save, L, R: Integer; J: Integer; Op: TOp; V: TValue;
+var Save, L, R: Integer; J: Integer; Op: TOp; V: TValue; JoinLine: Integer;
+  { a short circuit's join, compiled for coverage with the right operand ending on another line than the left one:
+    what follows takes no line, so line coverage neither counts the right operand's line when the jump skipped it nor
+    counts the left operand's line again after the right one ran }
+  procedure ShortCircuit(JumpOp: TOp);
+  begin
+    ExprTo(E.Left, Dest);
+    JoinLine := FS.CurLine;
+    J := EmitJ(JumpOp, Dest, 0);
+    ExprTo(E.Right, Dest);
+    PatchHere(J);
+    if CompileCoverage and (FS.CurLine <> JoinLine) then FS.CurLine := 0;
+  end;
 begin
   NoBareYield(E.Left);
   NoBareYield(E.Right);
@@ -6166,30 +6178,9 @@ begin
     Exit;
   end;
   case E.Operator of
-    gttAnd:
-      begin
-        ExprTo(E.Left, Dest);
-        J := EmitJ(opJF, Dest, 0);
-        ExprTo(E.Right, Dest);
-        PatchHere(J);
-        Exit;
-      end;
-    gttOr:
-      begin
-        ExprTo(E.Left, Dest);
-        J := EmitJ(opJT, Dest, 0);
-        ExprTo(E.Right, Dest);
-        PatchHere(J);
-        Exit;
-      end;
-    gttNullishCoalescing:
-      begin
-        ExprTo(E.Left, Dest);
-        J := EmitJ(opJNotNullish, Dest, 0);
-        ExprTo(E.Right, Dest);
-        PatchHere(J);
-        Exit;
-      end;
+    gttAnd: begin ShortCircuit(opJF); Exit; end;
+    gttOr: begin ShortCircuit(opJT); Exit; end;
+    gttNullishCoalescing: begin ShortCircuit(opJNotNullish); Exit; end;
   end;
   Save := FS.FreeReg;
   Op := BinOpFor(E.Operator);
