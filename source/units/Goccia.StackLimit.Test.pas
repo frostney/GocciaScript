@@ -502,7 +502,12 @@ begin
     Expect<Boolean>(Probe.Limit = NativeUInt(Stack) + PROTECTED_BYTES +
       (STACK_BYTES - PROTECTED_BYTES) div 4).ToBe(True);
   finally
-    Fpmunmap(Mapping, 3 * STACK_BYTES);
+    // The mapping stays: glibc keeps the static TLS of a thread on a stack
+    // its caller supplies inside that stack, and with FPC 3.3.1's native
+    // threadvars the RTL's heap keeps its per-thread state there, which it
+    // reaches again when the process exits (the probe thread is not an RTL
+    // thread, so nothing hands that state back when it ends).
+    Fpmprotect(Stack, PROTECTED_BYTES, PROT_READ or PROT_WRITE);
   end;
 end;
 {$ENDIF}
