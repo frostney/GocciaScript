@@ -1453,7 +1453,12 @@ begin
     Observed := VUndefined;
     AddRoot(@Observed);
   end;
-  if not IsPtr(Observed) then Observed := MkPtr(NewArray(0, 8));
+  if not IsPtr(Observed) then
+  begin
+    Observed := MkPtr(NewArray(0, 8));
+    { the allocation can move a young V: read it again from its rooted argument slot }
+    V := Args[1];
+  end;
   { the observed values stay rooted, so a value seen before is in the array: compare by identity there }
   A := ObjOf(Observed);
   if A^.Elements <> nil then
