@@ -4768,6 +4768,56 @@ begin
   Result := True;
 end;
 
+{ ---------------- proper tail calls (15.10, 10.4.1.1 PrepareForTailCall) ----------------
+  The compiler sets bit 41 of an opCall or opCallV in tail position. Once the frames are TAIL_FLOOR deep (half a
+  smaller --max-stack bound), such a call of a bytecode function replaces the calling frame instead of pushing on
+  it: the frames a tail-call chain leaves stay bounded, while shallow calls keep their frames (and the stack traces
+  that name them) and compiled code keeps its own calls. }
+const
+  TAIL_FLOOR = 1024;
+
+function TailFloorNow: Integer; inline;
+begin
+  if FrameLimitBase - 3 < 2 * TAIL_FLOOR then Result := (FrameLimitBase - 3) div 2 else Result := TAIL_FLOOR;
+end;
+
+{ whether a tail call of F may take the calling frame's place: a bytecode function, not a class constructor (which
+  throws), not a generator or an async function (their calls return at once), in the running realm }
+function XTailCallOk(F: TValue): Boolean;
+var O: PObj; T: PFuncTemplate;
+begin
+  Result := False;
+  if not IsObject(F) then Exit;
+  O := ObjOf(F);
+  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
+  T := PFuncTemplate(O^.Native);
+  if T^.IsAsync or T^.IsGenerator then Exit;
+  if MultiRealmAny and (FnRealm(O) <> CurRealm) then Exit;
+  Result := True;
+end;
+
+{ frame Fr's tail call (opCall A, Argc arguments, its this already in R[A + 1]) of the function in R[A]: Fr closes
+  its upvalues and gives up its place, and the callee's frame is pushed where Fr's was, with Fr's return index and
+  kind, its this and arguments moved down to Fr's base. False: a throw pending, with Fr gone when the push failed }
+function XTailCall(Fr: PFrame; A, Argc: Integer): Boolean; noinline;
+var Base, RetIdx: Integer; Kind: Byte; FV: TValue; T: PFuncTemplate;
+begin
+  Base := Fr^.Base;
+  T := PFuncTemplate(ObjOf(VStack[Base + A])^.Native);
+  { a lazy callee is compiled while this frame still holds it (a collection in its compile moves it) }
+  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
+  FV := VStack[Base + A];
+  CloseUpvals(Base);
+  while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
+  RetIdx := Fr^.RetIdx;
+  Kind := Fr^.Kind;
+  Move(VStack[Base + A + 1], VStack[Base], (Argc + 1) * SizeOf(TValue));
+  Dec(FrameTop);
+  { (nothing collects before the push takes the function: PushBytecodeFrameFull roots it before it allocates) }
+  StackTop := Base + 1 + Argc;
+  Result := PushBytecodeFrame(ObjOf(FV), VStack[Base], @VStack[Base + 1], Argc, RetIdx, Kind, VUndefined);
+end;
+
 { ---------------- the interpreter ---------------- }
 
 function ICGetEntry(E: PICEntry; O: PObj; var Res: TValue): Boolean;
@@ -7838,6 +7888,8 @@ LSetPropSlow:
             not a class constructor; the callee then runs here }
           VA := R[A];
           if not IsObject(VA) or MultiRealmAny then goto LBail;
+          { a call in tail position once the frames are deep: Execute's, which reuses the frame }
+          if ((PByte(IP)[-3] and 2) <> 0) and (FrameTop > TailFloorNow) then goto LBail;
           O := ObjOf(VA);
           Argc := PWord(PByte(IP) - 5)^;
           if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
@@ -9343,6 +9395,14 @@ LReload:
           else
             Argc := (I shr 24) and $FFFF;
           Fr^.PC := PC;
+          { a call in tail position once the frames are deep: this frame gives way to the callee's (a construction's
+            frame keeps its own, which checks the result) }
+          if ((I shr 41) and 1 <> 0) and (FrameTop > TailFloorNow) and ((Fr^.Kind = 0) or (Fr^.Kind = 2)) and
+             ((TOp(I and $FF) = opCall) or (TOp(I and $FF) = opCallV)) and XTailCallOk(VA) then
+          begin
+            if not XTailCall(Fr, A, Argc) then goto LThrow;
+            goto LReload;
+          end;
           if not IsCallable(VA) then
           begin
             XThrowNotFunction(Tpl, PC - 1, A, (TOp(I and $FF) = opNew) or (TOp(I and $FF) = opNewV), VA, R[A + 1]);

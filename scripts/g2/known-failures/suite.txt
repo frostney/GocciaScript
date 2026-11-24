@@ -13,7 +13,8 @@
 1 tests/language/expressions/stack-growth-reentry/non-strict/global-delete.js
 1 tests/language/for-of/for-await-of-close-timing.js
 1 tests/language/function-keyword/class-computed-field-yield.js
-2 tests/language/functions/concise-arrow-tail-calls.js
+# G2's default bound is 200,000 nested calls, not GocciaScript's 2,200: a 100,000-deep non-tail recursion completes
+1 tests/language/functions/concise-arrow-tail-calls.js
 6 tests/language/functions/stack-depth-limit.js
 6 tests/language/modules/imported-module-stack-depth.js
 1 tests/language/modules/source-phase-experimental/dynamic-import-source.js

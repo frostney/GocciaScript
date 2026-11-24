@@ -209,13 +209,14 @@ begin
       opCall, opNew, opSuperCall:
         begin
           Regs(A, B + 2);
-          OneOf(C, 0, 1, 'call flag');
+          { a call's flags: bit 0 its this is undefined, bit 1 it is in tail position }
+          if Op = opCall then OneOf(C, 0, 3, 'call flag') else OneOf(C, 0, 1, 'call flag');
           if Op <> opCall then Reg(0);
         end;
       opCallV, opNewV, opSuperCallV:
         begin
           Regs(A, 3);
-          OneOf(C, 0, 1, 'call flag');
+          if Op = opCallV then OneOf(C, 0, 3, 'call flag') else OneOf(C, 0, 1, 'call flag');
           if Op = opSuperCallV then Reg(0);
         end;
       opNewObj: begin Reg(A); OneOf(C, 0, MAX_NEWOBJ_HINT, 'object size hint'); end;

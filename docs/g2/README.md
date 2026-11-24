@@ -67,6 +67,18 @@ make its prelude snapshot, which holds the same bytes on every platform, then bu
 past its 32 KiB reach (patches 0131 to 0134). Without `fork` (Windows),
 GocciaTest262Runner runs each case on a thread of its own, bounded by the engine's deadline instead of a kill.
 
+### Proper tail calls
+
+A call in tail position (ES2026 §15.10.1 IsInTailPosition: strict code, not a generator or async function, no try
+block, `using` declaration or `for-of` loop still to act after it) gets bit 41 of its `opCall` or `opCallV`, set
+by `G2.Compiler` for a `return`'s value and a concise arrow body, through `?:`, `&&`, `||`, `??` and a comma
+expression's last operand (§15.10.2). Once the frames are 1,024 deep, or half a smaller `--max-stack` bound,
+such a call of a bytecode function replaces the calling frame (`XTailCall` in `G2.VM`): FastLoop hands it to
+Execute, and compiled code exits to the interpreter at it. A shallower one stays an ordinary call, so stack traces
+keep its frames and compiled code its own calls. A construction's frame, a native, bound or proxy callee, a
+generator or async callee, and another realm's function keep their frames
+([ADR 0187](../adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md)).
+
 ### Execution limits
 
 The host takes GocciaRunner's limits: `--timeout=` (500ms, 5s, 2m or milliseconds), `--max-instructions=N`,
@@ -421,8 +433,7 @@ GocciaScript's default resolver resolves it and, once it finds its file, fails w
 module content provider is configured` (`code` `ERR_MODULE_LOADING_UNSUPPORTED`). Without `--max-stack` the frame
 bound is G2's own, not the old loader's 10,000, since a bound keeps the JIT off. Against it, the Bare Loader sections
 of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass except
-three. G2 has no proper tail calls, so 100,000 nested strict tail calls under `--max-stack=1000` overflow. The two
-memory-budget sections test the old collector's allocation gate: G2 refuses at the next safe point
+two. The two memory-budget sections test the old collector's allocation gate: G2 refuses at the next safe point
 ([ADR 0185](../adr/0185-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
 nothing on G2.
 

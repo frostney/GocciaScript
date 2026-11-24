@@ -468,6 +468,11 @@ type
   TCompiler = class
     FS: TFuncState;
     SourceName: UnicodeString;
+    { the calls in tail position (15.10.1 IsInTailPosition) of the return values being compiled: their opCall gets
+      the tail bit (bit 41), which lets the VM reuse the frame. Each return's own calls are pushed on top and taken
+      off again once its value is compiled }
+    TailCalls: array of TObject;
+    TailCallCount: Integer;
     { the compile profile (--profile=compile, Goccia.Profiler.Compile; nil without one): the work each function's
       compile does, and its time, at the line and column the parser recorded it at (ProfLine, ProfCol: the next
       CompileFunction's node, -1 none) }
@@ -666,6 +671,9 @@ type
     procedure CompileSwitch(S: TGocciaSwitchStatement);
     procedure CompileTry(S: TGocciaTryStatement);
     procedure ClearDeadAtSuspension(Dest, Operand: Integer);
+    function TailEligible: Boolean;
+    procedure CollectTailCalls(E: TGocciaExpression);
+    function IsTailCall(N: TObject): Boolean;
     procedure CompileReturn(S: TGocciaReturnStatement);
     procedure CompileBreakContinue(IsBreak: Boolean; const Lbl: UnicodeString);
     procedure CompileClass(Def: TGocciaClassDefinition; Dest: Integer; const NameHint: UnicodeString = '');
@@ -1982,6 +1990,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames, BodyEnvParams: TStringList;
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
+  SavedTail: Integer;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -2474,8 +2483,12 @@ begin
     end
     else if Body is TGocciaExpression then
     begin
+      { a concise body's expression is a tail position as a return's is (15.10.1) }
       Ret := AllocReg;
+      SavedTail := TailCallCount;
+      if TailEligible then CollectTailCalls(TGocciaExpression(Body));
       ExprTo(TGocciaExpression(Body), Ret);
+      TailCallCount := SavedTail;
       Emit(Ins(opRet, Ret, 0, 0));
     end
     else
@@ -5095,8 +5108,61 @@ begin
   FreeTo(ExcReg);
 end;
 
+{ 15.10.1 IsInTailPosition, for a return here: strict code of a function that is not a generator or async, with no
+  try block, using declaration or for-of iterator that must act after the call (only a catch block without a
+  finally, or a finally block, is a tail position inside a try statement: those have left TryCount) }
+function TCompiler.TailEligible: Boolean;
+begin
+  Result := FS.Tpl^.IsStrict and not FS.Tpl^.IsGenerator and not FS.Tpl^.IsAsync and (FS.TryCount = 0) and
+    not FS.IsEvalOuter and not FS.IsLazyOuter and (FS.Parent <> nil);
+end;
+
+{ 15.10.2 HasCallInTailPosition: E's calls in tail position, through a conditional's branches, the right operand of
+  &&, || and ??, and a comma expression's last operand (the parser keeps no parentheses) }
+procedure TCompiler.CollectTailCalls(E: TGocciaExpression);
+var B: TGocciaBinaryExpression; Q: TGocciaSequenceExpression;
+begin
+  if E is TGocciaCallExpression then
+  begin
+    { super(...) and import(...) are not calls of a function value }
+    if TGocciaCallExpression(E).Callee is TGocciaSuperExpression then Exit;
+    if TailCallCount >= Length(TailCalls) then SetLength(TailCalls, TailCallCount * 2 + 8);
+    TailCalls[TailCallCount] := E;
+    Inc(TailCallCount);
+  end
+  else if E is TGocciaTaggedTemplateExpression then
+  begin
+    if TailCallCount >= Length(TailCalls) then SetLength(TailCalls, TailCallCount * 2 + 8);
+    TailCalls[TailCallCount] := E;
+    Inc(TailCallCount);
+  end
+  else if E is TGocciaConditionalExpression then
+  begin
+    CollectTailCalls(TGocciaConditionalExpression(E).Consequent);
+    CollectTailCalls(TGocciaConditionalExpression(E).Alternate);
+  end
+  else if E is TGocciaBinaryExpression then
+  begin
+    B := TGocciaBinaryExpression(E);
+    if B.Operator in [gttAnd, gttOr, gttNullishCoalescing] then CollectTailCalls(B.Right);
+  end
+  else if E is TGocciaSequenceExpression then
+  begin
+    Q := TGocciaSequenceExpression(E);
+    if Q.Expressions.Count > 0 then CollectTailCalls(Q.Expressions[Q.Expressions.Count - 1]);
+  end;
+end;
+
+function TCompiler.IsTailCall(N: TObject): Boolean;
+var I: Integer;
+begin
+  for I := TailCallCount - 1 downto 0 do
+    if TailCalls[I] = N then Exit(True);
+  Result := False;
+end;
+
 procedure TCompiler.CompileReturn(S: TGocciaReturnStatement);
-var R: Integer;
+var R, SavedTail: Integer;
 begin
   if S.HasExpression and Assigned(S.Value) and FS.Tpl^.IsAsync and FS.Tpl^.IsGenerator then
   begin
@@ -5115,7 +5181,10 @@ begin
     begin
       { no finally can run between evaluating and returning: a variable's register is returned as is }
       R := FS.FreeReg;
+      SavedTail := TailCallCount;
+      if TailEligible then CollectTailCalls(S.Value);
       Emit(Ins(opRet, ExprAny(S.Value), 0, 0));
+      TailCallCount := SavedTail;
       FreeTo(R);
       Exit;
     end;
@@ -6227,7 +6296,7 @@ end;
 procedure TCompiler.CompileCall(E: TGocciaCallExpression; Dest: Integer);
 var Base, Argc, K: Integer; M: TGocciaMemberExpression; Spread: Boolean; J: Integer; NullJ: Integer; UndefThis: Boolean;
   Reuse: Boolean; EvalHint, EvalDescConst: Integer; F: TFuncState; Callee: TGocciaExpression; ParenChain: Boolean;
-  IsLink: Boolean; SavedJ: TJumpList;
+  IsLink: Boolean; SavedJ: TJumpList; Tail: Boolean;
 begin
   IsLink := ChainBegin(SavedJ);
   UndefThis := False;
@@ -6392,6 +6461,8 @@ begin
   end;
   if E.Optional then ChainAdd(EmitJ(opJNullish, Base, 0));
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
+  { a call in tail position: bit 41 (a direct eval's PerformEval is no tail call, 13.3.6.1) }
+  Tail := (EvalHint = 0) and IsTailCall(E);
   if EvalHint > 0 then
   begin
     Emit(Ins(opEvalHint, EvalHint - 1, 0, EvalDescConst));
@@ -6399,8 +6470,8 @@ begin
   end;
   NoteCallPosition(E.Callee, E.Optional);
   RecordCallSite(E.Callee);
-  if Spread then Emit(Ins(opCallV, Base, 0, 0) or (QWord(Ord(UndefThis)) shl 40))
-  else Emit(Ins(opCall, Base, Argc, 0) or (QWord(Ord(UndefThis)) shl 40));
+  if Spread then Emit(Ins(opCallV, Base, 0, 0) or (QWord(Ord(UndefThis)) shl 40) or (QWord(Ord(Tail)) shl 41))
+  else Emit(Ins(opCall, Base, Argc, 0) or (QWord(Ord(UndefThis)) shl 40) or (QWord(Ord(Tail)) shl 41));
   ChainEnd(IsLink, SavedJ, Base);
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
   if Reuse then FreeTo(Base + 1) else FreeTo(Base);
@@ -6981,7 +7052,7 @@ begin
   end;
   NotePosition(E.Tag, False);
   RecordCallSite(E.Tag);
-  Emit(Ins(opCall, Base, 1 + E.Expressions.Count, 0));
+  Emit(Ins(opCall, Base, 1 + E.Expressions.Count, 0) or (QWord(Ord(IsTailCall(E))) shl 41));
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
   FreeTo(Base);
 end;

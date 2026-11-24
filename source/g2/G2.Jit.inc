@@ -3084,6 +3084,14 @@ begin
       end;
     opCall:
       begin
+        { a call in tail position (bit 41) once the frames are TAIL_FLOOR deep: the interpreter's, which reuses the
+          frame (compiled code runs only without a --max-stack bound, whose floor is TAIL_FLOOR) }
+        if (I shr 41) and 1 <> 0 then
+        begin
+          Mov32RFs(jDX, JitFsFrameTop);
+          AluRI(7, jDX, TAIL_FLOOR, False);
+          JccExit(ccG, PC);
+        end;
         { a compiled function's JitEnter, called here: the callee an object, a function, not a class constructor,
           its template's JitEnter set. Returned (-2): StackTop this frame's again. Anything else cold: JitEnter
           could not (-3) or the callee's other function kinds, the call stub's; the callee stopped part way or
