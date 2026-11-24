@@ -2,8 +2,6 @@
 # scripts/g2/check-known-failures.py fails a run where a file not listed fails or a listed file fails more;
 # it reports a listed file that fails fewer, so this list only shrinks. Format: COUNT PATH.
 1 tests/built-ins/Date/error-stack.js
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRange.js
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRangeToParts.js
 1 tests/built-ins/ShadowRealm/timer-realm-isolation.js
 3 tests/language/classes/deep-implicit-constructor-chain.js
 17 tests/language/explicit-resource-management/await-using-dispose-timing.js
