@@ -237,9 +237,10 @@ describe("exponentiation with exponent -1", () => {
     expect((-7390256613.693091) ** -1).toBe(-1.35313298613629e-10);
   });
 
-  // A division rounds 7e307's reciprocal twice on x87, to
+  // Reciprocals that are subnormal or, for 2 ** 1022, the smallest normal. A
+  // division rounds 7e307's reciprocal twice on x87, to
   // 1.4285714285714284e-308.
-  const subnormals = [
+  const smallReciprocals = [
     [7e307, 1.4285714285714287e-308],
     [-7e307, -1.4285714285714287e-308],
     [1e308, 1e-308],
@@ -247,7 +248,7 @@ describe("exponentiation with exponent -1", () => {
     [2 ** 1022, 2 ** -1022],
   ];
 
-  test.each(subnormals)("%s ** -1 rounds its subnormal reciprocal %s once", (x, expected) => {
+  test.each(smallReciprocals)("%s ** -1 rounds its reciprocal %s once", (x, expected) => {
     expect(power(x, -1)).toBe(expected);
   });
 
@@ -257,7 +258,7 @@ describe("exponentiation with exponent -1", () => {
   });
 
   test("NaN ** -1 is NaN", () => {
-    expect(power(NaN, -1)).toBeNaN();
+    expect(power(NaN, -1)).toBe(NaN);
   });
 
   test("±Infinity ** -1 is a zero of the same sign", () => {

@@ -126,7 +126,7 @@ describe("Math.pow precision", () => {
   });
 
   test("returns NaN for a NaN base with exponent -1", () => {
-    expect(Math.pow(NaN, -1)).toBeNaN();
+    expect(Math.pow(NaN, -1)).toBe(NaN);
   });
 
   test("returns -0 for a -Infinity base with exponent -1", () => {

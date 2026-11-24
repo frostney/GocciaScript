@@ -631,10 +631,11 @@ begin
   // rounded, or exactly 2^52 for 2^-1022.
   Mantissa := (ABits and FRACTION_MASK) or (UInt64(1) shl 52);
   Shift := 2149 - Integer((ABits shr 52) and EXPONENT_FIELD);
-  // Long division of 2^Shift by m, one bit at a time.
+  // Long division of 2^Shift by m, one bit at a time. m >= 2^52, so the
+  // first 51 bits of the quotient are zero and leave the remainder 2^51.
   Quotient := 0;
-  Remainder := 1;
-  for I := 1 to Shift do
+  Remainder := UInt64(1) shl 51;
+  for I := 52 to Shift do
   begin
     Remainder := Remainder shl 1;
     Quotient := Quotient shl 1;
@@ -737,10 +738,9 @@ begin
     Exit(CanonicalNaN);
 
   // ES2026 §6.1.6.1.3 step 13: implementation-approximated exponentiation.
-  // x * x, the square root and 1 / x are each one correctly rounded IEEE 754
-  // operation; V8 answers 2 and 0.5 with the first two. FinitePower is within
-  // 0.54 ULP and missed the correctly rounded 1 / x for 196 of 200,000
-  // sampled bases.
+  // V8 answers 2 and 0.5 with x * x and the square root. FinitePower is
+  // within 0.54 ULP and missed the correctly rounded 1 / x for 196 of 200,000
+  // sampled bases, so -1 is the reciprocal, rounded once on every target.
   if AExponent = 2.0 then
     Exit(ABase * ABase);
   if AExponent = 0.5 then
