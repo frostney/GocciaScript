@@ -179,16 +179,35 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests
-        run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
+        # The run exits nonzero for the known failures; the next step decides.
+        run: |
+          status=0
+          ./build/GocciaTestRunner -P tests --silent --no-progress \
+            --output=test-results.json || status=$?
+          echo "GocciaTestRunner exit status: $status"
+
+      - name: Check against the known failures
+        # A failure not on scripts/g2/known-failures fails the job; a listed one
+        # that now passes is reported. Windows runners name it python.
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" scripts/g2/check-known-failures.py suite test-results.json --platform x86_64-linux
 
       - name: Round-trip objects observed by the JavaScript suite
         timeout-minutes: 30
         run: |
+          # The run exits nonzero for the suite's known failures (checked in
+          # the step above); a value that does not round-trip fails here.
           status=0
           ./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
             --output=heap-snapshot-test-results.json 2> heap-snapshot-roundtrip.log || status=$?
-          cat heap-snapshot-roundtrip.log
-          exit "$status"
+          echo "GocciaTestRunner exit status: $status"
+          grep -E '^Heap snapshots:' heap-snapshot-roundtrip.log
+          if grep -q '^Heap snapshot failure' heap-snapshot-roundtrip.log; then
+            grep '^Heap snapshot failure' heap-snapshot-roundtrip.log | head -20
+            echo "::error::A value the suite observed did not round-trip through a heap snapshot"
+            exit 1
+          fi
 
       - name: Upload heap snapshot round-trip counts
         if: always()
@@ -1063,6 +1082,10 @@ jobs:
           path: test262-suite
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
 
       - name: Run test262 conformance suite
         continue-on-error: true

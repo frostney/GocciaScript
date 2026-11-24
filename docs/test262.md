@@ -552,3 +552,17 @@ standard CI run posts the per-category delta vs. the previous main baseline.
 Merge once the delta is acceptable.
 
 Manual bump: `bun scripts/test262-bump-pin.ts <40-hex-sha>`.
+
+### Corrections the pin lacks
+
+When an upstream test contradicts the current specification and a
+tc39/test262 pull request corrects it, `scripts/test262-patches/` holds that
+pull request's diff, named after it, and CI applies it to the checkout with
+`scripts/apply-test262-patches.sh test262-suite` before the run. Apply it to
+a local checkout the same way. The script fails when a patch no longer
+applies, which happens once the pin includes the pull request: delete the
+patch in the bump PR. The current patch is tc39/test262#5112, which brings
+`annexB/language/function-code/block-decl-func-skip-arguments.js` in line with
+ES2026 §10.2.11 FunctionDeclarationInstantiation: its Annex B step checks
+`parameterNames`, not `argumentsObjectNeeded`, so a block function named
+`arguments` is still hoisted.

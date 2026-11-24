@@ -78,6 +78,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
+
       - name: Build the engine and the test262 runner
         run: ./build.pas --prod g2 test262runner
 

@@ -1,20 +1,3 @@
 # GocciaTestRunner on G2: the test files that fail, and how many of their tests (a suite error counts as one).
 # scripts/g2/check-known-failures.py fails a run where a file not listed fails or a listed file fails more;
 # it reports a listed file that fails fewer, so this list only shrinks. Format: COUNT PATH.
-1 tests/built-ins/Date/error-stack.js
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRange.js
-2 tests/built-ins/Intl/DateTimeFormat/prototype/formatRangeToParts.js
-1 tests/built-ins/Intl/DateTimeFormat/prototype/formatToParts.js
-1 tests/built-ins/Intl/DisplayNames/prototype/of.js
-1 tests/built-ins/ShadowRealm/timer-realm-isolation.js
-3 tests/language/classes/deep-implicit-constructor-chain.js
-17 tests/language/explicit-resource-management/await-using-dispose-timing.js
-1 tests/language/explicit-resource-management/using-basic.js
-1 tests/language/expressions/stack-growth-reentry/non-strict/global-delete.js
-1 tests/language/for-of/for-await-of-close-timing.js
-1 tests/language/function-keyword/class-computed-field-yield.js
-# G2's default bound is 200,000 nested calls, not GocciaScript's 2,200: a 100,000-deep non-tail recursion completes
-1 tests/language/functions/concise-arrow-tail-calls.js
-6 tests/language/functions/stack-depth-limit.js
-6 tests/language/modules/imported-module-stack-depth.js
-1 tests/language/modules/source-phase-experimental/dynamic-import-source.js

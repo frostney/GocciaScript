@@ -124,6 +124,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
+
       - name: Run test262
         # --jobs=4: the runner's four vCPUs. --timeout=20s, as ci.yml's
         # test262 job: the deadline is wall-clock and four workers fill the
