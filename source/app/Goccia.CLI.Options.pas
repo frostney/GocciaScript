@@ -23,10 +23,9 @@ const
     'bytecode is the only execution mode, so drop the option';
   EXECUTION_MODE_REMOVED_CONFIG_HINT =
     'bytecode is the only execution mode, so drop the key';
-  { --max-stack's default as the help states it: the old engine's
-    (Goccia.StackLimit applies it); G2 counts to its own deepest bound
-    unless --max-stack is given }
-  DEFAULT_MAX_STACK_DEPTH = 2200;
+  { --max-stack's default as the help states it: the engine's own bound on
+    nested calls (FRAME_MAX in G2.VM), which 0 also selects }
+  DEFAULT_MAX_STACK_DEPTH = 200000;
 
 type
   TGocciaCompatibilityFlagDescriptor = record
@@ -778,7 +777,7 @@ begin
   FMaxInstructions := TCountOption.Create('max-instructions',
     'Maximum execution steps before aborting (0 = no limit)', LIMITS_GROUP);
   FMaxStack := TCountOption.Create('max-stack',
-    Format('Maximum call stack depth (default: %d; 0 = no limit)',
+    Format('Maximum call stack depth (default and 0: %d, the engine''s bound)',
       [DEFAULT_MAX_STACK_DEPTH]), LIMITS_GROUP);
   FMaxStack.Maximum := High(Integer);
   FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',

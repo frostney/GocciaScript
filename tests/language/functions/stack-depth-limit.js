@@ -127,15 +127,36 @@ test("closed numeric scalar recursion preserves the stack limit and trace", () =
   expect(caught.stack.includes("numeric")).toBe(true);
 });
 
-describe("the default limit allows exactly 2,200 nested calls", () => {
-  // The test runner's default --max-stack. The runner calls each test
-  // function itself, so the test function is not one of the nested calls.
-  const LIMIT = 2200;
+describe("the default limit allows 200,000 nested calls", () => {
+  // The engine counts frames from the entry's, and the testing library calls
+  // each test function from JavaScript, so a test function starts a few
+  // frames down. Each test therefore measures how deep a kind of call goes,
+  // through the same helper, and compares the kinds.
   const count = (n) => (n <= 1 ? 1 : count(n - 1) + 1);
+  // The deepest n for which run(n) completes, by bisection.
+  const maxDepth = (run) => {
+    let low = 1;
+    let high = 400000;
+    for (const _ of Array.from({ length: 40 })) {
+      if (low >= high) break;
+      const middle = Math.ceil((low + high) / 2);
+      let completed = true;
+      try {
+        run(middle);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        completed = false;
+      }
+      if (completed) low = middle;
+      else high = middle - 1;
+    }
+    return low;
+  };
 
-  test("plain calls", () => {
-    expect(count(LIMIT)).toBe(LIMIT);
-    expect(() => count(LIMIT + 1)).toThrow(RangeError);
+  test("plain calls reach nearly 200,000 frames, and no further", () => {
+    const depth = maxDepth(count);
+    expect(depth > 199900).toBe(true);
+    expect(depth <= 200000).toBe(true);
   });
 
   test("method calls", () => {
@@ -144,45 +165,39 @@ describe("the default limit allows exactly 2,200 nested calls", () => {
         return n <= 1 ? 1 : this.count(n - 1) + 1;
       },
     };
-    expect(counter.count(LIMIT)).toBe(LIMIT);
-    expect(() => counter.count(LIMIT + 1)).toThrow(RangeError);
+    // The arrow that calls the method is one of the nested calls.
+    expect(maxDepth((n) => counter.count(n))).toBe(maxDepth(count) - 1);
   });
 
   test("closed numeric self-calls", () => {
-    // The outer arrow is the first call. Called with a number literal,
-    // numeric's calls to itself compile to OP_CALL_SELF_NUM in bytecode.
-    const below = () => {
+    // The outer arrow is the first call; numeric's calls to itself are
+    // the rest.
+    const outer = (m) => {
       const numeric = (k) => (k <= 1 ? k : numeric(k - 1) + 1);
-      return numeric(2199) + 1;
+      return numeric(m - 1) + 1;
     };
-    const above = () => {
-      const numeric = (k) => (k <= 1 ? k : numeric(k - 1) + 1);
-      return numeric(2200) + 1;
-    };
-    expect(below()).toBe(LIMIT);
-    expect(() => above()).toThrow(RangeError);
+    expect(maxDepth(outer)).toBe(maxDepth(count));
   });
 
   test("calls from a native callback", () => {
-    // map and the callback it calls count as one call between them.
-    expect([LIMIT].map(count)).toEqual([LIMIT]);
-    expect(() => [LIMIT + 1].map(count)).toThrow(RangeError);
+    // The arrow is one call; map and the callback it calls count as one.
+    expect(maxDepth((n) => [n].map(count))).toBe(maxDepth(count) - 1);
   });
 
   test("calls from a generator", () => {
-    // next() is the first call.
     const source = {
       *values(n) {
         yield count(n);
       },
     };
-    expect(source.values(LIMIT - 1).next().value).toBe(LIMIT - 1);
-    expect(() => source.values(LIMIT).next()).toThrow(RangeError);
+    // The arrow and next() are one call each.
+    expect(maxDepth((n) => source.values(n).next())).toBe(maxDepth(count) - 2);
   });
 
   test("calls after an await", async () => {
     await Promise.resolve();
-    expect(count(LIMIT)).toBe(LIMIT);
-    expect(() => count(LIMIT + 1)).toThrow(RangeError);
+    const depth = maxDepth(count);
+    expect(depth > 199900).toBe(true);
+    expect(depth <= 200000).toBe(true);
   });
 });

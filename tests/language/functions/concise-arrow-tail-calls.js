@@ -6,10 +6,10 @@ features: [arrow-function, tail-call-optimization]
 // ES2026 §15.10.1 IsInTailPosition treats a ConciseBody like a FunctionBody,
 // and §15.10.2 HasCallInTailPosition places the call, both branches of a
 // conditional, the right operand of &&, || and ??, and the last operand of a
-// comma expression in tail position. The default stack limit allows far fewer
-// nested calls than these tests make.
+// comma expression in tail position. DEPTH is past the default bound of
+// 200,000 nested calls, so a call outside tail position overflows.
 
-const DEPTH = 100000;
+const DEPTH = 300000;
 
 describe("concise arrow bodies call in tail position", () => {
   test("a plain call", () => {

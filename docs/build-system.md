@@ -243,7 +243,7 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 # Abort after a fixed number of bytecode instructions
 printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --max-instructions=1000000
 
-# Set call stack depth limit (default 2200; 0 = no depth limit, bytecode recursion then stops at --max-memory, ADR 0130)
+# Set call stack depth limit (default and 0: the engine's bound of 200,000 nested calls)
 ./build/GocciaRunner example.js --max-stack=5000
 ./build/GocciaRunner example.js --max-stack=0
 

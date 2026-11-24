@@ -5,8 +5,8 @@ features: [stack-depth-limit]
 
 // Constructors, async functions, generators, accessors and callbacks from
 // built-ins run on a native re-entry of the bytecode VM. Each one is a nested
-// call like any other, so the test runner's default limit of 2,200 nested
-// calls applies to them, not a fixed cap of 512 native re-entries.
+// call like any other, so the default bound of 200,000 nested calls applies
+// to them, not a fixed cap of 512 native re-entries.
 //
 // Recursion without end is checked by scripts/test-cli.ts.
 const DEPTH = 600;
