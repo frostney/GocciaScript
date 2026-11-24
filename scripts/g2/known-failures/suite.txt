@@ -16,7 +16,6 @@
 1 tests/language/function-keyword/class-computed-field-yield.js
 2 tests/language/functions/concise-arrow-tail-calls.js
 6 tests/language/functions/stack-depth-limit.js
-3 tests/language/global-code/reassigned-lexical-binding-releases-initializer.js
 1 tests/language/labels/labeled-break-releases-dead-registers.js
 6 tests/language/modules/imported-module-stack-depth.js
 1 tests/language/modules/source-phase-experimental/dynamic-import-source.js
@@ -28,7 +27,6 @@
 2 tests/language/async-await/awaited-container-released.js
 1 tests/language/async-await/rejection-reason-released.js
 2 tests/language/for-of/for-await-of-value-released.js
-5 tests/language/generators/yielded-value-released.js
 3 tests/language/modules/top-level-dropped-value-released.js
 5 tests/language/pattern-matching/matched-value-released.js
 # FPC 3.3.1-b6 at -O4 copies an array[0..0] field before a scan loop and indexes the copy, so the join

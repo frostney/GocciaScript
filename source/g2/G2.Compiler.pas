@@ -640,6 +640,7 @@ type
       Pat: TGocciaDestructuringPattern);
     procedure CompileSwitch(S: TGocciaSwitchStatement);
     procedure CompileTry(S: TGocciaTryStatement);
+    procedure ClearDeadAtSuspension(Dest, Operand: Integer);
     procedure CompileReturn(S: TGocciaReturnStatement);
     procedure CompileBreakContinue(IsBreak: Boolean; const Lbl: UnicodeString);
     procedure CompileClass(Def: TGocciaClassDefinition; Dest: Integer; const NameHint: UnicodeString = '');
@@ -4829,6 +4830,29 @@ begin
   PopScope;
 end;
 
+{ before a yield or an await: what is dead across it is cleared, so the suspended frame does not keep it alive.
+  Every let, const or class binding of this function not initialized yet holds the hole (its register may hold
+  what an exited block left there); Dest, which the resumption writes, is cleared too unless it is a variable
+  already initialized (a return() at the suspension runs finally blocks that may read it). Operand is the
+  suspension's own operand, read when it suspends. }
+procedure TCompiler.ClearDeadAtSuspension(Dest, Operand: Integer);
+var I, J: Integer; DestIsVar: Boolean;
+begin
+  DestIsVar := False;
+  for I := 0 to FS.ScopeCount - 1 do
+    for J := 0 to FS.Scopes[I].Count - 1 do
+      with FS.Scopes[I].Bindings[J] do
+        if (Reg < 0) or (Reg >= FS.FreeReg) then Continue
+        { a switch's case block never marks its declarations initialized: they may have run }
+        else if (Reg = Dest) and (not IsLexical or Initialized or FS.Scopes[I].IsSwitch) then DestIsVar := True
+        else if IsLexical and not Initialized and not FS.Scopes[I].IsSwitch and (Reg <> Operand) then
+        begin
+          Emit(Ins(opLoadHole, Reg, 0, 0));
+          if Reg = Dest then DestIsVar := True;
+        end;
+  if not DestIsVar and (Dest <> Operand) then Emit(Ins(opLoadUndef, Dest, 0, 0));
+end;
+
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
 var Outer, Inner, ExcReg, JEnd, JEnd2, R, J, K: Integer; HasFinally: Boolean; MissL: TJumpList; PN: TStringList;
 begin
@@ -7366,6 +7390,7 @@ begin
     begin
       { 15.5.5: an async generator's yield awaits its operand first }
       if FS.Tpl^.IsAsync then Emit(Ins(opAwait, R, R, 0));
+      ClearDeadAtSuspension(Dest, R);
       { live across the yield: what was allocated before its operand, and Dest. The operand's register is read
         before the frame suspends and not again, so the suspended frame does not keep what it yielded }
       Emit(Ins(opYield, Dest, R, Max(Save, Dest + 1)));
@@ -7381,6 +7406,7 @@ begin
     Save := FS.FreeReg;
     R := AllocReg;
     ExprTo(TGocciaAwaitExpression(E).Operand, R);
+    ClearDeadAtSuspension(Dest, R);
     { as a yield's: the awaited value's register is not live across the suspension }
     Emit(Ins(opAwait, Dest, R, Max(Save, Dest + 1)));
     FreeTo(Save);
@@ -7645,11 +7671,10 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
         Rg := DeclareLocal(Name, IsConst);
         Emit(Ins(opMov, Rg, ValReg, 0));
         { a pattern parameter's binding is initialized now: a later default of the same pattern reads it }
-        if ParamInTDZ(Name, Rg) then
-        begin
-          FS.ParamTDZ.Delete(FS.ParamTDZ.IndexOf(Name));
-          MarkInitialized(Name);
-        end;
+        if ParamInTDZ(Name, Rg) then FS.ParamTDZ.Delete(FS.ParamTDZ.IndexOf(Name));
+        { and any declared name: code compiled after this binds reads it without a TDZ check, and a suspension
+          later does not treat its register as unwritten (ClearDeadAtSuspension) }
+        MarkInitialized(Name);
       end
       else StoreIdent(Name, ValReg);
     end
