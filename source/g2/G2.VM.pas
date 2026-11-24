@@ -9043,9 +9043,19 @@ LReload:
       opLoadNewTarget: R[A] := Fr^.NewTarget;
       opDelGlobal:
         begin
+          { 13.5.1.2 delete of an identifier the global environment resolves: a declarative binding is not deleted;
+            otherwise ResolveBinding asks the global object HasProperty (9.1.1.2.1, through its prototype chain,
+            which can run guest code), a name it does not have is unresolvable (true), and one it has goes to
+            DeleteBinding (9.1.1.4.7), which deletes only an own property }
           Key := PStr(PtrOf(K[I shr 40]));
           if GLexFind(Key) >= 0 then R[A] := VFalse
-          else R[A] := MkBool(DeleteIfConfigurable(ObjOf(GlobalObj), Key));
+          else
+          begin
+            Fr^.PC := PC;
+            if not HasPropertyV(GlobalObj, Key, Bool) then goto LThrow;
+            if Bool then R[A] := MkBool(DeleteIfConfigurable(ObjOf(GlobalObj), Key))
+            else R[A] := VTrue;
+          end;
         end;
       opSetSuper:
         begin
