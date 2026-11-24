@@ -381,8 +381,9 @@
     return collationsList;
   }
   var timeZonesList = null;
-  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES, the codes the host ICU adds and names,
-  // and those of RECENT_CURRENCY_NAMES_EN
+  // ECMA-402 6.4 AvailableCanonicalCurrencies: the currencies Intl.DisplayNames names in the loaded data. The codes
+  // of CURRENCIES it names (a newer ICU drops some, ICU 79 CNX), the codes the host ICU adds and names, and those of
+  // RECENT_CURRENCY_NAMES_EN
   var currenciesList = null;
   // CLDR's English names of the newest ISO 4217 currencies, which the data of older ICUs (ICU 74) does not name; an
   // ICU that names them still wins
@@ -397,7 +398,9 @@
   }
   function availableCurrencies() {
     if (currenciesList === null) {
-      var list = listCopy(CURRENCIES), icu = intlOp(18);
+      var list = [], icu = intlOp(18);
+      for (var k = 0; k < CURRENCIES.length; k++)
+        if (currencyDisplayName("en", CURRENCIES[k], "long") !== undefined) append(list, CURRENCIES[k]);
       if (icu !== undefined)
         for (var i = 0; i < icu.length; i++) {
           var code = asciiUpper(icu[i]);
