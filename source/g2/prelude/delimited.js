@@ -186,7 +186,9 @@
       if (typeof text !== 'string') throw new TypeError(`${name}.parseChunk: first argument must be a string`);
       const o = readOptions(options, csv);
       const startArg = arguments.length >= 3 ? toInteger(start) : 0;
-      const end = arguments.length >= 4 ? clamp(toInteger(endOffset), text.length) : text.length;
+      // a negative end reads to the end of the text, as Goccia.CSV's ParseChunk takes it
+      const endArg = arguments.length >= 4 ? toInteger(endOffset) : text.length;
+      const end = endArg < 0 ? text.length : clamp(endArg, text.length);
       let from = clamp(startArg, text.length);
       if (from === 0 && text[0] === BOM) from = 1;
       const values = [];
