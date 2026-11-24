@@ -15,14 +15,18 @@ Endpoints:
   HEAD *              — 200 with Content-Length but no body
 
 Usage:
-  python3 scripts/fetch_test_server.py <port-file>
+  python3 scripts/fetch_test_server.py <port-file> [<ipv6-port-file>]
 
 Writes the assigned port to <port-file>, then serves until killed.
+When an IPv6 port file is supplied, also serves on ::1 if available.
 """
 
+import errno
 import http.server
 import json
+import socket
 import sys
+import threading
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -147,18 +151,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class IPv6HTTPServer(http.server.HTTPServer):
+    address_family = socket.AF_INET6
+
+
+def start_ipv6(port_file):
+    try:
+        server = IPv6HTTPServer(("::1", 0), Handler)
+    except OSError as exc:
+        if exc.errno not in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
+            raise
+        return None
+    with open(port_file, "w") as f:
+        f.write(str(server.server_address[1]))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 fetch_test_server.py <port-file>", file=sys.stderr)
         sys.exit(1)
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    ipv6 = start_ipv6(sys.argv[2]) if len(sys.argv) > 2 else None
     port = server.server_address[1]
 
     with open(sys.argv[1], "w") as f:
         f.write(str(port))
 
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if ipv6 is not None:
+            ipv6.shutdown()
+            ipv6.server_close()
 
 
 if __name__ == "__main__":

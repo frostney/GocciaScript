@@ -80,7 +80,7 @@ type
     procedure TestRejectsObfuscatedLoopbackForms;
     procedure TestResolvesLiteralAddressWithoutLookup;
     procedure TestResolvesLocalhostNamesToLoopback;
-    procedure TestResolvesAHostNameToDottedQuad;
+    procedure TestResolvesAHostNameToAnAddress;
     {$IFDEF UNIX}
     procedure TestResolvesAHostsFileName;
     {$ENDIF}
@@ -290,13 +290,12 @@ type
     procedure RequestReset;
   end;
 
-  { A host check that counts the checks a request makes (the name, then the
-    address, of every hop it connects or reuses a connection for). On the
-    third, the redirect hop's first, it calls OnRedirectHop; it refuses the
-    address check numbered DenyAddressCheck. }
+  { Observes each hop's name and address checks. On the second name check
+    it calls OnRedirectHop. It refuses the address check numbered
+    DenyAddressCheck. }
   THopGate = class
   public
-    Checks: Integer;
+    NameChecks: Integer;
     AddressChecks: Integer;
     DenyAddressCheck: Integer;
     CheckedAddresses: string;
@@ -358,10 +357,13 @@ function THopGate.Check(const AHost: string; const APort: Integer;
 begin
   AReason := '';
   Result := True;
-  Inc(Checks);
-  if (Checks = 3) and Assigned(OnRedirectHop) then
-    OnRedirectHop;
-  if AResolvedAddress <> '' then
+  if AResolvedAddress = '' then
+  begin
+    Inc(NameChecks);
+    if (NameChecks = 2) and Assigned(OnRedirectHop) then
+      OnRedirectHop;
+  end
+  else
   begin
     Inc(AddressChecks);
     CheckedAddresses := CheckedAddresses + AResolvedAddress + ';';
@@ -921,8 +923,8 @@ begin
     TestRejectsObfuscatedLoopbackForms);
   Test('Resolves localhost names to loopback without a lookup',
     TestResolvesLocalhostNamesToLoopback);
-  Test('Resolves a host name to a dotted-quad address',
-    TestResolvesAHostNameToDottedQuad);
+  Test('Resolves a host name to an IP address',
+    TestResolvesAHostNameToAnAddress);
   Test('Resolves literal address without lookup',
     TestResolvesLiteralAddressWithoutLookup);
   {$IFDEF UNIX}
@@ -2576,6 +2578,30 @@ begin
   Expect<Boolean>(IsPrivateNetworkAddress('fd00::1')).ToBe(True);
   Expect<Boolean>(IsPrivateNetworkAddress('fe80::1')).ToBe(True);
   Expect<Boolean>(IsPrivateNetworkAddress('[::1]')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::127.0.0.1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:7f00:1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:169.254.169.254')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fc00::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fdff:ffff::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('febf::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fec0::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('ff02::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b::192.168.0.1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b:1::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2002:a9fe:a9fe::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('100::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('100:0:0:1::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::4')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:2::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:4:113::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:10::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:40::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:db8::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('3fff:fff::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('3ffe::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('5f00::1')).ToBe(True);
 end;
 
 { The boundaries matter as much as the ranges: 172.15 and 172.32 sit just
@@ -2592,6 +2618,20 @@ begin
   Expect<Boolean>(IsPrivateNetworkAddress('100.63.255.255')).ToBe(False);
   Expect<Boolean>(IsPrivateNetworkAddress('100.128.0.1')).ToBe(False);
   Expect<Boolean>(IsPrivateNetworkAddress('2606:4700::1111')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:8.8.8.8')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b::8.8.8.8')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2002:0808:0808::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::2')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::3')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:3::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:4:112::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:2f::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:3f::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:200::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:db9::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2620:4f:8000::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('3fff:1000::1')).ToBe(False);
 end;
 
 { Shortened and hex IPv4 forms are the classic way to smuggle loopback past
@@ -2624,10 +2664,10 @@ end;
 
 { A name the platform resolver answers comes back as dotted-quad text. The
   Windows lane formats the octets itself; this is what exercises it. }
-procedure THTTPClientTests.TestResolvesAHostNameToDottedQuad;
+procedure THTTPClientTests.TestResolvesAHostNameToAnAddress;
 var
   Address, Name: string;
-  Dots, I: Integer;
+  IP: TNetworkAddress;
 begin
   {$IFDEF MSWINDOWS}
   Name := GetEnvironmentVariable('COMPUTERNAME');
@@ -2640,11 +2680,7 @@ begin
     Exit;
   end;
   Address := ResolveHostToAddress(Name);
-  Dots := 0;
-  for I := 1 to Length(Address) do
-    if Address[I] = '.' then
-      Inc(Dots);
-  Expect<Integer>(Dots).ToBe(3);
+  Expect<Boolean>(TryParseIPAddress(Address, IP)).ToBe(True);
 end;
 
 {$IFDEF UNIX}
@@ -2662,6 +2698,7 @@ procedure THTTPClientTests.TestResolvesLiteralAddressWithoutLookup;
 begin
   Expect<string>(ResolveHostToAddress('93.184.216.34')).ToBe('93.184.216.34');
   Expect<string>(ResolveHostToAddress('127.0.0.1')).ToBe('127.0.0.1');
+  Expect<string>(ResolveHostToAddress('::1')).ToBe('::1');
 end;
 
 { A host that never sets a policy must see exactly the previous behavior:
