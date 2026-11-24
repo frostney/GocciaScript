@@ -340,15 +340,6 @@ begin
   if Result then R := UTF8Decode(O);
 end;
 
-{ G2.Builtins' NormalizeHook }
-function IntlNormalize(const S, Form: UnicodeString; var R: UnicodeString): Boolean;
-var O: string;
-begin
-  if not NoLoneSurrogate(S) then Exit(False);
-  Result := TryICUNormalize(UTF8Encode(Form), UTF8Encode(S), O);
-  if Result then R := UTF8Decode(O);
-end;
-
 { intlOp 20: a number (or a decimal string) formatted, as a string or parts. A numbering system newer than the
   host ICU's data fails there: the number is then formatted in Latin digits and mapped to the system's }
 procedure FormatNumberOp(Args: TArgs; Argc: Integer; var Res: TValue);
@@ -611,7 +602,6 @@ procedure InitIntl;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..3] of TValue; Ok: Boolean;
 begin
   CaseMapHook := @IntlCaseMap;
-  NormalizeHook := @IntlNormalize;
   if not CompilePrelude('<intl>', IntlSrc, T, Err) then raise Exception.Create('intl prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('intl prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('intl prelude run');

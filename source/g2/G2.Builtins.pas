@@ -18,7 +18,6 @@ procedure SeedMathRandom(Seed: QWord);
 var
   { G2.Intl's full Unicode case mapping (Locale '' the root's) and normalization (Form NFC, NFD, NFKC or NFKD) }
   CaseMapHook: function(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean = nil;
-  NormalizeHook: function(const S, Form: UnicodeString; var R: UnicodeString): Boolean = nil;
 function NewSymbolValue(const Desc: UnicodeString): TValue;
 
 threadvar
@@ -28,7 +27,7 @@ threadvar
 implementation
 
 uses
-  NumericText, G2.ObjModel, BigInteger, G2.BigIntV, TextSemantics;
+  NumericText, G2.ObjModel, BigInteger, G2.BigIntV, TextSemantics, UnicodeNormalization;
 
 type
   TArgs = PValue;
@@ -1827,9 +1826,11 @@ begin
   Result := True;
 end;
 
-{ 22.1.3.15 String.prototype.normalize ( [ form ] ): NFC by default; an ASCII string is every form already }
+{ 22.1.3.15 String.prototype.normalize ( [ form ] ): NFC by default; an ASCII string is every form already. The
+  forms come from UnicodeNormalization's pinned Unicode data, not the host's ICU, so a result is the same on every
+  host, one without ICU included }
 function StrProto_Normalize(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; F: TValue; Form: UnicodeString; I: Integer; Ascii: Boolean; R: UnicodeString;
+var S: PStr; F: TValue; Form: UnicodeString; I: Integer; Ascii: Boolean; Kind: TUnicodeNormalizationForm;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if Arg(Args, Argc, 1) = VUndefined then Form := 'NFC'
@@ -1838,14 +1839,17 @@ begin
     if not ToStringV(Args[1], F) then Exit(False);
     Form := StrToUnicode(StrOf(F));
   end;
-  if (Form <> 'NFC') and (Form <> 'NFD') and (Form <> 'NFKC') and (Form <> 'NFKD') then
-    Exit(ThrowError('RangeError', 'The normalization form should be one of NFC, NFD, NFKC, NFKD.'));
+  if Form = 'NFC' then Kind := unfNFC
+  else if Form = 'NFD' then Kind := unfNFD
+  else if Form = 'NFKC' then Kind := unfNFKC
+  else if Form = 'NFKD' then Kind := unfNFKD
+  else Exit(ThrowError('RangeError', 'The normalization form should be one of NFC, NFD, NFKC, NFKD.'));
   S := StrOf(Args[0]);
   Ascii := True;
   for I := 0 to S^.Len - 1 do
     if Ord(StrChars(S)[I]) >= 128 then begin Ascii := False; Break; end;
-  if Ascii or not Assigned(NormalizeHook) or not NormalizeHook(StrToUnicode(S), Form, R) then Res := Args[0]
-  else Res := StrFromUnicode(R);
+  if Ascii then Res := Args[0]
+  else Res := StrFromUnicode(NormalizeUnicode(StrToUnicode(S), Kind));
   Result := True;
 end;
 
