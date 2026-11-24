@@ -557,7 +557,7 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry{$IFDEF DARWIN}, Goccia.NumberExponentiation{$ENDIF};
 
 {$IFDEF MSWINDOWS}
 { (declared here: the Windows unit's names would hide SysUtils' in this unit) }
@@ -805,7 +805,9 @@ begin
     if (Result and $000FFFFFFFFFFFFF) <> 0 then Result := CANON_NAN;
 end;
 function DoubleOf(V: TValue): Double; inline; begin Result := PDouble(@V)^; end;
+{$IFNDEF DARWIN}
 function libm_pow(X, Y: Double): Double; cdecl; external G2LIBM name 'pow';
+{$ENDIF}
 function libm_fmod(X, Y: Double): Double; cdecl; external G2LIBM name 'fmod';
 
 function DTrunc(D: Double): Double;
@@ -843,8 +845,10 @@ begin
   if D - Result >= 0.5 then Result := Result + 1;
 end;
 
-{ C99 pow (glibc: correctly rounded) except where ECMAScript differs: a NaN exponent, and |base| 1 with an
-  infinite exponent, are NaN }
+{ ES2026 6.1.6.1.3 Number::exponentiate. On macOS through Goccia.NumberExponentiation, a port of the pow glibc and
+  musl ship (Arm optimized-routines), as macOS's libm rounds a subnormal result differently; elsewhere the system's
+  pow, which is faster (glibc ships that algorithm), except where ECMAScript differs: a NaN exponent, and |base| 1
+  with an infinite exponent, are NaN }
 function NumberExponentiate(B, E: Double): Double;
 begin
   if IsNan(E) then Exit(NaN);
@@ -852,7 +856,11 @@ begin
   { a positive finite base to the power 0.5: its square root, correctly rounded on every target (the Universal
     CRT's pow is not) }
   if (E = 0.5) and (B > 0) and not IsInfinite(B) then Exit(Sqrt(B));
+  {$IFDEF DARWIN}
+  Result := NumberExponentiation(B, E);
+  {$ELSE}
   Result := libm_pow(B, E);
+  {$ENDIF}
 end;
 
 function NumberRemainder(N, D: Double): Double; inline;
