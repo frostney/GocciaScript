@@ -84,7 +84,10 @@ and a caller never frees a descriptor it passed.
   owners until the commit installs it, which clears the flag.
 - `ExtendElementsWithHoles` takes the defining descriptor as an object handed
   over and frees it if the extension raises, in the frames its gate and its
-  long fill already have, so an array element definition gains none.
+  long fill already have, so a dense array element definition gains none. An
+  array definition gains no frame at its entry; its `length` branch, which can
+  throw a `RangeError`, and its non-dense index extension pay for their own
+  cleanup.
 - The callers that freed on a throw (`Object.defineProperty`,
   `Object.defineProperties`, the VM's accessor and data definitions, array
   `length` assignment, the heap snapshot reader's property store, an instance's
@@ -93,12 +96,14 @@ and a caller never frees a descriptor it passed.
 ## Consequences
 
 - An embedder may arm the abort handle before it builds the engine: a request
-  that lands during the build raises `TGocciaAbortError` from the engine's
-  constructor, and once the worker's runtime has shut down nothing the build
-  allocated is left.
-- `Goccia.DefinePropertyOwnership.Test` raises inside each implementation at
-  each point that can raise and checks that the descriptor is freed exactly
-  once. It also sweeps a host abort over every second heap allocation of an
+  that a construction poll observes raises `TGocciaAbortError` from the
+  engine's constructor, and once the worker's runtime has shut down nothing
+  the build allocated is left. A request made after the build's last poll
+  stays pending and stops the run at its first poll; a returned engine is no
+  evidence that no stop was requested.
+- `Goccia.DefinePropertyOwnership.Test` raises inside the exercised
+  definitions at the exercised failure points and checks that the descriptor
+  is freed exactly once. It also sweeps a host abort over every second heap allocation of an
   engine's construction, and separately of a definition-heavy script's run,
   on a worker thread, with a tracking memory manager that fails on any block
   left allocated after the thread's runtime shuts down. A request lands at
