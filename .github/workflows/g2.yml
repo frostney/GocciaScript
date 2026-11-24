@@ -31,7 +31,7 @@ permissions:
 env:
   # The frostney/fpc-toolchain build, as in ci.yml (scripts/g2/build.sh
   # selects the same one).
-  FPC_VERSION: "3.3.1-b6"
+  FPC_VERSION: "3.3.1-b7"
 
 jobs:
   suite:
@@ -197,14 +197,21 @@ jobs:
     name: G2 build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    # The aarch64 targets join once FPC_VERSION carries fpc-toolchain patch
-    # 0131: 3.3.1-b6 forms a tbz past its 32 KiB reach in the old runtime's
-    # interpreter loop, which the apps still link, and the assembler refuses
-    # it. x86_64-darwin builds on an Intel runner, where it is the host.
+    # Each Darwin target builds on a runner of its own architecture, where it
+    # is the host; aarch64-linux cross-compiles on x86-64 Linux against the
+    # downloaded glibc.
     strategy:
       fail-fast: false
       matrix:
         include:
+          - target: aarch64-darwin
+            cpu: aarch64
+            os: darwin
+            runner: macos-15
+          - target: aarch64-linux
+            cpu: aarch64
+            os: linux
+            runner: ubuntu-latest
           - target: x86_64-darwin
             cpu: x86_64
             os: darwin
@@ -287,6 +294,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - target: aarch64-darwin
+            runner: macos-15
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
           - target: x86_64-darwin
             runner: macos-15-intel
           - target: x86_64-win64

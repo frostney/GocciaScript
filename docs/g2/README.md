@@ -37,11 +37,12 @@ Largest performance gaps: generators (lazy-collections 0.67), float arithmetic o
 ## Build
 
 G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
-later; CI and `scripts/g2/build.sh` use 3.3.1+6 (release `3.3.1-b6`), selected by `fpc-toolchain env 3.3.1+6` or
+later; CI and `scripts/g2/build.sh` use 3.3.1+7 (release `3.3.1-b7`), selected by `fpc-toolchain env 3.3.1+7` or
 any command given in `G2_FPC_ENV`. Builds before 3.3.1+4 hang in the DFA pass on some units and drop the `@tpoff`
 relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs` prefix of a threadvar the peephole optimizer folds
 into an instruction at -O1 (patch 0123 in 3.3.1+5); 3.3.1+5 can fail an incremental compile after a used unit was
-recompiled, which `build.pas` retries from a clean unit directory (patches 0124 to 0128 in 3.3.1+6):
+recompiled, which `build.pas` retries from a clean unit directory (patches 0124 to 0128 in 3.3.1+6); 3.3.1+6 at
+-O4 hoists a load of an array or record field out of a loop into a copy it then indexes (patch 0129 in 3.3.1+7):
 
 ```sh
 ./build.pas --prod g2         # build/g2/g2, with the 3.3.1 toolchain selected
@@ -62,8 +63,8 @@ i386. Only Linux x86-64 has the JIT (`G2JIT` in `G2.Checks.inc`): it emits code 
 and reads threadvars `%fs`-relative. The other targets run the interpreter. With `FPC_TARGET_CPU` and
 `FPC_TARGET_OS` naming another platform, `build.pas` builds a G2 program for the host first (`build/g2/host`) to
 make its prelude snapshot, which holds the same bytes on every platform, then builds the target once with it;
-`G2_FPC_FLAGS` adds the target's library options. aarch64 needs fpc-toolchain patch 0131 (a `tbz` or `tbnz` the
-peephole optimizer forms past its 32 KiB reach), in the build after `3.3.1-b6`. Without `fork` (Windows),
+`G2_FPC_FLAGS` adds the target's library options. aarch64 needs 3.3.1+7: earlier builds form a `tbz` or `tbnz`
+past its 32 KiB reach (patches 0131 to 0134). Without `fork` (Windows),
 GocciaTest262Runner runs each case on a thread of its own, bounded by the engine's deadline instead of a kill.
 
 ### Execution limits
@@ -483,12 +484,11 @@ every collection. `scripts/g2/artifact-roundtrip-tests.py` and `scripts/g2/artif
 holds the expected lines.
 
 `.github/workflows/g2.yml` runs part of this in CI on every pull request and on pushes to `main` and `feat/g2-**`,
-with FPC `3.3.1-b6`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
+with FPC `3.3.1-b7`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
 `tests/` with `--heap-snapshots`, GocciaTest262Runner over the pinned test262, and the limits test, both
 bytecode-file tests and a 1,000-case grammar fuzz campaign. `platform-build` builds GocciaTestRunner for
-x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner, against
-the shared list plus the target's own (`known-failures/suite-<target>.txt`). The aarch64 targets join once
-`FPC_VERSION` has the `tbz` fix named above.
+macOS and Linux on aarch64, x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner, against
+the shared list plus the target's own (`known-failures/suite-<target>.txt`).
 `scripts/g2/check-known-failures.py` holds the suite and test262 to `scripts/g2/known-failures`: a failure not on the
 list fails the job, and a listed one that now passes is reported, so the lists only shrink. The digests, GC stress
 and the benchmarks stay with the local gate, which needs the bundles under `G2_WT_DIR` and `G2_JS_DIR`.

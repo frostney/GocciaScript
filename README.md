@@ -352,14 +352,14 @@ needs 3.3.1. The package managers install 3.2.2:
 - Ubuntu/Debian: `sudo apt-get install fpc`
 - Windows: `choco install freepascal`
 
-CI is pinned to the FPC 3.3.1 build `3.3.1-b6` from
+CI is pinned to the FPC 3.3.1 build `3.3.1-b7` from
 [fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
 same compiler on Linux or macOS, install it next to any other FPC and put it
 first on `PATH` (Windows: see its README):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
-sh install.sh 3.3.1-b6
+sh install.sh 3.3.1-b7
 eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.3.1)"
 ```
 

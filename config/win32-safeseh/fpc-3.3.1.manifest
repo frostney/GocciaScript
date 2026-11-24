@@ -1,5 +1,5 @@
 FPC-SAFESEH 2
-# Reviewed input identities for the supplied FPC 3.3.1+6 Win32 units.
+# Reviewed input identities for the supplied FPC 3.3.1+7 Win32 units.
 # Hashes cover whole objects, including registrations through pointer stores.
 # Only linked objects are required and hashed. A new unit must be audited.
 # handler = OS SEH entry; nonseh = reviewed ordinary function/callback.
@@ -19,7 +19,10 @@ FPC-SAFESEH 2
 # hashed name as $h... where 3.2.4 used $crc..., which renames sections here
 # but not the routines. rtti.o's TSystemFunctionCallback.Handler (the target
 # of its call thunks) and CallHandler methods are now linked: ordinary code.
-version 3.3.1+6
+#
+# 3.3.1+7 (patches 0129 to 0134: the SLP optimizer and aarch64 branches): each
+# object below hashes the same as in 3.3.1+6, so the 3.3.1+6 audit holds.
+version 3.3.1+7
 target i386-win32
 
 object fcl-base/contnrs.o d428913b0f1e5df6305e272ea1f0761e4b1cc9920caa64d7bb259255c9e7482d
