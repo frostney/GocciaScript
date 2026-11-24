@@ -83,7 +83,8 @@ type
     function GetPrivatePropertyGetter(const AName: string): TGocciaValue;
     function GetPrivatePropertySetter(const AName: string): TGocciaValue;
     // APending and APendingValue are what the caller is about to store: they
-    // are rooted while the intrinsic's value is allocated.
+    // are rooted while the intrinsic's value is allocated. APending belongs to
+    // a definition, which takes it on every exit, so a raise here frees it.
     procedure MaterializeIntrinsicProperty(const AName: string;
       const APending: TGocciaPropertyDescriptor = nil;
       const APendingValue: TGocciaValue = nil);
@@ -396,8 +397,6 @@ type
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
       const ACanCreate: Boolean);
-    procedure AddOwnDataPropertyGrowing(const AName: string;
-      const AValue: TGocciaValue);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
@@ -1923,19 +1922,29 @@ begin
   // value is held by nothing but the caller.
   Roots.Initialize;
   try
-    Roots.Add(Self);
-    if Assigned(APending) then
-      APending.PushRoots(Roots);
-    Roots.Add(APendingValue);
-    Descriptor := GetOwnPropertyDescriptor(AName);
-    if not Assigned(Descriptor) then
-      Exit;
-    // Adding can grow the map, and its gate roots only the map's owner and
-    // the descriptor added, not the caller's pending one.
-    if Descriptor.CallerOwned then
-      FProperties.Add(AName, Descriptor.TakeOwnership)
-    else
-      FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
+    try
+      Roots.Add(Self);
+      if Assigned(APending) then
+        APending.PushRoots(Roots);
+      Roots.Add(APendingValue);
+      Descriptor := GetOwnPropertyDescriptor(AName);
+      if not Assigned(Descriptor) then
+        Exit;
+      // Adding can grow the map, and its gate roots only the map's owner and
+      // the descriptor added, not the caller's pending one.
+      if Descriptor.CallerOwned then
+        FProperties.Add(AName, Descriptor.TakeOwnership)
+      else
+        FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
+    except
+      // Synthesizing allocates the value, which polls the deadline, the
+      // instruction budget and a host's abort, and the memory limit can
+      // refuse it or the map's growth: the definition owns APending
+      // (ADR 0184).
+      if Assigned(APending) then
+        APending.Free;
+      raise;
+    end;
   finally
     Roots.Clear;
   end;
@@ -1951,8 +1960,9 @@ begin
       ADescriptor.Free;
       Exit;
     end;
-    // The base contract: a definition that throws leaves the descriptor to
-    // its caller, which frees it. Freeing it here as well freed it twice.
+    // The base contract: a definition takes its descriptor on every exit, a
+    // throw included (ADR 0184).
+    ADescriptor.Free;
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
   end;
@@ -2738,7 +2748,8 @@ end;
 // a prototype only when that prototype keeps the ordinary [[Set]] and
 // [[GetOwnProperty]], and then only asks its map whether the name is there,
 // without materializing a lazy entry. Its one store that can raise, a new
-// property that grows the map, is AddOwnDataPropertyGrowing's.
+// property whose growth the map's gate refuses, frees the new descriptor in
+// the gate (ADR 0184).
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -2775,34 +2786,11 @@ begin
 
   // OrdinarySet creates an own data property, which OrdinaryDefineOwnProperty
   // accepts as given; an instance of exactly this class has the ordinary
-  // DefineProperty, so the descriptor goes straight into the map. When the
-  // map has room the Add allocates nothing and cannot raise, so the new
-  // descriptor is always stored; a store that grows the map goes through
-  // AddOwnDataPropertyGrowing, which frees it if the growth is refused.
+  // DefineProperty, so the descriptor goes straight into the map, whose
+  // growth gate frees it if it refuses the growth.
   NoteIndexedOwnProperty(AName);
-  if FProperties.HasRoomForAdd then
-    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
-      [pfEnumerable, pfConfigurable, pfWritable]))
-  else
-    AddOwnDataPropertyGrowing(AName, AValue);
-end;
-
-// The growing half of AssignProperty's new-property store. Its own procedure,
-// so that only a store that grows the map pays for the exception frame.
-procedure TGocciaInstanceValue.AddOwnDataPropertyGrowing(const AName: string;
-  const AValue: TGocciaValue);
-var
-  Descriptor: TGocciaPropertyDescriptor;
-begin
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]);
-  try
-    // A refused or failed growth leaves the map without the entry.
-    FProperties.Add(AName, Descriptor);
-  except
-    Descriptor.Free;
-    raise;
-  end;
+  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
 end;
 
 procedure TGocciaInstanceValue.AssignPropertySlow(const AName: string;

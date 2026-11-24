@@ -1364,17 +1364,22 @@ procedure TGocciaTypedArrayValue.DefineProperty(const AName: string;
 var
   IsNegativeZero: Boolean;
   NumericIndex: Double;
+  Defined: Boolean;
 begin
   if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
   begin
-    if TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
-      IsNegativeZero, ADescriptor) then
-    begin
+    // Writing the value converts it, which can run guest code and throw; the
+    // definition takes ADescriptor on every exit (ADR 0184).
+    try
+      Defined := TryDefineTypedArrayIntegerIndexedProperty(Self, NumericIndex,
+        IsNegativeZero, ADescriptor);
+    finally
       ADescriptor.Free;
-      Exit;
     end;
-    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
-      SSuggestCannotDeleteNonConfigurable);
+    if not Defined then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+        SSuggestCannotDeleteNonConfigurable);
+    Exit;
   end;
 
   inherited DefineProperty(AName, ADescriptor);

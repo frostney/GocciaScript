@@ -101,6 +101,7 @@ type
     FOwnerRealmIdentity: TGocciaRealmIdentity;
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
+    FKeepsRefusedValue: Boolean;
     function OwnerRealmIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // The stale-shape walk behind EnsureShape. It owns the managed key
     // temporary, and with it the implicit exception frame, so EnsureShape
@@ -132,6 +133,12 @@ type
     // times per map — a frame at every DefineProperty/TryDefineProperty/
     // AssignProperty instead measured +2.4%..+4.0% across the store-hot-path
     // benchmark shapes, for protection that is only ever consumed here.
+    //
+    // A refusal frees the pending descriptor before it propagates, for the
+    // same reason: a refused Add leaves the map as it was, so the descriptor
+    // belongs to nothing, and this frame is the one place on the store path
+    // that sees the refusal without a frame at every store (ADR 0184). A
+    // caller therefore never frees what it handed to Add.
     procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
       const APendingValue: TGocciaPropertyDescriptor); override;
     // The budget decision, taken inside the rooted window RequireStorageBytes
@@ -150,6 +157,11 @@ type
     // across a collection taken there; nil for a standalone map with no owning
     // value, which roots nothing extra.
     property Owner: TGCManagedObject read FOwner write FOwner;
+    // Off (the default): a refused growth frees the descriptor the Add was
+    // storing. On for a map built aside from descriptors that something else
+    // still owns, a heap snapshot restore's, whose caller frees what it made.
+    property KeepsRefusedValue: Boolean read FKeepsRefusedValue
+      write FKeepsRefusedValue;
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
     // Recompute the shape to cover all current entries (resuming from the
@@ -334,9 +346,16 @@ begin
     FOwner and the pending descriptor's roots already pushed. }
   Roots.Initialize;
   try
-    Roots.Add(FOwner);
-    APendingValue.PushRoots(Roots);
-    ConsultStorageBudget(ABytes, ANewBytes);
+    try
+      Roots.Add(FOwner);
+      APendingValue.PushRoots(Roots);
+      ConsultStorageBudget(ABytes, ANewBytes);
+    except
+      // The map is as the Add found it, without APendingValue (ADR 0184).
+      if not FKeepsRefusedValue then
+        APendingValue.Free;
+      raise;
+    end;
   finally
     Roots.Clear;
   end;

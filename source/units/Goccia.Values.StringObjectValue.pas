@@ -843,59 +843,66 @@ begin
   end;
 end;
 
+// A string index or "length" names a property the object reports without
+// storing it, built here for the comparison. Building it allocates a value,
+// so a deadline, a budget, a host's abort or the memory limit can stop it
+// before the definition decides anything; the definition owns ADescriptor
+// (ADR 0184) and frees it then.
+function StringObjectExistingDescriptorForDefine(
+  const APrimitive: TGocciaStringLiteralValue; const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+begin
+  try
+    Result := CreateStringIndexDescriptor(APrimitive, AName);
+    if not Assigned(Result) then
+      Result := CreateStringLengthDescriptor(APrimitive, AName);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+end;
+
 // ES2026 §10.4.3.2 StringExoticObject [[DefineOwnProperty]](P, Desc)
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaStringObjectValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
+  Compatible: Boolean;
 begin
-  ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
-  if not Assigned(ExistingDescriptor) then
-    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
-  try
-    if Assigned(ExistingDescriptor) and
-       not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
-         ADescriptor) then
+  ExistingDescriptor := StringObjectExistingDescriptorForDefine(FPrimitive,
+    AName, ADescriptor);
+  if Assigned(ExistingDescriptor) then
+  begin
+    Compatible := IsCompatibleStringDefineDescriptor(ExistingDescriptor,
+      ADescriptor);
+    ExistingDescriptor.Free;
+    ADescriptor.Free;
+    if not Compatible then
       ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
         SSuggestCannotDeleteNonConfigurable);
-    if Assigned(ExistingDescriptor) then
-    begin
-      ADescriptor.Free;
-      Exit;
-    end;
-  finally
-    if Assigned(ExistingDescriptor) then
-      ExistingDescriptor.Free;
+    Exit;
   end;
 
   inherited DefineProperty(AName, ADescriptor);
 end;
 
 // ES2026 §10.4.3.2 StringExoticObject [[DefineOwnProperty]](P, Desc)
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 function TGocciaStringObjectValue.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
-  ExistingDescriptor := CreateStringIndexDescriptor(FPrimitive, AName);
-  if not Assigned(ExistingDescriptor) then
-    ExistingDescriptor := CreateStringLengthDescriptor(FPrimitive, AName);
-  try
-    if Assigned(ExistingDescriptor) and
-       not IsCompatibleStringDefineDescriptor(ExistingDescriptor,
-         ADescriptor) then
-    begin
-      ADescriptor.Free;
-      Exit(False);
-    end;
-    if Assigned(ExistingDescriptor) then
-    begin
-      ADescriptor.Free;
-      Exit(True);
-    end;
-  finally
-    if Assigned(ExistingDescriptor) then
-      ExistingDescriptor.Free;
+  ExistingDescriptor := StringObjectExistingDescriptorForDefine(FPrimitive,
+    AName, ADescriptor);
+  if Assigned(ExistingDescriptor) then
+  begin
+    Result := IsCompatibleStringDefineDescriptor(ExistingDescriptor,
+      ADescriptor);
+    ExistingDescriptor.Free;
+    ADescriptor.Free;
+    Exit;
   end;
 
   Result := inherited TryDefineProperty(AName, ADescriptor);

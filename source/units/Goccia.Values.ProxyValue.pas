@@ -348,7 +348,14 @@ begin
     TGocciaObjectValue(FTarget).DefineProperty(AName, ADescriptor);
     Exit;
   end;
-  EnterPropertyDelegation;
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // bound stops the call before it starts.
+  try
+    EnterPropertyDelegation;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
   try
     TGocciaProxyValue(FTarget).DefineProperty(AName, ADescriptor);
   finally
@@ -365,7 +372,14 @@ begin
     TGocciaObjectValue(FTarget).DefineSymbolProperty(ASymbol, ADescriptor);
     Exit;
   end;
-  EnterPropertyDelegation;
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // bound stops the call before it starts.
+  try
+    EnterPropertyDelegation;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
   try
     TGocciaProxyValue(FTarget).DefineSymbolProperty(ASymbol, ADescriptor);
   finally
@@ -1967,6 +1981,7 @@ begin
 end;
 
 // ES2026 §28.1.1 [[DefineOwnProperty]](P, Desc)
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaProxyValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 var
@@ -1976,29 +1991,41 @@ var
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
-  CheckRevoked;
   // The frame opens before GetTrap: reading the trap off the handler is the
   // first guest-code safe point, and it happens before anything has read the
   // descriptor. See PushDefineTrapRoots.
   Roots.Initialize;
   try
-    PushDefineTrapRoots(Roots, ADescriptor);
-    Trap := GetTrap(PROP_DEFINE_PROPERTY);
-    Roots.Add(Trap);
+    // ADescriptor is owned here until the trap call or the target takes it;
+    // a revoked Proxy, or a trap lookup stopped by the delegation bound,
+    // throws before then.
+    try
+      CheckRevoked;
+      PushDefineTrapRoots(Roots, ADescriptor);
+      Trap := GetTrap(PROP_DEFINE_PROPERTY);
+      Roots.Add(Trap);
+      if Assigned(Trap) then
+        DescObj := FromPropertyDescriptor(ADescriptor);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
     if Assigned(Trap) then
     begin
-      DescObj := FromPropertyDescriptor(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
-        Args.Add(FTarget);
-        Args.Add(TGocciaStringLiteralValue.Create(AName));
-        Args.Add(DescObj);
-        TrapResult := InvokeTrap(Trap, Args);
-        if not TrapResult.ToBooleanLiteral.Value then
-          ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
-        ValidateProxyDefineTrapResult(AName, FTarget, ADescriptor);
-        ADescriptor.Free;
+        try
+          Args.Add(FTarget);
+          Args.Add(TGocciaStringLiteralValue.Create(AName));
+          Args.Add(DescObj);
+          TrapResult := InvokeTrap(Trap, Args);
+          if not TrapResult.ToBooleanLiteral.Value then
+            ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
+          ValidateProxyDefineTrapResult(AName, FTarget, ADescriptor);
+        finally
+          ADescriptor.Free;
+        end;
       finally
         Args.Free;
       end;
@@ -2008,7 +2035,10 @@ begin
       if FTarget is TGocciaObjectValue then
         TargetDefineProperty(AName, ADescriptor)
       else
+      begin
+        ADescriptor.Free;
         ThrowTypeError(SErrorProxyDefineNonObject, SSuggestProxyTargetType);
+      end;
     end;
   finally
     Roots.Clear;
@@ -2016,6 +2046,7 @@ begin
 end;
 
 // ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) — symbol key
+// Takes ADescriptor on every exit, a throw included (ADR 0184).
 procedure TGocciaProxyValue.DefineSymbolProperty(
   const ASymbol: TGocciaSymbolValue;
   const ADescriptor: TGocciaPropertyDescriptor);
@@ -2026,27 +2057,37 @@ var
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
-  CheckRevoked;
   // Same window as the string arm; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    PushDefineTrapRoots(Roots, ADescriptor);
-    Trap := GetTrap(PROP_DEFINE_PROPERTY);
-    Roots.Add(Trap);
+    // See DefineProperty.
+    try
+      CheckRevoked;
+      PushDefineTrapRoots(Roots, ADescriptor);
+      Trap := GetTrap(PROP_DEFINE_PROPERTY);
+      Roots.Add(Trap);
+      if Assigned(Trap) then
+        DescObj := FromPropertyDescriptor(ADescriptor);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
     if Assigned(Trap) then
     begin
-      DescObj := FromPropertyDescriptor(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
-        Args.Add(FTarget);
-        Args.Add(ASymbol);
-        Args.Add(DescObj);
-        TrapResult := InvokeTrap(Trap, Args);
-        if not TrapResult.ToBooleanLiteral.Value then
-          ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [ASymbol.ToDisplayString.Value]), SSuggestProxyTrapInvariant);
-        ValidateProxyDefineSymbolTrapResult(ASymbol, FTarget, ADescriptor);
-        ADescriptor.Free;
+        try
+          Args.Add(FTarget);
+          Args.Add(ASymbol);
+          Args.Add(DescObj);
+          TrapResult := InvokeTrap(Trap, Args);
+          if not TrapResult.ToBooleanLiteral.Value then
+            ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [ASymbol.ToDisplayString.Value]), SSuggestProxyTrapInvariant);
+          ValidateProxyDefineSymbolTrapResult(ASymbol, FTarget, ADescriptor);
+        finally
+          ADescriptor.Free;
+        end;
       finally
         Args.Free;
       end;
@@ -2056,7 +2097,10 @@ begin
       if FTarget is TGocciaObjectValue then
         TargetDefineSymbolProperty(ASymbol, ADescriptor)
       else
+      begin
+        ADescriptor.Free;
         ThrowTypeError(SErrorProxyDefineNonObject, SSuggestProxyTargetType);
+      end;
     end;
   finally
     Roots.Clear;

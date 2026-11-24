@@ -785,17 +785,12 @@ begin
   Descriptor := ToPropertyDescriptor(DescriptorObject, nil);
 
   // Step 4: Perform ? DefinePropertyOrThrow(O, key, desc)
-  // DefineProperty/DefineSymbolProperty takes ownership on success;
-  // free Descriptor and re-raise if the call throws.
-  try
-    if IsSymbolKey then
-      Obj.DefineSymbolProperty(SymbolKey, Descriptor)
-    else
-      Obj.DefineProperty(PropertyName, Descriptor);
-  except
-    Descriptor.Free;
-    raise;
-  end;
+  // The definition takes Descriptor on every exit, a throw included
+  // (ADR 0184).
+  if IsSymbolKey then
+    Obj.DefineSymbolProperty(SymbolKey, Descriptor)
+  else
+    Obj.DefineProperty(PropertyName, Descriptor);
 
   // Step 5: Return O
   Result := Obj;
@@ -810,6 +805,7 @@ var
   PropertyKeyValues: TArray<TGocciaValue>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
   PendingProperties: TPendingDefinePropertyArray;
+  Descriptor: TGocciaPropertyDescriptor;
   DescriptorValue: TGocciaValue;
   KeyValue: TGocciaValue;
   GC: TGarbageCollector;
@@ -888,25 +884,18 @@ begin
           CaptureSymbolDescriptor(SymbolKeys[I]);
       end;
 
-      // ES2026 §20.1.2.3.1 step 5: apply the collected descriptors.
+      // ES2026 §20.1.2.3.1 step 5: apply the collected descriptors. Each
+      // definition takes its descriptor on every exit, a throw included
+      // (ADR 0184), so the batch lets go of it first; a throw releases the
+      // ones not yet applied.
       for I := 0 to High(PendingProperties) do
       begin
-        try
-          if PendingProperties[I].IsSymbol then
-            Obj.DefineSymbolProperty(PendingProperties[I].Symbol,
-              PendingProperties[I].Descriptor)
-          else
-            Obj.DefineProperty(PendingProperties[I].Name,
-              PendingProperties[I].Descriptor);
-          PendingProperties[I].Descriptor := nil;
-        except
-          if Assigned(PendingProperties[I].Descriptor) then
-          begin
-            PendingProperties[I].Descriptor.Free;
-            PendingProperties[I].Descriptor := nil;
-          end;
-          raise;
-        end;
+        Descriptor := PendingProperties[I].Descriptor;
+        PendingProperties[I].Descriptor := nil;
+        if PendingProperties[I].IsSymbol then
+          Obj.DefineSymbolProperty(PendingProperties[I].Symbol, Descriptor)
+        else
+          Obj.DefineProperty(PendingProperties[I].Name, Descriptor);
       end;
     except
       ReleasePendingDefineProperties(PendingProperties);

@@ -54,7 +54,7 @@ type
     // ExtendElementsWithHoles and from nowhere else, which is what keeps every
     // extension path covered by construction.
     procedure RequireStorageBytes(const ABytes: Int64;
-      const APendingValue: TGocciaValue);
+      const APendingValue: TGocciaValue; const AHandedOver: TObject = nil);
     // The budget decision, taken inside the window RequireStorageBytes has
     // just opened. Virtual for the same reason
     // TGocciaShapedPropertyMap.ConsultStorageBudget is: the gate collects
@@ -87,8 +87,14 @@ type
 // the cost stays on the extension path instead of on every dense write. Pass
 // nil only where nothing reads a store value after the call; the callers
 // document which case each of them is.
+//
+// AHandedOver is an object the caller has handed over and would otherwise
+// have to free if the extension raised, such as the descriptor a definition
+// owns (ADR 0184): a raise frees it, inside the frames the gate and the long
+// fill already have, so a caller needs no frame of its own.
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
-  const ACount: Int64; const APendingValue: TGocciaValue);
+  const ACount: Int64; const APendingValue: TGocciaValue;
+  const AHandedOver: TObject = nil);
 
 // Raised by TGocciaElementList's indexer, as the generic list's would. In the
 // interface so the indexer inlines into other units.
@@ -127,7 +133,7 @@ begin
 end;
 
 procedure TGocciaElementList.RequireStorageBytes(const ABytes: Int64;
-  const APendingValue: TGocciaValue);
+  const APendingValue: TGocciaValue; const AHandedOver: TObject);
 var
   Roots: TGocciaActiveRootFrame;
 begin
@@ -172,9 +178,14 @@ begin
     collects — so no post-gate step can reclaim what the caller reads back. }
   Roots.Initialize;
   try
-    Roots.Add(FOwner);
-    Roots.Add(APendingValue);
-    ConsultStorageBudget(ABytes);
+    try
+      Roots.Add(FOwner);
+      Roots.Add(APendingValue);
+      ConsultStorageBudget(ABytes);
+    except
+      AHandedOver.Free;
+      raise;
+    end;
   finally
     Roots.Clear;
   end;
@@ -186,7 +197,8 @@ begin
 end;
 
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
-  const ACount: Int64; const APendingValue: TGocciaValue);
+  const ACount: Int64; const APendingValue: TGocciaValue;
+  const AHandedOver: TObject);
 var
   StartCount: Integer;
 begin
@@ -201,7 +213,7 @@ begin
     no hook to release a reservation when it shrinks or is freed. }
   if ACount > StartCount then
     AElements.RequireStorageBytes((ACount - StartCount) * SizeOf(Pointer),
-      APendingValue);
+      APendingValue, AHandedOver);
   // Fast path: small extensions skip both the poll and the rollback frame.
   // Sequential element writes extend by one slot at a time, and an FPC
   // try/except frame per append is a measurable tax on every array-building
@@ -229,6 +241,7 @@ begin
       SpendInstructions((AElements.Count - StartCount) and 1023);
   except
     AElements.Count := StartCount;
+    AHandedOver.Free;
     raise;
   end;
 end;
