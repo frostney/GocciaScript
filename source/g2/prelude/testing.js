@@ -1703,12 +1703,47 @@
   const api = {
     describe, test, it: test, expect, beforeAll, afterAll, beforeEach, afterEach, onTestFinished, mock, spyOn, runTests,
   };
-  for (const k of keysOf(api)) Object.defineProperty(global, k, { value: api[k], writable: true, configurable: true });
-  // the generated test262 wrappers' private aliases: a conformance test may declare its own describe or test
-  for (const [alias, fn] of [['__gocciaTest262Describe', describe], ['__gocciaTest262Test', test]])
-    Object.defineProperty(global, alias, { value: fn, writable: false, configurable: false });
-  if (shared && shared.hostModules) shared.hostModules['goccia:test'] = () => api;
+  // goccia:test outside the test runner (GocciaRunner imports it): no globals, and nothing runs what describe and
+  // test register but runTests, which runs it all before it returns (docs/testing-api.md, "Running an imported
+  // suite outside the runner")
+  const moduleOnly = !!(shared && shared.moduleOnly);
+  if (!moduleOnly) {
+    for (const k of keysOf(api)) Object.defineProperty(global, k, { value: api[k], writable: true, configurable: true });
+    // the generated test262 wrappers' private aliases: a conformance test may declare its own describe or test
+    for (const [alias, fn] of [['__gocciaTest262Describe', describe], ['__gocciaTest262Test', test]])
+      Object.defineProperty(global, alias, { value: fn, writable: false, configurable: false });
+  }
+  // runTests({ exitOnFirstFailure, showTestResults }) of the module-only API: the whole registry run again (the
+  // counts start over), its result returned, and the results block printed unless showTestResults is false or the
+  // host mutes the reporter (--silent, JSON output). The result reports; the script decides what a failure means.
+  function runTestsNow(options) {
+    const show = !(options && options.showTestResults === false);
+    const started = shared.deadline.clock();
+    const r = shared.deadline.settle(runTests());
+    const failedTests = r.failedTests.map(f => (f.error ? f.name + ': ' + f.error : f.name));
+    const suites = root.children.filter(c => c.kind === 'suite').map(c => c.suite.name);
+    let summary = `Tests: ${r.totalRunTests} total, ${r.passed} passed, ${r.failed} failed, ${r.skipped} skipped`;
+    if (suites.length > 0) summary += ' (Suites: ' + suites.join(', ') + ')';
+    const result = {
+      passed: r.passed, failed: r.failed, skipped: r.skipped, totalTests: r.totalTests, totalRunTests: r.totalRunTests,
+      assertions: r.assertions, duration: shared.deadline.clock() - started, suiteErrors: r.suiteErrors, failedTests,
+      summary,
+    };
+    if (show && shared.deadline.reporter) {
+      const out = ['', '=== Test Results ===', summary, 'Total Assertions: ' + r.assertions];
+      if (failedTests.length > 0) out.push('', 'Failed Tests:', ...failedTests.map(t => '  \u2022 ' + t));
+      if (r.failed === 0 && r.suiteErrors === 0)
+        out.push(r.skipped > 0 ? `\u2705 All tests passed! (${r.skipped} skipped)` : '\u2705 All tests passed!');
+      else out.push('\u274c Some tests failed!');
+      out.push('==================');
+      for (const line of out) shared.deadline.print(line);
+    }
+    return result;
+  }
+  const exported = moduleOnly ? { ...api, runTests: runTestsNow } : api;
+  if (shared && shared.hostModules) shared.hostModules['goccia:test'] = () => exported;
   return {
+    api: exported,
     report(done) {
       return runTests().then(
         r => done(JSON.stringify({ totalTests: r.totalTests, passed: r.passed, failed: r.failed, skipped: r.skipped,

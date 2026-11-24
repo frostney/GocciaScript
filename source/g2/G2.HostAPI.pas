@@ -1778,6 +1778,32 @@ begin
   Result := True;
 end;
 
+threadvar
+  { InstallTestingAPI installs goccia:test module-only (GocciaRunner's import of it): no testing globals, and the
+    job errors keep failing the run outside runTests }
+  TestModuleOnly: Boolean;
+  { the engine whose goccia:test is installed (FirstInEngine's generation) }
+  TestModuleGen: Integer;
+
+{ n.testingModule(): goccia:test outside the test runner, the testing API installed on its first import, module-only;
+  its exports }
+function Host_TestingModule(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Err: UnicodeString;
+begin
+  if not SameEngine(TestModuleGen) then
+  begin
+    TestModuleOnly := True;
+    try
+      Result := InstallTestingAPI(Err);
+    finally
+      TestModuleOnly := False;
+    end;
+    if not Result then Exit(ThrowError('Error', 'goccia:test could not be installed: ' + Err));
+    FirstInEngine(TestModuleGen);
+  end;
+  Result := GetV(TestApiV, AtomOf('api'), Res);
+end;
+
 { ---- installing the preludes ---- }
 
 { calls the prelude's function value (Source's completion) with the Argc temp roots from Base; Res its result }
@@ -1830,6 +1856,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
+  DefineNative(RootAt(TempTop - 1), 'testingModule', Host_TestingModule, 0);
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
   DefineNative(RootAt(TempTop - 1), 'dataParse', Host_DataParse, 2);
   DefineNative(RootAt(TempTop - 1), 'fileURL', Host_FileURL, 1);
@@ -2177,6 +2204,40 @@ begin
   Result := True;
 end;
 
+{ deadline.settle(p) (runTests of goccia:test outside the test runner): the jobs and timers run until none is left,
+  the job errors a test leaves attributed to its unit as the test runner attributes them; p's value, or its
+  rejection thrown }
+function Test_Settle(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var P, V: TValue; SavedToHost, SavedDrop, Ok: Boolean;
+begin
+  if Argc >= 1 then P := Args[1] else P := VUndefined;
+  if not IsPromiseValue(P) then begin Res := P; Exit(True); end;
+  PushRoot(P);
+  SavedToHost := JobErrorsToHost;
+  SavedDrop := JobErrorsDropWork;
+  JobErrorsToHost := True;
+  JobErrorsDropWork := False;
+  Ok := RunEventLoopIn(True);
+  JobErrorsToHost := SavedToHost;
+  JobErrorsDropWork := SavedDrop;
+  P := RootAt(TempTop - 1);
+  PopRoots(1);
+  if not Ok then Exit(False);
+  case PromiseStatus(P, V) of
+    1: begin Res := V; Result := True; end;
+    2: begin Pending := V; Result := False; end;
+  else
+    Result := ThrowError('Error', 'runTests did not finish: a test waits on work that never comes');
+  end;
+end;
+
+{ deadline.clock(): nanoseconds on the monotonic clock (runTests' duration) }
+function Test_Clock(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(GetNanoseconds);
+  Result := True;
+end;
+
 { deadline.callTest(fn): a test function called with --max-stack counted from its own frame }
 function Test_CallTest(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
@@ -2209,6 +2270,8 @@ begin
   DefineOwn(RootAt(TempTop - 1), AtomOf('reporter'), MkBool(TestReporterOn), pfDefault);
   DefineNative(RootAt(TempTop - 1), 'print', Host_WriteLine, 1);
   DefineNative(RootAt(TempTop - 1), 'callTest', Test_CallTest, 1);
+  DefineNative(RootAt(TempTop - 1), 'settle', Test_Settle, 1);
+  DefineNative(RootAt(TempTop - 1), 'clock', Test_Clock, 0);
   DefineOwn(SharedV, AtomOf('deadline'), RootAt(TempTop - 1), pfDefault);
   PopRoots(1);
   { shared.work: the host work each unit leaves (rejections, job errors), attributed to it }
@@ -2221,9 +2284,14 @@ begin
   DefineNative(RootAt(TempTop - 1), 'collected', Work_Collected, 0);
   DefineOwn(SharedV, AtomOf('work'), RootAt(TempTop - 1), pfDefault);
   PopRoots(1);
-  { a test file's queued callbacks that throw fail the unit that queued them, not the run }
-  JobErrorsToHost := True;
-  JobErrorsDropWork := True;
+  DefineOwn(SharedV, AtomOf('moduleOnly'), MkBool(TestModuleOnly), pfDefault);
+  { a test file's queued callbacks that throw fail the unit that queued them, not the run (module-only: only while
+    runTests runs, deadline.settle) }
+  if not TestModuleOnly then
+  begin
+    JobErrorsToHost := True;
+    JobErrorsDropWork := True;
+  end;
   PushRoot(GlobalObj);
   PushRoot(SharedV);
   Result := CallPrelude('<goccia:test>', TestingSrc, Base, 2, TestApiV, Err);

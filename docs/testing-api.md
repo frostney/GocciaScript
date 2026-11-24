@@ -52,27 +52,25 @@ The module exports everything the globals do — `describe`, `test`, `it`, `expe
 
 #### Availability per binary
 
-The testing API is installed by `InstallTestingAPI` (`G2.HostAPI`), which runs the `goccia:test` prelude (`source/g2/prelude/testing.js`). That prelude defines the globals and registers the `goccia:test` module in one step, so a host gets both or neither. `GocciaTestRunner` is the only application that calls it.
+The testing API is installed by `InstallTestingAPI` (`G2.HostAPI`), which runs the `goccia:test` prelude (`source/g2/prelude/testing.js`). In `GocciaTestRunner` it defines the globals and registers the `goccia:test` module. Every other host that installs the runtime registers `goccia:test` module-only: the first import that resolves installs the API without any testing global, so a script that never imports it pays nothing.
 
 | Binary | `goccia:test` | Testing globals |
 |---|---|---|
 | `GocciaTestRunner` | Yes | Yes |
-| `GocciaRunner` (host and sandbox mode) | No | No |
-| `GocciaREPL` | No | No |
-| `GocciaBenchmarkRunner` | No | No |
-| `GocciaScriptLoaderBare` | No | No |
-
-Outside the runner an `import` of `goccia:test` fails to resolve.
+| `GocciaRunner` (host and sandbox mode) | Yes | No |
+| `GocciaREPL` | Yes | No |
+| `GocciaBenchmarkRunner` | Yes | No |
+| `GocciaScriptLoaderBare` | No — attaches no runtime | No |
 
 The [timer surface](#fake-timers) — `goccia:timers` and the `setTimeout` family — is installed with the host unless the host turns it off (`TG2Engine.ExposeTimers`). `GocciaRunner`, its sandbox mode, `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off; `GocciaTestRunner` and `GocciaREPL` keep it. The timers are deterministic and carry no ambient authority either way.
 
 An embedder sets `TG2Engine.TestMode` for the test framework's host behaviour (no process exit on an uncaught error, the `vitest` shim below) and calls `InstallTestingAPI` after `TG2Engine.PrepareHost` to get the API.
 
-The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) straight to standard output, not through the console builtin. `GocciaTestRunner` mutes them in its `--output=json` and `--output=compact-json` modes (the `TestReporterOn` thread variable in `G2.HostAPI`), so they never precede a JSON envelope, and in those modes it does not print parse warnings either. Muting loses no information: the run's report still carries the counts and failure messages.
+The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) and, outside the runner, the `=== Test Results ===` block straight to standard output, not through the console builtin. It is on when the host sets the `TestReporterOn` thread variable in `G2.HostAPI`: `GocciaTestRunner` sets it except in its `--output=json` and `--output=compact-json` modes, and `GocciaRunner` except in those modes and `--silent`, so the reporter never precedes a JSON envelope. Its sandbox mode leaves it off, as the sandbox's console is captured. Muting loses no information: the run's report, or the `runTests()` result, still carries the counts and failure messages.
 
-#### Running the registered suites from a file
+#### Running an imported suite outside the runner
 
-`describe` and `test` only *register* — they never execute on their own. `GocciaTestRunner` drives execution after the file is evaluated. `runTests`, also exported by `goccia:test`, runs everything registered so far itself:
+`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A `GocciaRunner` script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
 
 ```javascript
 import { expect, runTests, test } from "goccia:test";
@@ -81,12 +79,17 @@ test("adds", () => {
   expect(1 + 1).toBe(2);
 });
 
-runTests().then((results) => {
-  console.log(results.passed, results.failed);
-});
+const results = runTests({ showTestResults: false });
+if (results.failed > 0) {
+  throw new Error(`${results.failed} test(s) failed`);
+}
 ```
 
-`runTests` takes no options and returns a Promise of a result object with `totalTests`, `passed`, `failed`, `skipped`, `totalRunTests`, `assertions`, `suiteErrors`, and `failedTests`. A second call re-runs the whole registry with fresh counts, not just the tests registered since the previous call — registration accumulates for the life of the file. The runner calls it once more after the file is evaluated, so tests a file runs itself also run again in the runner's pass, which is the one that counts.
+`runTests` executes everything registered so far, running the jobs and timers the tests leave until none is left, prints its report unless `showTestResults` is `false`, and returns a result object with `passed`, `failed`, `skipped`, `totalTests`, `totalRunTests`, `assertions`, `duration` (nanoseconds), `suiteErrors`, `failedTests` (one string per failure), and `summary`. It accepts `{ exitOnFirstFailure, showTestResults }`; `exitOnFirstFailure` is accepted for compatibility and does not stop the run.
+
+`runTests` reports; it does not decide. A failing test does not by itself change `GocciaRunner`'s exit status, because the runner has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
+
+Inside `GocciaTestRunner`, the global `runTests` is the prelude's own: it takes no options and returns a Promise of the result object (`totalTests`, `passed`, `failed`, `skipped`, `totalRunTests`, `assertions`, `suiteErrors`, and `failedTests` as `{ name, error }` records). The runner calls it once more after the file is evaluated, so tests a file runs itself also run again in the runner's pass, which is the one that counts.
 
 ### Available Assertions
 

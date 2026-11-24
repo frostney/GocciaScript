@@ -80,6 +80,10 @@
     shared.hostModules['goccia:ast'] = () => ({ parse });
   }
 
+  // goccia:test outside the test runner: the testing API installed module-only on its first import (the test
+  // runner's install registers its own)
+  if (!testMode && !shared.bare) shared.hostModules['goccia:test'] = () => n.testingModule();
+
   // the test runner's vitest compatibility shim, over goccia:test and goccia:timers (--no-vitest-compat: none)
   if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource();
 

@@ -1048,6 +1048,9 @@ begin
       Engine.ExposeTimers := False;
       Capture.Capturing := IsJsonOutput;
       Capture.Silent := FSilent.Present;
+      { an imported goccia:test's reporter (its per-test lines and runTests' results block): muted in a JSON run and
+        by --silent }
+      TestReporterOn := not IsJsonOutput and not FSilent.Present;
       if LogFileOpen then
         Capture.LogLine := HandleConsoleLog;
       if IsJsonOutput then
