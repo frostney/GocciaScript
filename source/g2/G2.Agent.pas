@@ -32,6 +32,7 @@ type
   TAgentThread = class(TThread)
   public
     Source: UnicodeString;
+    Ceiling: Int64;   { the starting thread's HeapCeiling, the agent's engine's too }
     { the pending broadcast, guarded by AgentLock }
     MsgBlock: PSharedBlock;
     MsgId: Double;
@@ -163,6 +164,7 @@ end;
 constructor TAgentThread.Create(const ASource: UnicodeString);
 begin
   Source := ASource;
+  Ceiling := HeapCeiling;
   MsgEvent := RTLEventCreate;
   FreeOnTerminate := False;
   inherited Create(True);
@@ -178,6 +180,7 @@ procedure TAgentThread.Execute;
 var Err: UnicodeString; G, Sab, CbArgs: array[0..1] of TValue; R: TValue; B: PSharedBlock; Id: Double;
 begin
   CurrentAgent := Self;
+  HeapCeiling := Ceiling;
   try
     EngineInit;
     try

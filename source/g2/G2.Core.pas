@@ -283,10 +283,11 @@ procedure CollectMajor;
 procedure NurseryFitCeiling;
 const
   NURSERY_MIN_ROOM = 64 * 1024;
-var
+threadvar
   { Goccia.gc.maxBytes (--max-memory, goccia.json max-memory): an allocation charged against it (HeapReserve) that
-    would take the heap past it collects, tests again and is refused; 0 none. One setting for every thread }
-  HeapCeiling: Int64 = 0;
+    would take the heap past it collects, tests again and is refused; 0 none. Each thread's engine its own: a
+    runner's workers run files with different limits side by side (an agent's thread takes its starter's) }
+  HeapCeiling: Int64;
 { the old generation and the nursery's used part (Goccia.gc.bytesAllocated) }
 function HeapUsedBytes: Int64;
 { every byte the heap has allocated since HeapInit, garbage included (a CLI report's allocatedDuringRunBytes) }
