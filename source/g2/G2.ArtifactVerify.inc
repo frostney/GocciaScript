@@ -328,6 +328,10 @@ begin
           begin
             if B <> 2 then Bad('for-in visit with other than two operands');
           end
+          else if C = INTRINSIC_IS_RETCOMP then
+          begin
+            if B <> 1 then Bad('return completion test with other than one operand');
+          end
           else if (C < 0) or (C >= INTRINSIC_COUNT) then Bad(Format('intrinsic %d unknown', [C]));
         end;
       opCheckType: begin Reg(A); OneOf(C, TYPE_NUMBER, TYPE_OBJECT, 'type'); end;

@@ -212,6 +212,8 @@ const
   INTRINSIC_COUNT = 17;
   { (key, object): a for-in loop's check at a key's turn, native (XIntrinsic): no prelude entry }
   INTRINSIC_FORIN_VISIT = 64;
+  { (completion): true when it is a generator's return completion in flight through a handler }
+  INTRINSIC_IS_RETCOMP = 65;
 threadvar
   Intrinsics: array[0..INTRINSIC_COUNT - 1] of TValue;
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
@@ -8346,6 +8348,11 @@ end;
 function XIntrinsic(Idx: Integer; Args: PValue; Argc: Integer; var Res: TValue): Boolean; noinline;
 begin
   if Idx = INTRINSIC_FORIN_VISIT then Exit(ForInVisit(Args[0], Args[1], Res));
+  if Idx = INTRINSIC_IS_RETCOMP then
+  begin
+    Res := MkBool(IsRetComp(Args[0]));
+    Exit(True);
+  end;
   Result := CallValue(Intrinsics[Idx], VUndefined, Args, Argc, Res);
 end;
 

@@ -4953,8 +4953,17 @@ begin
   PatchHere(Exit_);
   Emit(Ins(opEndTry, 0, 0, 0));
   R := EmitJ(opJmp, 0, 0);
-  { an exception in the loop: return() called and awaited, its own failure ignored, then the rethrow }
+  { a generator's return completion through the loop (its return() while suspended in the body): AsyncIteratorClose
+    as for a normal completion (7.4.13: return()'s errors and a non-object result are thrown), then the completion
+    goes on }
   PatchHere(H);
+  Emit(Ins(opMov, Exc2, Exc, 0));
+  Emit(Ins(opIntrinsic, Exc2, 1, INTRINSIC_IS_RETCOMP));
+  JQ := EmitJ(opJF, Exc2, 0);
+  EmitAsyncIterClose(It, Sv);
+  Emit(Ins(opThrow, Exc, 0, 0));
+  PatchHere(JQ);
+  { an exception in the loop: return() called and awaited, its own failure ignored, then the rethrow }
   H2 := Emit(Ins(opTry, Exc2, 0, 0));
   JQ := EmitJ(opAsyncIterReturn, Sv, It);
   Emit(Ins(opAwait, Sv, Sv, 0));
