@@ -17,10 +17,8 @@ features: [ShadowRealm, Timers]
 // `goccia:csv` reproduce it identically — so this file uses the timer globals
 // only. See docs/adr/0113-deterministic-virtual-timer-queue.md.
 
-// `Array.fromAsync` over an async iterator awaits on the caller's own stack
-// rather than suspending, which is what makes the drain reachable at all: an
-// ordinary `async` function suspends and resumes through a promise reaction, so
-// its `await` never gets there. This shape does.
+// `Array.fromAsync` over an async iterator that never settles: the caller
+// returns while the promise stays pending.
 const PENDING_FROM_ASYNC =
   "(() => {" +
   "  const iterable = {" +
@@ -41,16 +39,18 @@ const pendingFromAsyncHere = () => {
 };
 
 describe("a child realm does not run the parent's timers", () => {
-  test("the drain is reachable at all from this shape", () => {
+  test("a pending Array.fromAsync runs no timer before it returns", async () => {
+    // Array.fromAsync (ES2027 draft §23.1.2.2) returns a promise and runs its
+    // steps as jobs: it never waits on the caller's stack, so a timer the
+    // caller set runs only once the caller's job is done.
     let parentTimerRan = false;
     setTimeout(() => {
       parentTimerRan = true;
     }, 0);
 
-    // Run in the parent, where the queue's owner IS the current realm: the
-    // timer runs. Without this half the isolation test below would pass for the
-    // wrong reason — because nothing reached the drain either way.
     expect(pendingFromAsyncHere()).toBe("parent-ran");
+    expect(parentTimerRan).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(parentTimerRan).toBe(true);
   });
 
