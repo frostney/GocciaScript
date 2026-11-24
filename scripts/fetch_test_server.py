@@ -22,6 +22,7 @@ When an IPv6 port file is supplied, also serves on ::1 if available.
 """
 
 import errno
+import os
 import http.server
 import json
 import socket
@@ -155,6 +156,28 @@ class IPv6HTTPServer(http.server.HTTPServer):
     address_family = socket.AF_INET6
 
 
+def stall_ipv4(port):
+    # Linux leaves new connections pending when this one-slot accept queue
+    # fills. Confirm that condition before publishing the IPv6 fixture.
+    listener = socket.socket()
+    held = None
+    try:
+        listener.bind(("127.0.0.1", port))
+        listener.listen(0)
+        held = socket.create_connection(("127.0.0.1", port), 1)
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.5):
+                raise RuntimeError("IPv4 fixture did not stall the connection")
+        except TimeoutError:
+            pass
+        return listener, held
+    except BaseException:
+        if held is not None:
+            held.close()
+        listener.close()
+        raise
+
+
 def start_ipv6(port_file):
     try:
         server = IPv6HTTPServer(("::1", 0), Handler)
@@ -162,10 +185,13 @@ def start_ipv6(port_file):
         if exc.errno not in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
             raise
         return None
+    stalled = ()
+    if os.environ.get("GOCCIA_FETCH_IPV6_HOST"):
+        stalled = stall_ipv4(server.server_address[1])
     with open(port_file, "w") as f:
         f.write(str(server.server_address[1]))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+    return server, stalled
 
 
 def main():
@@ -184,8 +210,11 @@ def main():
         server.serve_forever()
     finally:
         if ipv6 is not None:
-            ipv6.shutdown()
-            ipv6.server_close()
+            server6, stalled = ipv6
+            server6.shutdown()
+            server6.server_close()
+            for sock in stalled:
+                sock.close()
 
 
 if __name__ == "__main__":

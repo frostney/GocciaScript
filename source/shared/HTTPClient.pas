@@ -623,7 +623,8 @@ var
   Pending: array of THTTPPollFD;
   Sock: TSocket;
   NowNs, NextAttemptNs, WakeNs, DelayNs: Int64;
-  I, Next, Count, AddressIndex, LastError, PollForMs, PollResult: Integer;
+  I, Next, Count, AddressIndex, LastAddressIndex, LastError, PollForMs, PollResult: Integer;
+  Endpoint: string;
 
   function TakeSocket(const ASocket: TSocket;
     const AAddressIndex: Integer): TSocket;
@@ -644,6 +645,7 @@ begin
   Count := 0;
   Next := 0;
   NextAttemptNs := 0;
+  LastAddressIndex := 0;
   LastError := 0;
   try
     while (Next < Length(Order)) or (Count > 0) do
@@ -658,12 +660,14 @@ begin
         Sock := OpenConnectSocket(AAddresses[AddressIndex]);
         if not IsValidHTTPSocket(Sock) then
         begin
+          LastAddressIndex := AddressIndex;
           LastError := SocketErrorCode;
           Continue;
         end;
         try
           if not SetSocketBlocking(Sock, False) then
           begin
+            LastAddressIndex := AddressIndex;
             LastError := SocketErrorCode;
             Continue;
           end;
@@ -673,6 +677,7 @@ begin
             Sock := InvalidHTTPSocket;
             Exit;
           end;
+          LastAddressIndex := AddressIndex;
           LastError := SocketErrorCode;
           if SocketConnectInProgress(LastError) then
           begin
@@ -718,6 +723,7 @@ begin
       begin
         if Pending[I].revents = 0 then
           Continue;
+        LastAddressIndex := PendingIndices[I];
         LastError := ConnectionSocketError(Pending[I].fd);
         if (LastError = 0) and ((Pending[I].revents and POLLOUT) <> 0) then
         begin
@@ -746,8 +752,11 @@ begin
       if IsValidHTTPSocket(Pending[I].fd) then
         SocketClose(Pending[I].fd);
   end;
+  Endpoint := AAddresses[LastAddressIndex].Text;
+  if Pos(':', Endpoint) > 0 then
+    Endpoint := '[' + Endpoint + ']';
   raise EHTTPError.CreateFmt('Failed to connect to %s:%d (%s)',
-    [AHost, APort, SysErrorMessage(LastError)]);
+    [Endpoint, APort, SysErrorMessage(LastError)]);
 end;
 
 function TryAcquireHTTPConnectionWorker: Boolean;
@@ -1688,6 +1697,8 @@ begin
   Address := Default(THTTPAddress);
   if TryParseIPAddress(AHost, Address.IP) then
   begin
+    if Pos('%', AHost) > 0 then
+      raise EHTTPError.Create('Scoped IPv6 literals are not supported by HTTP');
     Address.Text := AHost;
     AddAddress;
     Exit;

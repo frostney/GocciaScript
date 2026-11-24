@@ -376,15 +376,15 @@ begin
   Result := False;
 end;
 
-function StartsWithAddressBytes(const AAddress: TNetworkAddress;
-  const APrefix: array of Byte): Boolean;
+function IsIPv6Prefix(const AAddress: TNetworkAddress;
+  const APrefixLength: Integer; const APrefix: array of Byte): Boolean;
 var
-  I: Integer;
+  Network: TNetworkAddress;
 begin
-  for I := 0 to High(APrefix) do
-    if AAddress.Bytes[I] <> APrefix[I] then
-      Exit(False);
-  Result := True;
+  Network := Default(TNetworkAddress);
+  Network.Family := nafIPv6;
+  Move(APrefix[0], Network.Bytes[0], Length(APrefix));
+  Result := IsAddressInNetwork(AAddress, Network, APrefixLength);
 end;
 
 { IANA IPv6 Special-Purpose Address Registry: only these allocations within
@@ -393,13 +393,11 @@ end;
 function IsGlobalIETFIPv6Address(const AAddress: TNetworkAddress): Boolean;
 begin
   Result :=
-    (StartsWithAddressBytes(AAddress,
-      [$20, $01, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) and
+    (IsIPv6Prefix(AAddress, 120, [$20, $01, 0, 1]) and
       (AAddress.Bytes[15] in [1..3])) or                           // 2001:1::1–3
-    StartsWithAddressBytes(AAddress, [$20, $01, 0, 3]) or          // AMT
-    StartsWithAddressBytes(AAddress, [$20, $01, 0, 4, $01, $12]) or // AS112-v6
-    ((AAddress.Bytes[2] = 0) and
-     ((AAddress.Bytes[3] and $E0) = $20));                        // ORCHIDv2 and DETs
+    IsIPv6Prefix(AAddress, 32, [$20, $01, 0, 3]) or          // AMT
+    IsIPv6Prefix(AAddress, 48, [$20, $01, 0, 4, $01, $12]) or // AS112-v6
+    IsIPv6Prefix(AAddress, 27, [$20, $01, 0, $20]);                        // ORCHIDv2 and DETs
 end;
 
 function IsPrivateIPAddress(const AAddress: TNetworkAddress): Boolean;
@@ -436,15 +434,13 @@ begin
   { IANA limits global unicast assignments to 2000::/3. This excludes
     unspecified, loopback, deprecated IPv4-compatible addresses, ULA,
     link-local, multicast, and special-use space outside that block. }
-  if (AAddress.Bytes[0] and $E0) <> $20 then
+  if not IsIPv6Prefix(AAddress, 3, [$20]) then
     Exit(True);
-  if StartsWithAddressBytes(AAddress, [$20, $01]) and
-     (AAddress.Bytes[2] <= 1) then
+  if IsIPv6Prefix(AAddress, 23, [$20, $01]) then
     Exit(not IsGlobalIETFIPv6Address(AAddress));
-  Result := StartsWithAddressBytes(AAddress, [$20, $01, $0D, $B8]) or // 2001:db8::/32
-    (StartsWithAddressBytes(AAddress, [$3F, $FF]) and
-     ((AAddress.Bytes[2] and $F0) = 0)) or                         // 3fff::/20
-    StartsWithAddressBytes(AAddress, [$3F, $FE]);                  // retired 6bone
+  Result := IsIPv6Prefix(AAddress, 32, [$20, $01, $0D, $B8]) or // 2001:db8::/32
+    IsIPv6Prefix(AAddress, 20, [$3F, $FF]) or                   // 3fff::/20
+    IsIPv6Prefix(AAddress, 16, [$3F, $FE]);                     // retired 6bone
 end;
 
 function IsPrivateNetworkAddress(const AAddressText: string): Boolean;

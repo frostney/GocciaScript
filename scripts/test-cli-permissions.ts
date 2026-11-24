@@ -781,6 +781,27 @@ console.log("Fetch resolves names through the system resolver, hosts file includ
   }
 }
 
+if (isWindows) {
+  console.log("Fetch connects to an IPv6 loopback socket on Windows...");
+  const tmp = makeTmp();
+  const server = Bun.serve({
+    hostname: "::1",
+    port: 0,
+    fetch: () => new Response("ipv6"),
+  });
+  try {
+    const scope = `[::1]:${server.port}`;
+    const file = join(tmp, "ipv6.js");
+    writeFileSync(file, `const response = await fetch("http://${scope}/"); console.log(response.status, await response.text());\n`);
+    const connected = await runAsync(RUNNER, [`--allow-net=${scope}`, file]);
+    expectExit(connected, 0, "IPv6 loopback fetch");
+    expectIncludes(connected.stdout, "200 ipv6", "IPv6 loopback body");
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+}
+
 // -- Config permissions ------------------------------------------------------------
 
 console.log("A malformed permissions value fails instead of being ignored...");

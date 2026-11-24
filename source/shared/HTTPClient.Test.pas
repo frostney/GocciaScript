@@ -2662,8 +2662,8 @@ begin
     ResolveHostToAddress('app.localhost'))).ToBe(True);
 end;
 
-{ A name the platform resolver answers comes back as dotted-quad text. The
-  Windows lane formats the octets itself; this is what exercises it. }
+{ On Windows, check that the system resolver returns a parseable numeric
+  address for the computer's name. Either address family is valid. }
 procedure THTTPClientTests.TestResolvesAHostNameToAnAddress;
 var
   Address, Name: string;

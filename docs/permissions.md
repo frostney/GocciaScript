@@ -117,17 +117,17 @@ RFC 1918, and the `169.254.169.254` metadata address too. An address scope with
 a port names the address for that port only: `127.0.0.1:18765` lifts the
 private refusal for port 18765, not for port 22, whether the URL names the
 address or a host name that resolves to it. A `private` **deny**
-wins over every allow, explicit addresses and ranges included. IPv6 forms that
-embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
-6to4 `2002::/16` — are private when the host they embed is.
+wins over every allow, explicit addresses and ranges included. The
+[IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+defines the non-public IPv6 ranges. IPv4-mapped addresses, well-known NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) also apply the IPv4 rules to the
+address they carry. Deprecated IPv4-compatible addresses are non-public.
 
-This is checked twice: against an address literal in the URL, and against the
-address a host name resolved to — so `api.example.com` whose DNS answers with
-`169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
-allowed. Both checks run again on every redirect hop; a hop that reuses the
-connection of a redirect within the origin checks the address that connection
-was opened to rather than resolving the name again
-([Fetch: Redirects](built-ins-fetch.md#redirects)).
+Fetch checks the URL's host before lookup and each numeric address before
+connecting. A rejected address is skipped, and the fetch fails with
+`PermissionDenied` when all candidates are rejected. A redirect repeats the
+checks, and a same-origin redirect on an existing connection rechecks that
+connection's address ([Fetch: Redirects](built-ins-fetch.md#redirects)).
 
 `private` is a grant of its own: `--allow-net=private` reaches
 `http://127.0.0.1:8080` and `http://localhost:8080`, but no public address. A
