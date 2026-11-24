@@ -4728,10 +4728,11 @@ begin
             ModuleContext.ModuleEnvironmentInitialized := True;
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
               ModuleScope, FModuleLoader, False);
-            { The requested modules live from their evaluation to the drain
-              of their evaluation promises, and are freed whichever way that
-              ends: an import that does not resolve, link or evaluate, or a
-              stop, raises out of it. }
+            { The list of the requested modules (the loader owns the modules)
+              lives from their evaluation to the drain of their evaluation
+              promises, and is freed whichever way that ends: an import that
+              does not resolve, link or evaluate, or a stop, raises out of
+              it. }
             EntryRequestedModules := TGocciaModuleList.Create;
             try
               EvaluateEntryRequestedModulesInSourceOrder(

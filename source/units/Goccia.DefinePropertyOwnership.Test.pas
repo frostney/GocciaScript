@@ -88,7 +88,8 @@ const
     '}' + LineEnding +
     'export const n = made.length;';
   SCRIPT_UNRESOLVED_IMPORT =
-    'import { x } from "./missing.js";' + LineEnding +
+    'import { x } from "goccia-ownership-test-module-nobody-registers";' +
+    LineEnding +
     'export const n = x;';
   { Every second allocation: see the header. }
   SWEEP_STRIDE = 2;
@@ -186,7 +187,7 @@ type
     RaisedClass: ShortString;
     BlocksSeen: Int64;
     constructor Create(const AAbortAtBlock: Int64; const AInScript: Boolean;
-      const AScript: string = SCRIPT_DEFINITIONS);
+      const AScript: string);
   end;
 
   TEmbedderAbortTests = class(TTestSuite)
