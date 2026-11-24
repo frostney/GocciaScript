@@ -22,15 +22,12 @@ uses
   SysUtils,
   Classes,
 
-  Goccia.GarbageCollector,
-
-  Goccia.Values.Primitives,
-  Goccia.Values.ArrayValue,
+  Goccia.DataTree,
   Goccia.YAML;
 
 var
   ExitCode: Integer;
-  Documents: TGocciaArrayValue;
+  Documents: TGocciaDataTree;
   Parser: TGocciaYAMLParser;
   Source: TStringList;
 begin
@@ -38,8 +35,6 @@ begin
     Halt(2);
 
   ExitCode := 0;
-  TGarbageCollector.Initialize;
-  PinPrimitiveSingletons;
 
   Source := TStringList.Create;
   Parser := TGocciaYAMLParser.Create;
@@ -58,7 +53,6 @@ begin
   finally
     Parser.Free;
     Source.Free;
-    TGarbageCollector.Shutdown;
   end;
 
   Halt(ExitCode);

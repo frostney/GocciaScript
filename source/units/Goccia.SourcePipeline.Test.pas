@@ -9,7 +9,6 @@ uses
   TestingPascalLibrary,
 
   Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.SourcePipeline,
   Goccia.TestSetup;
 
@@ -404,13 +403,8 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(
-      TSourcePipelineTests.Create('SourcePipeline'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(
+    TSourcePipelineTests.Create('SourcePipeline'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

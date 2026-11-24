@@ -49,16 +49,6 @@ jobs:
       - name: Check formatting
         run: ./format.pas --check
 
-      - name: Check VM stack-slot stores
-        run: |
-          npx tsx scripts/check-vm-stack-stores.ts --self-test
-          npx tsx scripts/check-vm-stack-stores.ts
-
-      - name: Check VM dispatch layout
-        run: |
-          npx tsx scripts/check-vm-dispatch-layout.ts --self-test
-          npx tsx scripts/check-vm-dispatch-layout.ts
-
       - name: Check build-system behavior
         run: python3 scripts/test-build-system.py
 

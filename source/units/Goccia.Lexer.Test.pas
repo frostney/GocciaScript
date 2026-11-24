@@ -10,7 +10,6 @@ uses
   TestingPascalLibrary,
 
   Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
@@ -834,12 +833,7 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(TLexerTests.Create('Lexer'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(TLexerTests.Create('Lexer'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

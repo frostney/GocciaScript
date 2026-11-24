@@ -61,12 +61,10 @@ implementation
 uses
   TextSemantics,
 
-  Goccia.JSON,
+  Goccia.DataTree,
+  Goccia.DataTree.JSON,
   Goccia.SourceMap.VLQ,
-  Goccia.TextFiles,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.TextFiles;
 
 const
   INITIAL_CAPACITY = 64;
@@ -129,72 +127,71 @@ begin
   SetLength(FSegments, FSegmentCapacity);
 end;
 
-// Parse the source map JSON using the project's existing TGocciaJSONParser.
+// Parse the source map JSON as a data tree (Goccia.DataTree.JSON).
 procedure TGocciaSourceMapConsumer.ParseJSON(const AJSON: string);
+
+  function StringProperty(const AObject: TGocciaDataNode; const AKey: string;
+    out AValue: string): Boolean;
+  var
+    Node: TGocciaDataNode;
+  begin
+    Result := False;
+    if not AObject.HasProperty(AKey) then
+      Exit;
+    Node := AObject.GetProperty(AKey);
+    Result := Node.Kind = dnkString;
+    if Result then
+      AValue := Node.StringValue;
+  end;
+
+  procedure AddStrings(const AObject: TGocciaDataNode; const AKey: string;
+    const ATarget: TStrings);
+  var
+    Node, Elem: TGocciaDataNode;
+    I: Integer;
+  begin
+    if not AObject.HasProperty(AKey) then
+      Exit;
+    Node := AObject.GetProperty(AKey);
+    if Node.Kind <> dnkArray then
+      Exit;
+    for I := 0 to Node.Count - 1 do
+    begin
+      Elem := Node.Items[I];
+      if Elem.Kind = dnkString then
+        ATarget.Add(Elem.StringValue)
+      else
+        ATarget.Add('');
+    end;
+  end;
+
 var
-  Parser: TGocciaJSONParser;
-  Root, PropValue, Elem: TGocciaValue;
-  Obj: TGocciaObjectValue;
-  Arr: TGocciaArrayValue;
-  I: Integer;
+  Tree: TGocciaDataTree;
+  Root: TGocciaDataNode;
+  Text: string;
 begin
-  Parser := TGocciaJSONParser.Create;
+  Tree := ParseJSONDataTree(AJSON);
   try
-    Root := Parser.Parse(string(AJSON));
+    Root := Tree.Root;
+    if Root.Kind <> dnkObject then
+      raise Exception.Create('Source map must be a JSON object');
+
+    if StringProperty(Root, 'sourceRoot', Text) then
+    begin
+      FSourceRoot := Text;
+      // Ensure trailing separator for non-empty roots
+      if (FSourceRoot <> '') and (FSourceRoot[Length(FSourceRoot)] <> '/') then
+        FSourceRoot := FSourceRoot + '/';
+    end;
+
+    AddStrings(Root, 'sources', FSources);
+    AddStrings(Root, 'names', FNames);
+
+    // Decode mappings string
+    if StringProperty(Root, 'mappings', Text) and (Text <> '') then
+      DecodeMappings(Text);
   finally
-    Parser.Free;
-  end;
-
-  if not (Root is TGocciaObjectValue) then
-    raise Exception.Create('Source map must be a JSON object');
-  Obj := TGocciaObjectValue(Root);
-
-  // Extract sourceRoot
-  PropValue := Obj.GetProperty('sourceRoot');
-  if Assigned(PropValue) and (PropValue is TGocciaStringLiteralValue) then
-  begin
-    FSourceRoot := TGocciaStringLiteralValue(PropValue).Value;
-    // Ensure trailing separator for non-empty roots
-    if (FSourceRoot <> '') and (FSourceRoot[Length(FSourceRoot)] <> '/') then
-      FSourceRoot := FSourceRoot + '/';
-  end;
-
-  // Extract sources array
-  PropValue := Obj.GetProperty('sources');
-  if Assigned(PropValue) and (PropValue is TGocciaArrayValue) then
-  begin
-    Arr := TGocciaArrayValue(PropValue);
-    for I := 0 to Arr.Elements.Count - 1 do
-    begin
-      Elem := Arr.Elements[I];
-      if Elem is TGocciaStringLiteralValue then
-        FSources.Add(TGocciaStringLiteralValue(Elem).Value)
-      else
-        FSources.Add('');
-    end;
-  end;
-
-  // Extract names array
-  PropValue := Obj.GetProperty('names');
-  if Assigned(PropValue) and (PropValue is TGocciaArrayValue) then
-  begin
-    Arr := TGocciaArrayValue(PropValue);
-    for I := 0 to Arr.Elements.Count - 1 do
-    begin
-      Elem := Arr.Elements[I];
-      if Elem is TGocciaStringLiteralValue then
-        FNames.Add(TGocciaStringLiteralValue(Elem).Value)
-      else
-        FNames.Add('');
-    end;
-  end;
-
-  // Decode mappings string
-  PropValue := Obj.GetProperty('mappings');
-  if Assigned(PropValue) and (PropValue is TGocciaStringLiteralValue) then
-  begin
-    if TGocciaStringLiteralValue(PropValue).Value <> '' then
-      DecodeMappings(TGocciaStringLiteralValue(PropValue).Value);
+    Tree.Free;
   end;
 end;
 
