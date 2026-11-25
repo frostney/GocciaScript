@@ -8,8 +8,10 @@ unit Goccia.CLI.StandardDescriptors;
   standard error. On a Unix, this unit's initialization opens /dev/null onto
   each of descriptors 0, 1 and 2 that is closed, before any file is opened, as
   Node does at startup. Writes to a descriptor that was closed then go
-  nowhere. Every CLI program uses it through Goccia.CLI.Application; the
-  engine does not, so an embedder's descriptors are its own. }
+  nowhere. The TGocciaCLIApplication hosts (GocciaRunner, GocciaTestRunner,
+  GocciaBenchmarkRunner, GocciaREPL and GocciaBundler) use it through
+  Goccia.CLI.Application; the bare loader, the harnesses and the engine do
+  not, so an embedder's descriptors are its own. }
 
 interface
 

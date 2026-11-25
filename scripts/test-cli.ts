@@ -4616,6 +4616,31 @@ if (process.platform !== "win32") {
     const logged = normalizeLineEndings(readFileSync(log, "utf-8"));
     if (logged !== "[error] Error: first\n[error] Error: second\n[log] after\n")
       throw new Error(`The --log file should hold only its records with stderr closed, got ${JSON.stringify(logged)}`);
+    // Descriptor 2 open for reading only: every write to it fails (EBADF)
+    // and is dropped.
+    const readOnly = Bun.spawnSync(["sh", "-c", 'exec "$0" "$1" 2</dev/null', RUNNER, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const readOnlyOut = normalizeLineEndings(readOnly.stdout.toString());
+    if (readOnly.exitCode !== 0 || !readOnlyOut.startsWith("after\n"))
+      throw new Error(`console.error to a read-only stderr should not end the script, got exit ${readOnly.exitCode}: ${readOnlyOut}`);
+    // stderr on a pipe whose reader has gone: the write raises SIGPIPE, which
+    // the console holds off, so the script goes on. The script waits before
+    // it writes, so the reader (`:`) has exited by then.
+    const late = join(tmp, "late.js");
+    const lateOutPath = join(tmp, "late.out");
+    writeFileSync(
+      late,
+      ["const start = Date.now();", "while (Date.now() - start < 500) {}", 'console.error("failing");', 'console.log("after");', ""].join("\n"),
+    );
+    const broken = Bun.spawnSync(["sh", "-c", '"$0" "$1" --compat-while-loops 2>&1 >"$2" | :', RUNNER, late, lateOutPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const lateOut = normalizeLineEndings(readFileSync(lateOutPath, "utf-8"));
+    if (!lateOut.startsWith("after\n"))
+      throw new Error(`console.error to a pipe with no reader should not end the script, got stdout ${JSON.stringify(lateOut)}: ${broken.stderr.toString()}`);
   } finally {
     clean(tmp);
   }

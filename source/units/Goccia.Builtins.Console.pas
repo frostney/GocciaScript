@@ -82,6 +82,7 @@ uses
   SysUtils,
 
   ProcessEncoding,
+  SigPipeGuard,
   TimingUtils;
 
 function ConsoleMethodWritesToStderr(const AMethod: string): Boolean;
@@ -135,25 +136,34 @@ end;
   or the process ends. Before a standard-error line, whatever is still in
   standard output's buffer goes out first, so with both streams on one pipe or
   file the lines keep the order they were logged in. A write that fails, to a
-  closed descriptor or a full disk, is dropped, as Node's console drops it: a
-  console call never ends the script. }
+  closed descriptor, a full disk or a pipe whose reader has gone, is dropped,
+  as Node's console drops it: SigPipeGuard holds off the SIGPIPE such a pipe
+  raises on this thread, so a console call never ends the script. }
 procedure WriteConsoleLine(const AToStderr: Boolean; const ALine: string);
+var
+  Guard: TSigPipeGuard;
+  Failed: Boolean;
 begin
+  BeginSigPipeGuard(Guard);
   {$I-}
   if AToStderr then
   begin
     Flush(Output);
+    Failed := InOutRes <> 0;
     InOutRes := 0;
     WriteLn(ErrOutput, ALine);
     Flush(ErrOutput);
   end
   else
   begin
+    Failed := False;
     WriteLn(ALine);
     Flush(Output);
   end;
   {$I+}
+  Failed := Failed or (InOutRes <> 0);
   InOutRes := 0;
+  EndSigPipeGuard(Guard, Failed);
 end;
 
 { ALine starts with the group indentation; inside a group, every further line
