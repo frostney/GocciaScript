@@ -25,12 +25,22 @@ convention and the prebuilt RTL do not change. FPC's `SetExceptionMask` and
 `SetRoundMode` set both units, and its Win32 exception handler translates
 SSE2 traps.
 
+SSE2 arithmetic follows MXCSR, which FPC's setters change only in part: they
+leave its flush-to-zero and denormals-are-zero bits as the caller set them,
+and on i386 they read the rounding mode and exception mask back from the x87
+control word. `EnterGocciaFloatingPointScope` therefore saves MXCSR (FPCR on
+AArch64, whose FZ bit does the same), clears the flush-to-zero modes, and
+`LeaveGocciaFloatingPointScope` restores the saved register whole, status
+flags included.
+
 ## Consequences
 
 Double arithmetic on FPC's `i386-win32` build rounds once and returns the
-same bits as the other targets. The build needs a CPU with SSE2: a
-Pentium 4, Athlon 64 or later. A 32-bit Windows 8 or later requires SSE2 to
-install, so only Windows 7 or XP on an older CPU loses the build. FPC's
+same bits as the other targets. Every FPC i386 build needs a CPU with SSE2:
+a Pentium 4, Athlon 64 or later. A 32-bit Windows 8 or later requires SSE2
+to install, so only Windows 7 or XP on an older CPU loses the `i386-win32`
+build. A host that runs with flush-to-zero set still gets gradual underflow
+inside the engine, on every target. FPC's
 i386 `GetRoundMode` reads the x87 control word, not MXCSR, so the decimal
 parser's inexact fast path stays off on 32-bit x86. Delphi's Win32 compiler
 generates only x87 code, so its build still rounds a subnormal product or

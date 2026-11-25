@@ -351,6 +351,10 @@ version 3.2.2 or 3.2.4. The package managers install 3.2.2:
 - Ubuntu/Debian: `sudo apt-get install fpc`
 - Windows: `choco install freepascal`
 
+A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in
+SSE2, so it runs only on a Pentium 4, Athlon 64 or later CPU
+([ADR 0186](docs/adr/0186-fpc-i386-builds-compute-doubles-in-sse2.md)).
+
 CI is pinned to the FPC 3.2.4 build `3.2.4-rc2-b1` from
 [fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
 same compiler on Linux or macOS, install it next to any other FPC and put it

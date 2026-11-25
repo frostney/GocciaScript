@@ -289,6 +289,9 @@ describe("exponentiation with exponent 2 and a subnormal result", () => {
 
   test.each(squares)("%s ** 2 rounds once to %s", (x, expected) => {
     expect(power(x, 2)).toBe(expected);
+  });
+
+  test.each(squares)("a boxed %s ** 2 rounds once to %s", (x, expected) => {
     expect(boxed(x, 2)).toBe(expected);
   });
 
