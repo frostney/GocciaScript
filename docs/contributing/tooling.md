@@ -340,9 +340,10 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 
 AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
 the instrumentation comes from the assembler. On x86-64 Linux with AFL++
-installed (`afl++` on Debian and Ubuntu):
+installed (`afl++` on Debian and Ubuntu), a C compiler and make:
 
 ```bash
+scripts/afl/build-afl-as.sh
 mkdir -p build/compiled/targets/fuzzharness-afl
 fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
@@ -354,8 +355,15 @@ afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl 
 [`scripts/afl/as`](../../scripts/afl/as) as its assembler. That script reshapes
 FPC's section directives and jump labels into the form AFL++'s `afl-as`
 recognises, and `afl-as` adds a coverage trampoline at every function entry,
-branch target and conditional branch, plus the fork server. Set `AFL_PATH`
-when `afl-as` is not in `/usr/lib/afl`. FPC's runtime library stays
+branch target and conditional branch, plus the fork server. AFL++ removed
+`afl-as` after v4.21c, so current packages (Ubuntu 26.04's 4.33c, for one)
+have none: `scripts/afl/build-afl-as.sh` builds it from the v4.21c release,
+checked against its SHA-256, into `build/afl/`. `scripts/afl/as` uses
+`AFL_PATH/afl-as` when `AFL_PATH` is set, else `build/afl/afl-as`, else
+`/usr/lib/afl/afl-as`. The package's own `afl-fuzz` and `afl-showmap` drive
+the harness: they still accept the fork server `afl-as` adds, and say "Old
+fork server model is used by the target, this still works though". FPC's
+runtime library stays
 uninstrumented. AFL keeps every mutant that reaches new coverage, so the queue
 grows past the seeds; `afl-showmap` on two different inputs shows different
 maps. Both builds come from the same source with the same checks, so either
