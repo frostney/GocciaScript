@@ -100,11 +100,41 @@ function HostPathIsSymlink(const APath: string): Boolean;
   symbolic link or reparse point, which is not followed. }
 function HostPathIsRegularFile(const APath: string): Boolean;
 
+{ True when APath names a regular file, a symbolic link followed: not a
+  directory, a FIFO, a socket or a device. Judged without opening it, from
+  the name as the RTL spells it, the spelling FileExists checks. }
+function HostPathNamesRegularFile(const APath: string): Boolean;
+
 { Every byte of the open file AHandle, read from its start through that
   handle, so the bytes read are those of the file the handle pins. False
   with AError when the handle cannot be read. }
 function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
   out AError: string): Boolean;
+
+type
+  { What ReadRegularHostFileBytes found. }
+  TRegularHostFileRead = (
+    { ABytes holds the file's bytes. }
+    rhfRead,
+    { APath names something that is not a regular file. }
+    rhfNotRegularFile,
+    { APath could not be read, or the file shrank while it was. }
+    rhfFailed
+  );
+
+{ Every byte of APath, only when it is a regular file, read without waiting
+  on it. On POSIX the name is opened without following a symbolic link and
+  without blocking, spelled as the RTL spells file names, and the opened
+  file's own type is checked before a byte is read: a FIFO swapped in for
+  the file opens at once instead of waiting for a writer, and is refused
+  like a socket or a device. Exactly the size the file had when it was
+  opened is read; one that ends sooner is a failure, not a shorter copy.
+  Windows has no FIFOs in the filesystem; there a name that is not a
+  regular file (a directory or a reparse point) is refused before it is
+  opened, and one that cannot be looked up is a failure. AError says why, without repeating the path, whenever the result
+  is not rhfRead. }
+function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
+  out AError: string): TRegularHostFileRead;
 
 { APath with every symbolic link along it resolved to the file it physically
   names, or '' when the host cannot answer.
@@ -484,6 +514,19 @@ begin
 end;
 {$ENDIF}
 
+function HostPathNamesRegularFile(const APath: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+begin
+  Result := (fpStat(APath, Info) = 0) and fpS_ISREG(Info.st_mode);
+end;
+{$ELSE}
+begin
+  Result := FileExists(APath) and not DirectoryExists(APath);
+end;
+{$ENDIF}
+
 function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
   out AError: string): Boolean;
 var
@@ -604,6 +647,118 @@ procedure ClosePinnedHostFile(const AHandle: THandle);
 begin
   if AHandle <> INVALID_HANDLE_VALUE then
     CloseHandle(AHandle);
+end;
+{$ENDIF}
+
+function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
+  out AError: string): TRegularHostFileRead;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  NOT_A_REGULAR_FILE = 'not a regular file';
+var
+  Handle: cint;
+  Info: Stat;
+  PathBytes: RawByteString;
+  Offset: SizeInt;
+  Count: TSsize;
+begin
+  ABytes := nil;
+  AError := '';
+  Result := rhfFailed;
+  { Spelled as the RTL spells file names, so the name opened is the one
+    FindFirst listed and FileExists checked, whatever the locale. }
+  PathBytes := ToSingleByteFileSystemEncodedFileName(APath);
+  Handle := fpOpen(PAnsiChar(PathBytes),
+    O_RDONLY or O_NONBLOCK or HOST_O_NOFOLLOW or HOST_O_CLOEXEC);
+  if Handle < 0 then
+  begin
+    AError := SysErrorMessage(fpgeterrno);
+    { A socket does not open at all, and a link is not followed: either is
+      still something that is not a regular file. }
+    if (fpLStat(PAnsiChar(PathBytes), Info) = 0) and
+       not fpS_ISREG(Info.st_mode) then
+    begin
+      AError := NOT_A_REGULAR_FILE;
+      Result := rhfNotRegularFile;
+    end;
+    Exit;
+  end;
+  try
+    if fpFStat(Handle, Info) <> 0 then
+    begin
+      AError := SysErrorMessage(fpgeterrno);
+      Exit;
+    end;
+    if not fpS_ISREG(Info.st_mode) then
+    begin
+      AError := NOT_A_REGULAR_FILE;
+      Exit(rhfNotRegularFile);
+    end;
+    { Exactly the size the file had when it was opened: a file that grows
+      meanwhile is copied as it was, one that ends sooner is a failure. }
+    SetLength(ABytes, Info.st_size);
+    Offset := 0;
+    while Offset < Length(ABytes) do
+    begin
+      Count := fpRead(Handle, ABytes[Offset], Length(ABytes) - Offset);
+      if (Count < 0) and (fpgeterrno = ESysEINTR) then
+        Continue;
+      if Count <= 0 then
+      begin
+        if Count < 0 then
+          AError := SysErrorMessage(fpgeterrno)
+        else
+          AError := 'the file shrank while it was read';
+        ABytes := nil;
+        Exit;
+      end;
+      Inc(Offset, Count);
+    end;
+    Result := rhfRead;
+  finally
+    fpClose(Handle);
+  end;
+end;
+{$ELSE}
+{$IFDEF MSWINDOWS}
+var
+  Attributes: LongInt;
+{$ENDIF}
+begin
+  ABytes := nil;
+  AError := '';
+  Result := rhfFailed;
+  {$IFDEF MSWINDOWS}
+  Attributes := FileGetAttr(APath);
+  if Attributes = -1 then
+  begin
+    AError := SysErrorMessage(GetLastOSError);
+    Exit;
+  end;
+  if (Attributes and (faDirectory or faSymLink)) <> 0 then
+  begin
+    AError := 'not a regular file';
+    Exit(rhfNotRegularFile);
+  end;
+  {$ELSE}
+  { The Lakon/WASI filesystem has directories and regular files only. }
+  if DirectoryExists(APath) then
+  begin
+    AError := 'not a regular file';
+    Exit(rhfNotRegularFile);
+  end;
+  {$ENDIF}
+  try
+    ABytes := ReadFileBytes(APath);
+  except
+    on E: Exception do
+    begin
+      ABytes := nil;
+      AError := E.Message;
+      Exit;
+    end;
+  end;
+  Result := rhfRead;
 end;
 {$ENDIF}
 
