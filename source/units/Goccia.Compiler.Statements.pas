@@ -1350,11 +1350,14 @@ begin
     else
       TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
 
-    // A var redeclaration stores into the existing var binding, so an
-    // initializer that brings no type of its own is checked against the type
-    // enforced on that binding. ResolveLocal could pick a same-named catch
-    // parameter instead (ES2026 B.3.4), which is not the slot written here.
-    if (TypeHint = sltUntyped) and IsVarRedeclaration then
+    // A var redeclaration stores into the existing var binding, so its
+    // initializer is checked against the type enforced on that binding.
+    // ResolveLocal could pick a same-named catch parameter instead (ES2026
+    // B.3.4), which is not the slot written here. That type wins over the
+    // initializer's own:
+    // code compiled earlier against it, such as a closure, trusts it, so
+    // `var x = "s"` over a `number` parameter throws a TypeError.
+    if IsVarRedeclaration then
     begin
       LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
@@ -1707,11 +1710,13 @@ begin
   end;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
-  { A declaration named like a parameter with a strict type stores into the
-    parameter's binding (ES2026 §10.2.11 step 36), which the body's code
-    trusts to hold that type; the store is checked like an assignment, so a
-    function in a `number` parameter throws a TypeError instead of reaching
-    a numeric instruction. }
+  { A declaration named like a parameter with a strict type, in a body whose
+    parameter list has no expression, shares the parameter's binding (ES2026
+    §10.2.11 step 29) and stores the function into it (step 37.3). Code
+    compiled against the parameter's type trusts it, so the store is checked
+    like an assignment and throws a TypeError. With an expression in the
+    parameter list the body has a binding of its own (step 30) and a
+    separate local, which is not checked. }
   if (LocalIdx >= 0) and ACtx.StrictTypes and
      ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
      (ACtx.Scope.GetLocal(LocalIdx).Slot = Slot) then
@@ -6304,8 +6309,6 @@ begin
     if AGuardDerivedThis then
       EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
         UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
-
-    EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
     EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -6490,7 +6493,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -6677,7 +6679,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -6791,8 +6792,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
       Length(AMethod.Parameters));
-
-    EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
     EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then

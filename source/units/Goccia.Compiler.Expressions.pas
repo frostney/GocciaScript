@@ -169,15 +169,14 @@ function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boole
 procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 { Under --strict-types, records the strict type of each annotated parameter
-  in AScope and ATemplate; EmitParameterTypeChecks then checks the arguments
-  on entry. Every function, method, constructor and setter body calls both. }
+  in AScope and ATemplate; EmitParameterInitialization then checks the
+  arguments on entry. Every function, method, constructor and setter body
+  calls both. }
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
   const ATemplate: TGocciaFunctionTemplate;
   const AParameters: TGocciaParameterArray;
   const AStrictTypes: Boolean);
-procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
-  const AParameters: TGocciaParameterArray);
 procedure EmitBodyVarEnvironment(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray; const ABody: TGocciaASTNode);
 procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
@@ -4038,12 +4037,19 @@ begin
   end;
 end;
 
+procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
+  const AParameters: TGocciaParameterArray); forward;
+
 // The parameter list's code, compiled with CompilingParameters set: a direct
 // eval in it declares its vars in the parameters' environment (ES2026
 // §10.2.11 step 20), which its eval site record names.
 procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 begin
+  { Every argument is checked before any of the parameter list's code runs:
+    a default that read or replaced an unchecked argument would run code
+    compiled against the parameter's type on a value of another. }
+  EmitParameterTypeChecks(ACtx, AParams);
   ACtx.Scope.CompilingParameters := True;
   try
     EmitParameterListBindings(ACtx, AParams);
@@ -4142,7 +4148,11 @@ begin
         // a parameter allows.
         // A direct eval in the body can also reach it (ADR 0134): the
         // body's var is then a binding of its own.
+        // A parameter with a strict type keeps its own local too: the body's
+        // var is an untyped binding of its own (step 30), which a store into
+        // it must not reach the parameter's type through.
         if not ParameterLocal.IsCaptured and
+           not ParameterLocal.IsStrictlyTyped and
            not ACtx.Scope.DirectEvalSeen and
            not (deuDirectEval in ACtx.Scope.DirectEvalUsage) then
           Continue;
@@ -4353,8 +4363,11 @@ begin
       EmitConstAssignmentError(ACtx, AName);
       Exit;
     end;
-    if AAssignmentMode and Local.IsStrictlyTyped and
-       (Local.TypeHint <> sltUntyped) then
+    { A declaration stores into a strictly typed local only when a `var`
+      redeclares a typed binding (a parameter, ES2026 §10.2.11 step 29), so
+      it is checked like an assignment: code compiled against the binding's
+      type trusts it. }
+    if Local.IsStrictlyTyped and (Local.TypeHint <> sltUntyped) then
       EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
         UInt8(Ord(Local.TypeHint)), 0));
     if Local.IsGlobalBacked and AAssignmentMode then
@@ -5389,8 +5402,6 @@ begin
     ChildCtx.NonStrictMode := ACtx.NonStrictMode and
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := OldDerivedGuard;
-
-    EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -7042,7 +7053,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -7208,7 +7218,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
@@ -7893,8 +7902,6 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(AExpr.Parameters),
       Length(AExpr.Parameters));
-
-    EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
