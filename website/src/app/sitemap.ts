@@ -12,7 +12,7 @@ export function buildSitemap(
   siteUrl = getSiteUrl(),
   appLastModified = APP_LAST_MODIFIED,
 ): MetadataRoute.Sitemap {
-  const normalizedSiteUrl = siteUrl.replace(/\/+$/, "") + "/";
+  const normalizedSiteUrl = `${siteUrl.replace(/\/+$/, "")}/`;
   const baseSiteUrl = siteUrl.replace(/\/+$/, "");
 
   const top = [

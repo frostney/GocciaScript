@@ -146,7 +146,11 @@ cd website
 bun install
 bun run test
 bun run lint
+bun run typecheck
 ```
+
+Pull-request CI runs the same three checks in its `website` job
+([Build System](../build-system.md#pryml--pull-requests)).
 
 Two regressions shipped in `website/src/lib/positioning.ts` during 0.11.0
 because the unprovisioned numbers were compared before and after a change and
