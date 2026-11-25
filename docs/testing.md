@@ -787,7 +787,7 @@ build → test, boot-timing, benchmark*      → timing comment (benchmark* also
 docs, test-structure, website (no build)  * also needs build-main, a build of the PR's base commit
 ```
 
-`docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs `bun run lint` (Biome), `bun run typecheck` and `bun run test` in `website/`.
+`docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs the website's own checks ([Build System](build-system.md#pryml--pull-requests)).
 
 The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the main thread plus all worker thread-local GCs. The benchmark runner collects after every file. The test runner collects after every file of a run with more than one file, on the worker that ran it. The collection count includes those collections. Reclaiming a worker's heap at shutdown is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
