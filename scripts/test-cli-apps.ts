@@ -12834,52 +12834,80 @@ await section("Runner sandbox mode: a command-line --diff-file may be a FIFO..."
 
 await section("Runner sandbox mode: a link or replaced input met at write-back fails the run...", async () => {
   if (process.platform === "win32") return;
-  for (const fromConfig of [false, true]) {
-    const tmp = makeNativeTmp();
-    try {
-      mkdirSync(join(tmp, "out", "sub"), { recursive: true });
-      mkdirSync(join(tmp, "elsewhere"));
-      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
-      writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
-      writeFileSync(join(tmp, "w.js"), [
-        'import fs from "fs";',
-        'const start = Date.now(); while (Date.now() - start < 1500) {}',
-        'fs.writeFileSync("/out/keep.txt", "NEW");',
-        'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
-      ].join("\n"));
-      if (fromConfig)
-        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
-      const args = ["w.js", "--compat-while-loops", "--source-type=module", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
-      // A subdirectory swapped for a link mid-run: that file is refused, the
-      // rest is written, and the run fails.
-      let proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
-      await Bun.sleep(500);
-      renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
-      symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
-      let exitCode = await proc.exited;
-      let stderr = normalizeLineEndings(await new Response(proc.stderr).text());
-      if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
-          readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
-          !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
-        throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+  // The script asks this server to swap the input and waits for its answer,
+  // so each swap lands after copy-in and before write-back, however slowly
+  // the runner starts. A fixed sleep before the swap raced a slow start.
+  let swap: (() => void) | null = null;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      const run = swap;
+      swap = null;
+      if (!run) return new Response("no swap is due", { status: 500 });
+      run();
+      return new Response("swapped");
+    },
+  });
+  try {
+    for (const fromConfig of [false, true]) {
+      const tmp = makeNativeTmp();
+      try {
+        mkdirSync(join(tmp, "out", "sub"), { recursive: true });
+        mkdirSync(join(tmp, "elsewhere"));
+        writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+        writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
+        writeFileSync(join(tmp, "w.js"), [
+          'import fs from "fs";',
+          `const answer = await fetch("http://127.0.0.1:${server.port}/swap");`,
+          'if (!answer.ok) throw new Error("swap failed: " + await answer.text());',
+          'fs.writeFileSync("/out/keep.txt", "NEW");',
+          'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
+        ].join("\n"));
+        if (fromConfig)
+          writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
+        const args = ["w.js", "--source-type=module", "--allow-net=127.0.0.1", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
+        const run = async (swapInput: () => void) => {
+          swap = swapInput;
+          const proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+          const timer = setTimeout(() => proc.kill(), 20000);
+          const exitCode = await proc.exited;
+          clearTimeout(timer);
+          const stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+          if (swap !== null)
+            throw new Error(`(config ${fromConfig}) the script never asked for the swap (exit ${exitCode}):\n${stderr}`);
+          return { exitCode, stderr };
+        };
 
-      // The whole input moved away and replaced by a real directory: nothing
-      // is written into the new one.
-      unlinkSync(join(tmp, "out", "sub"));
-      renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
-      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
-      proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
-      await Bun.sleep(500);
-      renameSync(join(tmp, "out"), join(tmp, "out.real"));
-      mkdirSync(join(tmp, "out"));
-      exitCode = await proc.exited;
-      stderr = normalizeLineEndings(await new Response(proc.stderr).text());
-      if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
-          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
-        throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
-    } finally {
-      clean(tmp);
+        // A subdirectory swapped for a link mid-run: that file is refused, the
+        // rest is written, and the run fails.
+        let { exitCode, stderr } = await run(() => {
+          renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
+          symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
+        });
+        if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
+            readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
+            !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
+          throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+
+        // The whole input moved away and replaced by a real directory: nothing
+        // is written into the new one.
+        unlinkSync(join(tmp, "out", "sub"));
+        renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
+        writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+        ({ exitCode, stderr } = await run(() => {
+          renameSync(join(tmp, "out"), join(tmp, "out.real"));
+          mkdirSync(join(tmp, "out"));
+        }));
+        if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
+            !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
+          throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
+      } finally {
+        clean(tmp);
+      }
     }
+  } finally {
+    server.stop(true);
   }
 });
 

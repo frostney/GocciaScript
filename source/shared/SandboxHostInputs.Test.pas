@@ -13,6 +13,19 @@ uses
   TestingPascalLibrary;
 
 type
+  { A sandbox clock that, once armed, moves a host directory away and puts a
+    new, empty one in its place the first time the sandbox asks it the time:
+    a copy-in asks when it writes a file it has read, so the swap lands in
+    the middle of the copy. }
+  TSwapDirectoryClock = class(TSandboxFsClock)
+  private
+    FDirectory: string;
+    FArmed: Boolean;
+  public
+    procedure Arm(const ADirectory: string);
+    function Now: TDateTime; override;
+  end;
+
   TSandboxHostInputsTests = class(TTestSuite)
   private
     FRoot: string;
@@ -44,6 +57,10 @@ type
     procedure TestCommandLineOutputWritesAsNamed;
     procedure TestCommandLineOutputNeverWaitsOnAFifo;
     procedure TestPinnedInputReplacedByADirectoryWritesNothing;
+    procedure TestInputReplacedDuringCopyWritesNothing;
+    procedure TestPinnedInputReplacedDuringCopyWritesNothing;
+    procedure TestConfigFileInputTurnedDirectoryWritesNothing;
+    procedure TestUnpinnedInputStopsAllWriteBack;
     procedure TestDirectoryIdentityTellsDirectoriesApart;
     procedure TestUnavailableIdentityMatchesNothing;
     procedure TestOutputFileRefusesUnidentifiedDirectory;
@@ -54,6 +71,28 @@ type
   public
     procedure SetupTests; override;
   end;
+
+const
+  { Room for the few small files the swap tests copy. }
+  SWAP_TEST_QUOTA_BYTES = 1024 * 1024;
+
+procedure TSwapDirectoryClock.Arm(const ADirectory: string);
+begin
+  FDirectory := ADirectory;
+  FArmed := True;
+end;
+
+function TSwapDirectoryClock.Now: TDateTime;
+begin
+  if FArmed then
+  begin
+    FArmed := False;
+    if not RenameFile(FDirectory, FDirectory + '.real') or
+       not CreateDir(FDirectory) then
+      raise Exception.Create('could not swap ' + FDirectory);
+  end;
+  Result := SysUtils.Now;
+end;
 
 procedure TSandboxHostInputsTests.SetupTests;
 begin
@@ -95,6 +134,14 @@ begin
     TestCommandLineOutputNeverWaitsOnAFifo);
   Test('A config input replaced by another directory gets nothing written',
     TestPinnedInputReplacedByADirectoryWritesNothing);
+  Test('An input replaced while it was being copied gets nothing written',
+    TestInputReplacedDuringCopyWritesNothing);
+  Test('A config input replaced while it was being copied gets nothing written',
+    TestPinnedInputReplacedDuringCopyWritesNothing);
+  Test('A config file input that became a directory gets nothing written',
+    TestConfigFileInputTurnedDirectoryWritesNothing);
+  Test('An input that could not be pinned stops every input''s write-back',
+    TestUnpinnedInputStopsAllWriteBack);
   Test('A directory identity tells two directories apart',
     TestDirectoryIdentityTellsDirectoriesApart);
   Test('An unavailable directory identity matches nothing',
@@ -639,11 +686,23 @@ begin
   try
     FFs.WriteAllText('/out/f.txt', 'PWNED');
     FFs.WriteAllText('/out/planted.sh', 'echo planted');
+    { The route led nowhere link-free just before the copy, so there is no
+      directory to compare against: nothing is written, even if the route is
+      restored before write-back. }
+    Expect<Boolean>(RenameFile(HostPath('project/a'), HostPath('evil.link')))
+      .ToBe(True);
+    Expect<Boolean>(RenameFile(HostPath('project/a.real'),
+      HostPath('project/a'))).ToBe(True);
     Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
       Report)).ToBe(False);
     Expect<string>(ReadHostText('evil/out/f.txt')).ToBe('evil-orig');
     Expect<Boolean>(FileExists(HostPath('evil/out/planted.sh'))).ToBe(False);
-    Expect<string>(ReadHostText('project/a.real/out/f.txt')).ToBe('orig');
+    Expect<string>(ReadHostText('project/a/out/f.txt')).ToBe('orig');
+    Expect<Boolean>(FileExists(HostPath('project/a/out/planted.sh')))
+      .ToBe(False);
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/a/out') +
+      ' could not be pinned when it was copied (a is a symbolic link or not ' +
+      'a directory); nothing written') >= 0).ToBe(True);
   finally
     Report.Free;
     Baseline.Free;
@@ -765,6 +824,180 @@ begin
   end;
 end;
 
+
+procedure TSandboxHostInputsTests.TestInputReplacedDuringCopyWritesNothing;
+var
+  Clock: TSwapDirectoryClock;
+  Fs, Baseline: TSandboxVirtualFileSystem;
+  Inputs: TSandboxHostInputs;
+  Report: TStringList;
+begin
+  WriteHostFile('out/a.txt', 'orig');
+  Clock := TSwapDirectoryClock.Create;
+  Fs := TSandboxVirtualFileSystem.Create(SWAP_TEST_QUOTA_BYTES, Clock);
+  Inputs := TSandboxHostInputs.Create(Fs);
+  Baseline := nil;
+  Report := TStringList.Create;
+  try
+    { The input is moved away and a new directory takes its name after the
+      copy has begun: write-back must compare against the directory the copy
+      started from, not the one that had the name when the copy ended. }
+    { With /out already there, the first tick is the file write, which comes
+      after the host file was read: the swap lands between reading the input
+      and the end of the copy. }
+    Fs.MakeDirectory('/out', True);
+    Clock.Arm(HostPath('out'));
+    {$IFDEF UNIX}
+    Inputs.CopyIn(HostPath('out'), '/out', True);
+    {$ELSE}
+    { Windows will not rename a directory while the copy is listing it, so
+      there the file is copied on its own and its directory is swapped once
+      the file has been read and closed. }
+    Inputs.CopyIn(HostPath('out/a.txt'), '/out/', True);
+    {$ENDIF}
+    Expect<Boolean>(DirectoryExists(HostPath('out.real'))).ToBe(True);
+    Expect<string>(Fs.ReadAllText('/out/a.txt')).ToBe('orig');
+    Baseline := Fs.Fork;
+    Fs.WriteAllText('/out/a.txt', 'NEW');
+    Expect<Boolean>(Inputs.ApplyWriteBack(Inputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('out/a.txt'))).ToBe(False);
+    Expect<string>(ReadHostText('out.real/a.txt')).ToBe('orig');
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('out') +
+      ' was replaced during the run; nothing written') >= 0).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+    Inputs.Free;
+    Fs.Free;
+    Clock.Free;
+  end;
+end;
+
+procedure TSandboxHostInputsTests.TestPinnedInputReplacedDuringCopyWritesNothing;
+var
+  Clock: TSwapDirectoryClock;
+  Fs, Baseline: TSandboxVirtualFileSystem;
+  Inputs: TSandboxHostInputs;
+  Report: TStringList;
+  Pin: TSandboxHostPin;
+  Problem: string;
+begin
+  WriteHostFile('project/out/a.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/out'),
+    Pin, Problem)).ToBe(True);
+  Clock := TSwapDirectoryClock.Create;
+  Fs := TSandboxVirtualFileSystem.Create(SWAP_TEST_QUOTA_BYTES, Clock);
+  Inputs := TSandboxHostInputs.Create(Fs);
+  Baseline := nil;
+  Report := TStringList.Create;
+  try
+    Fs.MakeDirectory('/out', True);
+    Clock.Arm(HostPath('project/out'));
+    {$IFDEF UNIX}
+    Inputs.CopyIn(HostPath('project/out'), '/out', True, Pin);
+    {$ELSE}
+    { As in TestInputReplacedDuringCopyWritesNothing: a file input, pinned at
+      the same directory. }
+    Inputs.CopyIn(HostPath('project/out/a.txt'), '/out/', True, Pin);
+    {$ENDIF}
+    Expect<Boolean>(DirectoryExists(HostPath('project/out.real'))).ToBe(True);
+    Expect<string>(Fs.ReadAllText('/out/a.txt')).ToBe('orig');
+    Baseline := Fs.Fork;
+    Fs.WriteAllText('/out/a.txt', 'NEW');
+    Expect<Boolean>(Inputs.ApplyWriteBack(Inputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('project/out/a.txt'))).ToBe(False);
+    Expect<string>(ReadHostText('project/out.real/a.txt')).ToBe('orig');
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/out') +
+      ' was replaced during the run; nothing written') >= 0).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+    Inputs.Free;
+    Fs.Free;
+    Clock.Free;
+  end;
+end;
+
+procedure TSandboxHostInputsTests.TestConfigFileInputTurnedDirectoryWritesNothing;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+begin
+  { Checked as a file, so pinned at its directory, project/a; by the copy it
+    is a directory. Its paths must not be written under project/a. }
+  WriteHostFile('project/a/out', 'a file');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/a'),
+    Pin, Problem)).ToBe(True);
+  Expect<Boolean>(DeleteFile(HostPath('project/a/out'))).ToBe(True);
+  WriteHostFile('project/a/out/f.txt', 'orig');
+  FInputs.CopyIn(HostPath('project/a/out'), '/out', True, Pin);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'NEW');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('project/a/f.txt'))).ToBe(False);
+    Expect<string>(ReadHostText('project/a/out/f.txt')).ToBe('orig');
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/a/out') +
+      ' could not be pinned when it was copied (it is not the directory its ' +
+      'config entry was checked against); nothing written') >= 0).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+end;
+
+procedure TSandboxHostInputsTests.TestUnpinnedInputStopsAllWriteBack;
+{$IFDEF UNIX}
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { One config input's route is a link from before the copy until after the
+    run; another input is fine. A half-applied write-back is worse than
+    none, so neither is written. }
+  WriteHostFile('project/a/out/f.txt', 'orig');
+  WriteHostFile('evil/out/f.txt', 'evil-orig');
+  WriteHostFile('other/g.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/a/out'),
+    Pin, Problem)).ToBe(True);
+  Expect<Boolean>(RenameFile(HostPath('project/a'), HostPath('project/a.real')))
+    .ToBe(True);
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('evil'))),
+    PAnsiChar(AnsiString(HostPath('project/a'))))).ToBe(0);
+  FInputs.CopyIn(HostPath('project/a/out'), '/out', True, Pin);
+  FInputs.CopyIn(HostPath('other'), '/other', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'PWNED');
+    FFs.WriteAllText('/other/g.txt', 'NEW');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<string>(ReadHostText('evil/out/f.txt')).ToBe('evil-orig');
+    Expect<string>(ReadHostText('project/a.real/out/f.txt')).ToBe('orig');
+    Expect<string>(ReadHostText('other/g.txt')).ToBe('orig');
+    Expect<string>(Report[Report.Count - 1]).ToBe(
+      'write-back: 0 file(s) written, 2 skipped');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ELSE}
+  { The scenario needs symbolic links, which Windows creates only with
+    elevated rights. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
 
 procedure TSandboxHostInputsTests.TestDirectoryIdentityTellsDirectoriesApart;
 var
