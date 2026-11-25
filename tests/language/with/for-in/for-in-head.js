@@ -1,5 +1,5 @@
 /*---
-description: A for-in head inside with stores each key into the with object's property of that name, and into the binding only when no object has it
+description: A for-in head inside with stores each key into the with object's property of that name, and into the binding only when no with object exposes the name as a binding
 features: [compat-var, compat-non-strict-mode, compat-for-in-loop]
 ---*/
 
@@ -11,7 +11,7 @@ test("a var head stores into the object's property", () => {
   expect(f()).toEqual([undefined, "k"]);
 });
 
-test("a var head whose name no object has stores into the var", () => {
+test("a var head whose name no with object exposes stores into the var", () => {
   const box = {};
   const f = () => { var x; with (box) { for (var x in { k: 1 }) {} } return [x, "x" in box]; };
   expect(f()).toEqual(["k", false]);

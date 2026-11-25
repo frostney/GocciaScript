@@ -1,5 +1,5 @@
 /*---
-description: A destructuring var declaration inside with stores each name into the with object's property of that name, and into the var only when no object has it
+description: A destructuring var declaration inside with stores each name into the with object's property of that name, and into the var only when no with object exposes the name as a binding
 features: [compat-var, compat-non-strict-mode]
 ---*/
 
@@ -17,7 +17,7 @@ test("an array pattern stores into the object's property", () => {
   expect(f()).toEqual([undefined, "e"]);
 });
 
-test("a name no object has is stored into the var", () => {
+test("a name no with object exposes is stored into the var", () => {
   const box = { x: 0 };
   const f = () => { with (box) { var { x, y } = { x: "a", y: "b" }; } return [x, y, box.x, "y" in box]; };
   expect(f()).toEqual([undefined, "b", "a", false]);

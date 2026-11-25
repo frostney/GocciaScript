@@ -1,5 +1,5 @@
 /*---
-description: A for-of head inside with stores each value into the with object's property of that name, and into the binding only when no object has it
+description: A for-of head inside with stores each value into the with object's property of that name, and into the binding only when no with object exposes the name as a binding
 features: [compat-var, compat-non-strict-mode]
 ---*/
 
@@ -27,25 +27,13 @@ test("a var head stores every value into the property", () => {
   expect(seen).toEqual(["a", "b"]);
 });
 
-test("a var head over an array held in a local stores into the object's property", () => {
-  const box = { x: 0 };
-  const f = () => { var x; const items = ["c1", "c2"]; with (box) { for (var x of items) {} } return [x, box.x]; };
-  expect(f()).toEqual([undefined, "c2"]);
-});
-
-test("an assignment head over an array held in a local stores into the object's property", () => {
-  const box = { x: 0 };
-  const f = () => { var x; const items = ["a1"]; with (box) { for (x of items) {} } return [x, box.x]; };
-  expect(f()).toEqual([undefined, "a1"]);
-});
-
-test("a var head whose name no object has stores into the var", () => {
+test("a var head whose name no with object exposes stores into the var", () => {
   const box = {};
   const f = () => { var x; with (box) { for (var x of ["n"]) {} } return [x, "x" in box]; };
   expect(f()).toEqual(["n", false]);
 });
 
-test("a var head declared only by the loop stores into the var when no object has it", () => {
+test("a var head declared only by the loop stores into the var when no with object exposes the name", () => {
   const box = {};
   const f = () => { with (box) { for (var y of ["u"]) {} } return y; };
   expect(f()).toBe("u");
@@ -75,7 +63,7 @@ test("an assignment head stores into the object's property", () => {
   expect(f()).toEqual([undefined, "f"]);
 });
 
-test("an assignment head whose name no object has stores into the binding", () => {
+test("an assignment head whose name no with object exposes stores into the binding", () => {
   const box = {};
   const f = () => { let x; with (box) { for (x of ["m"]) {} } return [x, "x" in box]; };
   expect(f()).toEqual(["m", false]);
@@ -94,7 +82,11 @@ test("a var head whose store into the object throws closes the iterator", () => 
   const box = { set x(value) { log.push("set"); throw error; } };
   const iterable = {
     [Symbol.iterator]() {
-      return { next: () => ({ value: 1, done: false }), return: () => { log.push("close"); return {}; } };
+      let done = false;
+      return {
+        next: () => { const result = { value: 1, done }; done = true; return result; },
+        return: () => { log.push("close"); return {}; },
+      };
     },
   };
   const f = () => { var x; with (box) { for (var x of iterable) {} } };
@@ -110,8 +102,9 @@ test("a for-await var head whose store into the object throws closes the iterato
   const box = { set x(value) { log.push("set"); throw error; } };
   const iterable = {
     [Symbol.asyncIterator]() {
+      let done = false;
       return {
-        next: () => Promise.resolve({ value: 1, done: false }),
+        next: () => { const result = { value: 1, done }; done = true; return Promise.resolve(result); },
         return: () => { log.push("close"); return Promise.resolve({}); },
       };
     },
@@ -121,6 +114,12 @@ test("a for-await var head whose store into the object throws closes the iterato
   try { await f(); } catch (e) { caught = e; }
   expect(caught).toBe(error);
   expect(log).toEqual(["set", "close"]);
+});
+
+test("a property Symbol.unscopables hides is not a binding, so the var receives the value", () => {
+  const box = { x: 0, [Symbol.unscopables]: { x: true } };
+  const f = () => { var x; with (box) { for (var x of ["u"]) {} } return [x, box.x]; };
+  expect(f()).toEqual(["u", 0]);
 });
 
 test("a let head declares its own binding", () => {

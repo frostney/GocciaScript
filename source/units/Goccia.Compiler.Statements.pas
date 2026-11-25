@@ -1026,7 +1026,8 @@ end;
 // already is where its vars are global bindings: each name is resolved before
 // its value is read (§14.3.3.3 KeyedBindingInitialization, §8.6.3
 // IteratorBindingInitialization, §14.3.3.2 RestBindingInitialization), and
-// falls back to the var only when no object has it.
+// falls back to the var only when no `with` object exposes the name as a
+// binding (§9.1.1.2.1 HasBinding, which honours @@unscopables).
 function VarPatternStoresByAssignment(
   const ACtx: TGocciaCompilationContext): Boolean;
 begin
@@ -1035,8 +1036,8 @@ end;
 
 // Stores AValueReg into the var AName as a for-in or for-of head does (ES2026
 // §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: the value, then ResolveBinding and
-// PutValue): into the first `with` object that has the name, else into the var
-// itself, where a strict type is checked.
+// PutValue): into the first `with` object that exposes the name as a binding,
+// else into the var itself, where a strict type is checked.
 procedure EmitVarHeadNameStore(const ACtx: TGocciaCompilationContext;
   const AName: string; const AValueReg: UInt16);
 begin
