@@ -51,6 +51,7 @@ uses
 
 type
   TTypeAnnotationTokens = array of string;
+  TTypeBracketPairs = array of Integer;
 
 const
   // Extra token slots TokenizeTypeAnnotation allocates each time it grows.
@@ -133,138 +134,144 @@ begin
     (AToken = '>');
 end;
 
-{ The index of the token that closes the bracket opened at AOpen, or -1. }
-function MatchingTypeToken(const ATokens: TTypeAnnotationTokens;
-  const AOpen, ALast: Integer): Integer;
+{ The index of the bracket that pairs with each token of ATokens, or -1 for a
+  token that is no bracket or has no partner. One pass, so the classifier
+  never rescans a range to find a bracket's partner. }
+function PairTypeBrackets(const ATokens: TTypeAnnotationTokens): TTypeBracketPairs;
 var
+  Stack: array of Integer;
   Depth, I: Integer;
 begin
+  SetLength(Result, Length(ATokens));
+  SetLength(Stack, Length(ATokens));
   Depth := 0;
-  for I := AOpen to ALast do
+  for I := 0 to High(ATokens) do
   begin
+    Result[I] := -1;
     if IsOpeningTypeToken(ATokens[I]) then
-      Inc(Depth)
-    else if IsClosingTypeToken(ATokens[I]) then
+    begin
+      Stack[Depth] := I;
+      Inc(Depth);
+    end
+    else if IsClosingTypeToken(ATokens[I]) and (Depth > 0) then
     begin
       Dec(Depth);
-      if Depth = 0 then
-        Exit(I);
+      Result[I] := Stack[Depth];
+      Result[Stack[Depth]] := I;
     end;
   end;
-  Result := -1;
-end;
-
-{ The index of the bracket that opens the one closed at AClose, or -1. }
-function OpeningTypeToken(const ATokens: TTypeAnnotationTokens;
-  const AFirst, AClose: Integer): Integer;
-var
-  Depth, I: Integer;
-begin
-  Depth := 0;
-  for I := AClose downto AFirst do
-  begin
-    if IsClosingTypeToken(ATokens[I]) then
-      Inc(Depth)
-    else if IsOpeningTypeToken(ATokens[I]) then
-    begin
-      Dec(Depth);
-      if Depth = 0 then
-        Exit(I);
-    end;
-  end;
-  Result := -1;
 end;
 
 { Whether a token outside every bracket of ATokens[AFirst..ALast] is one of
-  ATargets. }
+  ATargets. A bracket group is stepped over through its partner. }
 function HasTopLevelTypeToken(const ATokens: TTypeAnnotationTokens;
-  const AFirst, ALast: Integer; const ATargets: array of string): Boolean;
+  const APairs: TTypeBracketPairs; const AFirst, ALast: Integer;
+  const ATargets: array of string): Boolean;
 var
-  Depth, I, J: Integer;
+  I, J: Integer;
 begin
-  Depth := 0;
-  for I := AFirst to ALast do
+  I := AFirst;
+  while I <= ALast do
   begin
-    if IsOpeningTypeToken(ATokens[I]) then
-      Inc(Depth)
-    else if IsClosingTypeToken(ATokens[I]) then
-      Dec(Depth)
-    else if Depth = 0 then
+    if IsOpeningTypeToken(ATokens[I]) and (APairs[I] > I) then
+      I := APairs[I]
+    else
       for J := 0 to High(ATargets) do
         if ATokens[I] = ATargets[J] then
           Exit(True);
+    Inc(I);
   end;
   Result := False;
 end;
 
-{ Whether ATokens[AFirst..ALast] is a function or constructor type. Its
-  return type runs to the end, so what follows its `=>` is part of it:
-  `() => A & B` is a function type, not an intersection. }
+{ Whether ATokens[AFirst..ALast] is a function or constructor type, as
+  TypeScript starts one: `(` or `<` opening a signature whose parameter list
+  is followed by `=>`, `new`, or `abstract new`. Its return type runs to the
+  end, so what follows the `=>` is part of it: `() => A & B` is a function
+  type, not an intersection. }
 function IsFunctionTypeTokens(const ATokens: TTypeAnnotationTokens;
-  const AFirst, ALast: Integer): Boolean;
+  const APairs: TTypeBracketPairs; const AFirst, ALast: Integer): Boolean;
 var
-  Close: Integer;
+  Start: Integer;
 begin
-  Result := False;
-  if not HasTopLevelTypeToken(ATokens, AFirst, ALast, ['=>']) then
-    Exit;
-  // `<T>(a: T) => T`, `new (a: T) => R`, `abstract new (a: T) => R`
-  if (ATokens[AFirst] = '<') or (ATokens[AFirst] = KEYWORD_NEW) or
-     (ATokens[AFirst] = KEYWORD_ABSTRACT) then
-    Exit(True);
-  // `(a: T) => R`, but not `(A)[]` or `(A) | B`
-  if ATokens[AFirst] = '(' then
-  begin
-    Close := MatchingTypeToken(ATokens, AFirst, ALast);
-    Result := (Close > 0) and (Close < ALast) and
-      (ATokens[Close + 1] = '=>');
-  end;
+  Start := AFirst;
+  if (ATokens[Start] = KEYWORD_ABSTRACT) and (Start < ALast) and
+     (ATokens[Start + 1] = KEYWORD_NEW) then
+    Inc(Start);
+  if ATokens[Start] = KEYWORD_NEW then
+    Inc(Start);
+  if Start > ALast then
+    Exit(False);
+  // `<T>(a: T) => T`: type parameters, then the parameter list.
+  if (ATokens[Start] = '<') and (APairs[Start] > Start) then
+    Start := APairs[Start] + 1;
+  Result := (Start < ALast) and (ATokens[Start] = '(') and
+    (APairs[Start] > Start) and (APairs[Start] < ALast) and
+    (ATokens[APairs[Start] + 1] = '=>');
 end;
 
 { The strict type every value of the type spelled by ATokens[AFirst..ALast]
   has, read from the type's outermost form in TypeScript's precedence. Only a
   form whose every value passes the check gets one: the check must never
-  reject a value `tsc` accepts for the annotation. A name is never enforced,
-  `Array<T>` and `Function` included, because a type alias, interface or
-  import in the program can rebind it; the predefined type keywords cannot be
-  rebound. }
+  reject a value `tsc` accepts for the annotation, given the built-in
+  interfaces of the primitive wrappers (Number, String, Boolean, Symbol,
+  BigInt) as the standard library declares them; a program that augments one
+  to extend an array or function type can be refused by an array or function
+  type check. A name is never enforced, `Array<T>` and `Function` included,
+  because a type alias, interface or import in the program can rebind it;
+  the predefined type keywords cannot be rebound. }
 function ClassifyTypeTokens(const ATokens: TTypeAnnotationTokens;
-  const AFirst, ALast: Integer): TGocciaLocalType;
+  const APairs: TTypeBracketPairs; AFirst, ALast: Integer): TGocciaLocalType;
 var
   Open: Integer;
+  ReadOnlyArray: Boolean;
 begin
   Result := sltUntyped;
+  ReadOnlyArray := False;
+  // Parentheses and `readonly` are peeled without recursion.
+  while AFirst <= ALast do
+  begin
+    if (ATokens[AFirst] = '(') and (APairs[AFirst] = ALast) then
+    begin
+      Inc(AFirst);
+      Dec(ALast);
+    end
+    // `readonly T[]` and `readonly [A, B]` are arrays.
+    else if ATokens[AFirst] = KEYWORD_READONLY then
+    begin
+      ReadOnlyArray := True;
+      Inc(AFirst);
+    end
+    else
+      Break;
+  end;
   if AFirst > ALast then
     Exit;
 
-  if IsFunctionTypeTokens(ATokens, AFirst, ALast) then
-    Exit(sltReference);
-
-  { A union may hold values of several kinds, and an intersection or a
-    conditional type is read from its members, which this does not do. A
-    leading `|` or `&` counts as one. }
-  if HasTopLevelTypeToken(ATokens, AFirst, ALast,
-       ['|', '&', '?', KEYWORD_EXTENDS]) then
-    Exit;
-
-  // `readonly T[]` and `readonly [A, B]` are arrays.
-  if ATokens[AFirst] = KEYWORD_READONLY then
+  if IsFunctionTypeTokens(ATokens, APairs, AFirst, ALast) then
   begin
-    if ClassifyTypeTokens(ATokens, AFirst + 1, ALast) = sltReference then
+    if not ReadOnlyArray then
       Result := sltReference;
     Exit;
   end;
 
-  { `keyof T[]` is the keys of an array, and `unique symbol` a symbol. A type
-    query (`typeof x`) is a primary type, so `typeof x[]` is an array and
-    reads on. }
+  { A union may hold values of several kinds, and an intersection or a
+    conditional type (the only form with a top-level `?`) is read from its
+    members, which this does not do. A leading `|` or `&` counts as one. }
+  if HasTopLevelTypeToken(ATokens, APairs, AFirst, ALast, ['|', '&', '?']) then
+    Exit;
+
+  { `keyof T[]` is the keys of an array. TypeScript reads `keyof`, `unique`
+    and `infer` as operators wherever a type starts. A type query
+    (`typeof x`) is a primary type, so `typeof x[]` is an array and reads
+    on. }
   if (ATokens[AFirst] = KEYWORD_KEYOF) or (ATokens[AFirst] = KEYWORD_UNIQUE) or
-     (ATokens[AFirst] = KEYWORD_INFER) or (ATokens[AFirst] = KEYWORD_ASSERTS) then
+     (ATokens[AFirst] = KEYWORD_INFER) then
     Exit;
 
   if ATokens[ALast] = ']' then
   begin
-    Open := OpeningTypeToken(ATokens, AFirst, ALast);
+    Open := APairs[ALast];
     // `[A, B]`: a tuple is an array.
     if Open = AFirst then
       Exit(sltReference);
@@ -275,11 +282,7 @@ begin
     Exit;
   end;
 
-  if (ATokens[AFirst] = '(') and
-     (MatchingTypeToken(ATokens, AFirst, ALast) = ALast) then
-    Exit(ClassifyTypeTokens(ATokens, AFirst + 1, ALast - 1));
-
-  if AFirst <> ALast then
+  if ReadOnlyArray or (AFirst <> ALast) then
     Exit;
   { A single token. A string literal type is quoted and a template literal
     type starts with a backtick, so neither reads as a keyword. }
@@ -298,7 +301,8 @@ var
   Tokens: TTypeAnnotationTokens;
 begin
   Tokens := TokenizeTypeAnnotation(AAnnotation);
-  Result := ClassifyTypeTokens(Tokens, 0, High(Tokens));
+  Result := ClassifyTypeTokens(Tokens, PairTypeBrackets(Tokens), 0,
+    High(Tokens));
 end;
 
 function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;

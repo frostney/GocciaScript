@@ -35,6 +35,7 @@ type
     procedure TestUnenforcedForms;
     procedure TestNamesAreNotEnforced;
     procedure TestLiteralTokens;
+    procedure TestDeepNesting;
     procedure TestParserKeepsLiteralTypesWhole;
   end;
 
@@ -52,6 +53,8 @@ begin
     TestNamesAreNotEnforced);
   Test('A literal type is one token whatever its text holds',
     TestLiteralTokens);
+  Test('100,000 nested parentheses classify without recursion',
+    TestDeepNesting);
   Test('The parser collects string and template literal types whole',
     TestParserKeepsLiteralTypesWhole);
 end;
@@ -131,6 +134,15 @@ begin
   // A parenthesized function type in a union is a member of the union.
   ExpectType('( ( ) => void ) | number', sltUntyped);
   ExpectType('string extends string ? number : object', sltUntyped);
+  // `abstract` starts a constructor type only before `new`.
+  ExpectType('abstract extends string ? string : ( ) => void', sltUntyped);
+  // `extends` after a dot is a property name, not a conditional type.
+  ExpectType('typeof y . extends [ ]', sltReference);
+  // `asserts` is a predicate only in a return type.
+  ExpectType('asserts [ ]', sltReference);
+  ExpectType('readonly asserts [ ]', sltReference);
+  // `=>` must follow the signature's parameter list.
+  ExpectType('( A ) | ( ( ) => void )', sltUntyped);
 end;
 
 procedure TTypeEnforcementTests.TestUnenforcedForms;
@@ -170,6 +182,20 @@ begin
   // A quote, bracket or `${` inside the template is still inside it.
   ExpectType('`\`a${"}" | \`]\`}\`` | string [ ]', sltUntyped);
   ExpectType('`\`a${string /* ${ */}b\`` [ ]', sltReference);
+end;
+
+procedure TTypeEnforcementTests.TestDeepNesting;
+var
+  Annotation: string;
+  I: Integer;
+begin
+  Annotation := '';
+  for I := 1 to 100000 do
+    Annotation := Annotation + '( ';
+  Annotation := Annotation + 'number';
+  for I := 1 to 100000 do
+    Annotation := Annotation + ' )';
+  ExpectType(Annotation, sltFloat);
 end;
 
 procedure TTypeEnforcementTests.TestParserKeepsLiteralTypesWhole;

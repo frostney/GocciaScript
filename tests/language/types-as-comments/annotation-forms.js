@@ -86,6 +86,12 @@ test("a name is not enforced, generic or not", () => {
   expect(xs + m + p + f).toBe(20);
 });
 
+test("a type alias named abstract is not a constructor type", () => {
+  type abstract = string;
+  const s: abstract extends string ? string : () => void = "s";
+  expect(s).toBe("s");
+});
+
 test("a union stays unenforced, even with a leading operator", () => {
   const n: | number = "s";
   expect(n).toBe("s");
@@ -112,6 +118,17 @@ test("an array of a template literal type rejects a primitive", () => {
 test("a type query with an array suffix is an array", () => {
   const y = 1;
   expect(() => { const xs: typeof y[] = 1; }).toThrow(TypeError);
+});
+
+test("a property named extends does not make a conditional type", () => {
+  const y = { extends: 1 };
+  expect(() => { const xs: typeof y.extends[] = 1; }).toThrow(TypeError);
+});
+
+test("a type alias named asserts is an ordinary name", () => {
+  type asserts = number;
+  expect(() => { const xs: asserts[] = 1; }).toThrow(TypeError);
+  expect(() => { const xs: readonly asserts[] = 1; }).toThrow(TypeError);
 });
 
 test("a function type rejects a primitive", () => {
