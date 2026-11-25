@@ -46,9 +46,10 @@ type
   end;
 
   { Asked for every hop of a request, redirects included: once with
-    AResolvedAddress empty before the name is looked up, and once with the
-    address it resolved to before connecting. Returning False refuses the hop;
-    AReason says why. Runs on the thread performing the request. }
+    AResolvedAddress empty before the name is looked up, and once for each
+    candidate address before connecting. Returning False excludes the address
+    or refuses the hop when checking its name. AReason says why. Runs on the
+    thread performing the request. }
   THTTPHostCheck = function(const AHost: string; const APort: Integer;
     const AResolvedAddress: string; out AReason: string): Boolean of object;
 
@@ -68,9 +69,8 @@ type
     does: the fetch manager's abstract base carries a policy in its interface
     and must not pull the socket implementation into its unit closure. }
   THTTPRequestPolicy = record
-    { Reject targets that resolve into RFC1918, loopback, link-local, CGNAT,
-      or IPv6 ULA/loopback space. Applied to the *resolved address*, on the
-      initial request and on every redirect hop. }
+    { Exclude private and other non-public IPv4 or IPv6 destinations. Applied
+      to each resolved address on the initial request and every redirect hop. }
     DenyPrivateRanges: Boolean;
     { Hard ceiling on the response body, in bytes. Zero selects
       DEFAULT_MAX_RESPONSE_BODY_BYTES. }

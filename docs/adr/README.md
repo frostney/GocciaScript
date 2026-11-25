@@ -194,3 +194,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0182 — Linux thread stack bounds come from pthread_getattr_np](0182-linux-thread-stack-bounds-come-from-pthread-getattr-np.md)
 - [0183 — Module code clears what each top-level statement left, and an imported module keeps no completion value](0183-module-code-clears-each-top-level-statement-and-imports-keep-no-completion-value.md)
 - [0184 — A definition takes its descriptor on every exit](0184-a-definition-takes-its-descriptor-on-every-exit.md)
+- [0185 — fetch connects across address families](0185-fetch-connects-across-address-families.md)

@@ -13,17 +13,20 @@ PASS=0
 FAIL=0
 TMPFILE="/tmp/goccia-fetch-e2e-$$.js"
 PORT_FILE="/tmp/goccia-fetch-port-$$.txt"
+IPV6_PORT_FILE="/tmp/goccia-fetch-ipv6-port-$$.txt"
+# CI sets this to a hosts-file fixture whose only address is ::1.
+IPV6_FIXTURE_HOST="${GOCCIA_FETCH_IPV6_HOST:-}"
 SERVER_PID=""
 
 cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
-  rm -f "$TMPFILE" "$PORT_FILE"
+  rm -f "$TMPFILE" "$PORT_FILE" "$IPV6_PORT_FILE"
 }
 trap cleanup EXIT
 
 # --- Start test server ---
 
-python3 scripts/fetch_test_server.py "$PORT_FILE" &
+python3 scripts/fetch_test_server.py "$PORT_FILE" "$IPV6_PORT_FILE" &
 SERVER_PID=$!
 # Loaded CI hosts can take more than five seconds to start Python. Keep the
 # readiness check bounded, and distinguish startup failure from slow startup.
@@ -137,6 +140,51 @@ check() {
     PASS=$((PASS + 1))
   fi
 }
+
+if [ -s "$IPV6_PORT_FILE" ]; then
+  IPV6_PORT="$(cat "$IPV6_PORT_FILE")"
+  IPV6_BASE="http://[::1]:${IPV6_PORT}"
+  IPV6_HOST_BASE="http://localhost:${IPV6_PORT}"
+  check_with "IPv6 loopback is connected with a bracketed Host header" \
+    "--allow-net=[::1]:${IPV6_PORT}" 0 "
+const r = await fetch('${IPV6_BASE}/echo-headers')
+console.log(r.status, (await r.json()).headers.Host)
+" "200 [::1]:${IPV6_PORT}"
+  check_with "IPv4 loopback falls back to IPv6 loopback" \
+    "--allow-net=localhost,private" 0 "
+const r = await fetch('${IPV6_HOST_BASE}/text', { signal: AbortSignal.timeout(2000) })
+console.log(r.status, await r.text())
+" "200 hello world"
+  check_with "A hostname-only grant refuses both loopback families" \
+    "--allow-net=localhost" 0 "
+try {
+  await fetch('${IPV6_HOST_BASE}/text', { signal: AbortSignal.timeout(2000) })
+  console.log('unexpected success')
+} catch (error) {
+  console.log(error.name)
+}
+" "PermissionDenied"
+  check_with "a scoped IPv6 literal gives an explicit error" \
+    "--allow-net=[::1]:${IPV6_PORT}" 0 "
+try {
+  await fetch('http://[::1%25lo]:${IPV6_PORT}/text')
+} catch (error) {
+  console.log(error.message)
+}
+" "Scoped IPv6 literals are not supported by HTTP"
+  if [ -n "$IPV6_FIXTURE_HOST" ]; then
+    check_with "the system resolver returns IPv6 for a hostname" \
+      "--allow-net=${IPV6_FIXTURE_HOST}:${IPV6_PORT},[::1]:${IPV6_PORT}" 0 "
+const r = await fetch('http://${IPV6_FIXTURE_HOST}:${IPV6_PORT}/echo-headers')
+console.log(r.status, (await r.json()).headers.Host)
+" "200 ${IPV6_FIXTURE_HOST}:${IPV6_PORT}"
+  fi
+elif [ -n "$IPV6_FIXTURE_HOST" ]; then
+  echo "FAIL: the IPv6 hostname fixture requires a loopback listener"
+  FAIL=$((FAIL + 1))
+else
+  echo "SKIP: IPv6 loopback listener is unavailable"
+fi
 
 # --- GET text ---
 check "GET /text returns 200 with body" 0 "

@@ -15,14 +15,21 @@ Endpoints:
   HEAD *              — 200 with Content-Length but no body
 
 Usage:
-  python3 scripts/fetch_test_server.py <port-file>
+  python3 scripts/fetch_test_server.py <port-file> [<ipv6-port-file>]
 
 Writes the assigned port to <port-file>, then serves until killed.
+When an IPv6 port file is supplied, also serves on ::1 if available.
 """
 
+import errno
+import faulthandler
+import os
 import http.server
 import json
+import socket
+import socketserver
 import sys
+import threading
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -147,18 +154,80 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+class LoopbackHTTPServer(http.server.HTTPServer):
+    def server_bind(self):
+        # HTTPServer asks DNS for a display name even for a numeric address.
+        # These loopback fixtures must be ready without a reverse lookup.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+class IPv6HTTPServer(LoopbackHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def stall_ipv4(port):
+    # Linux leaves new connections pending when this one-slot accept queue
+    # fills. Confirm that condition before publishing the IPv6 fixture.
+    listener = socket.socket()
+    held = None
+    try:
+        listener.bind(("127.0.0.1", port))
+        listener.listen(0)
+        held = socket.create_connection(("127.0.0.1", port), 1)
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.5):
+                raise RuntimeError("IPv4 fixture did not stall the connection")
+        except TimeoutError:
+            pass
+        return listener, held
+    except BaseException:
+        if held is not None:
+            held.close()
+        listener.close()
+        raise
+
+
+def start_ipv6(port_file):
+    try:
+        server = IPv6HTTPServer(("::1", 0), Handler)
+    except OSError as exc:
+        if exc.errno not in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
+            raise
+        return None
+    stalled = ()
+    if os.environ.get("GOCCIA_FETCH_IPV6_HOST"):
+        stalled = stall_ipv4(server.server_address[1])
+    with open(port_file, "w") as f:
+        f.write(str(server.server_address[1]))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, stalled
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 fetch_test_server.py <port-file>", file=sys.stderr)
         sys.exit(1)
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    port = server.server_address[1]
+    # Preserve evidence if setup stalls before the shell sees the port file.
+    faulthandler.dump_traceback_later(15)
+    try:
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
+        ipv6 = start_ipv6(sys.argv[2]) if len(sys.argv) > 2 else None
+        with open(sys.argv[1], "w") as f:
+            f.write(str(server.server_address[1]))
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
-    with open(sys.argv[1], "w") as f:
-        f.write(str(port))
-
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if ipv6 is not None:
+            server6, stalled = ipv6
+            server6.shutdown()
+            server6.server_close()
+            for sock in stalled:
+                sock.close()
 
 
 if __name__ == "__main__":

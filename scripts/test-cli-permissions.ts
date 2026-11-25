@@ -28,6 +28,7 @@ import {
 } from "fs";
 import { createHash } from "crypto";
 import { join, resolve } from "path";
+import { isIP } from "node:net";
 import {
   BARE,
   BENCHRUNNER,
@@ -748,6 +749,21 @@ function findLoopbackHostsFileName(): { name: string; addresses: Set<string> } |
   return undefined;
 }
 
+function canonicalHostAddress(value: string): string | undefined {
+  const address = value.split("%", 1)[0];
+  switch (isIP(address)) {
+    case 4: return address;
+    case 6: {
+      const canonical = new URL(`http://[${address}]/`).hostname;
+      const mapped = /^\[::ffff:([0-9a-f]+):([0-9a-f]+)\]$/.exec(canonical);
+      if (mapped === null) return canonical;
+      const upper = Number.parseInt(mapped[1], 16);
+      const lower = Number.parseInt(mapped[2], 16);
+      return [upper >> 8, upper & 255, lower >> 8, lower & 255].join(".");
+    }
+  }
+}
+
 console.log("Fetch resolves names through the system resolver, hosts file included...");
 {
   // FPC's own DNS client read /etc/resolv.conf and never the hosts file, so
@@ -767,8 +783,10 @@ console.log("Fetch resolves names through the system resolver, hosts file includ
       );
 
       const granted = run(RUNNER, [`--allow-net=${entry.name},private`, file]);
-      const connected = /TypeError Failed to connect to (\d+\.\d+\.\d+\.\d+):1/.exec(granted.stdout);
-      if (connected === null || !entry.addresses.has(connected[1]))
+      const connected = /TypeError Failed to connect to (\[[^\]]+\]|[0-9.]+):1 /.exec(granted.stdout);
+      const endpoint = connected && canonicalHostAddress(connected[1].replace(/^\[|\]$/g, ""));
+      const expected = [...entry.addresses].map(canonicalHostAddress);
+      if (!endpoint || !expected.includes(endpoint))
         throw new Error(
           `${entry.name} should resolve to ${[...entry.addresses].join(" or ")} from /etc/hosts and reach the connect, got:\n${granted.combined}`,
         );
@@ -778,6 +796,27 @@ console.log("Fetch resolves names through the system resolver, hosts file includ
     } finally {
       clean(tmp);
     }
+  }
+}
+
+if (isWindows) {
+  console.log("Fetch connects to an IPv6 loopback socket on Windows...");
+  const tmp = makeTmp();
+  const server = Bun.serve({
+    hostname: "::1",
+    port: 0,
+    fetch: () => new Response("ipv6"),
+  });
+  try {
+    const scope = `[::1]:${server.port}`;
+    const file = join(tmp, "ipv6.js");
+    writeFileSync(file, `const response = await fetch("http://${scope}/"); console.log(response.status, await response.text());\n`);
+    const connected = await runAsync(RUNNER, [`--allow-net=${scope}`, file]);
+    expectExit(connected, 0, "IPv6 loopback fetch");
+    expectIncludes(connected.stdout, "200 ipv6", "IPv6 loopback body");
+  } finally {
+    server.stop(true);
+    clean(tmp);
   }
 }
 

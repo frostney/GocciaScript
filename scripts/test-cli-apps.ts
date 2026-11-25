@@ -15388,10 +15388,12 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     // Asserted positively: a reaching arm has to prove the request got to the
     // connect, because an absent refusal is also what a script that never ran
     // produces.
-    const expectConnect = (label: string, result: { exitCode: number | null; out: string }, host: string) => {
-      if (result.exitCode !== 0 || !result.out.includes(`err:Failed to connect to ${host}:1`))
+    const expectConnect = (label: string, result: { exitCode: number | null; out: string }, endpoint: RegExp) => {
+      if (result.exitCode !== 0 || !endpoint.test(result.out))
         throw new Error(`Sandbox fetch ${label} should reach the connect, got (exit ${result.exitCode}):\n${result.out}`);
     };
+    const ipv4 = /err:Failed to connect to 127\.0\.0\.1:1 /;
+    const loopback = /err:Failed to connect to (127\.0\.0\.1|\[::1\]):1 /;
     // A refusal is a PermissionDenied carrying the guest-visible scope.
     const expectRefused = (label: string, result: { exitCode: number | null; out: string }, scope: string) => {
       if (result.exitCode !== 0 || !result.out.includes(`err:net: ${scope}`))
@@ -15401,11 +15403,11 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     // Deny by default: no grant, no request.
     expectRefused("without --allow-net", run("/address.js", []), "127.0.0.1:1");
     // An explicit IP allow names the private address, so it reaches it.
-    expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), "127.0.0.1");
+    expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), ipv4);
     expectConnect(
       "with --allow-net=127.0.0.1,private",
       run("/address.js", ["--allow-net=127.0.0.1,private"]),
-      "127.0.0.1",
+      ipv4,
     );
     // --deny-net=private refuses private destinations even when the IP is allowed.
     expectRefused(
@@ -15419,7 +15421,7 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     expectConnect(
       "to a privately-resolving name with --allow-net=private",
       run("/name.js", ["--allow-net=localhost,private"]),
-      "127.0.0.1",
+      loopback,
     );
 
     // The removed flags name their replacements.
@@ -15621,8 +15623,8 @@ await section("Runner sandbox mode: fetch, nested runScript, fetch completes wit
     "console.log('done');",
   ].join("\n");
   for (const [policyArgs, expectedError] of [
-    [["--deny-net=private"], `${PRIVATE_DENIAL}`],
-    [[], "Failed to connect to 127.0.0.1:1"],
+    [["--deny-net=private"], /net: localhost:1/],
+    [[], /Failed to connect to (127\.0\.0\.1|\[::1\]):1 /],
   ] as const) {
     const run = await runNestedFetchSandbox(
       { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
@@ -15631,9 +15633,11 @@ await section("Runner sandbox mode: fetch, nested runScript, fetch completes wit
     const label = policyArgs.join(" ") || "(default policy)";
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${label}: fetch, runScript, fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    for (const expected of [`before:${expectedError}`, `after:${expectedError}`, "done"])
-      if (!run.stdout.includes(expected))
-        throw new Error(`${label}: fetch, runScript, fetch should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
+    for (const phase of ["before", "after"])
+      if (!new RegExp(`^${phase}:${expectedError.source}`, "m").test(run.stdout))
+        throw new Error(`${label}: ${phase} should report ${expectedError}, got:\n${run.combined}`);
+    if (!run.stdout.includes("done"))
+      throw new Error(`${label}: fetch, runScript, fetch did not finish:\n${run.combined}`);
   }
 });
 

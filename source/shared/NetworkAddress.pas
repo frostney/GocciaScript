@@ -47,6 +47,9 @@ function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
 function IsAddressInNetwork(const AAddress, ANetwork: TNetworkAddress;
   const APrefixLength: Integer): Boolean;
 
+{ IPv4-mapped IPv6 addresses name the same endpoints as their IPv4 forms. }
+function NormalizeIPAddress(const AAddress: TNetworkAddress): TNetworkAddress;
+
 function AddressesEqual(const A, B: TNetworkAddress): Boolean;
 
 { The IPv4 host an IPv6 address is translated or relayed to: the well-known
@@ -55,11 +58,8 @@ function AddressesEqual(const A, B: TNetworkAddress): Boolean;
 function TryGetTranslatedIPv4(const AAddress: TNetworkAddress;
   out AIPv4: TNetworkAddress): Boolean;
 
-{ True when the address belongs to a range that is not routable on the public
-  internet: RFC 1918, loopback, "this host", link-local (which includes the
-  cloud metadata endpoint 169.254.169.254), CGNAT, the IETF protocol block,
-  IPv4 multicast and above, and IPv6 loopback/unspecified/ULA/link-local and
-  IPv4-mapped space. }
+{ True for private, local, or other non-public destinations. A translated
+  address is checked against the embedded IPv4 destination. }
 function IsPrivateIPAddress(const AAddress: TNetworkAddress): Boolean;
 
 { The textual form of IsPrivateIPAddress. Callers pass a *resolved* address,
@@ -262,6 +262,14 @@ begin
     Result.Bytes[I] := AAddress.Bytes[AOffset + I];
 end;
 
+function NormalizeIPAddress(const AAddress: TNetworkAddress): TNetworkAddress;
+begin
+  if IsIPv4MappedAddress(AAddress) then
+    Result := EmbeddedIPv4(AAddress, 12)
+  else
+    Result := AAddress;
+end;
+
 function TryParseRawIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 var
@@ -284,8 +292,8 @@ function TryParseIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 begin
   Result := TryParseRawIPAddress(AValue, AAddress);
-  if Result and IsIPv4MappedAddress(AAddress) then
-    AAddress := EmbeddedIPv4(AAddress, 12);
+  if Result then
+    AAddress := NormalizeIPAddress(AAddress);
 end;
 
 function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
@@ -379,10 +387,32 @@ begin
   Result := False;
 end;
 
+function IsIPv6Prefix(const AAddress: TNetworkAddress;
+  const APrefixLength: Integer; const APrefix: array of Byte): Boolean;
+var
+  Network: TNetworkAddress;
+begin
+  Network := Default(TNetworkAddress);
+  Network.Family := nafIPv6;
+  Move(APrefix[0], Network.Bytes[0], Length(APrefix));
+  Result := IsAddressInNetwork(AAddress, Network, APrefixLength);
+end;
+
+{ IANA IPv6 Special-Purpose Address Registry: only these allocations within
+  the 2001::/23 IETF block are marked globally reachable. Teredo is marked
+  N/A and can encapsulate another destination, so requires an explicit grant. }
+function IsGlobalIETFIPv6Address(const AAddress: TNetworkAddress): Boolean;
+begin
+  Result :=
+    (IsIPv6Prefix(AAddress, 120, [$20, $01, 0, 1]) and
+      (AAddress.Bytes[15] in [1..3])) or                           // 2001:1::1–3
+    IsIPv6Prefix(AAddress, 32, [$20, $01, 0, 3]) or          // AMT
+    IsIPv6Prefix(AAddress, 48, [$20, $01, 0, 4, $01, $12]) or // AS112-v6
+    IsIPv6Prefix(AAddress, 27, [$20, $01, 0, $20]);                        // ORCHIDv2 and DETs
+end;
+
 function IsPrivateIPAddress(const AAddress: TNetworkAddress): Boolean;
 var
-  I: Integer;
-  AllZeroBeforeLast, AllZero: Boolean;
   Translated: TNetworkAddress;
 begin
   if AAddress.Family = nafIPv4 then
@@ -403,50 +433,25 @@ begin
     Exit;
   end;
 
-  AllZeroBeforeLast := True;
-  for I := 0 to 14 do
-    if AAddress.Bytes[I] <> 0 then
-    begin
-      AllZeroBeforeLast := False;
-      Break;
-    end;
-  AllZero := AllZeroBeforeLast and (AAddress.Bytes[15] = 0);
-  if AllZero then
-    Exit(True);                                                    // ::
-  if AllZeroBeforeLast and (AAddress.Bytes[15] = 1) then
-    Exit(True);                                                    // ::1
-  if (AAddress.Bytes[0] and $FE) = $FC then
-    Exit(True);                                                    // fc00::/7
-  if (AAddress.Bytes[0] = $FE) and ((AAddress.Bytes[1] and $C0) = $80) then
-    Exit(True);                                                    // fe80::/10
-  if (AAddress.Bytes[0] = $FE) and ((AAddress.Bytes[1] and $C0) = $C0) then
-    Exit(True);                                                    // fec0::/10
-  if AAddress.Bytes[0] = $FF then
-    Exit(True);                                                    // ff00::/8
-  { ::ffff:0:0/96 — an address that reaches here unconverted names an IPv4
-    host the IPv6 checks cannot classify, so the block is private. }
+  { Mapped literals are normally normalized by TryParseIPAddress first.
+    Apply the same IPv4 checks if a caller gives us the raw representation. }
   if IsIPv4MappedAddress(AAddress) then
-    Exit(True);
-  { ::/96 — the deprecated IPv4-compatible form (::127.0.0.1). }
-  AllZero := True;
-  for I := 0 to 11 do
-    if AAddress.Bytes[I] <> 0 then
-    begin
-      AllZero := False;
-      Break;
-    end;
-  if AllZero then
-    Exit(True);
-  { 64:ff9b:1::/48 is local-use NAT64 and never public. }
-  if (AAddress.Bytes[0] = $00) and (AAddress.Bytes[1] = $64) and
-     (AAddress.Bytes[2] = $FF) and (AAddress.Bytes[3] = $9B) and
-     (AAddress.Bytes[4] = $00) and (AAddress.Bytes[5] = $01) then
-    Exit(True);
-  { 64:ff9b::/96 (NAT64) and 2002::/16 (6to4) reach the IPv4 host they
-    embed, so they are as private as it is. }
+    Exit(IsPrivateIPAddress(EmbeddedIPv4(AAddress, 12)));
+  { The well-known NAT64 and 6to4 prefixes encode an IPv4 destination.
+    The separate local-use NAT64 block (64:ff9b:1::/48) is refused below. }
   if TryGetTranslatedIPv4(AAddress, Translated) then
     Exit(IsPrivateIPAddress(Translated));
-  Result := False;
+
+  { IANA limits global unicast assignments to 2000::/3. This excludes
+    unspecified, loopback, deprecated IPv4-compatible addresses, ULA,
+    link-local, multicast, and special-use space outside that block. }
+  if not IsIPv6Prefix(AAddress, 3, [$20]) then
+    Exit(True);
+  if IsIPv6Prefix(AAddress, 23, [$20, $01]) then
+    Exit(not IsGlobalIETFIPv6Address(AAddress));
+  Result := IsIPv6Prefix(AAddress, 32, [$20, $01, $0D, $B8]) or // 2001:db8::/32
+    IsIPv6Prefix(AAddress, 20, [$3F, $FF]) or                   // 3fff::/20
+    IsIPv6Prefix(AAddress, 16, [$3F, $FE]);                     // retired 6bone
 end;
 
 function IsPrivateNetworkAddress(const AAddressText: string): Boolean;
