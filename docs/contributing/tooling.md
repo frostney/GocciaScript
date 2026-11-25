@@ -345,6 +345,7 @@ and access to GitHub, a C compiler and make:
 ```bash
 scripts/afl/build-afl.sh
 export PATH="$PWD/build/afl:$PATH"
+unset AFL_MAP_SIZE AFL_MAPSIZE
 mkdir -p build/compiled/targets/fuzzharness-afl
 AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
@@ -370,14 +371,16 @@ accepts the fork server `afl-as` adds ("Old fork server model is used by the
 target, this still works though").
 
 All three are built with a 1 MiB coverage map in place of AFL++'s 64 KiB,
-which the harness's edges fill within minutes of fuzzing, so that edges stop
-colliding and hiding new coverage. `afl-as` draws each trampoline's random
+which the harness's edges fill within minutes of fuzzing, so that far fewer
+edges collide and hide new coverage. `afl-as` draws each trampoline's random
 edge ID from below its build's `MAP_SIZE`. A target with the original fork
 server cannot report its map size, so `afl-fuzz` and `afl-showmap` take one
 from their own build: Ubuntu 26.04's packaged `afl-showmap` sizes the map at
 its 64 KiB `MAP_SIZE` even when `AFL_MAP_SIZE` asks for more, and v5.03c
 starts from its 8 MiB `DEFAULT_SHMEM_SIZE`. `scripts/afl/build-afl.sh` sets
-both to 1 MiB, so every map is exactly the harness's. Use the `afl-fuzz` and
+both to 1 MiB, so by default every map is exactly the harness's;
+`AFL_MAP_SIZE` or `AFL_MAPSIZE` would still override it, which the recipe
+above and `scripts/afl/fuzz.sh` clear. Use the `afl-fuzz` and
 `afl-showmap` from `build/afl/`: under a packaged one, the harness can die of
 SIGSEGV writing past a 64 KiB map.
 
@@ -385,7 +388,8 @@ SIGSEGV writing past a 64 KiB map.
 else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`; the build above empties
 `AFL_PATH` so that it takes the `afl-as` just built. The scheduled workflow
 runs each campaign through `scripts/afl/fuzz.sh`, which stops `afl-fuzz`
-after the given seconds of fuzzing and fails a run that ends any other way.
+after the given seconds of fuzzing (1 to 3600) and fails a run that ends
+any other way, unless it stopped on a crash it saved.
 
 ### Reproducing a finding
 

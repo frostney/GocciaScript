@@ -16,12 +16,13 @@
 #
 # All three are built with a 1 MiB coverage map in place of AFL++'s 64 KiB
 # (MAP_SIZE_POW2 16), which the harness's edges fill within minutes, so that
-# edges stop colliding and hiding new coverage. afl-as draws each
+# far fewer edges collide and hide new coverage. afl-as draws each
 # trampoline's random edge ID from that range, and a target with the original
 # fork server cannot tell afl-fuzz or afl-showmap its map size: they take it
 # from their own build (see docs/contributing/tooling.md). So afl-fuzz and
 # afl-showmap get the same MAP_SIZE, and DEFAULT_SHMEM_SIZE, their starting
-# map, is set to it in place of 8 MiB, so each map is exactly the harness's.
+# map, is set to it in place of 8 MiB, so by default each map is exactly the
+# harness's.
 set -euo pipefail
 
 map_size_pow2=20

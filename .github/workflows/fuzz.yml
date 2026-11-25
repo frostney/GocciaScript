@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       fuzz-seconds:
-        description: 'Seconds to fuzz per run'
+        description: 'Seconds to fuzz per run, 1 to 3600'
         required: false
         default: '900'
 
@@ -49,9 +49,13 @@ jobs:
   # AFL++'s 64 KiB, which the harness's edges fill within minutes
   # (docs/contributing/tooling.md says why the tools must match). The
   # coverage probe below fails the job if they stop working together.
+  #
+  # 90 minutes holds the longest dispatch (3600 s of fuzzing) through the
+  # setup, the calibration, scripts/afl/fuzz.sh's backstop 15 minutes past
+  # the limit and the triage after it.
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -182,7 +186,8 @@ jobs:
   # seeds rather than taking them from the repository.
   fuzz-heap-snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # As in the script fuzz job.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
