@@ -151,4 +151,13 @@ describe("repository links in Markdown responses", () => {
       "/docs/value-system?x=&copy;",
     ]);
   });
+
+  test("keep a docs route when the fragment holds an encoded line break", () => {
+    expect(
+      resolveRepositoryLinks(
+        "[x](value-system.md#sample&#10;line)",
+        page("built-ins"),
+      ),
+    ).toBe("[x](/docs/value-system#sample%0Aline)");
+  });
 });

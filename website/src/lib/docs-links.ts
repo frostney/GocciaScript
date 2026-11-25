@@ -22,7 +22,8 @@ export function resolveRepositoryHref(href: string, page: DocsPage): string {
     return docsSource.resolveHref(href, page);
   }
 
-  const match = href.match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
+  // A fragment may hold a decoded line break, which `.` would not match.
+  const match = href.match(/^([^?#]*)(\?[^#]*)?(#[\s\S]*)?$/);
   const pathname = match?.[1] ?? href;
   const suffix = `${match?.[2] ?? ""}${match?.[3] ?? ""}`;
   const repositoryPath = path.posix.normalize(

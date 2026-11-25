@@ -18,8 +18,7 @@
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself. Win32 builds also apply [audited SafeSEH metadata](contributing/win32-safeseh.md).
 
-This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
-`AGENTS.md` link here instead of duplicating the complete command list.
+This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and `AGENTS.md` link here instead of duplicating the complete command list.
 
 ## Prerequisites
 
@@ -356,6 +355,7 @@ Relative paths are resolved against the current working directory. A missing fil
 ```
 
 Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream, and in sandbox mode stamps every virtual-filesystem timestamp at the epoch too; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
