@@ -101,10 +101,16 @@ function referenceIdentifiers(tree: Root): {
   return { links, images };
 }
 
-/** A resolved URL as a Markdown destination: routes and GitHub URLs need no
- *  escaping beyond the characters a bare destination cannot hold. */
+/** A resolved URL written back as a bare Markdown destination that parses
+ *  to the same URL: whitespace, which ends a bare destination, is
+ *  percent-encoded, and punctuation Markdown would read is backslash-escaped
+ *  (parentheses, angle brackets, a backslash, `&`, which could start a
+ *  character reference, and `|`, which ends a GFM table cell even inside a
+ *  link). */
 function destinationText(url: string): string {
-  return url.replace(/[\s()<>]/g, (character) => encodeURIComponent(character));
+  return url
+    .replace(/\s/g, (character) => encodeURIComponent(character))
+    .replace(/[\\()<>&|]/g, (character) => `\\${character}`);
 }
 
 const resolvedDocuments = new Map<string, { source: string; result: string }>();

@@ -1,6 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { resolveRepositoryLinks } from "@/lib/docs-links";
+import type { Nodes } from "mdast";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+import {
+  resolveRepositoryHref,
+  resolveRepositoryLinks,
+} from "@/lib/docs-links";
 import { docsSource } from "@/lib/docs-source";
+
+/** Every link URL and table row width in a document, parsed as GFM. */
+function parsed(markdown: string): { links: string[]; rowWidths: number[] } {
+  const links: string[] = [];
+  const rowWidths: number[] = [];
+  const visit = (node: Nodes) => {
+    if (node.type === "link") links.push(node.url);
+    if (node.type === "tableRow") rowWidths.push(node.children.length);
+    if ("children" in node) for (const child of node.children) visit(child);
+  };
+  visit(
+    fromMarkdown(markdown, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }),
+  );
+  return { links, rowWidths };
+}
 
 function page(slug: string) {
   const found = docsSource.getPage([slug]);
@@ -103,5 +128,27 @@ describe("repository links in Markdown responses", () => {
         "    with [values](/docs/value-system).",
       ].join("\n"),
     );
+  });
+
+  test("write each destination so it parses to the URL the HTML page uses", () => {
+    const builtIns = page("built-ins");
+    const markdown = [
+      "| link | other |",
+      "| --- | --- |",
+      "| [pipe](value-system.md?x=\\|) | b |",
+      "",
+      "[paren](value-system.md#example\\)suffix) and [entity](value-system.md?x=\\&copy;).",
+    ].join("\n");
+    const before = parsed(markdown);
+    const after = parsed(resolveRepositoryLinks(markdown, builtIns));
+    expect(after.rowWidths).toEqual(before.rowWidths);
+    expect(after.links).toEqual(
+      before.links.map((url) => resolveRepositoryHref(url, builtIns)),
+    );
+    expect(after.links).toEqual([
+      "/docs/value-system?x=|",
+      "/docs/value-system#example)suffix",
+      "/docs/value-system?x=&copy;",
+    ]);
   });
 });
