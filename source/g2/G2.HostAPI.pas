@@ -163,7 +163,7 @@ uses
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
-  G2.Fetch, G2.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry;
+  G2.Fetch, G2.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry, ConsoleStreams;
 
 {$I G2.Testing.inc}
 {$I G2.Microbench.inc}
@@ -593,7 +593,7 @@ begin
   Result := True;
 end;
 
-{ writeLine(text): text and a line break on standard output }
+{ writeLine(text, method): text and a line break on the method's stream (ConsoleStreams), or to the host's sink }
 threadvar
   ConsoleSink: TConsoleSink;
 
@@ -608,7 +608,8 @@ var Sink: TConsoleSink;
 begin
   Sink := ConsoleSink;
   if Assigned(Sink) then Sink(ArgStr(Args, Argc, 2), ArgStr(Args, Argc, 1))
-  else WriteLn(ArgStr(Args, Argc, 1));   { the output's encoder writes an unpaired surrogate as U+FFFD }
+  else   { the output's encoder writes an unpaired surrogate as U+FFFD }
+    WriteConsoleLine(ConsoleMethodWritesToStderr(string(ArgStr(Args, Argc, 2))), ArgStr(Args, Argc, 1));
   Res := VUndefined;
   Result := True;
 end;

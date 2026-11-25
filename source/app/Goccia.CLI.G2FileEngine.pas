@@ -128,6 +128,7 @@ implementation
 uses
   Math,
 
+  ConsoleStreams,
   G2.Core,
   G2.HostAPI,
   TextSemantics,
@@ -197,12 +198,6 @@ begin
   inherited Destroy;
 end;
 
-function MethodWritesToStderr(const AMethod: string): Boolean;
-begin
-  Result := (AMethod = 'warn') or (AMethod = 'error') or
-    (AMethod = 'assert') or (AMethod = 'trace');
-end;
-
 function UnformatLine(const AMethod, ALine: string): string;
 var
   Prefix: string;
@@ -240,7 +235,7 @@ begin
   Method := AMethod;
   Line := ALine;
   FOutputLines.Add(Line);
-  if MethodWritesToStderr(Method) then
+  if ConsoleMethodWritesToStderr(Method) then
     FStderrLines.Add(UnformatLine(Method, Line))
   else
     FStdoutLines.Add(UnformatLine(Method, Line));
@@ -260,7 +255,7 @@ begin
   if Capturing then
     CaptureOutput(AMethod, ALine)
   else if not Silent then
-    WriteLn(ALine);
+    WriteConsoleLine(ConsoleMethodWritesToStderr(string(AMethod)), ALine);
 end;
 
 procedure TG2ConsoleCapture.PrintWarning(const AMessage, ASuggestion: UnicodeString;
