@@ -598,7 +598,8 @@ resolution, as canonical JSON.
   sorted, and a capability with an unscoped entry collapses to `true`. `false`
   and empty keys are omitted, and `unsafe` lists only keys set to `true`.
 - Relative paths are made absolute against the file that declares them, with
-  no trailing separator. This is lexical: symbolic links are not resolved, so a
+  no trailing separator, except that a filesystem root keeps its own (`/`, or
+  a Windows drive root such as `C:\`). This is lexical: symbolic links are not resolved, so a
   trust stays valid when a path it names (a built library, say) appears later.
 - Net scopes are lowercased, and `node_modules` and provider names too.
 - Denies are part of the block even though they need no trust, so a trusted

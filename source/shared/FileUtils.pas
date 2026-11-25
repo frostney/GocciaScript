@@ -73,6 +73,15 @@ function FindAllFilesExcludingDirectories(const ADirectory: string;
   they are unchanged here rather than refactored in passing.) }
 function IsAbsoluteHostPath(const APath: string): Boolean;
 function ExpandHostFileName(const APath: string): string;
+
+{ True when APath is a filesystem root, a path that ends in a separator and
+  is its own directory: `/`, or on Windows a drive root such as `C:\`. }
+function IsHostRootPath(const APath: string): Boolean;
+{ ExcludeTrailingPathDelimiter, except that a root keeps its separator: `/`
+  stays `/` and `C:\` stays `C:\`. Stripped, they would become `''` and `C:`,
+  which name the working directory and that drive's working directory. }
+function ExcludeTrailingHostPathDelimiter(const APath: string): string;
+
 function HostDirectoryExists(const APath: string): Boolean;
 function HostFileExists(const APath: string): Boolean;
 
@@ -386,6 +395,23 @@ end;
 function ExpandHostFileName(const APath: string): string;
 begin
   Result := ExpandFileName(APath);
+end;
+
+function IsHostRootPath(const APath: string): Boolean;
+begin
+  { The separator check keeps out a bare drive such as `C:`, which is its
+    own ExtractFileDir too but names that drive's working directory. }
+  Result := (APath <> '') and
+    CharInSet(APath[Length(APath)], AllowDirectorySeparators) and
+    (ExtractFileDir(APath) = APath);
+end;
+
+function ExcludeTrailingHostPathDelimiter(const APath: string): string;
+begin
+  if IsHostRootPath(APath) then
+    Result := APath
+  else
+    Result := ExcludeTrailingPathDelimiter(APath);
 end;
 
 function HostDirectoryExists(const APath: string): Boolean;
@@ -1373,7 +1399,7 @@ begin
     AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
     if AError <> '' then
       Exit;
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
     begin
       AError := ARoot + ' is no longer the copied directory';
@@ -1399,7 +1425,7 @@ begin
         AError := 'the path climbs out of ' + ARoot;
         Exit;
       end;
-      Path := Path + PathDelim + Parts[I];
+      Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if HostPathIsSymlink(Path) then
       begin
         AError := Parts[I] + ' is a symbolic link';
@@ -1509,7 +1535,7 @@ begin
     AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
     if AError <> '' then
       Exit;
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or
        not TryHostDirectoryIdentity(Path, AIdentity) then
     begin
@@ -1526,7 +1552,7 @@ begin
     end;
     for I := 0 to Parts.Count - 1 do
     begin
-      Path := Path + PathDelim + Parts[I];
+      Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if (Parts[I] = '.') or (Parts[I] = '..') or HostPathIsSymlink(Path) or
          not DirectoryExists(Path) then
       begin
@@ -1879,11 +1905,11 @@ begin
       end;
     { The root and every directory on the way are held for the whole
       removal, and none may be a reparse point. }
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     for I := -1 to Parts.Count - 2 do
     begin
       if I >= 0 then
-        Path := Path + PathDelim + Parts[I];
+        Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if not OpenHeld(Path, HOLD_ACCESS, Handle, Attributes, Missing) then
       begin
         if Missing and (I >= 0) then
@@ -1904,7 +1930,8 @@ begin
         Exit;
       end;
     end;
-    Result := RemoveEntry(Path + PathDelim + Parts[Parts.Count - 1]);
+    Result := RemoveEntry(IncludeTrailingPathDelimiter(Path) +
+      Parts[Parts.Count - 1]);
   finally
     for I := High(Held) downto 0 do
       CloseHandle(Held[I]);

@@ -246,10 +246,8 @@ begin
 
   Result.Spec := ASpec;
   Result.Origin := AOrigin;
-  Result.HostPath := ExcludeTrailingPathDelimiter(HostAbsolutePath(HostPart,
-    ABaseDirectory));
-  if Result.HostPath = '' then
-    Result.HostPath := PathDelim;
+  Result.HostPath := ExcludeTrailingHostPathDelimiter(HostAbsolutePath(
+    HostPart, ABaseDirectory));
   if Separator > 0 then
     Result.SandboxPath := CheckedSandboxPath(SandboxPart, AOrigin + ' ' + ASpec)
   else
@@ -401,9 +399,8 @@ begin
       Key := SANDBOX_CONFIG_KEY + '.copy';
     Input.Spec := AConfig.Inputs[I].Spec;
     Input.Origin := AConfig.Inputs[I].SourcePath;
-    Input.HostPath := ExcludeTrailingPathDelimiter(AConfig.Inputs[I].HostPath);
-    if Input.HostPath = '' then
-      Input.HostPath := PathDelim;
+    Input.HostPath := ExcludeTrailingHostPathDelimiter(
+      AConfig.Inputs[I].HostPath);
     if AConfig.Inputs[I].SandboxPath <> '' then
       Input.SandboxPath := CheckedSandboxPath(AConfig.Inputs[I].SandboxPath,
         AConfig.Inputs[I].SourcePath + ': "' + Key + '" entry "' +
