@@ -649,7 +649,8 @@ end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
 { whether a module the host loaded (before the entry's mark, or imported for the host) is the file at Path under
-  another name, by canonical identity (GocciaScript's loader judges ownership by it) }
+  another name: by canonical path (a symbolic link or junction), else by file identity (a hard link, which no
+  canonical path resolves). GocciaScript's loader judges ownership by it. }
 function SameFileAsHostModule(const Path: UnicodeString): Boolean;
 var R: TModRec; Canon: string;
 begin
@@ -657,7 +658,8 @@ begin
   Canon := CanonicalHostPath(string(Path));
   if Canon = '' then Exit;
   for R in Mods do
-    if (R.HostOwned or (R.Id < EntryModuleMark)) and (R.Path <> Path) and (CanonicalHostPath(string(R.Path)) = Canon) then
+    if (R.HostOwned or (R.Id < EntryModuleMark)) and (R.Path <> Path) and
+      ((CanonicalHostPath(string(R.Path)) = Canon) or SameHostFileIdentity(Canon, string(R.Path))) then
       Exit(True);
 end;
 

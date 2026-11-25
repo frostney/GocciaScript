@@ -4122,6 +4122,15 @@ console.log("Runtime diagnostics...");
       } catch {
         // Some filesystems disallow symlinks; skip rather than false-fail.
       }
+      // A hard link is the host file under a second name that no canonical
+      // path resolves, on POSIX as on Windows.
+      const hardlink = join(tmp, "hardlink-host.js");
+      try {
+        linkSync(realHost, hardlink);
+        aliases.push({ path: hardlink, label: "hardlink" });
+      } catch {
+        // The filesystem may not support hardlinks.
+      }
     }
     for (const alias of aliases) {
       if (!existsSync(alias.path)) continue;
