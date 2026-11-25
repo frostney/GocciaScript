@@ -97,6 +97,17 @@ function HostPathIsRegularFile(const APath: string): Boolean;
 function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
   out AError: string): Boolean;
 
+{ Every byte of APath, only when it is a regular file, read without waiting
+  on it. On POSIX the name is opened without following a symbolic link and
+  without blocking, and the opened file's own type is checked before a byte
+  is read: a FIFO swapped in for the file opens at once instead of waiting
+  for a writer, and is refused like a socket or a device. Windows has no
+  FIFOs in the filesystem; there a name that is not a regular file (a
+  directory or a reparse point) is refused before it is opened. False with
+  AError, which does not repeat the path, otherwise. }
+function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
+  out AError: string): Boolean;
+
 { APath with every symbolic link along it resolved to the file it physically
   names, or '' when the host cannot answer.
 
@@ -578,6 +589,79 @@ procedure ClosePinnedHostFile(const AHandle: THandle);
 begin
   if AHandle <> INVALID_HANDLE_VALUE then
     CloseHandle(AHandle);
+end;
+{$ENDIF}
+
+function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
+  out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Handle: cint;
+  Info: Stat;
+  PathBytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  ABytes := nil;
+  AError := '';
+  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
+  begin
+    AError := 'path cannot be encoded for the host';
+    Exit(False);
+  end;
+  Handle := fpOpen(PAnsiChar(@PathBytes[0]),
+    O_RDONLY or O_NONBLOCK or HOST_O_NOFOLLOW or HOST_O_CLOEXEC);
+  if Handle < 0 then
+  begin
+    AError := SysErrorMessage(fpgeterrno);
+    Exit(False);
+  end;
+  try
+    if fpFStat(Handle, Info) <> 0 then
+    begin
+      AError := SysErrorMessage(fpgeterrno);
+      Exit(False);
+    end;
+    if not fpS_ISREG(Info.st_mode) then
+    begin
+      AError := 'not a regular file';
+      Exit(False);
+    end;
+    Result := ReadHostHandleBytes(Handle, ABytes, AError);
+  finally
+    fpClose(Handle);
+  end;
+end;
+{$ELSE}
+var
+  Stream: TFileStream;
+begin
+  ABytes := nil;
+  AError := '';
+  {$IFDEF MSWINDOWS}
+  if not HostPathIsRegularFile(APath) then
+  begin
+    AError := 'not a regular file';
+    Exit(False);
+  end;
+  {$ENDIF}
+  try
+    Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+    try
+      SetLength(ABytes, Stream.Size);
+      if Length(ABytes) > 0 then
+        Stream.ReadBuffer(ABytes[0], Length(ABytes));
+    finally
+      Stream.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      ABytes := nil;
+      AError := E.Message;
+      Exit(False);
+    end;
+  end;
+  Result := True;
 end;
 {$ENDIF}
 

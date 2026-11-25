@@ -13,7 +13,10 @@ unit SandboxHostInputs;
   Symbolic links are refused wherever a copy meets one
   ([ADR 0071](../../docs/adr/0071-reject-symlinks-in-sandbox-seed-imports.md)): a
   link inside a copied directory would otherwise let the copy read, and the
-  write-back write, outside the tree the user named. }
+  write-back write, outside the tree the user named. So is anything else that
+  is not a regular file or a directory, such as a FIFO, a socket or a device:
+  reading a FIFO would wait for a writer, and none of them has contents to
+  copy. }
 
 {$I Shared.inc}
 
@@ -27,8 +30,8 @@ uses
   SandboxVirtualFileSystem;
 
 type
-  { A copy the host could not make: a missing path, a symbolic link, or a
-    sandbox target that does not fit. }
+  { A copy the host could not make: a missing path, a symbolic link or other
+    file that is not a regular file, or a sandbox target that does not fit. }
   ESandboxHostInputError = class(Exception);
 
   { Where a sandbox path came from on the host. }
@@ -262,18 +265,25 @@ begin
   Result := ExcludeTrailingPathDelimiter(Result);
 end;
 
+{ Copy-in judges a name's type without opening it
+  (FileUtils.HostPathIsRegularFile, which follows no link either) and refuses
+  anything that is neither a regular file nor a directory. }
+procedure RefuseSpecialFile(const APath: string);
+begin
+  raise ESandboxHostInputError.Create(
+    'Copy path is not a regular file (not supported): ' + APath);
+end;
+
+{ APath's bytes. The copy checked its type without opening it; the read
+  checks again on what it opened, so a FIFO swapped in since is refused
+  rather than waited on. }
 function ReadHostBytes(const APath: string): TBytes;
 var
-  Stream: TFileStream;
+  ErrorMessage: string;
 begin
-  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
-  try
-    SetLength(Result, Stream.Size);
-    if Stream.Size > 0 then
-      Stream.ReadBuffer(Result[0], Stream.Size);
-  finally
-    Stream.Free;
-  end;
+  if not ReadRegularHostFileBytes(APath, Result, ErrorMessage) then
+    raise ESandboxHostInputError.Create('Copy path could not be read: ' +
+      APath + ' (' + ErrorMessage + ')');
 end;
 
 { APath canonical where it exists, the missing rest appended, so a path
@@ -568,9 +578,11 @@ begin
       if (SearchRec.Attr and faDirectory) <> 0 then
         CopyDirectoryContents(HostChild,
           SandboxJoinPath(ASandboxDirectory, SearchRec.Name))
-      else
+      else if FileUtils.HostPathIsRegularFile(HostChild) then
         CopyFile(HostChild, SandboxJoinPath(ASandboxDirectory,
-          SearchRec.Name));
+          SearchRec.Name))
+      else
+        RefuseSpecialFile(HostChild);
     until FindNext(SearchRec) <> 0;
   finally
     FindClose(SearchRec);
@@ -613,6 +625,8 @@ begin
     Exit;
   end;
 
+  if not FileUtils.HostPathIsRegularFile(HostPath) then
+    RefuseSpecialFile(HostPath);
   if (Result = SANDBOX_SEPARATOR) or
      SandboxPathHasTrailingSeparator(ASandboxPath) or
      FFs.IsDirectory(Result) then

@@ -12196,6 +12196,43 @@ await section("Runner sandbox mode: --copy rejects a host symlink (no leak)...",
   }
 });
 
+await section("Runner sandbox mode: --copy refuses a FIFO at once, inside a directory or as the input...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const seedDir = join(tmp, "seedDir");
+      mkdirSync(seedDir, { recursive: true });
+      writeFileSync(join(seedDir, "a.txt"), "a");
+      const nested = join(seedDir, "pipe");
+      const top = join(tmp, "top");
+      for (const fifo of [nested, top]) {
+        const made = Bun.spawnSync(["mkfifo", fifo], { stdout: "pipe", stderr: "pipe" });
+        if (made.exitCode !== 0)
+          throw new Error(`mkfifo ${fifo} failed: ${made.stderr.toString()}`);
+      }
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, "1;\n");
+
+      // Nothing writes to either FIFO: a copy that opened one to read it
+      // would wait until the timeout kills it.
+      for (const [spec, fifo] of [[`${seedDir}=/seed`, nested], [`${top}=/top`, top]]) {
+        const proc = Bun.spawnSync([RUNNER, mainJs, "--copy", spec], {
+          stdout: "pipe", stderr: "pipe", timeout: 10_000,
+        });
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitedDueToTimeout)
+          throw new Error(`Sandbox mode --copy ${spec} waited on the FIFO until the timeout: ${output}`);
+        if (proc.exitCode !== 1)
+          throw new Error(`Sandbox mode --copy ${spec} should exit 1, got ${proc.exitCode}: ${output}`);
+        if (!output.includes(`Copy path is not a regular file (not supported): ${fifo}`))
+          throw new Error(`Sandbox mode --copy ${spec} should name the FIFO it refused, got: ${output}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a sandbox-section directory rejects a nested host symlink (no leak)...", async () => {
   const tmp = makeNativeTmp();
   try {

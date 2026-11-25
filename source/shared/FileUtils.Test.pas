@@ -43,6 +43,7 @@ type
     procedure TestReadSharedHostFileBytes;
     procedure TestHostPathIsRegularFile;
     procedure TestReadHostHandleBytesReadsFromTheStart;
+    procedure TestReadRegularHostFileBytesRefusesWhatIsNotOne;
     procedure TestRemoveHostTreeBeneathRemovesATree;
     procedure TestRemoveHostTreeBeneathDoesNotFollowLinks;
     procedure TestTryHostFileMode;
@@ -109,6 +110,9 @@ begin
     TestReadSharedHostFileBytes);
   Test('HostPathIsRegularFile is true only for a regular file itself',
     TestHostPathIsRegularFile);
+  Test('ReadRegularHostFileBytes reads a regular file and refuses, ' +
+    'without waiting, what is not one',
+    TestReadRegularHostFileBytesRefusesWhatIsNotOne);
   Test('ReadHostHandleBytes reads the whole file through its handle',
     TestReadHostHandleBytesReadsFromTheStart);
   Test('RemoveHostTreeBeneath removes a tree and refuses to climb',
@@ -602,6 +606,56 @@ begin
     PAnsiChar(AnsiString(FTempDir + PathDelim + 'link.txt')))).ToBe(0);
   Expect<Boolean>(HostPathIsRegularFile(FTempDir + PathDelim + 'link.txt'))
     .ToBe(False);
+  {$ENDIF}
+end;
+
+{ Why ReadRegularHostFileBytes refused APath, or '' when it read it. }
+function ReadRegularHostFileBytesError(const APath: string): string;
+var
+  Bytes: TBytes;
+begin
+  if ReadRegularHostFileBytes(APath, Bytes, Result) then
+    Result := '';
+end;
+
+procedure TFileUtilsTests.TestReadRegularHostFileBytesRefusesWhatIsNotOne;
+var
+  Target, Error: string;
+  Bytes: TBytes;
+  {$IFDEF UNIX}
+  Fifo: string;
+  {$ENDIF}
+begin
+  Target := FTempDir + PathDelim + 'regular.bin';
+  Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+    TEncoding.UTF8.GetBytes('0123456789'), Error)).ToBe(True);
+  Expect<Boolean>(ReadRegularHostFileBytes(Target, Bytes, Error)).ToBe(True);
+  Expect<string>(TEncoding.UTF8.GetString(Bytes)).ToBe('0123456789');
+  Expect<string>(Error).ToBe('');
+
+  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir, Bytes, Error))
+    .ToBe(False);
+  Expect<Integer>(Length(Bytes)).ToBe(0);
+  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir + PathDelim + 'missing',
+    Bytes, Error)).ToBe(False);
+  Expect<Boolean>(Error <> '').ToBe(True);
+  {$IFDEF UNIX}
+  Expect<string>(ReadRegularHostFileBytesError(FTempDir)).ToBe(
+    'not a regular file');
+  { Nobody writes to this FIFO: opened for reading the usual way, it would
+    wait for a writer forever. }
+  Fifo := FTempDir + PathDelim + 'fifo';
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(Fifo)), $1B6)).ToBe(0);
+  Expect<string>(ReadRegularHostFileBytesError(Fifo)).ToBe(
+    'not a regular file');
+  Expect<string>(ReadRegularHostFileBytesError('/dev/null')).ToBe(
+    'not a regular file');
+  { A link to a regular file is not followed. }
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Target)),
+    PAnsiChar(AnsiString(FTempDir + PathDelim + 'link.bin')))).ToBe(0);
+  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir + PathDelim + 'link.bin',
+    Bytes, Error)).ToBe(False);
+  Expect<Integer>(Length(Bytes)).ToBe(0);
   {$ENDIF}
 end;
 

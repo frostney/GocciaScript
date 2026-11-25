@@ -26,6 +26,7 @@ type
     procedure TestDirectoryTargets;
     procedure TestMissingHostPath;
     procedure TestSymlinksRejected;
+    procedure TestSpecialFilesRejected;
     procedure TestEntryInsideInput;
     procedure TestLongestOriginWins;
     procedure TestWriteBackOnlyReadWriteOrigins;
@@ -63,6 +64,8 @@ begin
   Test('A missing host path is refused', TestMissingHostPath);
   Test('Symbolic links are refused, at the top and inside a directory',
     TestSymlinksRejected);
+  Test('FIFOs and devices are refused without waiting, at the top and ' +
+    'inside a directory', TestSpecialFilesRejected);
   Test('A host file inside a copied input maps to its sandbox path',
     TestEntryInsideInput);
   Test('The longest matching origin supplies a sandbox path',
@@ -235,6 +238,48 @@ begin
   {$ELSE}
   { The scenario needs symbolic links, which Windows creates only with
     elevated rights. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestSpecialFilesRejected;
+{$IFDEF UNIX}
+const
+  REFUSAL = 'Copy path is not a regular file (not supported): ';
+var
+  NestedWriter, TopWriter: cint;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  WriteHostFile('in/a.txt', 'a');
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('in/pipe'))), $1B6))
+    .ToBe(0);
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('top'))), $1B6))
+    .ToBe(0);
+  { The test holds each FIFO open, so a copy that did open one would not
+    wait forever: it would fail here rather than hang the suite. }
+  NestedWriter := FpOpen(PAnsiChar(AnsiString(HostPath('in/pipe'))),
+    O_RDWR or O_NONBLOCK);
+  TopWriter := FpOpen(PAnsiChar(AnsiString(HostPath('top'))),
+    O_RDWR or O_NONBLOCK);
+  try
+    Expect<Boolean>((NestedWriter >= 0) and (TopWriter >= 0)).ToBe(True);
+    Expect<string>(CopyError(HostPath('in'), '/in')).ToBe(REFUSAL +
+      HostPath('in/pipe'));
+    Expect<string>(CopyError(HostPath('top'), '/top')).ToBe(REFUSAL +
+      HostPath('top'));
+    Expect<string>(CopyError('/dev/null', '/null')).ToBe(REFUSAL +
+      '/dev/null');
+    Expect<Boolean>(FFs.IsFile('/top')).ToBe(False);
+    Expect<Boolean>(FFs.IsFile('/null')).ToBe(False);
+  finally
+    if NestedWriter >= 0 then
+      FpClose(NestedWriter);
+    if TopWriter >= 0 then
+      FpClose(TopWriter);
+  end;
+  {$ELSE}
+  { Windows has no FIFOs in the filesystem. }
   Expect<Boolean>(True).ToBe(True);
   {$ENDIF}
 end;
