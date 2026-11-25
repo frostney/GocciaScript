@@ -847,7 +847,14 @@ begin
       and the end of the copy. }
     Fs.MakeDirectory('/out', True);
     Clock.Arm(HostPath('out'));
+    {$IFDEF UNIX}
     Inputs.CopyIn(HostPath('out'), '/out', True);
+    {$ELSE}
+    { Windows will not rename a directory while the copy is listing it, so
+      there the file is copied on its own and its directory is swapped once
+      the file has been read and closed. }
+    Inputs.CopyIn(HostPath('out/a.txt'), '/out/', True);
+    {$ENDIF}
     Expect<Boolean>(DirectoryExists(HostPath('out.real'))).ToBe(True);
     Expect<string>(Fs.ReadAllText('/out/a.txt')).ToBe('orig');
     Baseline := Fs.Fork;
@@ -887,7 +894,13 @@ begin
   try
     Fs.MakeDirectory('/out', True);
     Clock.Arm(HostPath('project/out'));
+    {$IFDEF UNIX}
     Inputs.CopyIn(HostPath('project/out'), '/out', True, Pin);
+    {$ELSE}
+    { As in TestInputReplacedDuringCopyWritesNothing: a file input, pinned at
+      the same directory. }
+    Inputs.CopyIn(HostPath('project/out/a.txt'), '/out/', True, Pin);
+    {$ENDIF}
     Expect<Boolean>(DirectoryExists(HostPath('project/out.real'))).ToBe(True);
     Expect<string>(Fs.ReadAllText('/out/a.txt')).ToBe('orig');
     Baseline := Fs.Fork;
