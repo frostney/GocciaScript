@@ -1019,6 +1019,32 @@ begin
     Result := ACtx.GlobalBackedTopLevelLexicals and (ACtx.Scope.Depth = 0);
 end;
 
+// ES2026 §8.6.2.1 InitializeBoundName: a var binding's value is stored by
+// ResolveBinding and PutValue, as an assignment's is, so a `with` object that
+// has the name receives it (§9.1.1.2.5). A var pattern is therefore compiled as
+// a destructuring assignment wherever a `with` object may be in scope, as it
+// already is where its vars are global bindings: each name is resolved before
+// its value is read, and falls back to the var only when no object has it.
+function VarPatternStoresByAssignment(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := ACtx.GlobalBackedTopLevel or (ACtx.Scope.WithBindingCount > 0);
+end;
+
+// Stores AValueReg into the var AName as a for-in or for-of head does (ES2026
+// §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: the value, then ResolveBinding and
+// PutValue): into the first `with` object that has the name, else into the var
+// itself, where a strict type is checked.
+procedure EmitVarHeadNameStore(const ACtx: TGocciaCompilationContext;
+  const AName: string; const AValueReg: UInt16);
+begin
+  if ShouldTryWithBinding(ACtx.Scope, AName) then
+    EmitWithAssignmentOrFallback(ACtx, AName, AValueReg)
+  else
+    EmitBindingAssignmentFromRegister(ACtx, AName, AValueReg,
+      ACtx.GlobalBackedTopLevel);
+end;
+
 function GlobalDefineOpcode(const AIsConst: Boolean; const AIsVar: Boolean;
   const AHasInitializer: Boolean; const AIsFunctionDeclaration: Boolean)
   : TGocciaOpCode;
@@ -1284,7 +1310,7 @@ begin
       try
         ACtx.CompileExpression(Info.Initializer, InitSlot);
         EmitDestructuring(PatternCtx, Info.Pattern, InitSlot,
-          IsTopLevelGlobalBacked and AStmt.IsVar);
+          AStmt.IsVar and VarPatternStoresByAssignment(ACtx));
       finally
         ACtx.Scope.FreeRegister;
       end;
@@ -3676,13 +3702,12 @@ begin
   begin
     CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope);
     EmitDestructuring(ACtx, AStmt.BindingPattern, AValueReg,
-      ACtx.GlobalBackedTopLevel);
+      VarPatternStoresByAssignment(ACtx));
   end
   else if AStmt.BindingName <> '' then
   begin
     ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
-    EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, AValueReg,
-      ACtx.GlobalBackedTopLevel);
+    EmitVarHeadNameStore(ACtx, AStmt.BindingName, AValueReg);
   end;
 end;
 
@@ -4118,16 +4143,21 @@ begin
         CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope,
           AStmt.IsConst);
       EmitDestructuring(ACtx, AStmt.BindingPattern, KeyReg,
-        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
+        AStmt.IsVar and VarPatternStoresByAssignment(ACtx));
     end
     else if AStmt.BindingName <> '' then
     begin
       if AStmt.IsVar then
-        Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName)
+      begin
+        ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
+        EmitVarHeadNameStore(ACtx, AStmt.BindingName, KeyReg);
+      end
       else
-        Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
-      EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
-        AStmt.IsVar and ACtx.GlobalBackedTopLevel);
+      begin
+        ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
+        EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, KeyReg,
+          False);
+      end;
     end;
 
     ACtx.CompileStatement(AStmt.Body);
@@ -8580,7 +8610,7 @@ begin
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
   EmitDestructuring(PatternCtx, AStmt.Pattern, SrcReg,
-    IsTopLevelGlobalBacked and AStmt.IsVar);
+    AStmt.IsVar and VarPatternStoresByAssignment(ACtx));
   ACtx.Scope.FreeRegister;
 end;
 
