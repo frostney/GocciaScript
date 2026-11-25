@@ -110,6 +110,12 @@
   const virtualKeys = Object.create(null);
   const isRelative = (a) => a.startsWith('./') || a.startsWith('../');
   const joinPath = (dir, rel) => {
+    // a Windows directory (C:\dir, \\server\share): joined as the host's resolver spells the paths it resolves,
+    // so that an import of the file meets this key
+    if (dir.includes('\\') || /^[A-Za-z]:/.test(dir)) {
+      const expanded = n.expandPath(dir, rel);
+      if (expanded !== '') return expanded;
+    }
     const parts = dir.split('/');
     for (const seg of rel.split('/')) {
       if (seg === '..') parts.pop();

@@ -1709,6 +1709,25 @@ console.log("Executable manifests keep --deny-read in force...");
   }
 }
 
+console.log("A manifest's relative address is a module even with no file at that path...");
+{
+  const tmp = makeTmp();
+  try {
+    const manifest = join(tmp, "modules.mjs");
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(
+      manifest,
+      'export default {"./virt.js": {content: "export default 42;"}};\n',
+    );
+    writeFileSync(entry, 'import value from "./virt.js"; console.log("virtual " + value);\n');
+    const out = runCwd(RUNNER, [entry, "--modules", manifest], tmp);
+    if (!out.stdout.includes("virtual 42"))
+      throw new Error(`A relative virtual address should resolve from the importing file: ${out.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Executable manifests cannot replace an already loaded module record...");
 {
   const tmp = makeTmp();

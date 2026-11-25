@@ -1387,6 +1387,20 @@ begin
       Exit(1);
     end;
   end;
+  { a relative specifier in a file names a virtual module defined at that path (a config's or manifest's relative
+    address, docs/virtual-modules.md) even when no file is there; with a file there, the resolution below finds it
+    and warns that the virtual module shadows it }
+  if IsRelativeSpecifier(Spec) and (Referrer <> '') and (Referrer[1] <> '<') and not IsVirtualKey(Referrer) and
+     not SandboxActive then
+  begin
+    Candidate := UnicodeString(ExpandFileName(IncludeTrailingPathDelimiter(ExtractFileDir(
+      ExpandFileName(UTF8Encode(Referrer)))) + UTF8Encode(Spec)));
+    if not FileExists(UTF8Encode(Candidate)) and IsHostModuleKey(Candidate) then
+    begin
+      Resolved := Candidate;
+      Exit(1);
+    end;
+  end;
   Resolver := CurrentResolver;
   if (Referrer = '') or (Referrer[1] = '<') or IsVirtualKey(Referrer) then Ref := ''
   { a sandbox's paths are its own, rooted at / (ExpandFileName would put a Windows drive in front) }
@@ -1532,6 +1546,19 @@ end;
 function Host_IsAbsolutePath(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   if IsAbsoluteFilePath(ArgStr(Args, Argc, 1)) then Res := VTrue else Res := VFalse;
+  Result := True;
+end;
+
+{ expandPath(dir, rel): on Windows, rel under the directory dir expanded as GocciaScript's resolver spells the paths
+  it resolves (ExpandFileName: '\' separators, '.' and '..' folded); '' elsewhere, where the prelude joins with '/' }
+function Host_ExpandPath(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+{$IFDEF MSWINDOWS}
+  Res := StrFromUnicode(UnicodeString(ExpandFileName(IncludeTrailingPathDelimiter(
+    UTF8Encode(ArgStr(Args, Argc, 1))) + UTF8Encode(ArgStr(Args, Argc, 2)))));
+{$ELSE}
+  Res := StrFromUnicode('');
+{$ENDIF}
   Result := True;
 end;
 
@@ -1871,6 +1898,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   DefineNative(RootAt(TempTop - 1), 'isAbsolutePath', Host_IsAbsolutePath, 1);
+  DefineNative(RootAt(TempTop - 1), 'expandPath', Host_ExpandPath, 2);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
   DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
