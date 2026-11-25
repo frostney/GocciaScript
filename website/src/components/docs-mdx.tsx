@@ -1,46 +1,11 @@
-import path from "node:path";
 import { Blockquote } from "@astryxdesign/core/Blockquote";
 import { Code, CodeBlock } from "@astryxdesign/core/CodeBlock";
 import Link from "next/link";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { MermaidBlock } from "@/components/mermaid-block";
-import { type DocsPage, docsSource } from "@/lib/docs-source";
-
-const REPOSITORY_BLOB_URL =
-  "https://github.com/frostney/GocciaScript/blob/main";
-
-function resolveRepositoryHref(href: string, page: DocsPage): string {
-  if (
-    href.startsWith("#") ||
-    href.startsWith("/") ||
-    /^[a-z][a-z\d+.-]*:/i.test(href)
-  ) {
-    return docsSource.resolveHref(href, page);
-  }
-
-  const match = href.match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
-  const pathname = match?.[1] ?? href;
-  const suffix = `${match?.[2] ?? ""}${match?.[3] ?? ""}`;
-  const repositoryPath = path.posix.normalize(
-    path.posix.join(path.posix.dirname(page.path), pathname),
-  );
-  const candidates = [
-    repositoryPath,
-    `${repositoryPath}.md`,
-    path.posix.join(repositoryPath, "README.md"),
-  ];
-  const target = docsSource
-    .getPages()
-    .find((candidate) => candidates.includes(candidate.path));
-
-  if (target) return `${target.url}${suffix}`;
-
-  // The docs collection intentionally exposes README.md and docs/**/*.md.
-  // Keep links to other repository files useful by sending them to GitHub
-  // instead of inventing website routes that cannot resolve.
-  return `${REPOSITORY_BLOB_URL}/${repositoryPath}${suffix}`;
-}
+import { resolveRepositoryHref } from "@/lib/docs-links";
+import type { DocsPage } from "@/lib/docs-source";
 
 function textContent(value: ReactNode): string {
   if (typeof value === "string" || typeof value === "number") {
