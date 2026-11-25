@@ -157,8 +157,14 @@ uses
 
 const
   SANDBOX_ROOT = '/';
-  { reserved, not committed: room for native recursion as deep as a file thread's }
+  { reserved, not committed: room for native recursion as deep as a file thread's. A 32-bit process has 2 GB of
+    address space, which the nesting ceiling's 33 run threads would fill at 64 MB each before the ceiling is
+    reached, so there each reserves 16 MB (the native stack guard reads the thread's own bounds) }
+  {$IFDEF CPU64}
   RUN_THREAD_STACK = 64 * 1024 * 1024;
+  {$ELSE}
+  RUN_THREAD_STACK = 16 * 1024 * 1024;
+  {$ENDIF}
 
 threadvar
   { the run this thread is carrying out: a nested run's parent }
@@ -618,7 +624,19 @@ begin
          (Remaining < Run.TimeoutMilliseconds)) then
         Run.TimeoutMilliseconds := Remaining;
     end;
-    Thread := TG2SandboxRunThread.Create(True, RUN_THREAD_STACK);
+    try
+      Thread := TG2SandboxRunThread.Create(True, RUN_THREAD_STACK);
+    except
+      on E: EThread do
+      begin
+        { no room for another run's thread: for a nested run a ceiling of the host's, as the nesting depth is,
+          which a guest reaches by nesting and so never a host fault }
+        if AParent = nil then
+          raise;
+        raise EGocciaSandboxNestingLimitExceeded.Create(
+          'sandbox runScript nesting limit exceeded: no room for another run (' + E.Message + ')');
+      end;
+    end;
     try
       Thread.FreeOnTerminate := False;
       Thread.Host := Self;
