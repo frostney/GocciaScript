@@ -42,6 +42,11 @@ type
       value. Equal offsets mean the parser did not record one. }
     StartOffset: Integer;
     EndOffset: Integer;
+    { Where the parameter starts, for a runtime error about it, such as a
+      failed strict-types check on entry. 0 when the parser did not record
+      it. }
+    Line: Integer;
+    Column: Integer;
   end;
   TGocciaParameterArray = array of TGocciaParameter;
 
