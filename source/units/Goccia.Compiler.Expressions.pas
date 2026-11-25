@@ -8630,6 +8630,20 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AValueReg, 0));
 end;
 
+// ES2026 §13.4.2.1-§13.4.5.1: an update's new value comes from ToNumeric, so
+// it is a Number or a BigInt. A strictly typed binding whose type is `number`
+// holds no BigInt (its parameter or assignment check refused one), so only a
+// binding of any other strict type can be handed a value its type rejects.
+function StrictLocalRejectsNumber(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer): Boolean;
+var
+  Local: TGocciaCompilerLocal;
+begin
+  Local := ACtx.Scope.GetLocal(ALocalIdx);
+  Result := Local.IsStrictlyTyped and (Local.TypeHint <> sltUntyped) and
+    not TypesAreCompatible(sltFloat, Local.TypeHint);
+end;
+
 procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const AMember: TGocciaMemberExpression;
   const ADest: UInt16; const AOp, ANumericOp, APostNumericOp: TGocciaOpCode;
@@ -8876,6 +8890,7 @@ begin
         EmitGetDeclaredGlobal(ACtx, Ident.Name, RegResult);
         EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
           PostNumericOp, AKeepResult);
+        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult, sltFloat);
         EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
@@ -8897,6 +8912,24 @@ begin
         RegResult := ACtx.Scope.AllocateRegister;
         CompileIncrement(ACtx, AExpr, RegResult);
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+        ACtx.Scope.FreeRegister;
+        Exit;
+      end;
+      // A strictly typed binding whose type is not `number` can be handed a
+      // new value its type rejects, so the update runs on a temporary whose
+      // value is checked like an assignment's before it replaces the
+      // binding's; an update in place would store it unchecked.
+      if StrictLocalRejectsNumber(ACtx, LocalIdx) then
+      begin
+        RegResult := ACtx.Scope.AllocateRegister;
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegResult, Slot));
+        EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
+          PostNumericOp, AKeepResult);
+        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult, sltFloat);
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, RegResult, Slot));
+        EmitExportBindingUpdates(ACtx,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNames,
+          ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegResult);
         ACtx.Scope.FreeRegister;
         Exit;
       end;

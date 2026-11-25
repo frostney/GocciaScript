@@ -305,6 +305,8 @@ type
     procedure TestGlobalBackedAssignmentChecksStrictType;
     procedure TestGlobalBackedShortCircuitChecksStrictType;
     procedure TestGlobalBackedCompoundChecksStrictType;
+    procedure TestLocalIncrementChecksStrictType;
+    procedure TestGlobalBackedIncrementChecksStrictType;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
@@ -589,6 +591,8 @@ begin
   Test('Global-backed assignment checks strict type', TestGlobalBackedAssignmentChecksStrictType);
   Test('Global-backed short-circuit checks strict type', TestGlobalBackedShortCircuitChecksStrictType);
   Test('Global-backed compound checks strict type', TestGlobalBackedCompoundChecksStrictType);
+  Test('Local increment checks strict type', TestLocalIncrementChecksStrictType);
+  Test('Global-backed increment checks strict type', TestGlobalBackedIncrementChecksStrictType);
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
   Test('Reassigned local keeps type only when every value is a Number',
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
@@ -6116,6 +6120,37 @@ var
 begin
   Module := CompileSource(
     'let a: number = 1; a += "x"; a;',
+    True, False, True, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLocalIncrementChecksStrictType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // Each update of a binding typed other than `number` is checked; one typed
+  // `number` is not, since its new value is always a Number.
+  Module := CompileSource(
+    'let a: string = "1"; a++; ++a; let b: boolean = true; b--; --b; ' +
+    'let n: number = 1; n++; --n; [a, b, n];',
+    True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(4);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedIncrementChecksStrictType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a: string = "1"; a++; let n: number = 1; n++; [a, n];',
     True, False, True, False, False, False);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
