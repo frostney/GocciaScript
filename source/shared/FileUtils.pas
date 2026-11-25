@@ -1399,7 +1399,7 @@ begin
     AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
     if AError <> '' then
       Exit;
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
     begin
       AError := ARoot + ' is no longer the copied directory';
@@ -1425,7 +1425,7 @@ begin
         AError := 'the path climbs out of ' + ARoot;
         Exit;
       end;
-      Path := Path + PathDelim + Parts[I];
+      Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if HostPathIsSymlink(Path) then
       begin
         AError := Parts[I] + ' is a symbolic link';
@@ -1535,7 +1535,7 @@ begin
     AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
     if AError <> '' then
       Exit;
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or
        not TryHostDirectoryIdentity(Path, AIdentity) then
     begin
@@ -1552,7 +1552,7 @@ begin
     end;
     for I := 0 to Parts.Count - 1 do
     begin
-      Path := Path + PathDelim + Parts[I];
+      Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if (Parts[I] = '.') or (Parts[I] = '..') or HostPathIsSymlink(Path) or
          not DirectoryExists(Path) then
       begin
@@ -1905,11 +1905,11 @@ begin
       end;
     { The root and every directory on the way are held for the whole
       removal, and none may be a reparse point. }
-    Path := ExcludeTrailingPathDelimiter(ARoot);
+    Path := ExcludeTrailingHostPathDelimiter(ARoot);
     for I := -1 to Parts.Count - 2 do
     begin
       if I >= 0 then
-        Path := Path + PathDelim + Parts[I];
+        Path := IncludeTrailingPathDelimiter(Path) + Parts[I];
       if not OpenHeld(Path, HOLD_ACCESS, Handle, Attributes, Missing) then
       begin
         if Missing and (I >= 0) then
@@ -1930,7 +1930,8 @@ begin
         Exit;
       end;
     end;
-    Result := RemoveEntry(Path + PathDelim + Parts[Parts.Count - 1]);
+    Result := RemoveEntry(IncludeTrailingPathDelimiter(Path) +
+      Parts[Parts.Count - 1]);
   finally
     for I := High(Held) downto 0 do
       CloseHandle(Held[I]);
