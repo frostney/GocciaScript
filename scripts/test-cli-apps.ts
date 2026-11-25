@@ -12248,7 +12248,7 @@ await section("Runner sandbox mode: a FIFO named goccia.json beside a copied ent
 
       // Config discovery starts beside the entry: reading the FIFO there
       // would wait until the timeout kills the run.
-      const proc = Bun.spawnSync([RUNNER, join(src, "main.js"), "--copy", src], {
+      const proc = Bun.spawnSync([resolve(RUNNER), join(src, "main.js"), "--copy", src], {
         stdout: "pipe", stderr: "pipe", timeout: 10_000, cwd: tmp,
       });
       const stdout = proc.stdout.toString();
