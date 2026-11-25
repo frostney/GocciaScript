@@ -4626,21 +4626,25 @@ if (process.platform !== "win32") {
     if (readOnly.exitCode !== 0 || !readOnlyOut.startsWith("after\n"))
       throw new Error(`console.error to a read-only stderr should not end the script, got exit ${readOnly.exitCode}: ${readOnlyOut}`);
     // stderr on a pipe whose reader has gone: the write raises SIGPIPE, which
-    // the console holds off, so the script goes on. The script waits before
-    // it writes, so the reader (`:`) has exited by then.
+    // the console holds off, so the script goes on and the runner exits 0,
+    // with no tail of the failed line left to raise one at exit. The script
+    // waits before it writes, so the reader (`:`) has exited by then; the
+    // line is longer than one write so the RTL splits it.
     const late = join(tmp, "late.js");
     const lateOutPath = join(tmp, "late.out");
+    const lateStatusPath = join(tmp, "late.status");
     writeFileSync(
       late,
-      ["const start = Date.now();", "while (Date.now() - start < 500) {}", 'console.error("failing");', 'console.log("after");', ""].join("\n"),
+      ["const start = Date.now();", "while (Date.now() - start < 500) {}", 'console.error("x".repeat(4000));', 'console.log("after");', ""].join("\n"),
     );
-    const broken = Bun.spawnSync(["sh", "-c", '"$0" "$1" --compat-while-loops 2>&1 >"$2" | :', RUNNER, late, lateOutPath], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const broken = Bun.spawnSync(
+      ["sh", "-c", '{ "$0" "$1" --compat-while-loops 2>&1 >"$2"; echo "$?" >"$3"; } | :', RUNNER, late, lateOutPath, lateStatusPath],
+      { stdout: "pipe", stderr: "pipe" },
+    );
     const lateOut = normalizeLineEndings(readFileSync(lateOutPath, "utf-8"));
-    if (!lateOut.startsWith("after\n"))
-      throw new Error(`console.error to a pipe with no reader should not end the script, got stdout ${JSON.stringify(lateOut)}: ${broken.stderr.toString()}`);
+    const lateStatus = readFileSync(lateStatusPath, "utf-8").trim();
+    if (lateStatus !== "0" || !lateOut.startsWith("after\n"))
+      throw new Error(`console.error to a pipe with no reader should not end the script, got status ${lateStatus}, stdout ${JSON.stringify(lateOut)}: ${broken.stderr.toString()}`);
   } finally {
     clean(tmp);
   }

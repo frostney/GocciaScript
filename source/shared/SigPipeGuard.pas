@@ -31,10 +31,7 @@ type
   end;
 
 procedure BeginSigPipeGuard(out AGuard: TSigPipeGuard);
-{ AMayHaveRaised False says the guarded call succeeded, so it raised no
-  SIGPIPE and none is looked for. }
-procedure EndSigPipeGuard(const AGuard: TSigPipeGuard;
-  const AMayHaveRaised: Boolean = True);
+procedure EndSigPipeGuard(const AGuard: TSigPipeGuard);
 
 implementation
 
@@ -84,8 +81,7 @@ begin
   end;
 end;
 
-procedure EndSigPipeGuard(const AGuard: TSigPipeGuard;
-  const AMayHaveRaised: Boolean);
+procedure EndSigPipeGuard(const AGuard: TSigPipeGuard);
 var
   Wanted: TSigSet;
   {$IFDEF LINUX}
@@ -99,7 +95,7 @@ begin
   { Only a SIGPIPE the caller did not already hold pending is taken. Taken
     even when the caller blocks SIGPIPE, or unblocking it would end the
     process for a write that failed with an error. }
-  if AMayHaveRaised and not AGuard.PendingBefore then
+  if not AGuard.PendingBefore then
   begin
     fpSigEmptySet(Wanted);
     fpSigAddSet(Wanted, SIGPIPE);
@@ -124,8 +120,7 @@ begin
   FillChar(AGuard, SizeOf(AGuard), 0);
 end;
 
-procedure EndSigPipeGuard(const AGuard: TSigPipeGuard;
-  const AMayHaveRaised: Boolean);
+procedure EndSigPipeGuard(const AGuard: TSigPipeGuard);
 begin
 end;
 {$ENDIF}
