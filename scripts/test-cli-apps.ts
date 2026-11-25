@@ -12234,6 +12234,37 @@ await section("Runner sandbox mode: --copy refuses a FIFO at once, inside a dire
   }
 });
 
+await section("Runner sandbox mode: a FIFO named goccia.json beside a copied entry is refused, not read as its config...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    if (process.platform !== "win32") {
+      const src = join(tmp, "src");
+      mkdirSync(src, { recursive: true });
+      writeFileSync(join(src, "main.js"), "1;\n");
+      const fifo = join(src, "goccia.json");
+      const made = Bun.spawnSync(["mkfifo", fifo], { stdout: "pipe", stderr: "pipe" });
+      if (made.exitCode !== 0)
+        throw new Error(`mkfifo ${fifo} failed: ${made.stderr.toString()}`);
+
+      // Config discovery starts beside the entry: reading the FIFO there
+      // would wait until the timeout kills the run.
+      const proc = Bun.spawnSync([RUNNER, join(src, "main.js"), "--copy", src], {
+        stdout: "pipe", stderr: "pipe", timeout: 10_000, cwd: tmp,
+      });
+      const stdout = proc.stdout.toString();
+      const stderr = proc.stderr.toString();
+      if (proc.exitedDueToTimeout)
+        throw new Error(`Sandbox mode with a FIFO goccia.json waited on it until the timeout: ${stdout}${stderr}`);
+      if (proc.exitCode !== 1)
+        throw new Error(`Sandbox mode with a FIFO goccia.json should exit 1, got ${proc.exitCode}: ${stdout}${stderr}`);
+      if (!stderr.includes(`Copy path is not a regular file (not supported): ${fifo}`))
+        throw new Error(`Sandbox mode with a FIFO goccia.json should refuse it on stderr, got stderr: ${stderr} stdout: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a sandbox-section directory rejects a nested host symlink (no leak)...", async () => {
   const tmp = makeNativeTmp();
   try {

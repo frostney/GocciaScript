@@ -633,11 +633,17 @@ const
     the suite. }
   FIFO_DEADLINE_SECONDS = 5;
 
-{ Does nothing: a blocked open(2) that the alarm interrupts returns EINTR,
+var
+  { Set by the SIGALRM handler, which can reach nothing else: whether the
+    deadline passed during the call under test. }
+  AlarmFired: Boolean;
+
+{ Records the alarm: a blocked open(2) that the alarm interrupts returns EINTR,
   because the handler is installed without SA_RESTART. }
 procedure InterruptOnAlarm(ASignal: cint; AInfo: PSigInfo;
   AContext: PSigContext); cdecl;
 begin
+  AlarmFired := True;
 end;
 
 { ReadRegularHostFileBytesOutcome for a FIFO nobody writes to, under a
@@ -652,6 +658,7 @@ begin
   Action.sa_flags := 0;
   if FpSigAction(SIGALRM, @Action, @Previous) <> 0 then
     Exit('the deadline could not be set');
+  AlarmFired := False;
   FpAlarm(FIFO_DEADLINE_SECONDS);
   try
     Result := ReadRegularHostFileBytesOutcome(APath);
@@ -659,6 +666,9 @@ begin
     FpAlarm(0);
     FpSigAction(SIGALRM, @Previous, nil);
   end;
+  { Whatever the read returned, it waited. }
+  if AlarmFired then
+    Result := 'deadline passed: ' + Result;
 end;
 {$ENDIF}
 

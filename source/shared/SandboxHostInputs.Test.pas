@@ -332,11 +332,17 @@ const
     the suite. }
   FIFO_DEADLINE_SECONDS = 5;
 
-{ Does nothing: a blocked open(2) or read(2) that the alarm interrupts
+var
+  { Set by the SIGALRM handler, which can reach nothing else: whether the
+    deadline passed during the call under test. }
+  AlarmFired: Boolean;
+
+{ Records the alarm: a blocked open(2) or read(2) that the alarm interrupts
   returns EINTR, because the handler is installed without SA_RESTART. }
 procedure InterruptOnAlarm(ASignal: cint; AInfo: PSigInfo;
   AContext: PSigContext); cdecl;
 begin
+  AlarmFired := True;
 end;
 {$ENDIF}
 
@@ -377,6 +383,7 @@ begin
   Action.sa_handler := SigActionHandler(@InterruptOnAlarm);
   Action.sa_flags := 0;
   Expect<Integer>(FpSigAction(SIGALRM, @Action, @Previous)).ToBe(0);
+  AlarmFired := False;
   FpAlarm(FIFO_DEADLINE_SECONDS);
   try
     try
@@ -389,6 +396,9 @@ begin
     FpAlarm(0);
     FpSigAction(SIGALRM, @Previous, nil);
   end;
+  { Whatever the copy reported, it waited. }
+  if AlarmFired then
+    Result := 'deadline passed: ' + Result;
   {$ENDIF}
 end;
 

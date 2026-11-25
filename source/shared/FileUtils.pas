@@ -91,6 +91,11 @@ function HostPathIsSymlink(const APath: string): Boolean;
   symbolic link or reparse point, which is not followed. }
 function HostPathIsRegularFile(const APath: string): Boolean;
 
+{ True when APath names a regular file, a symbolic link followed: not a
+  directory, a FIFO, a socket or a device. Judged without opening it, from
+  the name as the RTL spells it, the spelling FileExists checks. }
+function HostPathNamesRegularFile(const APath: string): Boolean;
+
 { Every byte of the open file AHandle, read from its start through that
   handle, so the bytes read are those of the file the handle pins. False
   with AError when the handle cannot be read. }
@@ -480,6 +485,19 @@ begin
   Attributes := FileGetAttr(APath);
   Result := (Attributes <> -1) and
     ((Attributes and (faDirectory or faSymLink)) = 0);
+end;
+{$ENDIF}
+
+function HostPathNamesRegularFile(const APath: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+begin
+  Result := (fpStat(APath, Info) = 0) and fpS_ISREG(Info.st_mode);
+end;
+{$ELSE}
+begin
+  Result := FileExists(APath) and not DirectoryExists(APath);
 end;
 {$ENDIF}
 

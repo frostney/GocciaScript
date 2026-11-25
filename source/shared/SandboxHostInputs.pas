@@ -273,9 +273,46 @@ begin
   Result := ExcludeTrailingPathDelimiter(Result);
 end;
 
-{ Copy-in judges a name's type without opening it (IsLinkOrSpecialFile, an
-  lstat of the name as the RTL spells it, the spelling FindFirst listed) and
-  refuses anything that is neither a regular file nor a directory. }
+type
+  { What a host name is to copy-in. }
+  TCopyEntryKind = (cekMissing, cekLink, cekDirectory, cekRegularFile,
+    cekOther);
+
+{ What APath is, judged from the name itself without following a link or
+  opening anything, and spelled as the RTL spells file names, the spelling
+  FindFirst listed. One judgement decides a link, a directory, a regular
+  file and anything else, so the refusals cannot disagree about a name. }
+function CopyEntryKind(const APath: string): TCopyEntryKind;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+begin
+  if fpLStat(APath, Info) <> 0 then
+    Result := cekMissing
+  else if fpS_ISLNK(Info.st_mode) then
+    Result := cekLink
+  else if fpS_ISDIR(Info.st_mode) then
+    Result := cekDirectory
+  else if fpS_ISREG(Info.st_mode) then
+    Result := cekRegularFile
+  else
+    Result := cekOther;
+end;
+{$ELSE}
+begin
+  if HostPathIsSymlink(APath) then
+    Result := cekLink
+  else if HostDirectoryExists(APath) then
+    Result := cekDirectory
+  else if HostFileExists(APath) then
+    Result := cekRegularFile
+  else
+    Result := cekMissing;
+end;
+{$ENDIF}
+
+{ Copy-in refuses anything that is neither a regular file nor a directory
+  (CopyEntryKind's cekOther). }
 procedure RefuseSpecialFile(const APath: string);
 begin
   raise ESandboxHostInputError.Create(
@@ -347,19 +384,6 @@ begin
   Result := True;
 end;
 
-{ APath, links followed, is a regular file. }
-function HostPathIsRegularFile(const APath: string): Boolean;
-{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-var
-  Info: Stat;
-begin
-  Result := (fpStat(APath, Info) = 0) and fpS_ISREG(Info.st_mode);
-end;
-{$ELSE}
-begin
-  Result := FileExists(APath) and not DirectoryExists(APath);
-end;
-{$ENDIF}
 
 { Writes ABytes to what APath names, as it is: opened write-only, never for
   reading. The open does not wait: a FIFO nobody is reading fails at once
@@ -427,7 +451,7 @@ end;
 {$ELSE}
 begin
   Result := HostPathIsSymlink(ExcludeTrailingPathDelimiter(APath)) or
-    (HostFileExists(APath) and not HostPathIsRegularFile(APath));
+    (HostFileExists(APath) and not HostPathNamesRegularFile(APath));
 end;
 {$ENDIF}
 
@@ -626,17 +650,21 @@ begin
         Continue;
       HostChild := IncludeTrailingPathDelimiter(AHostDirectory) +
         SearchRec.Name;
-      if HostPathIsSymlink(HostChild) then
-        raise ESandboxHostInputError.Create(
-          'Copy path is a symlink (not supported): ' + HostChild);
-      if (SearchRec.Attr and faDirectory) <> 0 then
-        CopyDirectoryContents(HostChild,
-          SandboxJoinPath(ASandboxDirectory, SearchRec.Name))
-      else if IsLinkOrSpecialFile(HostChild) then
-        RefuseSpecialFile(HostChild)
+      case CopyEntryKind(HostChild) of
+        cekLink:
+          raise ESandboxHostInputError.Create(
+            'Copy path is a symlink (not supported): ' + HostChild);
+        cekDirectory:
+          CopyDirectoryContents(HostChild,
+            SandboxJoinPath(ASandboxDirectory, SearchRec.Name));
+        cekOther:
+          RefuseSpecialFile(HostChild);
       else
+        { A regular file, or one gone since the listing, which the read
+          reports. }
         CopyFile(HostChild, SandboxJoinPath(ASandboxDirectory,
           SearchRec.Name));
+      end;
     until FindNext(SearchRec) <> 0;
   finally
     FindClose(SearchRec);
@@ -654,6 +682,7 @@ function TSandboxHostInputs.CopyIn(const AHostPath, ASandboxPath: string;
   const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
 var
   HostPath: string;
+  Kind: TCopyEntryKind;
   Origin: TSandboxHostOrigin;
 begin
   { Strip any trailing separator before the symlink check: POSIX lstat()
@@ -661,15 +690,16 @@ begin
     symlinked leaf would be rejected as `linkdir` but dereferenced as
     `linkdir/`. }
   HostPath := ExcludeTrailingPathDelimiter(ExpandHostFileName(AHostPath));
-  if HostPathIsSymlink(HostPath) then
+  Kind := CopyEntryKind(HostPath);
+  if Kind = cekLink then
     raise ESandboxHostInputError.Create(
       'Copy path is a symlink (not supported): ' + HostPath);
-  if not HostFileExists(HostPath) and not HostDirectoryExists(HostPath) then
+  if Kind = cekMissing then
     raise ESandboxHostInputError.Create('Copy path does not exist: ' +
       HostPath);
 
   Result := FFs.Normalize(EnsureSandboxAbsolute(ASandboxPath));
-  if HostDirectoryExists(HostPath) then
+  if Kind = cekDirectory then
   begin
     if FFs.IsFile(Result) then
       raise ESandboxHostInputError.CreateFmt(
@@ -681,7 +711,7 @@ begin
     Exit;
   end;
 
-  if IsLinkOrSpecialFile(HostPath) then
+  if Kind = cekOther then
     RefuseSpecialFile(HostPath);
   if (Result = SANDBOX_SEPARATOR) or
      SandboxPathHasTrailingSeparator(ASandboxPath) or
