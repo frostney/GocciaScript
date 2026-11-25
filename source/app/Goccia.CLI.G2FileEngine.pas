@@ -725,6 +725,16 @@ begin
   Result := '';
 end;
 
+{ the key a module of APath is loaded under: a sandbox run's paths (AFrameSource assigned) are its own, rooted at /,
+  as the sandbox's resolver keeps them; ExpandFileName would put a Windows drive in front of one }
+function PathKey(const APath: string; const AFrameSource: TSandboxVirtualFileSystem): string;
+begin
+  if Assigned(AFrameSource) then
+    Result := APath
+  else
+    Result := ExpandFileName(APath);
+end;
+
 { The failed run's report as text (WriteLn prints it as GocciaRunner does). AEngine: the run's engine, which says
   which files it loaded; AWithheld: a file whose source no report shows (the host environment's provider);
   AFrameSource: the virtual filesystem a sandbox run's modules are read from (nil: the host's files); AFrames: a
@@ -773,11 +783,11 @@ begin
     Loaded := nil;
     ErrorPath := UTF8Encode(AResult.ErrorFile);
     if (ErrorPath <> '') and (ErrorPath <> AFileName) and
-       (ExpandFileName(ErrorPath) <> ExpandFileName(AFileName)) then
+       (PathKey(ErrorPath, AFrameSource) <> PathKey(AFileName, AFrameSource)) then
     begin
       Source := nil;
-      if AFrames and ((AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld)) and
-         AEngine.ModuleLoaded(UnicodeString(ExpandFileName(ErrorPath))) then
+      if AFrames and ((AWithheld = '') or (PathKey(ErrorPath, AFrameSource) <> AWithheld)) and
+         AEngine.ModuleLoaded(UnicodeString(PathKey(ErrorPath, AFrameSource))) then
       begin
         try
           if Assigned(AFrameSource) then
