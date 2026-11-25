@@ -91,7 +91,6 @@ type
     FOutputLines: TStringList;
     FStdoutLines: TStringList;
     FStderrLines: TStringList;
-    function MethodWritesToStderr(const AMethod: string): Boolean;
     function UnformatLine(const AMethod, ALine: string): string;
   public
     constructor Create;
@@ -264,12 +263,6 @@ begin
   inherited Destroy;
 end;
 
-function TScriptLoaderConsoleCapture.MethodWritesToStderr(
-  const AMethod: string): Boolean;
-begin
-  Result := ConsoleMethodWritesToStderr(AMethod);
-end;
-
 function TScriptLoaderConsoleCapture.UnformatLine(const AMethod,
   ALine: string): string;
 var
@@ -305,7 +298,7 @@ procedure TScriptLoaderConsoleCapture.CaptureOutput(const AMethod,
   ALine: string);
 begin
   FOutputLines.Add(ALine);
-  if MethodWritesToStderr(AMethod) then
+  if ConsoleMethodWritesToStderr(AMethod) then
     FStderrLines.Add(UnformatLine(AMethod, ALine))
   else
     FStdoutLines.Add(UnformatLine(AMethod, ALine));

@@ -4542,7 +4542,9 @@ console.log("Console lines reach a piped stdout and stderr while the script runs
     async fetch() {
       const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
-        if (stdoutText.includes("running\n") && stderrText.includes("Error: failing\n")) {
+        // Windows ends lines with CRLF; a line counts once it is complete.
+        if (normalizeLineEndings(stdoutText).includes("running\n") &&
+            normalizeLineEndings(stderrText).includes("Error: failing\n")) {
           seenMidRun = true;
           break;
         }
@@ -4556,8 +4558,10 @@ console.log("Console lines reach a piped stdout and stderr while the script runs
     writeFileSync(
       file,
       [
-        'console.log("running");',
+        // The stdout line comes last, so only its own flush can deliver it:
+        // a stderr line flushes stdout first.
         'console.error("failing");',
+        'console.log("running");',
         `await fetch("http://127.0.0.1:${server.port}/");`,
         'console.log("after");',
         "",
@@ -4588,6 +4592,31 @@ console.log("Console lines reach a piped stdout and stderr while the script runs
       throw new Error(`console.error should write to stderr, got ${JSON.stringify(stderrText)}`);
   } finally {
     server.stop(true);
+    clean(tmp);
+  }
+}
+
+// A console line written to a closed descriptor is dropped: it does not end
+// the script, and a file opened later never takes the closed descriptor's
+// place, so the --log file gets only its own records.
+if (process.platform !== "win32") {
+  console.log("Console output to a closed stderr is dropped without ending the script...");
+  const tmp = mkdtemp("goccia-console-closed-");
+  try {
+    const file = join(tmp, "closed.js");
+    const log = join(tmp, "run.log");
+    writeFileSync(file, ['console.error("first");', 'console.error("second");', 'console.log("after");', ""].join("\n"));
+    const proc = Bun.spawnSync(["sh", "-c", 'exec "$0" "$1" --log="$2" 2>&-', RUNNER, file, log], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0 || !out.startsWith("after\n"))
+      throw new Error(`console.error to a closed stderr should not end the script, got exit ${proc.exitCode}: ${out}`);
+    const logged = normalizeLineEndings(readFileSync(log, "utf-8"));
+    if (logged !== "[error] Error: first\n[error] Error: second\n[log] after\n")
+      throw new Error(`The --log file should hold only its records with stderr closed, got ${JSON.stringify(logged)}`);
+  } finally {
     clean(tmp);
   }
 }

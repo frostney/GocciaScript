@@ -130,6 +130,32 @@ begin
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
+{ Writes ALine to standard error or standard output and flushes it, so each
+  line reaches a pipe or file as it is logged, not when the RTL's buffer fills
+  or the process ends. Before a standard-error line, whatever is still in
+  standard output's buffer goes out first, so with both streams on one pipe or
+  file the lines keep the order they were logged in. A write that fails, to a
+  closed descriptor or a full disk, is dropped, as Node's console drops it: a
+  console call never ends the script. }
+procedure WriteConsoleLine(const AToStderr: Boolean; const ALine: string);
+begin
+  {$I-}
+  if AToStderr then
+  begin
+    Flush(Output);
+    InOutRes := 0;
+    WriteLn(ErrOutput, ALine);
+    Flush(ErrOutput);
+  end
+  else
+  begin
+    WriteLn(ALine);
+    Flush(Output);
+  end;
+  {$I+}
+  InOutRes := 0;
+end;
+
 { ALine starts with the group indentation; inside a group, every further line
   of it, such as an Error's stack, is indented the same way. }
 procedure TGocciaConsole.EmitLine(const AMethod, ALine: string);
@@ -146,22 +172,8 @@ begin
       FOutputCallback(AMethod, Line)
     else if Assigned(FOutputLines) then
       FOutputLines.Add(Line)
-    else if ConsoleMethodWritesToStderr(AMethod) then
-    begin
-      { Both streams are block-buffered when they are not a terminal. What
-        is still in standard output's buffer goes first, so with both streams
-        on one pipe or file the lines keep the order they were logged in. }
-      Flush(Output);
-      WriteLn(ErrOutput, Line);
-      Flush(ErrOutput);
-    end
     else
-    begin
-      { Each line reaches a pipe or file as it is logged, not when the buffer
-        fills or the process ends, so a reader can act on it mid-run. }
-      WriteLn(Line);
-      Flush(Output);
-    end;
+      WriteConsoleLine(ConsoleMethodWritesToStderr(AMethod), Line);
   end;
   if Assigned(FLogCallback) then
     FLogCallback(AMethod, Line);
