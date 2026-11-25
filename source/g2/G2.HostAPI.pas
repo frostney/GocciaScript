@@ -1263,7 +1263,9 @@ begin
   if not On then Exit;
   ReadPolicy := TReadPolicy.Create;
   ReadPolicy.Caps := Caps;
-  ReadPolicy.Root := ProjectRoot;
+  { spelled as the paths it is compared with are (CanonicalCapabilityPath): a root from the working directory can be
+    a Windows short name (C:\Users\RUNNER~1\...) that the canonical path of a file inside it spells out in full }
+  if ProjectRoot <> '' then ReadPolicy.Root := CanonicalCapabilityPath(ProjectRoot) else ReadPolicy.Root := '';
   ReadPolicy.Audit := Audit;
 end;
 
