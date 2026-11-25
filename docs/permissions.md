@@ -804,11 +804,12 @@ when the config is checked, as the config's directory plus the route from it,
 and again just before it is copied, as the directory that route leads to.
 Pinning before the copy reads anything means an input swapped while it is
 being copied is compared against the directory the copy started from, so its
-replacement gets nothing written. An input that cannot be pinned then gets
-nothing written back either, each of its files refused with the reason and
-the run exiting 1: it is no longer a directory, a config input's route no
-longer leads to one without passing a link, or a config input has turned
-from a file into a directory (or back) since the config was checked. A Windows
+replacement gets nothing written. An input that cannot be pinned then is
+still copied, but once the run changes a file under it, nothing is written
+back for any input and the run exits 1, with the reason: it is no longer a
+directory, a config input's route no longer leads to one without passing a
+link, or a config input has turned from a file into a directory (or back)
+since the config was checked. A Windows
 directory that call cannot identify gets nothing written back — each of its
 files is refused with that reason and the run exits 1 — rather than falling
 back to the 64-bit file index, which ReFS does not keep unique. Before

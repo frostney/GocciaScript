@@ -60,6 +60,7 @@ type
     procedure TestInputReplacedDuringCopyWritesNothing;
     procedure TestPinnedInputReplacedDuringCopyWritesNothing;
     procedure TestConfigFileInputTurnedDirectoryWritesNothing;
+    procedure TestUnpinnedInputStopsAllWriteBack;
     procedure TestDirectoryIdentityTellsDirectoriesApart;
     procedure TestUnavailableIdentityMatchesNothing;
     procedure TestOutputFileRefusesUnidentifiedDirectory;
@@ -139,6 +140,8 @@ begin
     TestPinnedInputReplacedDuringCopyWritesNothing);
   Test('A config file input that became a directory gets nothing written',
     TestConfigFileInputTurnedDirectoryWritesNothing);
+  Test('An input that could not be pinned stops every input''s write-back',
+    TestUnpinnedInputStopsAllWriteBack);
   Test('A directory identity tells two directories apart',
     TestDirectoryIdentityTellsDirectoriesApart);
   Test('An unavailable directory identity matches nothing',
@@ -684,8 +687,8 @@ begin
     FFs.WriteAllText('/out/f.txt', 'PWNED');
     FFs.WriteAllText('/out/planted.sh', 'echo planted');
     { The route led nowhere link-free just before the copy, so there is no
-      directory to compare against: every file is refused with that reason,
-      even if the route is restored before write-back. }
+      directory to compare against: nothing is written, even if the route is
+      restored before write-back. }
     Expect<Boolean>(RenameFile(HostPath('project/a'), HostPath('evil.link')))
       .ToBe(True);
     Expect<Boolean>(RenameFile(HostPath('project/a.real'),
@@ -697,9 +700,9 @@ begin
     Expect<string>(ReadHostText('project/a/out/f.txt')).ToBe('orig');
     Expect<Boolean>(FileExists(HostPath('project/a/out/planted.sh')))
       .ToBe(False);
-    Expect<Boolean>(Report.IndexOf('write-back: ' +
-      HostPath('project/a/out/f.txt') +
-      ': a is a symbolic link or not a directory') >= 0).ToBe(True);
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/a/out') +
+      ' could not be pinned when it was copied (a is a symbolic link or not ' +
+      'a directory); nothing written') >= 0).ToBe(True);
   finally
     Report.Free;
     Baseline.Free;
@@ -927,14 +930,60 @@ begin
       Report)).ToBe(False);
     Expect<Boolean>(FileExists(HostPath('project/a/f.txt'))).ToBe(False);
     Expect<string>(ReadHostText('project/a/out/f.txt')).ToBe('orig');
-    Expect<Boolean>(Report.IndexOf('write-back: ' +
-      HostPath('project/a/out/f.txt') + ': ' + HostPath('project/a/out') +
-      ' is not the directory its config entry was checked against') >= 0)
-      .ToBe(True);
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/a/out') +
+      ' could not be pinned when it was copied (it is not the directory its ' +
+      'config entry was checked against); nothing written') >= 0).ToBe(True);
   finally
     Report.Free;
     Baseline.Free;
   end;
+end;
+
+procedure TSandboxHostInputsTests.TestUnpinnedInputStopsAllWriteBack;
+{$IFDEF UNIX}
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { One config input's route is a link from before the copy until after the
+    run; another input is fine. A half-applied write-back is worse than
+    none, so neither is written. }
+  WriteHostFile('project/a/out/f.txt', 'orig');
+  WriteHostFile('evil/out/f.txt', 'evil-orig');
+  WriteHostFile('other/g.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/a/out'),
+    Pin, Problem)).ToBe(True);
+  Expect<Boolean>(RenameFile(HostPath('project/a'), HostPath('project/a.real')))
+    .ToBe(True);
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('evil'))),
+    PAnsiChar(AnsiString(HostPath('project/a'))))).ToBe(0);
+  FInputs.CopyIn(HostPath('project/a/out'), '/out', True, Pin);
+  FInputs.CopyIn(HostPath('other'), '/other', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'PWNED');
+    FFs.WriteAllText('/other/g.txt', 'NEW');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<string>(ReadHostText('evil/out/f.txt')).ToBe('evil-orig');
+    Expect<string>(ReadHostText('project/a.real/out/f.txt')).ToBe('orig');
+    Expect<string>(ReadHostText('other/g.txt')).ToBe('orig');
+    Expect<string>(Report[Report.Count - 1]).ToBe(
+      'write-back: 0 file(s) written, 2 skipped');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ELSE}
+  { The scenario needs symbolic links, which Windows creates only with
+    elevated rights. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
 end;
 
 procedure TSandboxHostInputsTests.TestDirectoryIdentityTellsDirectoriesApart;

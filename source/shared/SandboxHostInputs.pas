@@ -54,8 +54,9 @@ type
       one. }
     WriteRouteIdentity: THostDirectoryIdentity;
     { Why the input's directory could not be pinned just before the copy, or
-      ''. Nothing is written back under such an input: an identity that was
-      never taken would match whatever directory has the name later. }
+      ''. A write-back with changes under such an input writes nothing: an
+      identity that was never taken would match whatever directory has the
+      name later. }
     IdentityProblem: string;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
@@ -489,8 +490,9 @@ end;
   identity taken after the copy would belong to whatever directory had the
   name by then, so an input swapped during the copy would be written back
   into its replacement. When the directory cannot be pinned now, the origin
-  records why (IdentityProblem) and write-back refuses everything under it,
-  rather than recording an identity that would match any directory. }
+  records why (IdentityProblem) and a write-back that would write under it
+  writes nothing at all, rather than recording an identity that would match
+  any directory. }
 function TSandboxHostInputs.TakeOrigin(const AHostPath,
   ASandboxPath: string; const AIsDirectory, AReadWrite: Boolean;
   const APin: TSandboxHostPin): TSandboxHostOrigin;
@@ -521,9 +523,14 @@ begin
        APin.Route)) then
     begin
       Identified := False;
-      Problem := OriginRootPath(Result) + ' is not the directory its ' +
-        'config entry was checked against';
+      Problem := 'it is not the directory its config entry was checked ' +
+        'against';
     end;
+    { A config directory Windows gave no file ID for keeps its own refusal
+      of each file under it (OriginIdentityProblem). }
+    if not Identified and (HostDirectoryIdentityProblem(APin.Root,
+       APin.RootIdentity) <> '') then
+      Identified := True;
   end
   else
   begin
@@ -535,8 +542,7 @@ begin
   if not Identified then
   begin
     if Problem = '' then
-      Problem := OriginWriteDirectory(Result) +
-        ' could not be identified when it was copied';
+      Problem := 'it could not be identified';
     Result.IdentityProblem := Problem;
   end;
 end;
@@ -886,7 +892,7 @@ function TSandboxHostInputs.ApplyWriteBack(const APlan: TSandboxWriteBackPlan;
   const AReport: TStrings): Boolean;
 var
   I, Written, Skipped: Integer;
-  ErrorMessage: string;
+  ErrorMessage, ReplacedLine: string;
   Ok, Replaced: Boolean;
   Origin: TSandboxHostOrigin;
 begin
@@ -919,21 +925,28 @@ begin
 
   { Every input written under must still be the directory that was copied.
     One that is not has been moved or swapped for a link while the run was
-    going on, and a half-applied write-back is worse than none, so nothing
-    is written. }
+    going on, and one that could not be pinned when it was copied has no
+    directory to compare against; a half-applied write-back is worse than
+    none, so nothing is written. }
   Replaced := False;
   for I := 0 to High(APlan) do
     if (APlan[I].Action in [swaWrite, swaSkipOutside]) and
        (APlan[I].OriginIndex >= 0) and
-       FOrigins[APlan[I].OriginIndex].ReadWrite and
-       (OriginIdentityProblem(FOrigins[APlan[I].OriginIndex]) = '') and
-       not OriginRootUnchanged(FOrigins[APlan[I].OriginIndex]) then
+       FOrigins[APlan[I].OriginIndex].ReadWrite then
     begin
       Origin := FOrigins[APlan[I].OriginIndex];
-      if AReport.IndexOf(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
-         ' was replaced during the run; nothing written') < 0 then
-        AReport.Add(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
-          ' was replaced during the run; nothing written');
+      if Origin.IdentityProblem <> '' then
+        ReplacedLine := WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+          ' could not be pinned when it was copied (' +
+          Origin.IdentityProblem + '); nothing written'
+      else if (OriginIdentityProblem(Origin) = '') and
+         not OriginRootUnchanged(Origin) then
+        ReplacedLine := WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+          ' was replaced during the run; nothing written'
+      else
+        Continue;
+      if AReport.IndexOf(ReplacedLine) < 0 then
+        AReport.Add(ReplacedLine);
       Replaced := True;
     end;
   if Replaced then
