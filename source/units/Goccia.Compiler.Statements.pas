@@ -1235,7 +1235,7 @@ var
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
-  TypeHint, AnnotationType: TGocciaLocalType;
+  TypeHint, AnnotationType, DestinationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
@@ -1350,18 +1350,17 @@ begin
     else
       TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
 
-    // A var redeclaration stores into the existing var binding, so its
-    // initializer is checked against the type enforced on that binding.
-    // ResolveLocal could pick a same-named catch parameter instead (ES2026
-    // B.3.4), which is not the slot written here. That type wins over the
-    // initializer's own:
-    // code compiled earlier against it, such as a closure, trusts it, so
-    // `var x = "s"` over a `number` parameter throws a TypeError.
-    if IsVarRedeclaration then
+    // A var redeclaration stores into the existing var binding. When that
+    // binding has a strict type, the declaration keeps its own check and the
+    // store is checked against the binding's type too (DestinationType
+    // below). ResolveLocal could pick a same-named catch parameter instead
+    // (ES2026 B.3.4), which is not the slot written here.
+    DestinationType := sltUntyped;
+    if IsVarRedeclaration and ACtx.StrictTypes then
     begin
       LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
-        TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+        DestinationType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     end;
 
     { Strict-types enforcement is opt-in via --strict-types / config.
@@ -1410,7 +1409,9 @@ begin
     else
       DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
 
-    if TypeHint <> sltUntyped then
+    // A binding with a strict type keeps it: code compiled against it, such
+    // as a closure, trusts it.
+    if (TypeHint <> sltUntyped) and (DestinationType = sltUntyped) then
     begin
       LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
@@ -1433,7 +1434,7 @@ begin
       end;
     end;
 
-    if Info.TypeAnnotation <> '' then
+    if (Info.TypeAnnotation <> '') and (DestinationType = sltUntyped) then
     begin
       LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
@@ -1549,6 +1550,26 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end
+      else if DestinationType <> sltUntyped then
+      begin
+        { A store into a binding with a strict type: the initializer's value
+          is checked before it reaches the binding, so a TypeError a caller
+          catches leaves the binding holding a value of its type. }
+        InitSlot := ACtx.Scope.AllocateRegister;
+        try
+          CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
+          if IsStrict and HasRealInitializer and
+             not TypesAreCompatible(StrictInitializerType(ACtx, AStmt, Info),
+               TypeHint) then
+            EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
+              UInt8(Ord(TypeHint)), 0));
+          EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
+            UInt8(Ord(DestinationType)), 0));
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, InitSlot, 0));
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end
       else
         CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, Slot);
 
@@ -1561,7 +1582,7 @@ begin
         ACtx.Scope.SetLocalReturnTypeHint(DeclaredIdx,
           ACtx.Scope.LastChildReturnType);
 
-      if IsStrict and HasRealInitializer then
+      if IsStrict and HasRealInitializer and (DestinationType = sltUntyped) then
         if not TypesAreCompatible(StrictInitializerType(ACtx, AStmt, Info), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
             UInt8(Ord(TypeHint)), 0));
@@ -3633,6 +3654,21 @@ end;
 // ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: a var-binding head
 // assigns each value to the binding hoisted by VarDeclaredNames (§8.2.8)
 // instead of creating a per-iteration binding.
+{ Whether a for-of's simple `var` head stores into a binding with a strict
+  type, whose check can throw between steps and so needs the iterator closed
+  (ES2026 §14.7.5.7 step 6.i, IteratorClose). }
+function ForOfVarHeadIsChecked(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForOfStatement): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  Result := False;
+  if not (ACtx.StrictTypes and AStmt.IsVar and (AStmt.BindingName <> '')) then
+    Exit;
+  LocalIdx := ACtx.Scope.ResolveLocal(AStmt.BindingName);
+  Result := (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped;
+end;
+
 procedure EmitForOfVarHeadBinding(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AValueReg: UInt16);
 begin
@@ -3883,6 +3919,7 @@ begin
 
   NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
     Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    ForOfVarHeadIsChecked(ACtx, AStmt) or
     StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
@@ -4144,6 +4181,7 @@ begin
 
   NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
     Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
+    ForOfVarHeadIsChecked(ACtx, AStmt) or
     StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
   begin
