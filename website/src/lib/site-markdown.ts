@@ -296,6 +296,8 @@ async function installationMarkdown(): Promise<string> {
     "",
     fence(QUICK_INSTALL_COMMANDS.windows, "powershell"),
     "",
+    "On 32-bit Windows the installer picks the x86 build, which needs a CPU with SSE2: a Pentium 4, Athlon 64 or later.",
+    "",
     "You can inspect the install scripts directly at `/install` and `/install.ps1`.",
     "",
     "## Homebrew",

@@ -286,7 +286,9 @@ export function Install({
             <p>
               The fastest path: fetch the right binary for your platform and
               drop it on your <code>$PATH</code>. We&apos;ve preselected your
-              detected OS — pick a different tab if needed.
+              detected OS — pick a different tab if needed. On 32-bit Windows
+              the installer picks the x86 build, which needs a CPU with SSE2:
+              a Pentium 4, Athlon 64 or later.
             </p>
             <QuickInstall />
             <p className="install-method-aux">

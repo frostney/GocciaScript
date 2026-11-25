@@ -58,6 +58,15 @@ begin
 end;
 
 {$IFDEF GOCCIA_FLUSH_TO_ZERO_CONTROL}
+const
+  // Exact powers of two, as bit patterns: on i386, LdExp(1.0, ...) picks the
+  // Single overload, whose result underflows to zero.
+  TWO_POW_MINUS_600 = UInt64($1A70000000000000);
+  TWO_POW_MINUS_460 = UInt64($2330000000000000);
+  TWO_POW_MINUS_1060 = UInt64($0000000000004000); // Subnormal.
+  TWO_POW_100 = UInt64($4630000000000000);
+  TWO_POW_MINUS_960 = UInt64($03F0000000000000);
+
 var
   // Globals, so the compiler cannot fold the products below.
   NormalFactor, SmallFactor, SubnormalOperand, ScaleFactor: Double;
@@ -70,28 +79,40 @@ var
   Original, HostControl, Restored: LongWord;
   FloatingPointState: TGocciaFloatingPointState;
   Product, Scaled: Double;
+  {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_X86)}
+  DefaultControlWord, ScopeDefaultControlWord: Word;
+  DefaultVectorControl, ScopeDefaultVectorControl: LongWord;
+  {$ENDIF}
 begin
-  NormalFactor := LdExp(1.0, -600);
-  SmallFactor := LdExp(1.0, -460);
-  SubnormalOperand := LdExp(1.0, -1060);
-  ScaleFactor := LdExp(1.0, 100);
+  NormalFactor := BitsToDouble(TWO_POW_MINUS_600);
+  SmallFactor := BitsToDouble(TWO_POW_MINUS_460);
+  SubnormalOperand := BitsToDouble(TWO_POW_MINUS_1060);
+  ScaleFactor := BitsToDouble(TWO_POW_100);
   {$IF DEFINED(GOCCIA_CPU_AARCH64)}
   Original := GetFPCR;
   HostControl := Original or FPCR_FLUSH_TO_ZERO;
   SetFPCR(HostControl);
   {$ELSE}
   Original := GetMXCSR;
-  // Flush-to-zero, denormals-are-zero and rounding toward +Infinity, set in
+  // Flush-to-zero, denormals-are-zero and rounding toward -Infinity, set in
   // MXCSR alone: on i386 the x87 control word keeps the caller's mode.
   HostControl := (Original and not LongWord($6000)) or LongWord($2000) or
     MXCSR_FLUSH_TO_ZERO or MXCSR_DENORMALS_ARE_ZERO;
   SetMXCSR(HostControl);
+  DefaultControlWord := Default8087CW;
+  DefaultVectorControl := DefaultMXCSR;
   {$ENDIF}
   try
     EnterGocciaFloatingPointScope(FloatingPointState);
     try
       Product := NormalFactor * SmallFactor;
       Scaled := SubnormalOperand * ScaleFactor;
+      {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_X86)}
+      // FPC's thread start loads these process-wide defaults, so the scope's
+      // settings must not reach them.
+      ScopeDefaultControlWord := Default8087CW;
+      ScopeDefaultVectorControl := DefaultMXCSR;
+      {$ENDIF}
     finally
       LeaveGocciaFloatingPointScope(FloatingPointState);
     end;
@@ -109,9 +130,13 @@ begin
   end;
   // Compared as bits: the host's denormals-are-zero mode, now undone, would
   // also have compared a subnormal equal to zero.
-  Expect<UInt64>(DoubleToBits(Product)).ToBe(DoubleToBits(SubnormalOperand));
-  Expect<UInt64>(DoubleToBits(Scaled)).ToBe(DoubleToBits(LdExp(1.0, -960)));
+  Expect<UInt64>(DoubleToBits(Product)).ToBe(TWO_POW_MINUS_1060);
+  Expect<UInt64>(DoubleToBits(Scaled)).ToBe(TWO_POW_MINUS_960);
   Expect<UInt64>(Restored).ToBe(HostControl);
+  {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_X86)}
+  Expect<UInt64>(ScopeDefaultVectorControl).ToBe(DefaultVectorControl);
+  Expect<UInt64>(ScopeDefaultControlWord).ToBe(DefaultControlWord);
+  {$ENDIF}
 end;
 {$ENDIF}
 
