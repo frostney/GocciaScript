@@ -39,7 +39,10 @@ type
     procedure TestDirectoryTargets;
     procedure TestMissingHostPath;
     procedure TestSymlinksRejected;
-    procedure TestSpecialFilesRejected;
+    function SpecialFileError(const AInput, ASandboxPath: string): string;
+    procedure TestFifoInsideADirectoryRejected;
+    procedure TestFifoInputRejected;
+    procedure TestDeviceInputRejected;
     procedure TestEntryInsideInput;
     procedure TestLongestOriginWins;
     procedure TestWriteBackOnlyReadWriteOrigins;
@@ -103,8 +106,11 @@ begin
   Test('A missing host path is refused', TestMissingHostPath);
   Test('Symbolic links are refused, at the top and inside a directory',
     TestSymlinksRejected);
-  Test('FIFOs and devices are refused without waiting, at the top and ' +
-    'inside a directory', TestSpecialFilesRejected);
+  Test('A FIFO inside a copied directory is refused without waiting',
+    TestFifoInsideADirectoryRejected);
+  Test('A FIFO given as the input is refused without waiting',
+    TestFifoInputRejected);
+  Test('A device given as the input is refused', TestDeviceInputRejected);
   Test('A host file inside a copied input maps to its sandbox path',
     TestEntryInsideInput);
   Test('The longest matching origin supplies a sandbox path',
@@ -289,44 +295,83 @@ begin
   {$ENDIF}
 end;
 
-procedure TSandboxHostInputsTests.TestSpecialFilesRejected;
 {$IFDEF UNIX}
 const
-  REFUSAL = 'Copy path is not a regular file (not supported): ';
+  FIFO_MODE = $1B6;
+  SPECIAL_FILE_REFUSAL = 'Copy path is not a regular file (not supported): ';
+
+{ A FIFO at APath, held open for reading and writing until the returned
+  descriptor is closed: a copy that did open the FIFO would then not wait
+  forever, so a regression fails its test rather than hanging the suite. }
+function MakeHeldFifo(const APath: string): cint;
+begin
+  if FpMkfifo(PAnsiChar(AnsiString(APath)), FIFO_MODE) <> 0 then
+    Exit(-1);
+  Result := FpOpen(PAnsiChar(AnsiString(APath)), O_RDWR or O_NONBLOCK);
+end;
+{$ENDIF}
+
+{ CopyError for AInput copied to ASandboxPath, with nothing left at
+  ASandboxPath. }
+function TSandboxHostInputsTests.SpecialFileError(const AInput,
+  ASandboxPath: string): string;
+begin
+  Result := CopyError(AInput, ASandboxPath);
+  Expect<Boolean>(FFs.IsFile(ASandboxPath)).ToBe(False);
+end;
+
+procedure TSandboxHostInputsTests.TestFifoInsideADirectoryRejected;
+{$IFDEF UNIX}
 var
-  NestedWriter, TopWriter: cint;
+  Held: cint;
 {$ENDIF}
 begin
   {$IFDEF UNIX}
   WriteHostFile('in/a.txt', 'a');
-  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('in/pipe'))), $1B6))
-    .ToBe(0);
-  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('top'))), $1B6))
-    .ToBe(0);
-  { The test holds each FIFO open, so a copy that did open one would not
-    wait forever: it would fail here rather than hang the suite. }
-  NestedWriter := FpOpen(PAnsiChar(AnsiString(HostPath('in/pipe'))),
-    O_RDWR or O_NONBLOCK);
-  TopWriter := FpOpen(PAnsiChar(AnsiString(HostPath('top'))),
-    O_RDWR or O_NONBLOCK);
+  Held := MakeHeldFifo(HostPath('in/pipe'));
+  Expect<Boolean>(Held >= 0).ToBe(True);
   try
-    Expect<Boolean>((NestedWriter >= 0) and (TopWriter >= 0)).ToBe(True);
-    Expect<string>(CopyError(HostPath('in'), '/in')).ToBe(REFUSAL +
-      HostPath('in/pipe'));
-    Expect<string>(CopyError(HostPath('top'), '/top')).ToBe(REFUSAL +
-      HostPath('top'));
-    Expect<string>(CopyError('/dev/null', '/null')).ToBe(REFUSAL +
-      '/dev/null');
-    Expect<Boolean>(FFs.IsFile('/top')).ToBe(False);
-    Expect<Boolean>(FFs.IsFile('/null')).ToBe(False);
+    Expect<string>(SpecialFileError(HostPath('in'), '/in/pipe')).ToBe(
+      SPECIAL_FILE_REFUSAL + HostPath('in/pipe'));
   finally
-    if NestedWriter >= 0 then
-      FpClose(NestedWriter);
-    if TopWriter >= 0 then
-      FpClose(TopWriter);
+    if Held >= 0 then
+      FpClose(Held);
   end;
   {$ELSE}
   { Windows has no FIFOs in the filesystem. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestFifoInputRejected;
+{$IFDEF UNIX}
+var
+  Held: cint;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Held := MakeHeldFifo(HostPath('top'));
+  Expect<Boolean>(Held >= 0).ToBe(True);
+  try
+    Expect<string>(SpecialFileError(HostPath('top'), '/top')).ToBe(
+      SPECIAL_FILE_REFUSAL + HostPath('top'));
+  finally
+    if Held >= 0 then
+      FpClose(Held);
+  end;
+  {$ELSE}
+  { Windows has no FIFOs in the filesystem. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestDeviceInputRejected;
+begin
+  {$IFDEF UNIX}
+  Expect<string>(SpecialFileError('/dev/null', '/null')).ToBe(
+    SPECIAL_FILE_REFUSAL + '/dev/null');
+  {$ELSE}
+  { A Windows device name such as NUL is not a file in a directory. }
   Expect<Boolean>(True).ToBe(True);
   {$ENDIF}
 end;
@@ -819,8 +864,8 @@ begin
   {$IFDEF UNIX}
   { Opened for reading, a FIFO would wait for a writer; opened to write,
     for a reader. Nobody reads this one, so the write fails at once. }
-  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('fifo'))), $1B6))
-    .ToBe(0);
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('fifo'))),
+    FIFO_MODE)).ToBe(0);
   Message := '';
   try
     WriteCommandLineOutputFile(HostPath('fifo'), TEncoding.UTF8.GetBytes('x'));

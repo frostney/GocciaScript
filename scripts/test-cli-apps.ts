@@ -12219,13 +12219,14 @@ await section("Runner sandbox mode: --copy refuses a FIFO at once, inside a dire
         const proc = Bun.spawnSync([RUNNER, mainJs, "--copy", spec], {
           stdout: "pipe", stderr: "pipe", timeout: 10_000,
         });
-        const output = proc.stdout.toString() + proc.stderr.toString();
+        const stdout = proc.stdout.toString();
+        const stderr = proc.stderr.toString();
         if (proc.exitedDueToTimeout)
-          throw new Error(`Sandbox mode --copy ${spec} waited on the FIFO until the timeout: ${output}`);
+          throw new Error(`Sandbox mode --copy ${spec} waited on the FIFO until the timeout: ${stdout}${stderr}`);
         if (proc.exitCode !== 1)
-          throw new Error(`Sandbox mode --copy ${spec} should exit 1, got ${proc.exitCode}: ${output}`);
-        if (!output.includes(`Copy path is not a regular file (not supported): ${fifo}`))
-          throw new Error(`Sandbox mode --copy ${spec} should name the FIFO it refused, got: ${output}`);
+          throw new Error(`Sandbox mode --copy ${spec} should exit 1, got ${proc.exitCode}: ${stdout}${stderr}`);
+        if (!stderr.includes(`Copy path is not a regular file (not supported): ${fifo}`))
+          throw new Error(`Sandbox mode --copy ${spec} should name the FIFO it refused on stderr, got stderr: ${stderr} stdout: ${stdout}`);
       }
     }
   } finally {

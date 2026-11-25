@@ -97,16 +97,29 @@ function HostPathIsRegularFile(const APath: string): Boolean;
 function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
   out AError: string): Boolean;
 
+type
+  { What ReadRegularHostFileBytes found. }
+  TRegularHostFileRead = (
+    { ABytes holds the file's bytes. }
+    rhfRead,
+    { APath names something that is not a regular file. }
+    rhfNotRegularFile,
+    { APath could not be read, or the file shrank while it was. }
+    rhfFailed
+  );
+
 { Every byte of APath, only when it is a regular file, read without waiting
   on it. On POSIX the name is opened without following a symbolic link and
   without blocking, and the opened file's own type is checked before a byte
   is read: a FIFO swapped in for the file opens at once instead of waiting
-  for a writer, and is refused like a socket or a device. Windows has no
-  FIFOs in the filesystem; there a name that is not a regular file (a
-  directory or a reparse point) is refused before it is opened. False with
-  AError, which does not repeat the path, otherwise. }
+  for a writer, and is refused like a socket or a device. A file that ends
+  before the size it had when it was opened is a failure, not a shorter
+  copy. Windows has no FIFOs in the filesystem; there a name that is not a
+  regular file (a directory or a reparse point) is refused before it is
+  opened. AError says why, without repeating the path, whenever the result
+  is not rhfRead. }
 function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
-  out AError: string): Boolean;
+  out AError: string): TRegularHostFileRead;
 
 { APath with every symbolic link along it resolved to the file it physically
   names, or '' when the host cannot answer.
@@ -593,7 +606,7 @@ end;
 {$ENDIF}
 
 function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
-  out AError: string): Boolean;
+  out AError: string): TRegularHostFileRead;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   Handle: cint;
@@ -603,30 +616,39 @@ var
 begin
   ABytes := nil;
   AError := '';
+  Result := rhfFailed;
   if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
   begin
     AError := 'path cannot be encoded for the host';
-    Exit(False);
+    Exit;
   end;
   Handle := fpOpen(PAnsiChar(@PathBytes[0]),
     O_RDONLY or O_NONBLOCK or HOST_O_NOFOLLOW or HOST_O_CLOEXEC);
   if Handle < 0 then
   begin
     AError := SysErrorMessage(fpgeterrno);
-    Exit(False);
+    Exit;
   end;
   try
     if fpFStat(Handle, Info) <> 0 then
     begin
       AError := SysErrorMessage(fpgeterrno);
-      Exit(False);
+      Exit;
     end;
     if not fpS_ISREG(Info.st_mode) then
     begin
       AError := 'not a regular file';
-      Exit(False);
+      Exit(rhfNotRegularFile);
     end;
-    Result := ReadHostHandleBytes(Handle, ABytes, AError);
+    if not ReadHostHandleBytes(Handle, ABytes, AError) then
+      Exit;
+    if Length(ABytes) < Info.st_size then
+    begin
+      ABytes := nil;
+      AError := 'the file shrank while it was read';
+      Exit;
+    end;
+    Result := rhfRead;
   finally
     fpClose(Handle);
   end;
@@ -637,11 +659,12 @@ var
 begin
   ABytes := nil;
   AError := '';
+  Result := rhfFailed;
   {$IFDEF MSWINDOWS}
   if not HostPathIsRegularFile(APath) then
   begin
     AError := 'not a regular file';
-    Exit(False);
+    Exit(rhfNotRegularFile);
   end;
   {$ENDIF}
   try
@@ -658,10 +681,10 @@ begin
     begin
       ABytes := nil;
       AError := E.Message;
-      Exit(False);
+      Exit;
     end;
   end;
-  Result := True;
+  Result := rhfRead;
 end;
 {$ENDIF}
 

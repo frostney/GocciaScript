@@ -609,18 +609,61 @@ begin
   {$ENDIF}
 end;
 
-{ Why ReadRegularHostFileBytes refused APath, or '' when it read it. }
-function ReadRegularHostFileBytesError(const APath: string): string;
+{ What ReadRegularHostFileBytes made of APath: `read`, or the kind of
+  refusal and why. }
+function ReadRegularHostFileBytesOutcome(const APath: string): string;
 var
   Bytes: TBytes;
+  Error: string;
 begin
-  if ReadRegularHostFileBytes(APath, Bytes, Result) then
-    Result := '';
+  case ReadRegularHostFileBytes(APath, Bytes, Error) of
+    rhfRead:
+      Result := 'read';
+    rhfNotRegularFile:
+      Result := 'not regular: ' + Error;
+  else
+    Result := 'failed: ' + Error;
+  end;
 end;
+
+{$IFDEF UNIX}
+const
+  FIFO_MODE = $1B6;
+  { Long enough for any open that does not wait, short enough not to stall
+    the suite. }
+  FIFO_DEADLINE_SECONDS = 5;
+
+{ Does nothing: a blocked open(2) that the alarm interrupts returns EINTR,
+  because the handler is installed without SA_RESTART. }
+procedure InterruptOnAlarm(ASignal: cint; AInfo: PSigInfo;
+  AContext: PSigContext); cdecl;
+begin
+end;
+
+{ ReadRegularHostFileBytesOutcome for a FIFO nobody writes to, under a
+  deadline: an open that waited for a writer is interrupted and reported as
+  a failure instead of hanging the suite. }
+function UnattendedFifoOutcome(const APath: string): string;
+var
+  Action, Previous: SigActionRec;
+begin
+  FillChar(Action, SizeOf(Action), 0);
+  Action.sa_handler := SigActionHandler(@InterruptOnAlarm);
+  Action.sa_flags := 0;
+  FpSigAction(SIGALRM, @Action, @Previous);
+  FpAlarm(FIFO_DEADLINE_SECONDS);
+  try
+    Result := ReadRegularHostFileBytesOutcome(APath);
+  finally
+    FpAlarm(0);
+    FpSigAction(SIGALRM, @Previous, nil);
+  end;
+end;
+{$ENDIF}
 
 procedure TFileUtilsTests.TestReadRegularHostFileBytesRefusesWhatIsNotOne;
 var
-  Target, Error: string;
+  Target, Error, Outcome: string;
   Bytes: TBytes;
   {$IFDEF UNIX}
   Fifo: string;
@@ -629,33 +672,34 @@ begin
   Target := FTempDir + PathDelim + 'regular.bin';
   Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
     TEncoding.UTF8.GetBytes('0123456789'), Error)).ToBe(True);
-  Expect<Boolean>(ReadRegularHostFileBytes(Target, Bytes, Error)).ToBe(True);
+  Expect<Boolean>(ReadRegularHostFileBytes(Target, Bytes, Error) = rhfRead)
+    .ToBe(True);
   Expect<string>(TEncoding.UTF8.GetString(Bytes)).ToBe('0123456789');
   Expect<string>(Error).ToBe('');
 
-  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir, Bytes, Error))
-    .ToBe(False);
+  Expect<string>(ReadRegularHostFileBytesOutcome(FTempDir)).ToBe(
+    'not regular: not a regular file');
+  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir, Bytes, Error) =
+    rhfNotRegularFile).ToBe(True);
   Expect<Integer>(Length(Bytes)).ToBe(0);
-  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir + PathDelim + 'missing',
-    Bytes, Error)).ToBe(False);
-  Expect<Boolean>(Error <> '').ToBe(True);
+  Outcome := ReadRegularHostFileBytesOutcome(FTempDir + PathDelim + 'missing');
+  Expect<string>(Copy(Outcome, 1, Length('failed: '))).ToBe('failed: ');
+  Expect<Boolean>(Length(Outcome) > Length('failed: ')).ToBe(True);
   {$IFDEF UNIX}
-  Expect<string>(ReadRegularHostFileBytesError(FTempDir)).ToBe(
-    'not a regular file');
   { Nobody writes to this FIFO: opened for reading the usual way, it would
     wait for a writer forever. }
   Fifo := FTempDir + PathDelim + 'fifo';
-  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(Fifo)), $1B6)).ToBe(0);
-  Expect<string>(ReadRegularHostFileBytesError(Fifo)).ToBe(
-    'not a regular file');
-  Expect<string>(ReadRegularHostFileBytesError('/dev/null')).ToBe(
-    'not a regular file');
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(Fifo)), FIFO_MODE)).ToBe(0);
+  Expect<string>(UnattendedFifoOutcome(Fifo)).ToBe(
+    'not regular: not a regular file');
+  Expect<string>(ReadRegularHostFileBytesOutcome('/dev/null')).ToBe(
+    'not regular: not a regular file');
   { A link to a regular file is not followed. }
   Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Target)),
     PAnsiChar(AnsiString(FTempDir + PathDelim + 'link.bin')))).ToBe(0);
-  Expect<Boolean>(ReadRegularHostFileBytes(FTempDir + PathDelim + 'link.bin',
-    Bytes, Error)).ToBe(False);
-  Expect<Integer>(Length(Bytes)).ToBe(0);
+  Outcome := ReadRegularHostFileBytesOutcome(FTempDir + PathDelim +
+    'link.bin');
+  Expect<string>(Copy(Outcome, 1, Length('failed: '))).ToBe('failed: ');
   {$ENDIF}
 end;
 

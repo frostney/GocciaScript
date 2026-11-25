@@ -282,16 +282,22 @@ begin
     'Copy path is not a regular file (not supported): ' + APath);
 end;
 
-{ APath's bytes. The copy checked its type without opening it; the read
-  checks again on what it opened, so a FIFO swapped in since is refused
-  rather than waited on. }
+{ APath's bytes. The copy checked its type without opening it; on POSIX the
+  read checks again on what it opened, so a FIFO swapped in since is refused
+  the same way rather than waited on. }
 function ReadHostBytes(const APath: string): TBytes;
 var
   ErrorMessage: string;
 begin
-  if not ReadRegularHostFileBytes(APath, Result, ErrorMessage) then
+  case ReadRegularHostFileBytes(APath, Result, ErrorMessage) of
+    rhfRead:
+      ;
+    rhfNotRegularFile:
+      RefuseSpecialFile(APath);
+  else
     raise ESandboxHostInputError.Create('Copy path could not be read: ' +
       APath + ' (' + ErrorMessage + ')');
+  end;
 end;
 
 { APath canonical where it exists, the missing rest appended, so a path
