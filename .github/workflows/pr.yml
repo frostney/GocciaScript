@@ -181,6 +181,32 @@ jobs:
       - name: Check CI report publishing helpers
         run: node --test .github/scripts/test-report-publishing.js
 
+  # The website's own checks. Vercel only builds the site, so without this job a
+  # lint or test failure under website/ reached main unnoticed.
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install website dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint and check formatting
+        run: bun run lint
+
+      - name: Type-check
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
   test:
     needs: build
     runs-on: ubuntu-latest
