@@ -307,6 +307,46 @@ console.log("An uncaught failed property read is located at its property name...
   }
 }
 
+console.log("A failed strict-types parameter check is located at its parameter...");
+{
+  const tmp = mkdtemp("goccia-strict-parameter-");
+  try {
+    const file = join(tmp, "param.ts");
+    const cases = [
+      ['const f = (x: number) => x;\nf("a");\n', 1, 12],
+      ['const f = (a: string,\n  x: number) => x;\nf("s", "a");\n', 2, 3],
+      ['const o = {\n  set v(x: number) {},\n};\no.v = "a";\n', 2, 9],
+    ] as const;
+    for (const [source, line, column] of cases) {
+      writeFileSync(file, source);
+      const proc = Bun.spawnSync([RUNNER, file, "--strict-types"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      const { header, caretColumn } = codeFrameLocation(out);
+      if (proc.exitCode === 0 || header !== `--> ${file}:${line}:${column}` || caretColumn !== column)
+        throw new Error(
+          `A failed parameter check should be located at ${line}:${column} with the caret under it, got header "${header}", caret ${caretColumn}: ${out}`,
+        );
+    }
+    // An indexed access type is the type of the property it names.
+    writeFileSync(
+      file,
+      'type N = { kind: "text" | "row" };\nconst f = (kind: N["kind"]) => kind;\nconsole.log(f("text"));\n',
+    );
+    const indexed = Bun.spawnSync([RUNNER, file, "--strict-types"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const indexedOut = indexed.stdout.toString() + indexed.stderr.toString();
+    if (indexed.exitCode !== 0 || !indexedOut.includes("text"))
+      throw new Error(`An indexed access parameter should accept "text", got: ${indexedOut}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("A failed import() is located at the import() call...");
 {
   const tmp = mkdtemp("goccia-dynamic-import-missing-");

@@ -5205,6 +5205,7 @@ procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
 var
   I, LocalIdx, CheckCount, CodeBefore: Integer;
   Local: TGocciaCompilerLocal;
+  Location: TGocciaInstructionLocation;
   ParamName: string;
 begin
   CodeBefore := ACtx.Template.CodeCount;
@@ -5224,8 +5225,12 @@ begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if not Local.IsStrictlyTyped then
       Continue;
+    // A failed check reports the parameter it is for.
+    Location := BeginInstructionLocation(ACtx, AParameters[I].Line,
+      AParameters[I].Column);
     EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Local.Slot,
       UInt8(Ord(Local.TypeHint)), 0));
+    EndInstructionLocation(ACtx, Location);
   end;
   CheckCount := ACtx.Template.CodeCount - CodeBefore;
   if (CheckCount > 0) and (CodeBefore = 0) then

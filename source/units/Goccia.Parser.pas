@@ -3859,6 +3859,8 @@ begin
           Parameters[0].TypeAnnotation := '';
           Parameters[0].StartOffset := Token.Span.StartOffset;
           Parameters[0].EndOffset := Token.Span.EndOffset;
+          Parameters[0].Line := Token.Line;
+          Parameters[0].Column := Token.Column;
 
 
           SavedInAsyncFunction := FInAsyncFunction;
@@ -5284,6 +5286,8 @@ begin
       Result[ParamCount].IsOptional := False;
       Result[ParamCount].TypeAnnotation := '';
       Result[ParamCount].StartOffset := Peek.Span.StartOffset;
+      Result[ParamCount].Line := Peek.Line;
+      Result[ParamCount].Column := Peek.Column;
 
       if Match(gttSpread) then
       begin
@@ -5886,6 +5890,8 @@ begin
       Parameters[0].TypeAnnotation := '';
       Parameters[0].StartOffset := Left.Span.StartOffset;
       Parameters[0].EndOffset := Left.Span.EndOffset;
+      Parameters[0].Line := Left.Line;
+      Parameters[0].Column := Left.Column;
       Advance; // consume =>
       SavedInAsyncFunction := FInAsyncFunction;
       SavedInGeneratorFunction := FInGeneratorFunction;
@@ -10630,9 +10636,8 @@ begin
   Result := CollectTypeAnnotationTokens(ATerminators, AContextualTerminator,
     ASecondaryContextualTerminator, AAllowInitialObjectType);
 
-  { Whether anything was consumed, not whether the collected text is empty: a
-    template literal type without substitutions carries its text outside the
-    token lexeme, so it collects tokens but renders as ''. }
+  { Whether anything was consumed, not whether the collected text is empty:
+    a token the lexer did not make can still render as ''. }
   if not ARequireType then
     Exit;
 
@@ -10662,6 +10667,16 @@ var
     if Result <> '' then
       Result := Result + ' ';
     Result := Result + ALexeme;
+  end;
+
+  { The source text from AFirst to ALast. A token the lexer did not make has
+    no source; its lexeme is quoted, which still reads as a literal. }
+  function LiteralTypeText(const AFirst, ALast: TGocciaToken): string;
+  begin
+    Result := AFirst.Span.Cover(ALast.Span).Text;
+    if Result = '' then
+      Result := '"' + StringReplace(StringReplace(AFirst.Lexeme, '\', '\\',
+        [rfReplaceAll]), '"', '\"', [rfReplaceAll]) + '"';
   end;
 
 begin
@@ -10722,14 +10737,22 @@ begin
     // operand-aware skipper: lexing them token by token under the default goal
     // would let the substitution's '}' close a structural brace and re-lex the
     // trailing chunk as a fresh, unterminated template literal.
+    // The collected text keeps a literal type whole, so that `"number"` or
+    // `` `a${"}"}` `` cannot read as the keyword, quote or bracket inside it
+    // (Goccia.Types.Enforcement reads the text). A template literal type is
+    // one backtick-quoted token with its backslashes and backticks escaped, so
+    // its end is the first unescaped backtick, whatever its substitutions hold.
     if (TokenType = gttTemplate) or (TokenType = gttTemplateHead) then
     begin
       TemplateStart := FCurrent;
       SkipTemplateLiteral;
-      for I := TemplateStart to FCurrent - 1 do
-        AppendLexeme(FTokens[I].Lexeme);
       if FCurrent > TemplateStart then
+      begin
+        AppendLexeme('`' + StringReplace(StringReplace(
+          LiteralTypeText(FTokens[TemplateStart], FTokens[FCurrent - 1]),
+          '\', '\\', [rfReplaceAll]), '`', '\`', [rfReplaceAll]) + '`');
         PreviousTypeToken := FTokens[FCurrent - 1];
+      end;
       Continue;
     end;
 
@@ -10753,7 +10776,10 @@ begin
       Depth := 0;
 
     PreviousTypeToken := Peek;
-    AppendLexeme(Peek.Lexeme);
+    if TokenType = gttString then
+      AppendLexeme(LiteralTypeText(Peek, Peek))
+    else
+      AppendLexeme(Peek.Lexeme);
     Advance;
   end;
 end;
