@@ -45,10 +45,10 @@ jobs:
   # follows upstream (Ubuntu 26.04's 4.33c has none), so
   # scripts/afl/build-afl.sh builds afl-as from the v4.21c release and
   # afl-fuzz and afl-showmap from a pinned current one, which accept its fork
-  # server. All three get a 1 MiB coverage map in place of AFL++'s 64 KiB,
-  # which the harness's edges fill within minutes; a packaged afl-fuzz or
-  # afl-showmap would give the harness a 64 KiB map. The coverage probe below
-  # fails the job if the tools stop working together.
+  # server. All three are built with one 1 MiB coverage map in place of
+  # AFL++'s 64 KiB, which the harness's edges fill within minutes
+  # (docs/contributing/tooling.md says why the tools must match). The
+  # coverage probe below fails the job if they stop working together.
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -137,58 +137,13 @@ jobs:
           exit $status
 
       - name: Fuzz
+        # scripts/afl/fuzz.sh holds the campaign's options, its time limit
+        # and backstop, and which exits count as a completed run.
         run: |
           # AFL refuses to run when the host uses a core-dump handler pipe.
           echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
-          mkdir -p build/fuzz/out
-          # AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the standard CI
-          # accommodations for shared runners.
-          # -t 5000: the harness's own budget is 1000ms and a harness timeout
-          # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
-          # above it — otherwise process overhead around a legitimate slow input
-          # lands it in hangs/ and false-fails the job.
-          # -V: afl-fuzz stops itself after FUZZ_SECONDS of fuzzing, not
-          # counting the seeds' calibration, and writes its final stats. It
-          # does not reliably exit on a SIGTERM: run 31771115536 sat 43
-          # further minutes on one until the job's own 60-minute cap cancelled
-          # it, and v5.03c ignored `timeout`'s every time (run 45623922253).
-          # `timeout -k 60` stays as the backstop, 20 minutes past FUZZ_SECONDS
-          # for the calibration (about 3 minutes for the script corpus). Findings
-          # are written to crashes/ and hangs/ as they are discovered, so a
-          # hard kill loses no reproducers — only the final stats summary.
-          status=0
-          started=${SECONDS}
-          deadline=$(( FUZZ_SECONDS + 1200 ))
-          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${deadline}" afl-fuzz -V "${FUZZ_SECONDS}" -t 5000 \
-            -i build/fuzz/corpus \
-            -o build/fuzz/out \
-            -- ./build/GocciaFuzzHarnessAfl @@ || status=$?
-          elapsed=$(( SECONDS - started ))
-          echo "afl-fuzz exit status: ${status} after ${elapsed}s"
-          # 0 = afl-fuzz returned on its own, at the -V limit; 124 = the
-          # backstop deadline reached and the SIGTERM was honored; 137 =
-          # SIGKILL — expected only when it is timeout's -k escalation at the
-          # deadline. A 137 before the deadline is an outside kill (OOM
-          # killer) and must not pass as a completed fuzz run, so 137 is
-          # accepted only once the deadline elapsed. Anything else is
-          # afl-fuzz never getting off the ground (bad arguments, missing
-          # binary, 127 from a missing afl-fuzz) and must fail the job rather
-          # than pass as a fuzz run that found nothing. Crash triage still
-          # runs — "Report crashes" is `!cancelled()`.
-          case "${status}" in
-            0 | 124) ;;
-            137)
-              if [ "${elapsed}" -lt "${deadline}" ]; then
-                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${deadline}s deadline (OOM killer?)"
-                exit "${status}"
-              fi
-              ;;
-            *)
-              echo "::error::afl-fuzz did not run to a deadline (exit ${status})"
-              exit "${status}"
-              ;;
-          esac
+          scripts/afl/fuzz.sh "${FUZZ_SECONDS}" build/fuzz/corpus build/fuzz/out \
+            -- ./build/GocciaFuzzHarnessAfl @@
 
       - name: Report crashes
         # Runs even when the Fuzz step failed: findings are written to
@@ -316,33 +271,11 @@ jobs:
           exit $status
 
       - name: Fuzz
-        # Same accommodations and exit-status rules as the script fuzz job.
+        # As in the script fuzz job.
         run: |
           echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
-          mkdir -p build/fuzz/heap-snapshot-out
-          status=0
-          started=${SECONDS}
-          deadline=$(( FUZZ_SECONDS + 1200 ))
-          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${deadline}" afl-fuzz -V "${FUZZ_SECONDS}" -t 5000 \
-            -i build/fuzz/heap-snapshot-corpus \
-            -o build/fuzz/heap-snapshot-out \
-            -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@ || status=$?
-          elapsed=$(( SECONDS - started ))
-          echo "afl-fuzz exit status: ${status} after ${elapsed}s"
-          case "${status}" in
-            0 | 124) ;;
-            137)
-              if [ "${elapsed}" -lt "${deadline}" ]; then
-                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${deadline}s deadline (OOM killer?)"
-                exit "${status}"
-              fi
-              ;;
-            *)
-              echo "::error::afl-fuzz did not run to a deadline (exit ${status})"
-              exit "${status}"
-              ;;
-          esac
+          scripts/afl/fuzz.sh "${FUZZ_SECONDS}" build/fuzz/heap-snapshot-corpus \
+            build/fuzz/heap-snapshot-out -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@
 
       - name: Replay under heaptrc and Valgrind
         # ADR 0148 asks for mutated real snapshots under heaptrc and a memory

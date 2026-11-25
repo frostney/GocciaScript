@@ -16,11 +16,12 @@
 #
 # All three are built with a 1 MiB coverage map in place of AFL++'s 64 KiB
 # (MAP_SIZE_POW2 16), which the harness's edges fill within minutes, so that
-# edges stop colliding and hiding new coverage. afl-as writes the map size
-# into every trampoline, and AFL++ sizes the map of a target with the
-# original fork server at its own build's map size, whatever AFL_MAP_SIZE
-# says. A packaged afl-fuzz or afl-showmap therefore gives such a harness a
-# 64 KiB map, and the harness dies of SIGSEGV writing past it.
+# edges stop colliding and hiding new coverage. afl-as draws each
+# trampoline's random edge ID from that range, and a target with the original
+# fork server cannot tell afl-fuzz or afl-showmap its map size: they take it
+# from their own build (see docs/contributing/tooling.md). So afl-fuzz and
+# afl-showmap get the same MAP_SIZE, and DEFAULT_SHMEM_SIZE, their starting
+# map, is set to it in place of 8 MiB, so each map is exactly the harness's.
 set -euo pipefail
 
 map_size_pow2=20
@@ -35,8 +36,21 @@ out="${1:-$root/build/afl}"
 work=$(mktemp -d "${TMPDIR:-/tmp}/goccia-afl-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-# fetch <release> <sha256> <directory>: downloads and checks the release,
-# unpacks it into <directory> and sets its map size.
+# define <directory> <name> <AFL++'s value> <ours>: replaces one #define in
+# <directory>'s include/config.h, and stops if AFL++'s line is not there.
+define() {
+  local config=$work/$1/include/config.h name=$2 from=$3 to=$4
+  grep -qxF "#define $name $from" "$config" || {
+    echo "scripts/afl/build-afl.sh: no '#define $name $from' in $1's include/config.h" >&2
+    exit 1
+  }
+  awk -v line="#define $name $from" -v new="#define $name $to" \
+    '$0 == line { $0 = new } { print }' "$config" > "$config.new"
+  mv "$config.new" "$config"
+}
+
+# fetch <release> <sha256> <directory>: downloads and checks the release and
+# unpacks it into <directory>.
 fetch() {
   local release=$1 sha256=$2 name=$3 dir=$work/$3
   curl -fsSL --retry 3 -o "$dir.tar.gz" \
@@ -46,12 +60,6 @@ fetch() {
   (cd "$work" && echo "$sha256  $name.tar.gz" | sha256sum -c --quiet -)
   mkdir "$dir"
   tar -xzf "$dir.tar.gz" -C "$dir" --strip-components=1
-  sed -i.orig "s/^#define MAP_SIZE_POW2 16\$/#define MAP_SIZE_POW2 ${map_size_pow2}/" \
-    "$dir/include/config.h"
-  grep -qx "#define MAP_SIZE_POW2 ${map_size_pow2}" "$dir/include/config.h" || {
-    echo "scripts/afl/build-afl.sh: could not set MAP_SIZE_POW2 in ${release}'s include/config.h" >&2
-    exit 1
-  }
 }
 
 # build <directory> <make arguments...>
@@ -64,10 +72,16 @@ build() {
   }
 }
 
+cpus=$(nproc)
+
 fetch v4.21c 11f7c77d37cff6e7f65ac7cc55bab7901e0c6208e845a38764394d04ed567b30 as
+define as MAP_SIZE_POW2 16 "$map_size_pow2"
 build as afl-as
+
 fetch v5.03c 07f089e8591209862898c770a569d8e2b74b459fe967db323fc6a3924dcc82b5 fuzz
-build fuzz -j"$(nproc)" NO_PYTHON=1 afl-fuzz afl-showmap
+define fuzz MAP_SIZE_POW2 16 "$map_size_pow2"
+define fuzz DEFAULT_SHMEM_SIZE '(8 * 1024 * 1024)' MAP_SIZE
+build fuzz -j"$cpus" NO_PYTHON=1 afl-fuzz afl-showmap
 
 install -D -T -m 755 -- "$work/as/afl-as" "$out/afl-as"
 install -D -T -m 755 -- "$work/fuzz/afl-fuzz" "$out/afl-fuzz"
