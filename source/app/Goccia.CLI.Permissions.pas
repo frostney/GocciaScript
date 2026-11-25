@@ -267,9 +267,7 @@ begin
   else
     Result := ExpandHostFileName(IncludeTrailingPathDelimiter(ABaseDirectory) +
       APath);
-  Result := ExcludeTrailingPathDelimiter(Result);
-  if Result = '' then
-    Result := PathDelim;
+  Result := ExcludeTrailingHostPathDelimiter(Result);
 end;
 
 function ResolvePermissionScope(const ACapability: TGocciaCapability;

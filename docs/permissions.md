@@ -117,17 +117,17 @@ RFC 1918, and the `169.254.169.254` metadata address too. An address scope with
 a port names the address for that port only: `127.0.0.1:18765` lifts the
 private refusal for port 18765, not for port 22, whether the URL names the
 address or a host name that resolves to it. A `private` **deny**
-wins over every allow, explicit addresses and ranges included. IPv6 forms that
-embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
-6to4 `2002::/16` — are private when the host they embed is.
+wins over every allow, explicit addresses and ranges included. The
+[IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+defines the non-public IPv6 ranges. IPv4-mapped addresses, well-known NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) also apply the IPv4 rules to the
+address they carry. Deprecated IPv4-compatible addresses are non-public.
 
-This is checked twice: against an address literal in the URL, and against the
-address a host name resolved to — so `api.example.com` whose DNS answers with
-`169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
-allowed. Both checks run again on every redirect hop; a hop that reuses the
-connection of a redirect within the origin checks the address that connection
-was opened to rather than resolving the name again
-([Fetch: Redirects](built-ins-fetch.md#redirects)).
+Fetch checks the URL's host before lookup and each numeric address before
+connecting. A rejected address is skipped, and the fetch fails with
+`PermissionDenied` when all candidates are rejected. A redirect repeats the
+checks, and a same-origin redirect on an existing connection rechecks that
+connection's address ([Fetch: Redirects](built-ins-fetch.md#redirects)).
 
 `private` is a grant of its own: `--allow-net=private` reaches
 `http://127.0.0.1:8080` and `http://localhost:8080`, but no public address. A
@@ -592,7 +592,8 @@ resolution, as canonical JSON.
   sorted, and a capability with an unscoped entry collapses to `true`. `false`
   and empty keys are omitted, and `unsafe` lists only keys set to `true`.
 - Relative paths are made absolute against the file that declares them, with
-  no trailing separator. This is lexical: symbolic links are not resolved, so a
+  no trailing separator, except that a filesystem root keeps its own (`/`, or
+  a Windows drive root such as `C:\`). This is lexical: symbolic links are not resolved, so a
   trust stays valid when a path it names (a built library, say) appears later.
 - Net scopes are lowercased, and `node_modules` and provider names too.
 - Denies are part of the block even though they need no trust, so a trusted
@@ -781,12 +782,20 @@ the host paths they were copied from, including new files created inside a
 - each file is written to an exclusively created temporary beside it and then
   replaces it in one rename, so a failed write leaves the original intact.
 
-Each input's directory is pinned: a command-line input when it is copied (its
-canonical path and which directory it is — device and inode on POSIX, the
-64-bit volume serial number and 128-bit file ID from
+Each input's directory is pinned: a command-line input just before it is
+copied (its canonical path and which directory it is — device and inode on
+POSIX, the 64-bit volume serial number and 128-bit file ID from
 `GetFileInformationByHandleEx(FileIdInfo)` on Windows), and a config-named one
 when the config is checked, as the config's directory plus the route from it,
-and again when it is copied, as the directory that route led to. A Windows
+and again just before it is copied, as the directory that route leads to.
+Pinning before the copy reads anything means an input swapped while it is
+being copied is compared against the directory the copy started from, so its
+replacement gets nothing written. An input that cannot be pinned then is
+still copied, but once the run changes a file under it, nothing is written
+back for any input and the run exits 1, with the reason: it is no longer a
+directory, a config input's route no longer leads to one without passing a
+link, or a config input has turned from a file into a directory (or back)
+since the config was checked. A Windows
 directory that call cannot identify gets nothing written back — each of its
 files is refused with that reason and the run exits 1 — rather than falling
 back to the 64-bit file index, which ReFS does not keep unique. Before

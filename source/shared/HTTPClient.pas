@@ -100,6 +100,7 @@ uses
 const
   HTTP_CONNECTION_WORKER_STACK_SIZE = 1024 * 1024;
   MAX_HTTP_CONNECTION_WORKERS = 16;
+  CONNECT_FALLBACK_NANOSECONDS = 250 * 1000000; // RFC 8305 section 8
   MAX_REDIRECTS = 20;
   HTTP_STATUS_MOVED_PERMANENTLY = 301;
   HTTP_STATUS_FOUND = 302;
@@ -118,6 +119,13 @@ type
   // THTTPParsedURL and ParseHTTPURL now live in HTTPTypes (socket-free) so the
   // fetch builtin's host validation and the Lakon WASM lane can canonicalize a
   // URL without this unit's socket closure. Named here through the used unit.
+  THTTPAddress = record
+    IP: TNetworkAddress;
+    ScopeID: Cardinal;
+    Text: string;
+  end;
+  THTTPAddresses = array of THTTPAddress;
+
   THTTPConnectionState = class
   private
     FAbandoned: Boolean;
@@ -127,14 +135,16 @@ type
     FLock: TGocciaCriticalSection;
     FRefCount: Integer;
     FSocket: TSocket;
+    FConnectedIndex: Integer;
   public
     constructor Create;
     destructor Destroy; override;
 
     procedure AddRef;
-    procedure Complete(const ASocket: TSocket; const AErrorMessage: string);
+    procedure Complete(const ASocket: TSocket; const AConnectedIndex: Integer;
+      const AErrorMessage: string);
     procedure Release;
-    function TakeResult(out ASocket: TSocket;
+    function TakeResult(out ASocket: TSocket; out AConnectedIndex: Integer;
       out AErrorMessage: string): Boolean;
     function TryAbandon: Boolean;
     function WaitFor(const ATimeoutMilliseconds: Integer): TWaitResult;
@@ -143,40 +153,116 @@ type
   THTTPConnectionWorker = class(TThread)
   private
     FHost: string;
+    FAddresses: THTTPAddresses;
     FPort: Integer;
     FState: THTTPConnectionState;
-    FTimeoutMilliseconds: Integer;
+    FDeadlineNs: Int64;
     FWorkerSlotAcquired: Boolean;
   protected
     procedure Execute; override;
   public
-    constructor Create(const AHost: string; const APort,
-      ATimeoutMilliseconds: Integer; const AState: THTTPConnectionState);
+    constructor Create(const AHost: string; const APort: Integer;
+      const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
+      const AState: THTTPConnectionState);
     destructor Destroy; override;
   end;
 
 var
   GHTTPConnectionWorkerCount: Integer = 0;
 
-{$IFDEF MSWINDOWS}
+{ Use the host resolver so DNS, /etc/hosts and NSS all follow the same
+  configuration as other programs. The field order follows the platform ABI. }
 type
-  PAddrInfo = ^TAddrInfo;
-  TAddrInfo = record
-    ai_flags: LongInt;
-    ai_family: LongInt;
-    ai_socktype: LongInt;
-    ai_protocol: LongInt;
+  PHTTPAddrInfo = ^THTTPAddrInfo;
+  {$IFDEF FPC}
+  {$PUSH}
+  {$PACKRECORDS C}
+  {$ENDIF}
+  THTTPAddrInfo = record
+    ai_flags: Integer;
+    ai_family: Integer;
+    ai_socktype: Integer;
+    ai_protocol: Integer;
+    {$IFDEF MSWINDOWS}
     ai_addrlen: NativeUInt;
+    {$ELSE}
+    ai_addrlen: TSockLen;
+    {$ENDIF}
+    {$IF DEFINED(LINUX)}
+    ai_addr: PSockAddr;
+    ai_canonname: PAnsiChar;
+    {$ELSEIF DEFINED(MSWINDOWS) OR DEFINED(DARWIN) OR DEFINED(FREEBSD)}
     ai_canonname: PAnsiChar;
     ai_addr: PSockAddr;
-    ai_next: PAddrInfo;
+    {$ELSE}
+      {$ERROR Declare this host's struct addrinfo field order in HTTPClient}
+    {$ENDIF}
+    ai_next: PHTTPAddrInfo;
   end;
+  {$IFDEF FPC}
+  {$POP}
+  {$ENDIF}
 
-function Getaddrinfo(ANodeName, AServName: PAnsiChar;
-  AHints: PAddrInfo; out ARes: PAddrInfo): LongInt; stdcall;
+{$IFDEF UNIX}
+type
+  TSocketAddress4 = TInetSockAddr;
+  PSocketAddress4 = ^TSocketAddress4;
+  TSocketAddress6 = TInetSockAddr6;
+  PSocketAddress6 = ^TSocketAddress6;
+  THTTPPollFD = TPollFD;
+
+function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
+  AHints: PHTTPAddrInfo; out ARes: PHTTPAddrInfo): Integer; cdecl;
+  external 'c' name 'getaddrinfo';
+procedure HostFreeAddrInfo(AInfo: PHTTPAddrInfo); cdecl;
+  external 'c' name 'freeaddrinfo';
+function HostGaiStrError(ACode: Integer): PAnsiChar; cdecl;
+  external 'c' name 'gai_strerror';
+function HostInetNtop(AFamily: Integer; ASource: Pointer;
+  ADestination: PAnsiChar; ASize: TSockLen): PAnsiChar; cdecl;
+  external 'c' name 'inet_ntop';
+{$ENDIF}
+
+{$IFDEF MSWINDOWS}
+type
+  TSocketAddress4 = TSockAddrIn;
+  PSocketAddress4 = ^TSocketAddress4;
+  TSocketAddress6 = TSockAddrIn6;
+  PSocketAddress6 = ^TSocketAddress6;
+  PHTTPPollFD = ^THTTPPollFD;
+  {$IFDEF FPC}
+  {$PUSH}
+  {$PACKRECORDS C}
+  {$ENDIF}
+  THTTPPollFD = record
+    fd: TSocket;
+    events: SmallInt;
+    revents: SmallInt;
+  end;
+  {$IFDEF FPC}
+  {$POP}
+  {$ENDIF}
+
+const
+  POLLOUT = $0010; // Winsock POLLWRNORM
+  POLL_FAILED = $0007; // POLLERR, POLLHUP or POLLNVAL
+
+function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
+  AHints: PHTTPAddrInfo; out ARes: PHTTPAddrInfo): Integer; stdcall;
   external 'ws2_32.dll' name 'getaddrinfo';
-procedure Freeaddrinfo(AI: PAddrInfo); stdcall;
+procedure HostFreeAddrInfo(AInfo: PHTTPAddrInfo); stdcall;
   external 'ws2_32.dll' name 'freeaddrinfo';
+function HostInetNtop(AFamily: Integer; ASource: Pointer;
+  ADestination: PAnsiChar; ASize: NativeUInt): PAnsiChar; stdcall;
+  external 'ws2_32.dll' name 'inet_ntop';
+{ Delphi's RTL wrapper takes a sockaddr record. Import the native
+  pointer ABI so the kernel gets the whole IPv6 address and its length. }
+function HostConnect(ASocket: TSocket; AAddress: PSockAddr;
+  ALength: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'connect';
+function WSAPoll(ADescriptors: PHTTPPollFD; ACount: Cardinal;
+  ATimeoutMilliseconds: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'WSAPoll';
 
 var
   GWinSockInitialized: Boolean = False;
@@ -189,93 +275,6 @@ begin
   if WSAStartup($0202, WSAData) <> 0 then
     raise EHTTPError.Create('WSAStartup failed');
   GWinSockInitialized := True;
-end;
-{$ENDIF}
-
-{$IFDEF UNIX}
-{ The platform resolver: getaddrinfo(3) from libc, which the binaries already
-  link through cthreads. It follows the system's resolver configuration
-  (nsswitch, /etc/hosts, stub resolvers, IPv6 nameservers), as every other
-  program on the host does. FPC's NetDB resolves names itself instead: it
-  reads /etc/resolv.conf, queries only its IPv4 nameservers, and never
-  consults /etc/hosts or nsswitch. getaddrinfo is thread-safe in glibc, musl
-  and the BSD libcs, which matters because fetch workers resolve on their own
-  threads. }
-type
-  PHostAddrInfo = ^THostAddrInfo;
-  {$PUSH}
-  {$PACKRECORDS C}
-  THostAddrInfo = record
-    ai_flags: cint;
-    ai_family: cint;
-    ai_socktype: cint;
-    ai_protocol: cint;
-    ai_addrlen: TSockLen;
-    { glibc and musl put the address before the canonical name; Darwin and
-      FreeBSD put the canonical name first. }
-    {$IF DEFINED(LINUX)}
-    ai_addr: PSockAddr;
-    ai_canonname: PAnsiChar;
-    {$ELSEIF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
-    ai_canonname: PAnsiChar;
-    ai_addr: PSockAddr;
-    {$ELSE}
-      {$ERROR Declare this host's struct addrinfo field order in HTTPClient}
-    {$IFEND}
-    ai_next: PHostAddrInfo;
-  end;
-  {$POP}
-
-function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
-  AHints: PHostAddrInfo; out ARes: PHostAddrInfo): cint; cdecl;
-  external 'c' name 'getaddrinfo';
-procedure HostFreeAddrInfo(AInfo: PHostAddrInfo); cdecl;
-  external 'c' name 'freeaddrinfo';
-function HostGaiStrError(ACode: cint): PAnsiChar; cdecl;
-  external 'c' name 'gai_strerror';
-
-{ The first IPv4 address the platform resolver gives for AHost, as
-  dotted-quad text. IPv4 only: the connect path opens AF_INET sockets. }
-function ResolveIPv4WithSystemResolver(const AHost: string): string;
-var
-  Hints: THostAddrInfo;
-  Res, Cur: PHostAddrInfo;
-  HostBytes: TBytes;
-  ErrorOffset: Integer;
-  Status: cint;
-begin
-  if not TryEncodeASCIINullTerminated(AHost, HostBytes, ErrorOffset) then
-    raise EHTTPError.CreateFmt(
-      'HTTP host contains a non-ASCII code unit at offset %d',
-      [ErrorOffset]);
-  FillChar(Hints, SizeOf(Hints), 0);
-  Hints.ai_family := AF_INET;
-  Hints.ai_socktype := SOCK_STREAM;
-  Hints.ai_protocol := IPPROTO_TCP;
-  Res := nil;
-  Status := HostGetAddrInfo(PAnsiChar(@HostBytes[0]), nil, @Hints, Res);
-  if Status <> 0 then
-    raise EHTTPError.CreateFmt('Failed to resolve host: %s (%s)',
-      [AHost, string(AnsiString(HostGaiStrError(Status)))]);
-  Result := '';
-  try
-    Cur := Res;
-    while Assigned(Cur) do
-    begin
-      if (Cur^.ai_family = AF_INET) and Assigned(Cur^.ai_addr) and
-         (Cur^.ai_addrlen >= SizeOf(TInetSockAddr)) then
-      begin
-        Result := NetAddrToStr(PInetSockAddr(Cur^.ai_addr)^.sin_addr);
-        Break;
-      end;
-      Cur := Cur^.ai_next;
-    end;
-  finally
-    if Assigned(Res) then
-      HostFreeAddrInfo(Res);
-  end;
-  if Result = '' then
-    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
 end;
 {$ENDIF}
 
@@ -342,85 +341,6 @@ begin
     SizeOf(Timeout));
 end;
 
-function ConnectSocketBlocking(const AHost: string; const APort,
-  ATimeoutMilliseconds: Integer): TSocket;
-var
-  SockAddr: TInetSockAddr;
-  Octets: array[0..3] of Byte;
-  Addr: in_addr;
-  ConnectResult: Integer;
-  OriginalFlags: Integer;
-  PollDescriptor: TPollFD;
-  SocketError: Integer;
-  SocketErrorLength: TSockLen;
-  NoDelay: Integer;
-begin
-  { DoRequest passes the literal ResolveHostToAddress pinned, so the
-    numeric path is the one taken and nothing is resolved twice. A name
-    goes to the same system resolver. }
-  if not TryParseIPv4(AHost, Octets) and
-     not TryParseIPv4(ResolveIPv4WithSystemResolver(AHost), Octets) then
-    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-  Addr.s_addr := htonl((Cardinal(Octets[0]) shl 24) or
-    (Cardinal(Octets[1]) shl 16) or (Cardinal(Octets[2]) shl 8) or
-    Cardinal(Octets[3]));
-
-  Result := fpSocket(AF_INET, SOCK_STREAM, 0);
-  if Result < 0 then
-    raise EHTTPError.Create('Failed to create socket');
-  DisableSocketSigPipe(Result);
-  { A request is written whole, right after the TLS handshake's last
-    flight: Nagle would hold it until that flight is acknowledged, a
-    delayed ACK on TLS 1.3. }
-  NoDelay := 1;
-  fpSetSockOpt(Result, IPPROTO_TCP, TCP_NODELAY, @NoDelay,
-    SizeOf(NoDelay));
-
-  FillChar(SockAddr, SizeOf(SockAddr), 0);
-  SockAddr.sin_family := AF_INET;
-  SockAddr.sin_port := htons(APort);
-  SockAddr.sin_addr := Addr;
-
-  try
-    if ATimeoutMilliseconds > 0 then
-    begin
-      OriginalFlags := fpFcntl(Result, F_GETFL, 0);
-      if (OriginalFlags < 0) or
-         (fpFcntl(Result, F_SETFL, OriginalFlags or O_NONBLOCK) < 0) then
-        raise EHTTPError.Create('Failed to configure non-blocking socket');
-      try
-        ConnectResult := fpConnect(Result, @SockAddr, SizeOf(SockAddr));
-        if (ConnectResult <> 0) and (fpGetErrNo <> ESysEINPROGRESS) then
-          raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
-            [AHost, APort]);
-        if ConnectResult <> 0 then
-        begin
-          FillChar(PollDescriptor, SizeOf(PollDescriptor), 0);
-          PollDescriptor.fd := Result;
-          PollDescriptor.events := POLLOUT;
-          if fpPoll(@PollDescriptor, 1, ATimeoutMilliseconds) <= 0 then
-            raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
-              [AHost, APort]);
-          SocketError := 0;
-          SocketErrorLength := SizeOf(SocketError);
-          if (fpGetSockOpt(Result, SOL_SOCKET, SO_ERROR, @SocketError,
-              @SocketErrorLength) <> 0) or (SocketError <> 0) then
-            raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
-              [AHost, APort]);
-        end;
-      finally
-        fpFcntl(Result, F_SETFL, OriginalFlags);
-      end;
-    end
-    else if fpConnect(Result, @SockAddr, SizeOf(SockAddr)) <> 0 then
-      raise EHTTPError.CreateFmt('Failed to connect to %s:%d',
-        [AHost, APort]);
-    ConfigureSocketTimeout(Result, ATimeoutMilliseconds);
-  except
-    CloseSocket(Result);
-    raise;
-  end;
-end;
 {$ENDIF}
 
 {$IFDEF MSWINDOWS}
@@ -438,71 +358,6 @@ begin
     PAnsiChar(@Timeout), SizeOf(Timeout));
 end;
 
-function ConnectSocketBlocking(const AHost: string; const APort,
-  ATimeoutMilliseconds: Integer): TSocket;
-var
-  Hints, Res, Cur: PAddrInfo;
-  HostBytes, PortBytes: TBytes;
-  ErrorOffset: Integer;
-  Sock: TSocket;
-begin
-  EnsureWinSockInit;
-
-  FillChar(Hints, SizeOf(Hints), 0);
-  New(Hints);
-  try
-    FillChar(Hints^, SizeOf(TAddrInfo), 0);
-    Hints^.ai_family := AF_INET;
-    Hints^.ai_socktype := SOCK_STREAM;
-    Hints^.ai_protocol := IPPROTO_TCP;
-    if not TryEncodeASCIINullTerminated(AHost, HostBytes,
-      ErrorOffset) then
-      raise EHTTPError.CreateFmt(
-        'HTTP host contains a non-ASCII code unit at offset %d',
-        [ErrorOffset]);
-    if not TryEncodeASCIINullTerminated(IntToStr(APort), PortBytes,
-      ErrorOffset) then
-      raise EHTTPError.Create('HTTP port could not be encoded as ASCII');
-    Res := nil;
-
-    if Getaddrinfo(PAnsiChar(@HostBytes[0]), PAnsiChar(@PortBytes[0]),
-                   Hints, Res) <> 0 then
-      raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-  finally
-    Dispose(Hints);
-  end;
-
-  try
-    Cur := Res;
-    Sock := INVALID_SOCKET;
-    while Assigned(Cur) do
-    begin
-      Sock := WinSock2.socket(Cur^.ai_family, Cur^.ai_socktype,
-                               Cur^.ai_protocol);
-      if Sock = INVALID_SOCKET then
-      begin
-        Cur := Cur^.ai_next;
-        Continue;
-      end;
-      ConfigureSocketTimeout(Sock, ATimeoutMilliseconds);
-
-      if WinSock2.connect(Sock, Cur^.ai_addr^,
-        Integer(Cur^.ai_addrlen)) = 0 then
-        Break;
-
-      WinSock2.closesocket(Sock);
-      Sock := INVALID_SOCKET;
-      Cur := Cur^.ai_next;
-    end;
-
-    if Sock = INVALID_SOCKET then
-      raise EHTTPError.CreateFmt('Failed to connect to %s:%d', [AHost, APort]);
-
-    Result := Sock;
-  finally
-    Freeaddrinfo(Res);
-  end;
-end;
 {$ENDIF}
 
 // ---------------------------------------------------------------------------
@@ -594,6 +449,329 @@ begin
   {$ENDIF}
 end;
 
+function SocketErrorCode: Integer;
+begin
+  {$IFDEF UNIX}
+  Result := fpGetErrNo;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := WSAGetLastError;
+  {$ENDIF}
+end;
+
+function SocketFamily(const AAddress: THTTPAddress): Integer;
+begin
+  if AAddress.IP.Family = nafIPv4 then
+    Result := AF_INET
+  else
+    Result := AF_INET6;
+end;
+
+function ConnectToAddress(const ASocket: TSocket;
+  const AAddress: THTTPAddress; const APort: Integer): Integer;
+var
+  IPv4SocketAddress: TSocketAddress4;
+  IPv6SocketAddress: TSocketAddress6;
+  SockAddr: PSockAddr;
+  AddrLength: Integer;
+begin
+  if AAddress.IP.Family = nafIPv4 then
+  begin
+    FillChar(IPv4SocketAddress, SizeOf(IPv4SocketAddress), 0);
+    {$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+    IPv4SocketAddress.sin_len := SizeOf(IPv4SocketAddress);
+    {$IFEND}
+    IPv4SocketAddress.sin_family := AF_INET;
+    IPv4SocketAddress.sin_port := htons(APort);
+    Move(AAddress.IP.Bytes[0], IPv4SocketAddress.sin_addr, 4);
+    SockAddr := PSockAddr(@IPv4SocketAddress);
+    AddrLength := SizeOf(IPv4SocketAddress);
+  end
+  else
+  begin
+    FillChar(IPv6SocketAddress, SizeOf(IPv6SocketAddress), 0);
+    {$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+    IPv6SocketAddress.sin6_len := SizeOf(IPv6SocketAddress);
+    {$IFEND}
+    IPv6SocketAddress.sin6_family := AF_INET6;
+    IPv6SocketAddress.sin6_port := htons(APort);
+    IPv6SocketAddress.sin6_scope_id := AAddress.ScopeID;
+    Move(AAddress.IP.Bytes[0], IPv6SocketAddress.sin6_addr, 16);
+    SockAddr := PSockAddr(@IPv6SocketAddress);
+    AddrLength := SizeOf(IPv6SocketAddress);
+  end;
+  {$IFDEF UNIX}
+  Result := fpConnect(ASocket, SockAddr, AddrLength);
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := HostConnect(ASocket, SockAddr, AddrLength);
+  {$ENDIF}
+end;
+
+function SetSocketBlocking(const ASocket: TSocket;
+  const ABlocking: Boolean): Boolean;
+var
+  {$IFDEF UNIX}
+  Flags: Integer;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  NonBlocking: u_long;
+  {$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Flags := fpFcntl(ASocket, F_GETFL, 0);
+  if Flags < 0 then
+    Exit(False);
+  if ABlocking then
+    Flags := Flags and not O_NONBLOCK
+  else
+    Flags := Flags or O_NONBLOCK;
+  Result := fpFcntl(ASocket, F_SETFL, Flags) = 0;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  NonBlocking := Ord(not ABlocking);
+  Result := WinSock2.ioctlsocket(ASocket, FIONBIO, NonBlocking) = 0;
+  {$ENDIF}
+end;
+
+function OpenConnectSocket(const AAddress: THTTPAddress): TSocket;
+var
+  NoDelay: Integer;
+begin
+  NoDelay := 1;
+  {$IFDEF UNIX}
+  Result := fpSocket(SocketFamily(AAddress), SOCK_STREAM, IPPROTO_TCP);
+  if not IsValidHTTPSocket(Result) then
+    Exit;
+  DisableSocketSigPipe(Result);
+  { Avoid delaying the request behind the TLS handshake's last flight. }
+  fpSetSockOpt(Result, IPPROTO_TCP, TCP_NODELAY, @NoDelay, SizeOf(NoDelay));
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := WinSock2.socket(SocketFamily(AAddress), SOCK_STREAM, IPPROTO_TCP);
+  if not IsValidHTTPSocket(Result) then
+    Exit;
+  WinSock2.setsockopt(Result, IPPROTO_TCP, TCP_NODELAY,
+    PAnsiChar(@NoDelay), SizeOf(NoDelay));
+  {$ENDIF}
+end;
+
+function ConnectionSocketError(const ASocket: TSocket): Integer;
+var
+  Size: {$IFDEF UNIX}TSockLen{$ELSE}LongInt{$ENDIF};
+begin
+  Result := 0;
+  Size := SizeOf(Result);
+  {$IFDEF UNIX}
+  if fpGetSockOpt(ASocket, SOL_SOCKET, SO_ERROR, @Result, @Size) <> 0 then
+    Result := SocketErrorCode;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  if WinSock2.getsockopt(ASocket, SOL_SOCKET, SO_ERROR, PAnsiChar(@Result),
+      Size) <> 0 then
+    Result := SocketErrorCode;
+  {$ENDIF}
+end;
+
+function SocketConnectInProgress(const AError: Integer): Boolean;
+begin
+  {$IFDEF UNIX}
+  Result := AError = ESysEINPROGRESS;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := AError = WSAEWOULDBLOCK;
+  {$ENDIF}
+end;
+
+function PollConnectSockets(var ADescriptors: array of THTTPPollFD;
+  const ACount, ATimeoutMilliseconds: Integer): Integer;
+begin
+  {$IFDEF UNIX}
+  Result := fpPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
+  if (Result < 0) and (fpGetErrNo = ESysEINTR) then
+    Result := 0; // Recalculate the remaining time before polling again.
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := WSAPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
+  if (Result < 0) and (WSAGetLastError = WSAEINTR) then
+    Result := 0;
+  {$ENDIF}
+end;
+
+{ Keep the resolver's first choice, then alternate families while both have
+  candidates. Preserve the resolver's order within a family. A pending
+  connection stays in the race as the next one starts. }
+function ConnectionOrder(const AAddresses: THTTPAddresses): TArray<Integer>;
+var
+  Next: array[TNetworkAddressFamily] of Integer;
+  Family: TNetworkAddressFamily;
+  I: Integer;
+begin
+  SetLength(Result, Length(AAddresses));
+  Next[nafIPv4] := 0;
+  Next[nafIPv6] := 0;
+  Family := AAddresses[0].IP.Family;
+  for I := 0 to High(Result) do
+  begin
+    while (Next[Family] < Length(AAddresses)) and
+      (AAddresses[Next[Family]].IP.Family <> Family) do
+      Inc(Next[Family]);
+    if Next[Family] = Length(AAddresses) then
+    begin
+      Family := TNetworkAddressFamily(1 - Ord(Family));
+      while AAddresses[Next[Family]].IP.Family <> Family do
+        Inc(Next[Family]);
+    end;
+    Result[I] := Next[Family];
+    Inc(Next[Family]);
+    Family := TNetworkAddressFamily(1 - Ord(Family));
+  end;
+end;
+
+function ConnectSocketBlocking(const AHost: string; const APort: Integer;
+  const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
+  out AConnectedIndex: Integer): TSocket;
+var
+  Order, PendingIndices: TArray<Integer>;
+  Pending: array of THTTPPollFD;
+  Sock: TSocket;
+  NowNs, NextAttemptNs, WakeNs, DelayNs: Int64;
+  I, Next, Count, AddressIndex, LastAddressIndex, LastError, PollForMs, PollResult: Integer;
+  Endpoint: string;
+
+  function TakeSocket(const ASocket: TSocket;
+    const AAddressIndex: Integer): TSocket;
+  begin
+    if not SetSocketBlocking(ASocket, True) then
+      raise EHTTPError.Create('Failed to restore blocking socket');
+    AConnectedIndex := AAddressIndex;
+    Result := ASocket;
+  end;
+
+begin
+  {$IFDEF MSWINDOWS}
+  EnsureWinSockInit;
+  {$ENDIF}
+  Order := ConnectionOrder(AAddresses);
+  SetLength(Pending, Length(Order));
+  SetLength(PendingIndices, Length(Order));
+  Count := 0;
+  Next := 0;
+  NextAttemptNs := 0;
+  LastAddressIndex := 0;
+  LastError := 0;
+  try
+    while (Next < Length(Order)) or (Count > 0) do
+    begin
+      NowNs := GetNanoseconds;
+      if (ADeadlineNs <> 0) and (NowNs >= ADeadlineNs) then
+        raise EHTTPError.Create('HTTP request timed out');
+      if (Next < Length(Order)) and (NowNs >= NextAttemptNs) then
+      begin
+        AddressIndex := Order[Next];
+        Inc(Next);
+        Sock := OpenConnectSocket(AAddresses[AddressIndex]);
+        if not IsValidHTTPSocket(Sock) then
+        begin
+          LastAddressIndex := AddressIndex;
+          LastError := SocketErrorCode;
+          Continue;
+        end;
+        try
+          if not SetSocketBlocking(Sock, False) then
+          begin
+            LastAddressIndex := AddressIndex;
+            LastError := SocketErrorCode;
+            Continue;
+          end;
+          if ConnectToAddress(Sock, AAddresses[AddressIndex], APort) = 0 then
+          begin
+            Result := TakeSocket(Sock, AddressIndex);
+            Sock := InvalidHTTPSocket;
+            Exit;
+          end;
+          LastAddressIndex := AddressIndex;
+          LastError := SocketErrorCode;
+          if SocketConnectInProgress(LastError) then
+          begin
+            Pending[Count].fd := Sock;
+            Pending[Count].events := POLLOUT;
+            Pending[Count].revents := 0;
+            PendingIndices[Count] := AddressIndex;
+            Inc(Count);
+            Sock := InvalidHTTPSocket;
+            NowNs := GetNanoseconds;
+            DelayNs := CONNECT_FALLBACK_NANOSECONDS;
+            if (ADeadlineNs <> 0) and
+               ((ADeadlineNs - NowNs) div 2 < DelayNs) then
+              DelayNs := (ADeadlineNs - NowNs) div 2;
+            NextAttemptNs := NowNs + DelayNs;
+          end;
+        finally
+          if IsValidHTTPSocket(Sock) then
+            SocketClose(Sock);
+        end;
+        Continue;
+      end;
+
+      WakeNs := ADeadlineNs;
+      if (Next < Length(Order)) and
+         ((WakeNs = 0) or (NextAttemptNs < WakeNs)) then
+        WakeNs := NextAttemptNs;
+      PollForMs := -1;
+      if WakeNs <> 0 then
+      begin
+        DelayNs := WakeNs - NowNs;
+        if DelayNs <= 0 then
+          Continue;
+        PollForMs := Integer((DelayNs + 999999) div 1000000);
+      end;
+      PollResult := PollConnectSockets(Pending, Count, PollForMs);
+      if PollResult < 0 then
+        raise EHTTPError.CreateFmt('Failed to wait for a connection to %s:%d (%s)',
+          [AHost, APort, SysErrorMessage(SocketErrorCode)]);
+      if PollResult = 0 then
+        Continue;
+      for I := Count - 1 downto 0 do
+      begin
+        if Pending[I].revents = 0 then
+          Continue;
+        LastAddressIndex := PendingIndices[I];
+        LastError := ConnectionSocketError(Pending[I].fd);
+        if (LastError = 0) and ((Pending[I].revents and POLLOUT) <> 0) then
+        begin
+          {$IFDEF MSWINDOWS}
+          { Windows may report POLLOUT alongside errors for a failed connect. }
+          if (Pending[I].revents and POLL_FAILED) <> 0 then
+            LastError := WSAECONNREFUSED
+          else
+          {$ENDIF}
+          begin
+            Result := TakeSocket(Pending[I].fd, PendingIndices[I]);
+            Pending[I].fd := InvalidHTTPSocket;
+            Exit;
+          end;
+        end;
+        SocketClose(Pending[I].fd);
+        Dec(Count);
+        Pending[I] := Pending[Count];
+        PendingIndices[I] := PendingIndices[Count];
+        { A failed attempt need not wait for the stagger timer. }
+        NextAttemptNs := 0;
+      end;
+    end;
+  finally
+    for I := 0 to Count - 1 do
+      if IsValidHTTPSocket(Pending[I].fd) then
+        SocketClose(Pending[I].fd);
+  end;
+  Endpoint := AAddresses[LastAddressIndex].Text;
+  if Pos(':', Endpoint) > 0 then
+    Endpoint := '[' + Endpoint + ']';
+  raise EHTTPError.CreateFmt('Failed to connect to %s:%d (%s)',
+    [Endpoint, APort, SysErrorMessage(LastError)]);
+end;
+
 function TryAcquireHTTPConnectionWorker: Boolean;
 begin
   Result := AtomicIncrementInt32(GHTTPConnectionWorkerCount) <=
@@ -656,7 +834,7 @@ begin
 end;
 
 procedure THTTPConnectionState.Complete(const ASocket: TSocket;
-  const AErrorMessage: string);
+  const AConnectedIndex: Integer; const AErrorMessage: string);
 var
   CloseSocketAfterCompletion: Boolean;
 begin
@@ -669,6 +847,7 @@ begin
     else
     begin
       FSocket := ASocket;
+      FConnectedIndex := AConnectedIndex;
       FErrorMessage := AErrorMessage;
     end;
   finally
@@ -680,9 +859,10 @@ begin
 end;
 
 function THTTPConnectionState.TakeResult(out ASocket: TSocket;
-  out AErrorMessage: string): Boolean;
+  out AConnectedIndex: Integer; out AErrorMessage: string): Boolean;
 begin
   ASocket := InvalidHTTPSocket;
+  AConnectedIndex := -1;
   AErrorMessage := '';
   CriticalSectionEnter(FLock);
   try
@@ -690,6 +870,7 @@ begin
     if Result then
     begin
       ASocket := FSocket;
+      AConnectedIndex := FConnectedIndex;
       FSocket := InvalidHTTPSocket;
       AErrorMessage := FErrorMessage;
     end;
@@ -718,8 +899,9 @@ end;
 
 { THTTPConnectionWorker }
 
-constructor THTTPConnectionWorker.Create(const AHost: string; const APort,
-  ATimeoutMilliseconds: Integer; const AState: THTTPConnectionState);
+constructor THTTPConnectionWorker.Create(const AHost: string;
+  const APort: Integer; const AAddresses: THTTPAddresses;
+  const ADeadlineNs: Int64; const AState: THTTPConnectionState);
 begin
   {$IFDEF FPC}
   inherited Create(True, HTTP_CONNECTION_WORKER_STACK_SIZE);
@@ -732,7 +914,8 @@ begin
   FWorkerSlotAcquired := True;
   FHost := AHost;
   FPort := APort;
-  FTimeoutMilliseconds := ATimeoutMilliseconds;
+  FAddresses := AAddresses;
+  FDeadlineNs := ADeadlineNs;
   FState := AState;
   FState.AddRef;
 end;
@@ -750,25 +933,29 @@ procedure THTTPConnectionWorker.Execute;
 var
   ErrorMessage: string;
   Socket: TSocket;
+  ConnectedIndex: Integer;
 begin
+  ConnectedIndex := -1;
   ErrorMessage := '';
   Socket := InvalidHTTPSocket;
   try
     try
-      Socket := ConnectSocketBlocking(FHost, FPort, FTimeoutMilliseconds);
+      Socket := ConnectSocketBlocking(FHost, FPort, FAddresses, FDeadlineNs,
+        ConnectedIndex);
     except
       on E: Exception do
         ErrorMessage := E.Message;
     end;
-    FState.Complete(Socket, ErrorMessage);
+    FState.Complete(Socket, ConnectedIndex, ErrorMessage);
   except
     if IsValidHTTPSocket(Socket) then
       SocketClose(Socket);
   end;
 end;
 
-function ConnectSocket(const AHost: string; const APort,
-  ATimeoutMilliseconds: Integer): TSocket;
+function ConnectSocket(const AHost: string; const APort: Integer;
+  const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
+  const ATimeoutMilliseconds: Integer; out AConnectedIndex: Integer): TSocket;
 var
   ErrorMessage: string;
   State: THTTPConnectionState;
@@ -776,13 +963,14 @@ var
   Worker: THTTPConnectionWorker;
 begin
   if ATimeoutMilliseconds <= 0 then
-    Exit(ConnectSocketBlocking(AHost, APort, ATimeoutMilliseconds));
+    Exit(ConnectSocketBlocking(AHost, APort, AAddresses, ADeadlineNs,
+      AConnectedIndex));
 
   State := THTTPConnectionState.Create;
   Worker := nil;
   try
-    Worker := THTTPConnectionWorker.Create(AHost, APort,
-      ATimeoutMilliseconds, State);
+    Worker := THTTPConnectionWorker.Create(AHost, APort, AAddresses,
+      ADeadlineNs, State);
     Worker.Start;
     Worker := nil;
 
@@ -795,7 +983,7 @@ begin
     else if WaitResult <> wrSignaled then
       raise EHTTPError.Create('HTTP connection wait failed');
 
-    if not State.TakeResult(Result, ErrorMessage) then
+    if not State.TakeResult(Result, AConnectedIndex, ErrorMessage) then
       raise EHTTPError.Create('HTTP request timed out');
     if ErrorMessage <> '' then
       raise EHTTPError.Create(ErrorMessage);
@@ -1474,19 +1662,8 @@ begin
   Result := NetworkAddress.IsPrivateNetworkAddress(AAddressText);
 end;
 
-{ Resolves a hostname to a single numeric address, once.
-
-  This is the fix for the check-then-use window: DoRequest used to validate a
-  *hostname* and then hand that same hostname to connect, which resolved it
-  again. An allowlisted name under attacker DNS control could answer the first
-  lookup with a public address and the second with 169.254.169.254. Resolving
-  here and connecting to the returned literal means the address that was
-  checked is the address that is used.
-
-  An input that is already a literal is returned unchanged, so no lookup
-  happens for numeric targets. }
-const
-  LOCALHOST_ADDRESS = '127.0.0.1';
+{ Resolve each hop once. Keep the binary address in the same record as the
+  text passed to the policy. The socket code only accepts these records. }
 
 { `localhost`, or any name under it, in any case and with one trailing
   dot. }
@@ -1505,69 +1682,122 @@ begin
       '.' + LOCALHOST_NAME));
 end;
 
-function ResolveHostToAddress(const AHost: string): string;
-{$IFDEF UNIX}
+function ResolveHostAddresses(const AHost: string): THTTPAddresses;
 var
-  Octets: array[0..3] of Byte;
-{$ENDIF}
-{$IFDEF MSWINDOWS}
-var
-  Octets: array[0..3] of Byte;
-  Hints, Res: PAddrInfo;
+  Hints: THTTPAddrInfo;
+  Addresses, Current: PHTTPAddrInfo;
+  Address: THTTPAddress;
   HostBytes: TBytes;
-  ErrorOffset: Integer;
-  SockAddr: PSockAddrIn;
-{$ENDIF}
+  NumericText: array[0..45] of AnsiChar; // INET6_ADDRSTRLEN
+  ErrorOffset, Status: Integer;
+
+  procedure AddAddress;
+  var
+    I: Integer;
+  begin
+    for I := 0 to High(Result) do
+      if (Address.ScopeID = Result[I].ScopeID) and
+         AddressesEqual(Address.IP, Result[I].IP) then
+        Exit;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := Address;
+  end;
+
 begin
+  Result := nil;
   if AHost = '' then
     raise EHTTPError.Create('Failed to resolve host: (empty)');
-  if TryParseIPv4(AHost, Octets) then
-    Exit(AHost);
-  { RFC 6761 section 6.3: localhost names are loopback, answered here rather
-    than by a platform resolver that may not know them (macOS's) or may
-    forward them to DNS (every name under localhost). }
+  Address := Default(THTTPAddress);
+  if TryParseIPAddress(AHost, Address.IP) then
+  begin
+    if Pos('%', AHost) > 0 then
+      raise EHTTPError.Create('Scoped IPv6 literals are not supported by HTTP');
+    Address.Text := AHost;
+    AddAddress;
+    Exit;
+  end;
+  { RFC 6761 section 6.3: localhost and its subdomains are loopback. Keep
+    IPv4 first for existing local servers, and try IPv6 when needed. }
   if IsLocalhostName(AHost) then
-    Exit(LOCALHOST_ADDRESS);
+  begin
+    Address.Text := '127.0.0.1';
+    TryParseIPAddress(Address.Text, Address.IP);
+    AddAddress;
+    Address.Text := '::1';
+    TryParseIPAddress(Address.Text, Address.IP);
+    AddAddress;
+    Exit;
+  end;
+  if not TryEncodeASCIINullTerminated(AHost, HostBytes, ErrorOffset) then
+    raise EHTTPError.CreateFmt(
+      'HTTP host contains a non-ASCII code unit at offset %d', [ErrorOffset]);
 
-  {$IFDEF UNIX}
-  Result := ResolveIPv4WithSystemResolver(AHost);
-  {$ENDIF}
   {$IFDEF MSWINDOWS}
   EnsureWinSockInit;
-  New(Hints);
+  {$ENDIF}
+  FillChar(Hints, SizeOf(Hints), 0);
+  Hints.ai_family := AF_UNSPEC;
+  Hints.ai_socktype := SOCK_STREAM;
+  Hints.ai_protocol := IPPROTO_TCP;
+  Addresses := nil;
+  Status := HostGetAddrInfo(PAnsiChar(@HostBytes[0]), nil, @Hints, Addresses);
+  if Status <> 0 then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s (%s)',
+      [AHost, {$IFDEF UNIX}string(AnsiString(HostGaiStrError(Status)))
+              {$ELSE}SysErrorMessage(Status){$ENDIF}]);
   try
-    FillChar(Hints^, SizeOf(TAddrInfo), 0);
-    Hints^.ai_family := AF_INET;
-    Hints^.ai_socktype := SOCK_STREAM;
-    Hints^.ai_protocol := IPPROTO_TCP;
-    if not TryEncodeASCIINullTerminated(AHost, HostBytes, ErrorOffset) then
-      raise EHTTPError.CreateFmt(
-        'HTTP host contains a non-ASCII code unit at offset %d',
-        [ErrorOffset]);
-    Res := nil;
-    if Getaddrinfo(PAnsiChar(@HostBytes[0]), nil, Hints, Res) <> 0 then
-      raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-    try
-      if not Assigned(Res) or not Assigned(Res^.ai_addr) then
-        raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-      SockAddr := PSockAddrIn(Res^.ai_addr);
-      { WinSock2 declares the octets as u_char, a character type Format's
-        %d refuses; their ordinals are the octet values. }
-      Result := Format('%d.%d.%d.%d', [
-        Ord(SockAddr^.sin_addr.S_un_b.s_b1),
-        Ord(SockAddr^.sin_addr.S_un_b.s_b2),
-        Ord(SockAddr^.sin_addr.S_un_b.s_b3),
-        Ord(SockAddr^.sin_addr.S_un_b.s_b4)]);
-    finally
-      Freeaddrinfo(Res);
+    Current := Addresses;
+    while Assigned(Current) do
+    begin
+      if Assigned(Current^.ai_addr) then
+      begin
+        Address := Default(THTTPAddress);
+        if (Current^.ai_family = AF_INET) and
+           (Current^.ai_addrlen >= SizeOf(TSocketAddress4)) then
+        begin
+          Address.IP.Family := nafIPv4;
+          Move(PSocketAddress4(Current^.ai_addr)^.sin_addr,
+            Address.IP.Bytes[0], 4);
+        end
+        else if (Current^.ai_family = AF_INET6) and
+                (Current^.ai_addrlen >= SizeOf(TSocketAddress6)) then
+        begin
+          Address.IP.Family := nafIPv6;
+          Address.ScopeID := PSocketAddress6(Current^.ai_addr)^.sin6_scope_id;
+          Move(PSocketAddress6(Current^.ai_addr)^.sin6_addr,
+            Address.IP.Bytes[0], 16);
+        end
+        else
+        begin
+          Current := Current^.ai_next;
+          Continue;
+        end;
+        Address.IP := NormalizeIPAddress(Address.IP);
+        if Address.IP.Family = nafIPv4 then
+          Address.ScopeID := 0;
+        if Assigned(HostInetNtop(SocketFamily(Address), @Address.IP.Bytes[0],
+            @NumericText[0], SizeOf(NumericText))) then
+        begin
+          Address.Text := string(AnsiString(PAnsiChar(@NumericText[0])));
+          AddAddress;
+        end;
+      end;
+      Current := Current^.ai_next;
     end;
   finally
-    Dispose(Hints);
+    if Assigned(Addresses) then
+      HostFreeAddrInfo(Addresses);
   end;
-  {$ENDIF}
-
-  if Result = '' then
+  if Length(Result) = 0 then
     raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+end;
+
+function ResolveHostToAddress(const AHost: string): string;
+var
+  Addresses: THTTPAddresses;
+begin
+  Addresses := ResolveHostAddresses(AHost);
+  Result := Addresses[0].Text;
 end;
 
 { HTML Standard, same origin: two tuple origins with the same scheme, host
@@ -1592,9 +1822,13 @@ function DoRequest(const AMethod, AURL: string;
   const AMaxRedirects: Integer; const AAllowedHosts: TStrings;
   const ATimeoutMilliseconds: Integer;
   const APolicy: THTTPRequestPolicy): THTTPResponse;
+type
+  TAddressDenial = (adNone, adCapability, adPrivate);
 var
   Parsed, NextParsed: THTTPParsedURL;
   ResolvedAddress: string;
+  Addresses: THTTPAddresses;
+  ConnectedIndex: Integer;
   MaxBodyBytes: Integer;
   Sock: TSocket;
   Transport: TTransportSecurityConnection;
@@ -1658,28 +1892,69 @@ var
         Reason);
   end;
 
+  function AddressDenial(const AParsed: THTTPParsedURL; const AAddress: string;
+    out AReason: string): TAddressDenial;
+  begin
+    AReason := '';
+    if Assigned(APolicy.HostCheck) and
+       not APolicy.HostCheck(AParsed.Host, AParsed.Port, AAddress, AReason) then
+      Exit(adCapability);
+    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(AAddress) then
+      Exit(adPrivate);
+    Result := adNone;
+  end;
+
+  procedure RaiseAddressDenial(const AParsed: THTTPParsedURL;
+    const AAddress, AReason: string; const ADenial: TAddressDenial);
+  begin
+    case ADenial of
+      adCapability:
+        raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
+          AReason);
+      adPrivate:
+        raise EHTTPError.CreateFmt(
+          'fetch destination not allowed: %s resolves to private address %s',
+          [AParsed.Host, AAddress]);
+    end;
+  end;
+
   procedure ValidateAddress(const AParsed: THTTPParsedURL;
     const AAddress: string);
   var
     Reason: string;
+    Denial: TAddressDenial;
   begin
-    if Assigned(APolicy.HostCheck) and
-       not APolicy.HostCheck(AParsed.Host, AParsed.Port, AAddress, Reason) then
-      raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
-        Reason);
-
-    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(AAddress) then
-      raise EHTTPError.CreateFmt(
-        'fetch destination not allowed: %s resolves to private address %s',
-        [AParsed.Host, AAddress]);
+    Denial := AddressDenial(AParsed, AAddress, Reason);
+    RaiseAddressDenial(AParsed, AAddress, Reason, Denial);
   end;
 
   function ResolveAndValidateDestination(
-    const AParsed: THTTPParsedURL): string;
+    const AParsed: THTTPParsedURL): THTTPAddresses;
+  var
+    Address: THTTPAddress;
+    DeniedAddress, FirstReason, Reason: string;
+    FirstDenial, Denial: TAddressDenial;
   begin
     ValidateName(AParsed);
-    Result := ResolveHostToAddress(AParsed.Host);
-    ValidateAddress(AParsed, Result);
+    Result := nil;
+    FirstDenial := adNone;
+    for Address in ResolveHostAddresses(AParsed.Host) do
+    begin
+      Denial := AddressDenial(AParsed, Address.Text, Reason);
+      if Denial = adNone then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := Address;
+      end
+      else if FirstDenial = adNone then
+      begin
+        FirstDenial := Denial;
+        DeniedAddress := Address.Text;
+        FirstReason := Reason;
+      end;
+    end;
+    if Length(Result) = 0 then
+      RaiseAddressDenial(AParsed, DeniedAddress, FirstReason, FirstDenial);
   end;
 
   procedure CloseConnection;
@@ -1731,17 +2006,16 @@ begin
         { Runs on every pass of this loop that opens a connection, so a
           redirect hop is resolved, validated, and pinned exactly like the
           initial request. }
-        ResolvedAddress := ResolveAndValidateDestination(Parsed);
+        Addresses := ResolveAndValidateDestination(Parsed);
       ValidateHTTPRequestText(Parsed.Path, 'request target', False);
       if not Reused then
       begin
         FillChar(Transport, SizeOf(Transport), 0);
-        { Connect to the address that was just validated, not to the name.
-          Both platform connect paths take a numeric fast path for a
-          literal, so this performs no second lookup and there is no window
-          in which DNS can answer differently. }
-        Sock := ConnectSocket(ResolvedAddress, Parsed.Port,
-          RemainingTimeoutMilliseconds);
+        { The worker receives only the checked endpoints. The winning one
+          stays pinned for same-origin redirects on this connection. }
+        Sock := ConnectSocket(Parsed.Host, Parsed.Port, Addresses, DeadlineNs,
+          RemainingTimeoutMilliseconds, ConnectedIndex);
+        ResolvedAddress := Addresses[ConnectedIndex].Text;
         Connected := True;
         ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
         { TLS still verifies against the hostname. Pinning changes which
@@ -1762,11 +2036,7 @@ begin
         ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
 
       // Build Host header value
-      if ((Parsed.Scheme = 'http') and (Parsed.Port = 80)) or
-         ((Parsed.Scheme = 'https') and (Parsed.Port = 443)) then
-        HostHeader := Parsed.Host
-      else
-        HostHeader := Parsed.Host + ':' + IntToStr(Parsed.Port);
+      HostHeader := DestinationScope(Parsed);
 
       RequestText := Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF;
       RequestText := RequestText + 'Host: ' + HostHeader + CRLF;

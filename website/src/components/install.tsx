@@ -50,7 +50,7 @@ const SHOW_JAVASCRIPT_PACKAGE_MANAGER_SECTIONS = false;
 const ARCH_LABELS = {
   macos: { arm64: "Apple Silicon (arm64)", x64: "Intel (x64)", x86: "" },
   linux: { arm64: "ARM (arm64)", x64: "x64", x86: "" },
-  windows: { arm64: "", x64: "x64", x86: "32-bit (x86)" },
+  windows: { arm64: "", x64: "x64", x86: "32-bit (x86, needs an SSE2 CPU)" },
 } as const;
 
 /** Strip the optional `v` prefix from a tag (`v0.6.1` → `0.6.1`).

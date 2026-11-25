@@ -353,6 +353,10 @@ native thread-local variables and code generator fixes, and `build.pas` stops
 with a message on an older compiler. The FPC 3.2.2 that package managers
 install builds only the code outside `source/g2`.
 
+A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in
+SSE2, so it runs only on a Pentium 4, Athlon 64 or later CPU
+([ADR 0191](docs/adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)).
+
 CI is pinned to the build `3.3.1-b8`. To build with the same compiler on Linux
 or macOS, install it next to any other FPC and put it first on `PATH`
 (Windows: see its README):

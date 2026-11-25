@@ -71,12 +71,12 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | Method | Description |
 |--------|-------------|
 | `console.log(...args)` | Output to stdout with space-separated values |
-| `console.warn(...args)` | Output with "Warning:" prefix |
-| `console.error(...args)` | Output with "Error:" prefix |
+| `console.warn(...args)` | Output with "Warning:" prefix ([stderr](#console-streams)) |
+| `console.error(...args)` | Output with "Error:" prefix ([stderr](#console-streams)) |
 | `console.info(...args)` | Output with "Info:" prefix |
 | `console.debug(...args)` | Output with "Debug:" prefix |
 | `console.dir(obj)` | Display object properties |
-| `console.assert(condition, ...args)` | Print if assertion fails |
+| `console.assert(condition, ...args)` | Print if assertion fails ([stderr](#console-streams)) |
 | `console.count(label?)` | Increment and print named counter |
 | `console.countReset(label?)` | Reset named counter |
 | `console.time(label?)` | Start a named timer |
@@ -86,7 +86,7 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | `console.group(label?)` | Increase indentation level |
 | `console.groupCollapsed(label?)` | Same as `console.group` |
 | `console.groupEnd()` | Decrease indentation level |
-| `console.trace(...args)` | Print with "Trace:" prefix |
+| `console.trace(...args)` | Print with "Trace:" prefix ([stderr](#console-streams)) |
 | `console.table(data)` | Display data (formatted output) |
 
 **Value formatting:** Arguments are rendered the way Node's `util.inspect` renders them. Strings print as they are at the top level and quoted inside containers. A function prints as `[Function: name]`, or `[Function (anonymous)]` when its name is empty, with `AsyncFunction`, `GeneratorFunction` or `AsyncGeneratorFunction` in place of `Function` for those kinds. A class prints as `[class K]` or `[class K extends B]`. An `Error` prints its `stack`, or `[name: message]` when the stack lists no frames; `[cause]` and an `AggregateError`'s `[errors]` follow it. A function, class or error then lists its own enumerable properties in braces: `[Function: f] { a: 1 }`. A container or error holding a multi-line entry, such as another error's stack, puts each entry on its own line, indented by two spaces. Inside `console.group`, every line of a multi-line value is indented. Depth beyond five levels reads `[Object]`, `[Array]`, `[Set]` or `[Map]`. Test-assertion messages keep the plain object rendering.
@@ -95,13 +95,17 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 
 Separately, the CLI hosts take `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
 
+#### Console streams
+
+When the console writes to the process itself, as `GocciaRunner` does outside sandbox mode, `warn`, `error`, `assert` and `trace` write to standard error, as in Node, and every other method that prints a line writes to standard output. Each line is flushed as it is logged, so a process reading a piped stdout or stderr gets it while the script runs, and with both streams on one pipe the lines keep their order. A line whose write fails with an error (a closed or read-only descriptor, a full disk, a pipe whose reader has gone) is dropped and the script goes on; a signal the write raises other than SIGPIPE, such as SIGXFSZ past a file-size limit, keeps its default action. Where a host captures console output instead (`TG2Engine.OnConsole`, sandbox mode, `--output=json`), it receives every line with its method name and decides where it goes; sandbox mode prints the captured lines to stdout after the run.
+
 ### Math
 
 Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math). See [MDN Math reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math) for the full API.
 
 **Full standard compliance** — all standard constants and methods are available.
 
-**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, for a finite, nonzero base `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`; the special cases come first, so `(-0) ** 0.5` is `+0` and `(-Infinity) ** 0.5` is `Infinity`, where `Math.sqrt` gives `-0` and `NaN`.
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). The port's finite results are within 0.54 ULP of the exact value, and every platform returns the same bits for them. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact. For a finite, nonzero base, `x ** 2` is the native multiplication `x * x`, which rounds once on every FPC build (i386 included, which computes in SSE2, [ADR 0191](adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)) but on Delphi's x87-only Win32 build can round a subnormal product twice, and `x ** 0.5` is `Math.sqrt(x)`, as in V8. `x ** -1` is the correctly rounded `1 / x` on every platform, which the general path missed for 196 of 200,000 sampled bases; for a base of magnitude 2^1022 or more, whose reciprocal is subnormal or the smallest normal, it is rounded in integer arithmetic, because x87 can round a subnormal reciprocal twice. The special cases come first, so `(-0) ** 0.5` is `+0` and `(-Infinity) ** 0.5` is `Infinity`, where `Math.sqrt` gives `-0` and `NaN`.
 
 **Extras:**
 

@@ -213,3 +213,89 @@ describe("exponentiation with a negative base", () => {
     expect(power(-2, -3)).toBe(-0.125);
   });
 });
+
+describe("exponentiation with exponent -1", () => {
+  // pow's general path misses each of these correctly rounded reciprocals by
+  // one ULP; Node 24 on x86-64 Linux misses 0.499 too.
+  const reciprocals = [
+    [4.615, 0.21668472372697725],
+    [7.943, 0.12589701624071511],
+    [0.499, 2.004008016032064],
+    [966.7920963510852, 0.0010343485468843297],
+    [-7390256613.693091, -1.35313298613629e-10],
+    [-6.850193229586685e-63, -1.4598128351779884e62],
+  ];
+
+  test.each(reciprocals)("%s ** -1 is %s, the correctly rounded 1 / x", (x, expected) => {
+    expect(power(x, -1)).toBe(expected);
+    expect(boxed(x, -1)).toBe(expected);
+  });
+
+  test("constant operands fold to the correctly rounded reciprocal", () => {
+    expect(4.615 ** -1).toBe(0.21668472372697725);
+    expect(0.499 ** -1).toBe(2.004008016032064);
+    expect((-7390256613.693091) ** -1).toBe(-1.35313298613629e-10);
+  });
+
+  // Reciprocals that are subnormal or, for 2 ** 1022, the smallest normal. A
+  // division rounds 7e307's reciprocal twice on x87, to
+  // 1.4285714285714284e-308.
+  const smallReciprocals = [
+    [7e307, 1.4285714285714287e-308],
+    [-7e307, -1.4285714285714287e-308],
+    [1e308, 1e-308],
+    [Number.MAX_VALUE, 5.562684646268003e-309],
+    [2 ** 1022, 2 ** -1022],
+  ];
+
+  test.each(smallReciprocals)("%s ** -1 rounds its reciprocal %s once", (x, expected) => {
+    expect(power(x, -1)).toBe(expected);
+  });
+
+  test("the reciprocal of the smallest subnormal overflows", () => {
+    expect(power(5e-324, -1)).toBe(Infinity);
+    expect(power(-5e-324, -1)).toBe(-Infinity);
+  });
+
+  test("NaN ** -1 is NaN", () => {
+    expect(power(NaN, -1)).toBe(NaN);
+  });
+
+  test("±Infinity ** -1 is a zero of the same sign", () => {
+    expect(Object.is(power(Infinity, -1), 0)).toBe(true);
+    expect(Object.is(power(-Infinity, -1), -0)).toBe(true);
+  });
+
+  test("±0 ** -1 is an infinity of the same sign", () => {
+    expect(power(0, -1)).toBe(Infinity);
+    expect(power(-0, -1)).toBe(-Infinity);
+  });
+
+  test("exact reciprocals are exact", () => {
+    expect(power(1, -1)).toBe(1);
+    expect(power(-1, -1)).toBe(-1);
+    expect(power(2, -1)).toBe(0.5);
+    expect(power(-4, -1)).toBe(-0.25);
+  });
+});
+
+describe("exponentiation with exponent 2 and a subnormal result", () => {
+  // x ** 2 is x * x; x87 rounded each of these squares twice.
+  const squares = [
+    [5.3259942652121085e-155, 2.83662149130723e-309],
+    [1.2113425480323198e-154, 1.467350768673433e-308],
+    [1.2051227599178144e-154, 1.4523208664719304e-308],
+  ];
+
+  test.each(squares)("%s ** 2 rounds once to %s", (x, expected) => {
+    expect(power(x, 2)).toBe(expected);
+  });
+
+  test.each(squares)("a boxed %s ** 2 rounds once to %s", (x, expected) => {
+    expect(boxed(x, 2)).toBe(expected);
+  });
+
+  test("a constant operand folds to the square rounded once", () => {
+    expect(5.3259942652121085e-155 ** 2).toBe(2.83662149130723e-309);
+  });
+});

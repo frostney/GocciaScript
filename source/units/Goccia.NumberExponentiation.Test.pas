@@ -23,6 +23,10 @@ type
     procedure TestCorrectlyRoundedResults;
     procedure TestNegativeBaseLargeIntegralExponent;
     procedure TestSubnormalAndOverflowingResults;
+    procedure TestReciprocalRounding;
+    procedure TestReciprocalOfLargeBase;
+    procedure TestReciprocalOverflow;
+    procedure TestReciprocalSpecialValues;
   public
     procedure SetupTests; override;
   end;
@@ -42,6 +46,13 @@ begin
     TestNegativeBaseLargeIntegralExponent);
   Test('results round once into the subnormal range and overflow to infinity',
     TestSubnormalAndOverflowingResults);
+  Test('exponent -1 is the correctly rounded reciprocal',
+    TestReciprocalRounding);
+  Test('exponent -1 rounds a subnormal reciprocal once',
+    TestReciprocalOfLargeBase);
+  Test('exponent -1 overflows for the smallest subnormal',
+    TestReciprocalOverflow);
+  Test('exponent -1 keeps the special values', TestReciprocalSpecialValues);
 end;
 
 procedure TNumberExponentiationTests.TestOrdinaryValues;
@@ -129,6 +140,54 @@ begin
     BitsToDouble(UInt64($C05F45F2DA703D6F))))).ToBe($000FFFFFFFFFFFDF);
   Expect<Double>(NumberExponentiation(10.0, 309.0)).ToBe(Infinity);
   Expect<Double>(NumberExponentiation(-10.0, 309.0)).ToBe(NegInfinity);
+end;
+
+// The general path misses each of these correctly rounded reciprocals by one
+// ULP.
+procedure TNumberExponentiationTests.TestReciprocalRounding;
+begin
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($401275C28F5C28F6), -1.0))).ToBe($3FCBBC5334F99EED);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($401FC5A1CAC08312), -1.0))).ToBe($3FC01D64B7B57C2F);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($3FDFEF9DB22D0E56), -1.0))).ToBe($400008355ACE3C89);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($408E3656369C9989), -1.0))).ToBe($3F50F25F4B9E3DED);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble(UInt64($C1FB87E5DE5B16E7)), -1.0))).ToBe(
+    UInt64($BDE298E9D7A97110));
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble(UInt64($B3068B46C0C6E145)), -1.0))).ToBe(
+    UInt64($CCD6B60A40A21585));
+  Expect<Double>(NumberExponentiation(-4.0, -1.0)).ToBe(-0.25);
+end;
+
+// A division can round 7e307's subnormal reciprocal twice on x87, to
+// $000A45C4AB92BA50. The reciprocal of 2^1022 is the smallest normal.
+procedure TNumberExponentiationTests.TestReciprocalOfLargeBase;
+begin
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($7FD8EBBB5516E5AD), -1.0))).ToBe($000A45C4AB92BA51);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($7FEFFFFFFFFFFFFF), -1.0))).ToBe($0004000000000000);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($7FD0000000000000), -1.0))).ToBe($0010000000000000);
+end;
+
+procedure TNumberExponentiationTests.TestReciprocalOverflow;
+begin
+  Expect<Double>(NumberExponentiation(BitsToDouble(1), -1.0)).ToBe(Infinity);
+end;
+
+procedure TNumberExponentiationTests.TestReciprocalSpecialValues;
+begin
+  Expect<Boolean>(IsNan(NumberExponentiation(NaN, -1.0))).ToBe(True);
+  Expect<Double>(NumberExponentiation(0.0, -1.0)).ToBe(Infinity);
+  Expect<Double>(NumberExponentiation(BitsToDouble(UInt64(1) shl 63),
+    -1.0)).ToBe(NegInfinity);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(NegInfinity, -1.0))).ToBe(
+    UInt64(1) shl 63);
 end;
 
 begin

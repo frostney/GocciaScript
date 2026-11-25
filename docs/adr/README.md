@@ -199,3 +199,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0187 — G2 reuses a frame for a tail call only past a depth floor](0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md)
 - [0188 — The Delphi projects and the Wasm test runner leave with the old engine](0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)
 - [0189 — Windows builds carry ICU's own libraries](0189-windows-builds-carry-icu-s-own-libraries.md)
+- [0190 — fetch connects across address families](0190-fetch-connects-across-address-families.md)
+- [0191 — FPC i386 builds compute doubles in SSE2](0191-fpc-i386-builds-compute-doubles-in-sse2.md)

@@ -73,6 +73,9 @@ type
     procedure TestConnectionCloseWhenNoReuseCanFollow;
     procedure TestSendOnResetConnectionIsRetried;
     procedure TestReusedHopChecksThePinnedAddress;
+    {$IFDEF LINUX}
+    procedure TestReusedHopChecksTheApprovedIPv6Winner;
+    {$ENDIF}
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -80,7 +83,7 @@ type
     procedure TestRejectsObfuscatedLoopbackForms;
     procedure TestResolvesLiteralAddressWithoutLookup;
     procedure TestResolvesLocalhostNamesToLoopback;
-    procedure TestResolvesAHostNameToDottedQuad;
+    procedure TestResolvesAHostNameToAnAddress;
     {$IFDEF UNIX}
     procedure TestResolvesAHostsFileName;
     {$ENDIF}
@@ -171,7 +174,8 @@ begin
 end;
 
 { A TCP listener on an ephemeral loopback port. }
-function CreateLoopbackListener(out APort: Word): cint;
+function CreateLoopbackListener(out APort: Word;
+  const ARequestedPort: Word = 0; const AListen: Boolean = True): cint;
 var
   Address: TInetSockAddr;
   AddressLength: TSockLen;
@@ -181,11 +185,11 @@ begin
     raise Exception.Create('socket failed');
   FillChar(Address, SizeOf(Address), 0);
   Address.sin_family := AF_INET;
-  Address.sin_port := 0;
+  Address.sin_port := htons(ARequestedPort);
   Address.sin_addr := StrToNetAddr('127.0.0.1');
   AddressLength := SizeOf(Address);
   if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
-     (fpListen(Result, 1) <> 0) or
+     (AListen and (fpListen(Result, 1) <> 0)) or
      (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
   begin
     CloseSocket(Result);
@@ -193,6 +197,30 @@ begin
   end;
   APort := ntohs(Address.sin_port);
 end;
+
+{$IFDEF LINUX}
+function CreateIPv6LoopbackListener(out APort: Word): cint;
+var
+  Address: TInetSockAddr6;
+  AddressLength: TSockLen;
+begin
+  Result := fpSocket(AF_INET6, SOCK_STREAM, 0);
+  if Result < 0 then
+    raise Exception.Create('IPv6 socket failed');
+  FillChar(Address, SizeOf(Address), 0);
+  Address.sin6_family := AF_INET6;
+  Address.sin6_addr := StrToNetAddr6('::1');
+  AddressLength := SizeOf(Address);
+  if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
+     (fpListen(Result, 1) <> 0) or
+     (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
+  begin
+    CloseSocket(Result);
+    raise Exception.Create('IPv6 loopback listener failed');
+  end;
+  APort := ntohs(Address.sin6_port);
+end;
+{$ENDIF}
 
 { Accepts one connection within 10 s, or returns -1, so a server thread
   whose client never connected still ends and the test can join it. The
@@ -290,13 +318,12 @@ type
     procedure RequestReset;
   end;
 
-  { A host check that counts the checks a request makes (the name, then the
-    address, of every hop it connects or reuses a connection for). On the
-    third, the redirect hop's first, it calls OnRedirectHop; it refuses the
-    address check numbered DenyAddressCheck. }
+  { Observes each hop's name and address checks. On the second name check
+    it calls OnRedirectHop. It refuses the address check numbered
+    DenyAddressCheck. }
   THopGate = class
   public
-    Checks: Integer;
+    NameChecks: Integer;
     AddressChecks: Integer;
     DenyAddressCheck: Integer;
     CheckedAddresses: string;
@@ -358,10 +385,13 @@ function THopGate.Check(const AHost: string; const APort: Integer;
 begin
   AReason := '';
   Result := True;
-  Inc(Checks);
-  if (Checks = 3) and Assigned(OnRedirectHop) then
-    OnRedirectHop;
-  if AResolvedAddress <> '' then
+  if AResolvedAddress = '' then
+  begin
+    Inc(NameChecks);
+    if (NameChecks = 2) and Assigned(OnRedirectHop) then
+      OnRedirectHop;
+  end
+  else
   begin
     Inc(AddressChecks);
     CheckedAddresses := CheckedAddresses + AResolvedAddress + ';';
@@ -911,6 +941,10 @@ begin
     TestSendOnResetConnectionIsRetried);
   Test('A reused connection''s hop checks the address it was opened to',
     TestReusedHopChecksThePinnedAddress);
+  {$IFDEF LINUX}
+  Test('A refused IPv4 candidate is skipped and the reused hop checks IPv6',
+    TestReusedHopChecksTheApprovedIPv6Winner);
+  {$ENDIF}
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -921,8 +955,8 @@ begin
     TestRejectsObfuscatedLoopbackForms);
   Test('Resolves localhost names to loopback without a lookup',
     TestResolvesLocalhostNamesToLoopback);
-  Test('Resolves a host name to a dotted-quad address',
-    TestResolvesAHostNameToDottedQuad);
+  Test('Resolves a host name to an IP address',
+    TestResolvesAHostNameToAnAddress);
   Test('Resolves literal address without lookup',
     TestResolvesLiteralAddressWithoutLookup);
   {$IFDEF UNIX}
@@ -2131,18 +2165,25 @@ type
     Port: Word;
     Connections: Integer;
     Served: Integer;
-    constructor Create(const AResponses: array of RawByteString);
+    constructor Create(const AResponses: array of RawByteString
+      {$IFDEF LINUX}; const AIPv6: Boolean = False{$ENDIF});
     destructor Destroy; override;
   end;
 
-constructor TKeepAliveServer.Create(const AResponses: array of RawByteString);
+constructor TKeepAliveServer.Create(const AResponses: array of RawByteString
+  {$IFDEF LINUX}; const AIPv6: Boolean{$ENDIF});
 var
   I: Integer;
 begin
   SetLength(FResponses, Length(AResponses));
   for I := 0 to High(AResponses) do
     FResponses[I] := AResponses[I];
-  FListener := CreateLoopbackListener(Port);
+  {$IFDEF LINUX}
+  if AIPv6 then
+    FListener := CreateIPv6LoopbackListener(Port)
+  else
+  {$ENDIF}
+    FListener := CreateLoopbackListener(Port);
   inherited Create;
 end;
 
@@ -2226,8 +2267,8 @@ end;
 { GETs (or with AHead, HEADs) http://127.0.0.1:<port>/ from AServer under
   APolicy and answers 'status|body', or 'error: <message>'. }
 function FetchKeepAlive(const AServer: TKeepAliveServer;
-  const APolicy: THTTPRequestPolicy; const AHead: Boolean = False): string;
-  overload;
+  const APolicy: THTTPRequestPolicy; const AHead: Boolean = False;
+  const AHost: string = '127.0.0.1'): string; overload;
 var
   Body: RawByteString;
   Headers: THTTPHeaders;
@@ -2235,7 +2276,7 @@ var
   URL: string;
 begin
   SetLength(Headers, 0);
-  URL := Format('http://127.0.0.1:%d/', [AServer.Port]);
+  URL := Format('http://%s:%d/', [AHost, AServer.Port]);
   try
     if AHead then
       Response := HTTPHead(URL, Headers, nil, 5000, APolicy)
@@ -2531,6 +2572,51 @@ begin
     Gate.Free;
   end;
 end;
+
+{$IFDEF LINUX}
+procedure THTTPClientTests.TestReusedHopChecksTheApprovedIPv6Winner;
+var
+  Gate: THopGate;
+  Policy: THTTPRequestPolicy;
+  Server: TKeepAliveServer;
+  IPv4Listener: cint;
+  IPv4Port: Word;
+  DenyIPv4: Boolean;
+begin
+  for DenyIPv4 := False to True do
+  begin
+    Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE], True);
+    try
+      { With a grant, bind IPv4 without listening so it fails and IPv6
+        wins the race. Without a grant, a listening IPv4 socket would
+        reveal any connection attempted before the denial. }
+      IPv4Listener := CreateLoopbackListener(IPv4Port, Server.Port, DenyIPv4);
+      try
+        Gate := THopGate.Create;
+        try
+          if DenyIPv4 then
+            Gate.DenyAddressCheck := 1;
+          Policy := DefaultHTTPPolicy;
+          Policy.HostCheck := Gate.Check;
+          Expect<string>(FetchKeepAlive(Server, Policy, False, 'localhost'))
+            .ToBe('200|ok');
+          Server.WaitFor;
+          Expect<string>(Gate.CheckedAddresses).ToBe('127.0.0.1;::1;::1;');
+          Expect<Integer>(Server.Connections).ToBe(1);
+          if DenyIPv4 then
+            Expect<Boolean>(HasPendingInput(IPv4Listener)).ToBe(False);
+        finally
+          Gate.Free;
+        end;
+      finally
+        CloseSocket(IPv4Listener);
+      end;
+    finally
+      Server.Free;
+    end;
+  end;
+end;
+{$ENDIF}
 {$ENDIF}
 
 { HTML Standard, same origin: scheme, host and port. An HTTPS-to-HTTP
@@ -2576,6 +2662,30 @@ begin
   Expect<Boolean>(IsPrivateNetworkAddress('fd00::1')).ToBe(True);
   Expect<Boolean>(IsPrivateNetworkAddress('fe80::1')).ToBe(True);
   Expect<Boolean>(IsPrivateNetworkAddress('[::1]')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::127.0.0.1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:7f00:1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:169.254.169.254')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fc00::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fdff:ffff::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('febf::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('fec0::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('ff02::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b::192.168.0.1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b:1::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2002:a9fe:a9fe::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('100::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('100:0:0:1::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::4')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:2::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:4:113::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:10::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:40::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:db8::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('3fff:fff::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('3ffe::1')).ToBe(True);
+  Expect<Boolean>(IsPrivateNetworkAddress('5f00::1')).ToBe(True);
 end;
 
 { The boundaries matter as much as the ranges: 172.15 and 172.32 sit just
@@ -2592,6 +2702,20 @@ begin
   Expect<Boolean>(IsPrivateNetworkAddress('100.63.255.255')).ToBe(False);
   Expect<Boolean>(IsPrivateNetworkAddress('100.128.0.1')).ToBe(False);
   Expect<Boolean>(IsPrivateNetworkAddress('2606:4700::1111')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('::ffff:8.8.8.8')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('64:ff9b::8.8.8.8')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2002:0808:0808::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::2')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:1::3')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:3::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:4:112::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:2f::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:3f::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:200::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2001:db9::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('2620:4f:8000::1')).ToBe(False);
+  Expect<Boolean>(IsPrivateNetworkAddress('3fff:1000::1')).ToBe(False);
 end;
 
 { Shortened and hex IPv4 forms are the classic way to smuggle loopback past
@@ -2622,12 +2746,12 @@ begin
     ResolveHostToAddress('app.localhost'))).ToBe(True);
 end;
 
-{ A name the platform resolver answers comes back as dotted-quad text. The
-  Windows lane formats the octets itself; this is what exercises it. }
-procedure THTTPClientTests.TestResolvesAHostNameToDottedQuad;
+{ On Windows, check that the system resolver returns a parseable numeric
+  address for the computer's name. Either address family is valid. }
+procedure THTTPClientTests.TestResolvesAHostNameToAnAddress;
 var
   Address, Name: string;
-  Dots, I: Integer;
+  IP: TNetworkAddress;
 begin
   {$IFDEF MSWINDOWS}
   Name := GetEnvironmentVariable('COMPUTERNAME');
@@ -2640,11 +2764,7 @@ begin
     Exit;
   end;
   Address := ResolveHostToAddress(Name);
-  Dots := 0;
-  for I := 1 to Length(Address) do
-    if Address[I] = '.' then
-      Inc(Dots);
-  Expect<Integer>(Dots).ToBe(3);
+  Expect<Boolean>(TryParseIPAddress(Address, IP)).ToBe(True);
 end;
 
 {$IFDEF UNIX}
@@ -2652,9 +2772,21 @@ end;
   file; FPC's NetDB DNS client did not, so this name failed to resolve
   (issue #1565). }
 procedure THTTPClientTests.TestResolvesAHostsFileName;
+var
+  Resolved, Listed: TNetworkAddress;
+  AddressText: string;
+  Found: Boolean;
 begin
-  Expect<Boolean>(GHostsFileAddresses.IndexOf(
-    ResolveHostToAddress(GHostsFileName)) >= 0).ToBe(True);
+  Found := False;
+  if TryParseIPAddress(ResolveHostToAddress(GHostsFileName), Resolved) then
+    for AddressText in GHostsFileAddresses do
+      if TryParseIPAddress(AddressText, Listed) and
+         AddressesEqual(Resolved, Listed) then
+      begin
+        Found := True;
+        Break;
+      end;
+  Expect<Boolean>(Found).ToBe(True);
 end;
 {$ENDIF}
 
@@ -2662,6 +2794,7 @@ procedure THTTPClientTests.TestResolvesLiteralAddressWithoutLookup;
 begin
   Expect<string>(ResolveHostToAddress('93.184.216.34')).ToBe('93.184.216.34');
   Expect<string>(ResolveHostToAddress('127.0.0.1')).ToBe('127.0.0.1');
+  Expect<string>(ResolveHostToAddress('::1')).ToBe('::1');
 end;
 
 { A host that never sets a policy must see exactly the previous behavior:

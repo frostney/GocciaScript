@@ -38,6 +38,23 @@
 {$IF DEFINED(FPC) AND (DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_X86))}
   {$ASMMODE INTEL}
 {$ENDIF}
+
+{ FPC's i386 builds do Single and Double arithmetic in SSE2, as the 64-bit
+  targets do. The x87 unit rounds a Double result with its wider exponent
+  range and then again when it is stored, so a result in Double's subnormal
+  range could round twice: 1.2349373183628205e-308 / 3.3 came out one bit
+  low. Extended stays on x87 with its 64-bit significand, and functions still
+  return floating-point results in ST(0), so the calling convention does not
+  change. SSE2 needs a Pentium 4 or Athlon 64 or later. Delphi's Win32
+  compiler generates only x87 code, so its builds keep the double rounding. }
+{$IF DEFINED(FPC) AND DEFINED(GOCCIA_CPU_X86)}
+  {$FPUTYPE SSE2}
+{$ENDIF}
+{ FPC builds whose Double arithmetic follows a control register with a
+  flush-to-zero mode: MXCSR on x86, FPCR on AArch64. }
+{$IF DEFINED(FPC) AND (DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_X86) OR DEFINED(GOCCIA_CPU_AARCH64))}
+  {$DEFINE GOCCIA_FLUSH_TO_ZERO_CONTROL}
+{$ENDIF}
 {$M+}
 {$IFDEF PRODUCTION}
   {$IFDEF FPC}

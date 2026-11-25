@@ -1,3 +1,4 @@
+import { resolveRepositoryLinks } from "@/lib/docs-links";
 import {
   docsPageDescription,
   docsPageTitle,
@@ -149,7 +150,7 @@ async function docsMarkdown(id: string): Promise<string | null> {
   const page = docPageForId(id);
   if (!page) return null;
   const markdown = await page.data.getText("processed");
-  if (markdown) return markdown;
+  if (markdown) return resolveRepositoryLinks(markdown, page);
 
   return [
     frontmatter(

@@ -12861,52 +12861,80 @@ await section("Runner sandbox mode: a command-line --diff-file may be a FIFO..."
 
 await section("Runner sandbox mode: a link or replaced input met at write-back fails the run...", async () => {
   if (process.platform === "win32") return;
-  for (const fromConfig of [false, true]) {
-    const tmp = makeNativeTmp();
-    try {
-      mkdirSync(join(tmp, "out", "sub"), { recursive: true });
-      mkdirSync(join(tmp, "elsewhere"));
-      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
-      writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
-      writeFileSync(join(tmp, "w.js"), [
-        'import fs from "fs";',
-        'const start = Date.now(); while (Date.now() - start < 1500) {}',
-        'fs.writeFileSync("/out/keep.txt", "NEW");',
-        'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
-      ].join("\n"));
-      if (fromConfig)
-        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
-      const args = ["w.js", "--compat-while-loops", "--source-type=module", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
-      // A subdirectory swapped for a link mid-run: that file is refused, the
-      // rest is written, and the run fails.
-      let proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
-      await Bun.sleep(500);
-      renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
-      symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
-      let exitCode = await proc.exited;
-      let stderr = normalizeLineEndings(await new Response(proc.stderr).text());
-      if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
-          readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
-          !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
-        throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+  // The script asks this server to swap the input and waits for its answer,
+  // so each swap lands after copy-in and before write-back, however slowly
+  // the runner starts. A fixed sleep before the swap raced a slow start.
+  let swap: (() => void) | null = null;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      const run = swap;
+      swap = null;
+      if (!run) return new Response("no swap is due", { status: 500 });
+      run();
+      return new Response("swapped");
+    },
+  });
+  try {
+    for (const fromConfig of [false, true]) {
+      const tmp = makeNativeTmp();
+      try {
+        mkdirSync(join(tmp, "out", "sub"), { recursive: true });
+        mkdirSync(join(tmp, "elsewhere"));
+        writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+        writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
+        writeFileSync(join(tmp, "w.js"), [
+          'import fs from "fs";',
+          `const answer = await fetch("http://127.0.0.1:${server.port}/swap");`,
+          'if (!answer.ok) throw new Error("swap failed: " + await answer.text());',
+          'fs.writeFileSync("/out/keep.txt", "NEW");',
+          'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
+        ].join("\n"));
+        if (fromConfig)
+          writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
+        const args = ["w.js", "--source-type=module", "--allow-net=127.0.0.1", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
+        const run = async (swapInput: () => void) => {
+          swap = swapInput;
+          const proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+          const timer = setTimeout(() => proc.kill(), 20000);
+          const exitCode = await proc.exited;
+          clearTimeout(timer);
+          const stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+          if (swap !== null)
+            throw new Error(`(config ${fromConfig}) the script never asked for the swap (exit ${exitCode}):\n${stderr}`);
+          return { exitCode, stderr };
+        };
 
-      // The whole input moved away and replaced by a real directory: nothing
-      // is written into the new one.
-      unlinkSync(join(tmp, "out", "sub"));
-      renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
-      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
-      proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
-      await Bun.sleep(500);
-      renameSync(join(tmp, "out"), join(tmp, "out.real"));
-      mkdirSync(join(tmp, "out"));
-      exitCode = await proc.exited;
-      stderr = normalizeLineEndings(await new Response(proc.stderr).text());
-      if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
-          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
-        throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
-    } finally {
-      clean(tmp);
+        // A subdirectory swapped for a link mid-run: that file is refused, the
+        // rest is written, and the run fails.
+        let { exitCode, stderr } = await run(() => {
+          renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
+          symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
+        });
+        if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
+            readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
+            !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
+          throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+
+        // The whole input moved away and replaced by a real directory: nothing
+        // is written into the new one.
+        unlinkSync(join(tmp, "out", "sub"));
+        renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
+        writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+        ({ exitCode, stderr } = await run(() => {
+          renameSync(join(tmp, "out"), join(tmp, "out.real"));
+          mkdirSync(join(tmp, "out"));
+        }));
+        if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
+            !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
+          throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
+      } finally {
+        clean(tmp);
+      }
     }
+  } finally {
+    server.stop(true);
   }
 });
 
@@ -15383,10 +15411,12 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     // Asserted positively: a reaching arm has to prove the request got to the
     // connect, because an absent refusal is also what a script that never ran
     // produces.
-    const expectConnect = (label: string, result: { exitCode: number | null; out: string }, host: string) => {
-      if (result.exitCode !== 0 || !result.out.includes(`err:Failed to connect to ${host}:1`))
+    const expectConnect = (label: string, result: { exitCode: number | null; out: string }, endpoint: RegExp) => {
+      if (result.exitCode !== 0 || !endpoint.test(result.out))
         throw new Error(`Sandbox fetch ${label} should reach the connect, got (exit ${result.exitCode}):\n${result.out}`);
     };
+    const ipv4 = /err:Failed to connect to 127\.0\.0\.1:1 /;
+    const loopback = /err:Failed to connect to (127\.0\.0\.1|\[::1\]):1 /;
     // A refusal is a PermissionDenied carrying the guest-visible scope.
     const expectRefused = (label: string, result: { exitCode: number | null; out: string }, scope: string) => {
       if (result.exitCode !== 0 || !result.out.includes(`err:net: ${scope}`))
@@ -15396,11 +15426,11 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     // Deny by default: no grant, no request.
     expectRefused("without --allow-net", run("/address.js", []), "127.0.0.1:1");
     // An explicit IP allow names the private address, so it reaches it.
-    expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), "127.0.0.1");
+    expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), ipv4);
     expectConnect(
       "with --allow-net=127.0.0.1,private",
       run("/address.js", ["--allow-net=127.0.0.1,private"]),
-      "127.0.0.1",
+      ipv4,
     );
     // --deny-net=private refuses private destinations even when the IP is allowed.
     expectRefused(
@@ -15414,7 +15444,7 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
     expectConnect(
       "to a privately-resolving name with --allow-net=private",
       run("/name.js", ["--allow-net=localhost,private"]),
-      "127.0.0.1",
+      loopback,
     );
 
     // The removed flags name their replacements.
@@ -15616,8 +15646,8 @@ await section("Runner sandbox mode: fetch, nested runScript, fetch completes wit
     "console.log('done');",
   ].join("\n");
   for (const [policyArgs, expectedError] of [
-    [["--deny-net=private"], `${PRIVATE_DENIAL}`],
-    [[], "Failed to connect to 127.0.0.1:1"],
+    [["--deny-net=private"], /net: localhost:1/],
+    [[], /Failed to connect to (127\.0\.0\.1|\[::1\]):1 /],
   ] as const) {
     const run = await runNestedFetchSandbox(
       { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
@@ -15626,9 +15656,11 @@ await section("Runner sandbox mode: fetch, nested runScript, fetch completes wit
     const label = policyArgs.join(" ") || "(default policy)";
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${label}: fetch, runScript, fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    for (const expected of [`before:${expectedError}`, `after:${expectedError}`, "done"])
-      if (!run.stdout.includes(expected))
-        throw new Error(`${label}: fetch, runScript, fetch should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
+    for (const phase of ["before", "after"])
+      if (!new RegExp(`^${phase}:${expectedError.source}`, "m").test(run.stdout))
+        throw new Error(`${label}: ${phase} should report ${expectedError}, got:\n${run.combined}`);
+    if (!run.stdout.includes("done"))
+      throw new Error(`${label}: fetch, runScript, fetch did not finish:\n${run.combined}`);
   }
 });
 

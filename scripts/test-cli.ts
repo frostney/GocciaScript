@@ -304,6 +304,46 @@ console.log("An uncaught failed property read is located at its property name...
   }
 }
 
+console.log("A failed strict-types parameter check is located at its parameter...");
+{
+  const tmp = mkdtemp("goccia-strict-parameter-");
+  try {
+    const file = join(tmp, "param.ts");
+    const cases = [
+      ['const f = (x: number) => x;\nf("a");\n', 1, 12],
+      ['const f = (a: string,\n  x: number) => x;\nf("s", "a");\n', 2, 3],
+      ['const o = {\n  set v(x: number) {},\n};\no.v = "a";\n', 2, 9],
+    ] as const;
+    for (const [source, line, column] of cases) {
+      writeFileSync(file, source);
+      const proc = Bun.spawnSync([RUNNER, file, "--strict-types"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      const { header, caretColumn } = codeFrameLocation(out);
+      if (proc.exitCode === 0 || header !== `--> ${file}:${line}:${column}` || caretColumn !== column)
+        throw new Error(
+          `A failed parameter check should be located at ${line}:${column} with the caret under it, got header "${header}", caret ${caretColumn}: ${out}`,
+        );
+    }
+    // An indexed access type is the type of the property it names.
+    writeFileSync(
+      file,
+      'type N = { kind: "text" | "row" };\nconst f = (kind: N["kind"]) => kind;\nconsole.log(f("text"));\n',
+    );
+    const indexed = Bun.spawnSync([RUNNER, file, "--strict-types"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const indexedOut = indexed.stdout.toString() + indexed.stderr.toString();
+    if (indexed.exitCode !== 0 || !indexedOut.includes("text"))
+      throw new Error(`An indexed access parameter should accept "text", got: ${indexedOut}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("A failed import() is located at the import() call...");
 {
   const tmp = mkdtemp("goccia-dynamic-import-missing-");
@@ -3374,6 +3414,150 @@ console.log("Console timer lifecycle...");
     throw new Error(`Console timers should remove the default timer, got: ${removedDefault}`);
   if (normalizeLineEndings(json.stderr) !== "")
     throw new Error(`Console timers should route output to stdout, got stderr: ${json.stderr}`);
+}
+
+// A host reading a piped GocciaRunner acts on console output mid-run: each
+// line reaches the pipe as it is logged, and error, warn, assert and trace go
+// to stderr, as in Node. The script logs, then fetches a loopback server whose
+// handler answers only once both lines were read from the pipes, so an output
+// held back until exit would fail the check rather than race it.
+console.log("Console lines reach a piped stdout and stderr while the script runs...");
+{
+  const tmp = mkdtemp("goccia-console-pipes-");
+  let stdoutText = "";
+  let stderrText = "";
+  let seenMidRun = false;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        // Windows ends lines with CRLF; a line counts once it is complete.
+        if (normalizeLineEndings(stdoutText).includes("running\n") &&
+            normalizeLineEndings(stderrText).includes("Error: failing\n")) {
+          seenMidRun = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      return new Response("ok");
+    },
+  });
+  try {
+    const file = join(tmp, "pipes.js");
+    writeFileSync(
+      file,
+      [
+        // The stdout line comes last, so only its own flush can deliver it:
+        // a stderr line flushes stdout first.
+        'console.error("failing");',
+        'console.log("running");',
+        `await fetch("http://127.0.0.1:${server.port}/");`,
+        'console.log("after");',
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawn([RUNNER, file, "--allow-net=127.0.0.1"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const drain = async (stream: ReadableStream<Uint8Array>, append: (text: string) => void) => {
+      const decoder = new TextDecoder();
+      for await (const chunk of stream) append(decoder.decode(chunk, { stream: true }));
+    };
+    await Promise.all([
+      drain(proc.stdout, (text) => { stdoutText += text; }),
+      drain(proc.stderr, (text) => { stderrText += text; }),
+      proc.exited,
+    ]);
+    stdoutText = normalizeLineEndings(stdoutText);
+    stderrText = normalizeLineEndings(stderrText);
+    if (proc.exitCode !== 0)
+      throw new Error(`Piped console run should exit 0, got ${proc.exitCode}: ${stdoutText}${stderrText}`);
+    if (!seenMidRun)
+      throw new Error(`Console lines should reach the pipes before the script finishes, got stdout ${JSON.stringify(stdoutText)}, stderr ${JSON.stringify(stderrText)}`);
+    if (!stdoutText.startsWith("running\nafter\n") || stdoutText.includes("failing"))
+      throw new Error(`console.log lines belong on stdout and console.error lines do not, got ${JSON.stringify(stdoutText)}`);
+    if (stderrText !== "Error: failing\n")
+      throw new Error(`console.error should write to stderr, got ${JSON.stringify(stderrText)}`);
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+}
+
+// A console line written to a closed descriptor is dropped: it does not end
+// the script, and a file opened later never takes the closed descriptor's
+// place, so the --log file gets only its own records.
+if (process.platform !== "win32") {
+  console.log("Console output to a closed stderr is dropped without ending the script...");
+  const tmp = mkdtemp("goccia-console-closed-");
+  try {
+    const file = join(tmp, "closed.js");
+    const log = join(tmp, "run.log");
+    writeFileSync(file, ['console.error("first");', 'console.error("second");', 'console.log("after");', ""].join("\n"));
+    const proc = Bun.spawnSync(["sh", "-c", 'exec "$0" "$1" --log="$2" 2>&-', RUNNER, file, log], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0 || !out.startsWith("after\n"))
+      throw new Error(`console.error to a closed stderr should not end the script, got exit ${proc.exitCode}: ${out}`);
+    const logged = normalizeLineEndings(readFileSync(log, "utf-8"));
+    if (logged !== "[error] Error: first\n[error] Error: second\n[log] after\n")
+      throw new Error(`The --log file should hold only its records with stderr closed, got ${JSON.stringify(logged)}`);
+    // Descriptor 2 open for reading only: every write to it fails (EBADF)
+    // and is dropped.
+    const readOnly = Bun.spawnSync(["sh", "-c", 'exec "$0" "$1" 2</dev/null', RUNNER, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const readOnlyOut = normalizeLineEndings(readOnly.stdout.toString());
+    if (readOnly.exitCode !== 0 || !readOnlyOut.startsWith("after\n"))
+      throw new Error(`console.error to a read-only stderr should not end the script, got exit ${readOnly.exitCode}: ${readOnlyOut}`);
+    // stderr on a pipe whose reader has gone: the write raises SIGPIPE, which
+    // the console holds off, so the script goes on and the runner exits 0,
+    // with no tail of the failed line left to raise one at exit. The script
+    // waits before it writes, so the reader (`:`) has exited by then; the
+    // line is longer than one write so the RTL splits it.
+    const late = join(tmp, "late.js");
+    const lateOutPath = join(tmp, "late.out");
+    const lateStatusPath = join(tmp, "late.status");
+    writeFileSync(
+      late,
+      ["const start = Date.now();", "while (Date.now() - start < 500) {}", 'console.error("x".repeat(4000));', 'console.log("after");', ""].join("\n"),
+    );
+    const broken = Bun.spawnSync(
+      ["sh", "-c", '{ "$0" "$1" --compat-while-loops 2>&1 >"$2"; echo "$?" >"$3"; } | :', RUNNER, late, lateOutPath, lateStatusPath],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const lateOut = normalizeLineEndings(readFileSync(lateOutPath, "utf-8"));
+    const lateStatus = readFileSync(lateStatusPath, "utf-8").trim();
+    if (lateStatus !== "0" || !lateOut.startsWith("after\n"))
+      throw new Error(`console.error to a pipe with no reader should not end the script, got status ${lateStatus}, stdout ${JSON.stringify(lateOut)}: ${broken.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// With both streams on one file, the lines keep the order they were logged in.
+console.log("Console lines keep their order with stdout and stderr on one file...");
+{
+  const tmp = mkdtemp("goccia-console-merged-");
+  try {
+    const file = join(tmp, "merged.js");
+    writeFileSync(
+      file,
+      ['console.log("one");', 'console.error("two");', 'console.log("three");', 'console.warn("four");', ""].join("\n"),
+    );
+    const merged = await $`${RUNNER} ${file} 2>&1`.nothrow().text();
+    const lines = normalizeLineEndings(merged).split("\n").slice(0, 4);
+    if (JSON.stringify(lines) !== JSON.stringify(["one", "Error: two", "three", "Warning: four"]))
+      throw new Error(`Merged console streams should keep their order, got ${JSON.stringify(merged)}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- --log option (Loader) ------------------------------------------------------

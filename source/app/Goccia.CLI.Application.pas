@@ -18,6 +18,7 @@ uses
   Goccia.CLI.FileSettings,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
+  Goccia.CLI.StandardDescriptors,
   Goccia.CLI.Stdin,
   Goccia.CLI.Trust,
   Goccia.ScriptLoader.SourceRegistry;

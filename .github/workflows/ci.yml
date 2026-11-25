@@ -1578,13 +1578,16 @@ jobs:
       # through the system resolver.
       - name: Add a hosts-file-only name
         if: runner.os == 'Linux'
-        run: echo "127.0.0.2 goccia-hosts-file.test" | sudo tee -a /etc/hosts
+        run: |
+          printf '%s\n' '127.0.0.2 goccia-hosts-file.test' '::1 goccia-hosts-ipv6.test' | sudo tee -a /etc/hosts
 
       - name: Check capability flags, limits, and permission defaults
         run: bun run scripts/test-cli-permissions.ts
 
       - name: Check real fetch redirects and headers
         if: runner.os != 'Windows'
+        env:
+          GOCCIA_FETCH_IPV6_HOST: ${{ runner.os == 'Linux' && 'goccia-hosts-ipv6.test' || '' }}
         run: bash scripts/fetch-e2e.sh
 
       - name: Check embedded resource CLI behaviour

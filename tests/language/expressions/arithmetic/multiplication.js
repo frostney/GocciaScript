@@ -61,3 +61,23 @@ describe("sign of a zero product", () => {
     expect(Object.is(id(0) * id(-1.5), -0)).toBe(true);
   });
 });
+
+describe("a subnormal product", () => {
+  // x87 rounded each exact product to a 53-bit significand first and again,
+  // to the subnormal's shorter one, when it stored the result. The first
+  // product came out 0 instead of 5e-324, the others one bit off.
+  const id = (value) => value;
+  const products = [
+    [(1 + 2 ** -26) * 2 ** -600, (1 - 2 ** -26 + 2 ** -52) * 2 ** -475, 5e-324],
+    [1.447496838033e-154, 5.5919834578432674e-155, 8.094378373560973e-309],
+    [7.74112909910552e-155, 9.621469127582922e-155, 7.448103463967754e-309],
+  ];
+
+  test.each(products)("%s * %s rounds once to %s", (a, b, expected) => {
+    expect(id(a) * id(b)).toBe(expected);
+  });
+
+  test("constant operands fold to the product rounded once", () => {
+    expect(1.447496838033e-154 * 5.5919834578432674e-155).toBe(8.094378373560973e-309);
+  });
+});

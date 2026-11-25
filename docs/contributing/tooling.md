@@ -357,13 +357,15 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 ### Fuzzing locally
 
 AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
-the instrumentation comes from the assembler. On x86-64 Linux with an AFL++
-older than 4.30c installed, which still has `afl-as` (Ubuntu 24.04's `afl++`
-is 4.09c; CI's fuzz jobs run there for this):
+the instrumentation comes from the assembler. On x86-64 Linux with `curl`
+and access to GitHub, a C compiler and make:
 
 ```bash
+scripts/afl/build-afl.sh
+export PATH="$PWD/build/afl:$PATH"
+unset AFL_MAP_SIZE AFL_MAPSIZE
 mkdir -p build/compiled/targets/fuzzharness-afl
-fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
   -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
 afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
@@ -373,11 +375,40 @@ afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl 
 [`scripts/afl/as`](../../scripts/afl/as) as its assembler. That script reshapes
 FPC's section directives and jump labels into the form AFL++'s `afl-as`
 recognises, and `afl-as` adds a coverage trampoline at every function entry,
-branch target and conditional branch, plus the fork server. Set `AFL_PATH`
-when `afl-as` is not in `/usr/lib/afl`. FPC's runtime library stays
-uninstrumented. AFL keeps every mutant that reaches new coverage, so the queue
-grows past the seeds; `afl-showmap` on two different inputs shows different
-maps. Both builds come from the same source, so either replays a finding.
+branch target and conditional branch, plus the fork server. FPC's runtime
+library stays uninstrumented. AFL keeps every mutant that reaches new
+coverage, so the queue grows past the seeds; `afl-showmap` on two different
+inputs shows different maps. Both builds come from the same source with the
+same checks, so either replays a finding.
+
+AFL++ removed `afl-as` after v4.21c, so current packages (Ubuntu 26.04's
+4.33c, for one) have none. `scripts/afl/build-afl.sh` builds it from the
+v4.21c release, and `afl-fuzz` and `afl-showmap` from a pinned current one,
+each checked against its SHA-256, into `build/afl/`. Current AFL++ still
+accepts the fork server `afl-as` adds ("Old fork server model is used by the
+target, this still works though").
+
+All three are built with a 1 MiB coverage map in place of AFL++'s 64 KiB,
+which the harness's edges fill within minutes of fuzzing, so that far fewer
+edges collide and hide new coverage. `afl-as` draws each trampoline's random
+edge ID from below its build's `MAP_SIZE`. A target with the original fork
+server cannot report its map size, so `afl-fuzz` and `afl-showmap` take one
+from their own build: Ubuntu 26.04's packaged `afl-showmap` sizes the map at
+its 64 KiB `MAP_SIZE` even when `AFL_MAP_SIZE` asks for more, and v5.03c
+starts from its 8 MiB `DEFAULT_SHMEM_SIZE`. `scripts/afl/build-afl.sh` sets
+both to 1 MiB, so by default every map is exactly the harness's;
+`AFL_MAP_SIZE` or `AFL_MAPSIZE` would still override it, which the recipe
+above and `scripts/afl/fuzz.sh` clear. Use the `afl-fuzz` and
+`afl-showmap` from `build/afl/`: under a packaged one, the harness can die of
+SIGSEGV writing past a 64 KiB map.
+
+`scripts/afl/as` uses `AFL_PATH/afl-as` when `AFL_PATH` is set and not empty,
+else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`; the build above empties
+`AFL_PATH` so that it takes the `afl-as` just built. The scheduled workflow
+runs each campaign through `scripts/afl/fuzz.sh`, which starts `afl-fuzz` in
+a fresh output directory, stops it after the given seconds of fuzzing (1 to
+3600) and fails a run that ends any other way, unless it stopped on a crash
+it saved.
 
 This command line, like the scheduled workflow's, compiles with `config.cfg`
 alone. The G2 applications build with the unit and include paths `build.pas`
