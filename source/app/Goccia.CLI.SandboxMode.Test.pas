@@ -33,6 +33,7 @@ type
       const ACommandLine: TGocciaSandboxCommandLine): string;
     procedure TestCopySpecDefaultTargets;
     procedure TestCopySpecExplicitTargets;
+    procedure TestCopySpecRootStaysARoot;
     procedure TestCopySpecWithoutName;
     procedure TestCopySpecTargetsMustBeAbsolute;
     procedure TestDuplicateCommandLineTargetsRejected;
@@ -63,6 +64,7 @@ procedure TSandboxModeTests.SetupTests;
 begin
   Test('--copy lands at /<basename> by default', TestCopySpecDefaultTargets);
   Test('--copy host=sandbox names the target', TestCopySpecExplicitTargets);
+  Test('--copy keeps a filesystem root a root', TestCopySpecRootStaysARoot);
   Test('A host path with no name needs an explicit target',
     TestCopySpecWithoutName);
   Test('Copy targets are absolute, non-empty, and stay in the sandbox',
@@ -304,6 +306,21 @@ begin
   Expect<string>(ResolveError(['--sandbox', '--entry=/in/a.txt', '--copy',
     '../dup/a.txt=/in/', '--copy', '../dup/x/y.txt=/in/'],
     Default(TGocciaSandboxRequest), CommandLine)).ToBe('');
+end;
+
+procedure TSandboxModeTests.TestCopySpecRootStaysARoot;
+var
+  Input: TGocciaSandboxInput;
+  Root: string;
+begin
+  { A filesystem root stays a root: `/`, or on Windows a drive root such as
+    `C:\`, never the drive-relative `C:`. }
+  Root := IncludeTrailingPathDelimiter(ExtractFileDrive(FRoot));
+  Input := ParseCopySpec(Root + '=/host', FRoot, '--copy', False);
+  Expect<string>(Input.HostPath).ToBe(Root);
+  Input := ParseCopySpec(Root + 'f.txt', FRoot, '--copy-rw', True);
+  Expect<string>(Input.HostPath).ToBe(Root + 'f.txt');
+  Expect<string>(Input.SandboxPath).ToBe('/f.txt');
 end;
 
 procedure TSandboxModeTests.TestCopySpecWithoutName;

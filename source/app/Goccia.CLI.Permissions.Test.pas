@@ -54,6 +54,7 @@ type
     procedure TestGoldenHash;
     procedure TestDescribeRequestAndChange;
     procedure TestSandboxSectionIsARequest;
+    procedure TestSandboxInputAtARootStaysARoot;
     procedure TestEmptySandboxSectionIsARequest;
     procedure TestSandboxSectionErrors;
     procedure TestSandboxSectionExtendsAndTOML;
@@ -120,6 +121,8 @@ begin
     TestDescribeRequestAndChange);
   Test('A sandbox section is a request, hashed and described',
     TestSandboxSectionIsARequest);
+  Test('A config sandbox input at a filesystem root stays a root',
+    TestSandboxInputAtARootStaysARoot);
   Test('An empty sandbox section is a request too',
     TestEmptySandboxSectionIsARequest);
   Test('Malformed sandbox sections are rejected', TestSandboxSectionErrors);
@@ -887,6 +890,21 @@ begin
     '  sandbox.diff: unified' + sLineBreak +
     '  sandbox.diff-file: ' + Directory + 'changes.diff' + sLineBreak +
     '  sandbox.entry: /src/main.js' + sLineBreak);
+end;
+
+procedure TPermissionsTests.TestSandboxInputAtARootStaysARoot;
+var
+  Path, Root: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  { A filesystem root stays a root: `/`, or on Windows a drive root such as
+    `C:\`, never the drive-relative `C:`. }
+  Root := IncludeTrailingPathDelimiter(ExtractFileDrive(FRoot));
+  Path := WriteConfig('root/goccia.json', '{"sandbox": {"copy-rw": ["' +
+    StringReplace(Root, '\', '\\', [rfReplaceAll]) + '=/host"]}}');
+  Request := ReadRequest(Path);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(1);
+  Expect<string>(Request.Sandbox.Inputs[0].HostPath).ToBe(Root);
 end;
 
 procedure TPermissionsTests.TestEmptySandboxSectionIsARequest;

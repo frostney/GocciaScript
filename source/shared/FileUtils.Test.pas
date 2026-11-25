@@ -34,6 +34,7 @@ type
     procedure TestMixedExtensionsAcrossDepths;
     procedure TestIsAbsoluteHostPathRootedForms;
     procedure TestIsAbsoluteHostPathRelativeForms;
+    procedure TestARootKeepsItsTrailingSeparator;
     procedure TestCanonicalHostPathIsUnknownForAMissingPath;
     procedure TestCanonicalHostPathIsStableForARealFile;
     procedure TestCanonicalHostPathFollowsASymlink;
@@ -79,6 +80,8 @@ begin
     TestIsAbsoluteHostPathRootedForms);
   Test('IsAbsoluteHostPath rejects paths read against a working directory',
     TestIsAbsoluteHostPathRelativeForms);
+  Test('A filesystem root keeps its separator; other paths lose theirs',
+    TestARootKeepsItsTrailingSeparator);
   Test('CanonicalHostPath reports unknown for a path that does not exist',
     TestCanonicalHostPathIsUnknownForAMissingPath);
   Test('CanonicalHostPath is stable for a file that does exist',
@@ -468,6 +471,33 @@ begin
   { A backslash is an ordinary filename character on UNIX. }
   Expect<Boolean>(IsAbsoluteHostPath('\packages')).ToBe(False);
   Expect<Boolean>(IsAbsoluteHostPath('C:\packages')).ToBe(False);
+  {$ENDIF}
+end;
+
+procedure TFileUtilsTests.TestARootKeepsItsTrailingSeparator;
+var
+  Root: string;
+begin
+  { The root of the temporary directory's filesystem: `/`, or on Windows its
+    drive root, such as `C:\`. }
+  Root := IncludeTrailingPathDelimiter(ExtractFileDrive(FTempDir));
+  Expect<Boolean>(IsHostRootPath(Root)).ToBe(True);
+  Expect<string>(ExcludeTrailingHostPathDelimiter(Root)).ToBe(Root);
+  Expect<string>(ExcludeTrailingHostPathDelimiter(
+    ExtractFileDir(Root + 'f.txt'))).ToBe(Root);
+  Expect<Boolean>(IsHostRootPath(Root + 'dir')).ToBe(False);
+  Expect<string>(ExcludeTrailingHostPathDelimiter(Root + 'dir' + PathDelim))
+    .ToBe(Root + 'dir');
+  Expect<string>(ExcludeTrailingHostPathDelimiter(FTempDir + PathDelim))
+    .ToBe(FTempDir);
+  Expect<Boolean>(IsHostRootPath('')).ToBe(False);
+  Expect<string>(ExcludeTrailingHostPathDelimiter('')).ToBe('');
+  {$IFDEF MSWINDOWS}
+  Expect<Boolean>(IsHostRootPath('C:\')).ToBe(True);
+  Expect<string>(ExcludeTrailingHostPathDelimiter(ExtractFileDir('C:\f.txt')))
+    .ToBe('C:\');
+  { Drive-relative, not a root. }
+  Expect<Boolean>(IsHostRootPath('C:')).ToBe(False);
   {$ENDIF}
 end;
 
