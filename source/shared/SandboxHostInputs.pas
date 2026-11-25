@@ -112,15 +112,19 @@ type
   private
     FFs: TSandboxVirtualFileSystem;
     FOrigins: TSandboxHostOriginArray;
-    function TakeOrigin(const AHostPath, ASandboxPath: string;
-      const AIsDirectory, AReadWrite: Boolean;
-      const APin: TSandboxHostPin): TSandboxHostOrigin;
-    procedure AddOrigin(const AOrigin: TSandboxHostOrigin);
     procedure CopyFile(const AHostPath, ASandboxPath: string);
     procedure CopyDirectoryContents(const AHostDirectory,
       ASandboxDirectory: string);
     function BestOrigin(const ASandboxPath: string): Integer;
     function OriginRootUnchanged(const AOrigin: TSandboxHostOrigin): Boolean;
+  protected
+    { Taking and recording an origin are steps of CopyIn. They are
+      protected so that a test can record an input no test can copy, such
+      as a whole filesystem root, and check how it maps and pins. }
+    function TakeOrigin(const AHostPath, ASandboxPath: string;
+      const AIsDirectory, AReadWrite: Boolean;
+      const APin: TSandboxHostPin): TSandboxHostOrigin;
+    procedure AddOrigin(const AOrigin: TSandboxHostOrigin);
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem);
 

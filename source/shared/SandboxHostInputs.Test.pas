@@ -26,6 +26,15 @@ type
     function Now: TDateTime; override;
   end;
 
+  { Records origins as CopyIn does, without copying: for an input no test
+    can copy, such as a whole filesystem root. }
+  TRecordingHostInputs = class(TSandboxHostInputs)
+  public
+    function RecordOrigin(const AHostPath, ASandboxPath: string;
+      const AIsDirectory: Boolean;
+      const APin: TSandboxHostPin): TSandboxHostOrigin;
+  end;
+
   TSandboxHostInputsTests = class(TTestSuite)
   private
     FRoot: string;
@@ -69,6 +78,8 @@ type
     procedure TestInputDirectlyUnderARootHasTheRootAsItsDirectory;
     procedure TestInputPinnedAtARootWritesBackUnderIt;
     procedure TestPathBelowARootKeepsItsFirstCharacter;
+    procedure TestCopiedRootMapsItsFilesBothWays;
+    procedure TestPinAtARootItselfIdentifiesTheRoot;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -160,6 +171,10 @@ begin
     TestInputPinnedAtARootWritesBackUnderIt);
   Test('A path below a filesystem root keeps its first character',
     TestPathBelowARootKeepsItsFirstCharacter);
+  Test('A copied filesystem root maps its files both ways',
+    TestCopiedRootMapsItsFilesBothWays);
+  Test('A config pin at a filesystem root itself identifies the root',
+    TestPinAtARootItselfIdentifiesTheRoot);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -1139,6 +1154,85 @@ begin
   Origin.HostPath := HostPath('in/f.txt');
   Origin.IsDirectory := False;
   Expect<string>(OriginRootPath(Origin)).ToBe(HostPath('in'));
+end;
+
+function TRecordingHostInputs.RecordOrigin(const AHostPath,
+  ASandboxPath: string; const AIsDirectory: Boolean;
+  const APin: TSandboxHostPin): TSandboxHostOrigin;
+begin
+  Result := TakeOrigin(AHostPath, ASandboxPath, AIsDirectory, True, APin);
+  AddOrigin(Result);
+end;
+
+procedure TSandboxHostInputsTests.TestCopiedRootMapsItsFilesBothWays;
+var
+  Inputs: TRecordingHostInputs;
+  Origin: TSandboxHostOrigin;
+  Baseline: TSandboxVirtualFileSystem;
+  Plan: TSandboxWriteBackPlan;
+  Canonical, Below, SandboxPath, Path: string;
+begin
+  { As `--copy-rw /=/`: an entry file under the root runs at its path below
+    the root, and a file the run changes maps back to the same host path. }
+  WriteHostFile('in/d.js', 'entry');
+  Canonical := CanonicalHostPath(HostPath('in/d.js'));
+  Below := Copy(Canonical, Length(FilesystemRoot) + 1, MaxInt);
+  Inputs := TRecordingHostInputs.Create(FFs);
+  Baseline := nil;
+  try
+    Origin := Inputs.RecordOrigin(FilesystemRoot, '/', True,
+      Default(TSandboxHostPin));
+    Expect<string>(Origin.HostPath).ToBe(FilesystemRoot);
+    Expect<string>(Origin.WriteRoot).ToBe(FilesystemRoot);
+    Expect<string>(Origin.IdentityProblem).ToBe('');
+
+    Expect<Boolean>(Inputs.SandboxPathOfHostFile(HostPath('in/d.js'),
+      SandboxPath)).ToBe(True);
+    Expect<string>(SandboxPath).ToBe('/' + StringReplace(Below, PathDelim,
+      '/', [rfReplaceAll]));
+    Expect<Boolean>(Inputs.HostPathForSandboxPath(SandboxPath, Origin, Path))
+      .ToBe(True);
+    Expect<string>(Path).ToBe(Canonical);
+
+    Baseline := FFs.Fork;
+    FFs.MakeDirectory(Copy(SandboxPath, 1, LastDelimiter('/', SandboxPath) -
+      1), True);
+    FFs.WriteAllText(SandboxPath, 'changed');
+    Plan := Inputs.PlanWriteBack(Baseline);
+    Expect<Integer>(Length(Plan)).ToBe(1);
+    Expect<string>(Plan[0].HostPath).ToBe(Canonical);
+    Expect<string>(Plan[0].RelativePath).ToBe(Below);
+    Expect<Boolean>(Plan[0].Action = swaWrite).ToBe(True);
+  finally
+    Baseline.Free;
+    Inputs.Free;
+  end;
+end;
+
+procedure TSandboxHostInputsTests.TestPinAtARootItselfIdentifiesTheRoot;
+var
+  Inputs: TRecordingHostInputs;
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Origin: TSandboxHostOrigin;
+begin
+  { A config at the root naming the root, or a file directly under it: the
+    pin's route is empty and leads to the root itself. }
+  Expect<Boolean>(TryPinBeneath(FilesystemRoot, FilesystemRoot, Pin,
+    Problem)).ToBe(True);
+  Expect<string>(Pin.Root).ToBe(FilesystemRoot);
+  Expect<string>(Pin.Route).ToBe('');
+  Inputs := TRecordingHostInputs.Create(FFs);
+  try
+    Origin := Inputs.RecordOrigin(FilesystemRoot, '/', True, Pin);
+    Expect<string>(Origin.IdentityProblem).ToBe('');
+    Origin := Inputs.RecordOrigin(FilesystemRoot + 'f.txt', '/f.txt', False,
+      Pin);
+    Expect<string>(Origin.IdentityProblem).ToBe('');
+    Expect<string>(OriginRootPath(Origin)).ToBe(FilesystemRoot);
+  finally
+    Inputs.Free;
+  end;
 end;
 
 procedure TSandboxHostInputsTests.TestPathBelowARootKeepsItsFirstCharacter;
