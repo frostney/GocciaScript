@@ -97,3 +97,21 @@ describe("division with NaN", () => {
     expect(Number.isNaN(NaN / NaN)).toBe(true);
   });
 });
+
+describe("a subnormal quotient", () => {
+  // x87 rounded each of these quotients twice and came out one bit off.
+  const id = (value) => value;
+  const quotients = [
+    [2.0996648512956365e-308, 1.1, 1.9087862284505787e-308],
+    [1.134375790418231e-308, 0.7, 1.6205368434546157e-308],
+    [1.2349373183628205e-308, 3.3, 3.742234298069156e-309],
+  ];
+
+  test.each(quotients)("%s / %s rounds once to %s", (a, b, expected) => {
+    expect(id(a) / id(b)).toBe(expected);
+  });
+
+  test("constant operands fold to the quotient rounded once", () => {
+    expect(1.2349373183628205e-308 / 3.3).toBe(3.742234298069156e-309);
+  });
+});

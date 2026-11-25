@@ -17,7 +17,7 @@ describe("install commands", () => {
 
   test("points Windows at the PowerShell install script", () => {
     expect(QUICK_INSTALL_COMMANDS.windows).toBe(
-      "irm https://www.gocciascript.dev/install.ps1 | iex",
+      "# 32-bit Windows needs a CPU with SSE2: a Pentium 4, Athlon 64 or later.\nirm https://www.gocciascript.dev/install.ps1 | iex",
     );
   });
 

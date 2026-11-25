@@ -39,19 +39,25 @@ type
     { Copied with --copy-rw: changed files under it may be written back. }
     ReadWrite: Boolean;
     { The directory write-back writes under — the input itself, or a file
-      input's directory — canonical, and which directory it was, both as of
-      the copy. A write goes through this recorded directory, never through
-      the input's path looked up again, so a directory swapped for a link
-      during the run cannot redirect it. }
+      input's directory — canonical, and which directory it was, both taken
+      before the copy read anything. A write goes through this recorded
+      directory, never through the input's path looked up again, so a
+      directory swapped for a link during the run cannot redirect it. }
     WriteRoot: string;
     WriteRootIdentity: THostDirectoryIdentity;
     { The route from WriteRoot to the input's directory: '' for a
       command-line input, which is pinned at itself; the route from the
       config's directory for a config-named one (TSandboxHostPin). }
     WriteRoute: string;
-    { For a pinned input, which directory the route led to when the input
-      was copied: a directory put in its place later is a different one. }
+    { For a pinned input, which directory the route led to just before the
+      input was copied: a directory put in its place later is a different
+      one. }
     WriteRouteIdentity: THostDirectoryIdentity;
+    { Why the input's directory could not be pinned just before the copy, or
+      ''. A write-back with changes under such an input writes nothing: an
+      identity that was never taken would match whatever directory has the
+      name later. }
+    IdentityProblem: string;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
 
@@ -106,8 +112,10 @@ type
   private
     FFs: TSandboxVirtualFileSystem;
     FOrigins: TSandboxHostOriginArray;
-    procedure RecordOrigin(const AHostPath, ASandboxPath: string;
-      const AIsDirectory, AReadWrite: Boolean; const APin: TSandboxHostPin);
+    function TakeOrigin(const AHostPath, ASandboxPath: string;
+      const AIsDirectory, AReadWrite: Boolean;
+      const APin: TSandboxHostPin): TSandboxHostOrigin;
+    procedure AddOrigin(const AOrigin: TSandboxHostOrigin);
     procedure CopyFile(const AHostPath, ASandboxPath: string);
     procedure CopyDirectoryContents(const AHostDirectory,
       ASandboxDirectory: string);
@@ -175,6 +183,12 @@ function TryPinBeneath(const ARoot, APath: string; out APin: TSandboxHostPin;
   input itself, or a file input's directory. A root stays a root, so a file
   directly under `/` (or `C:\`) has `/` (or `C:\`) as its directory. }
 function OriginRootPath(const AOrigin: TSandboxHostOrigin): string;
+
+{ The part of APath below ARoot, '' for ARoot itself. APath lies within
+  ARoot, and both are written as HostPathIsWithin takes them: without a
+  trailing separator, except a root, which keeps its own, so a path directly
+  under `/` keeps its first character. }
+function HostPathBelow(const APath, ARoot: string): string;
 
 { Writes ABytes to APath, a path the user named on the command line: a
   regular file (or none) is replaced atomically, through a temporary beside
@@ -258,6 +272,12 @@ begin
   {$ENDIF}
 end;
 
+function HostPathBelow(const APath, ARoot: string): string;
+begin
+  Result := Copy(APath, Length(IncludeTrailingPathDelimiter(ARoot)) + 1,
+    MaxInt);
+end;
+
 { APath canonical when the host can say, else its lexical expansion. }
 function CanonicalOrExpanded(const APath: string): string;
 begin
@@ -323,8 +343,7 @@ begin
     AError := 'is outside ' + APin.Root;
     Exit(False);
   end;
-  APin.Route := Copy(Target, Length(IncludeTrailingPathDelimiter(APin.Root)) +
-    1, MaxInt);
+  APin.Route := HostPathBelow(Target, APin.Root);
   Result := True;
 end;
 
@@ -481,38 +500,75 @@ begin
       AOrigin.HostPath));
 end;
 
-procedure TSandboxHostInputs.RecordOrigin(const AHostPath,
+{ The origin of an input about to be copied, with which directory its
+  write-back goes under. It is taken before a byte of the input is read: an
+  identity taken after the copy would belong to whatever directory had the
+  name by then, so an input swapped during the copy would be written back
+  into its replacement. When the directory cannot be pinned now, the origin
+  records why (IdentityProblem) and a write-back that would write under it
+  writes nothing at all, rather than recording an identity that would match
+  any directory. }
+function TSandboxHostInputs.TakeOrigin(const AHostPath,
   ASandboxPath: string; const AIsDirectory, AReadWrite: Boolean;
-  const APin: TSandboxHostPin);
+  const APin: TSandboxHostPin): TSandboxHostOrigin;
 var
-  Index: Integer;
+  Identified: Boolean;
   Problem: string;
 begin
-  Index := Length(FOrigins);
-  SetLength(FOrigins, Index + 1);
-  FOrigins[Index].SandboxPath := ASandboxPath;
-  FOrigins[Index].HostPath := ExcludeTrailingHostPathDelimiter(AHostPath);
-  FOrigins[Index].IsDirectory := AIsDirectory;
-  FOrigins[Index].ReadWrite := AReadWrite;
+  Result := Default(TSandboxHostOrigin);
+  Result.SandboxPath := ASandboxPath;
+  Result.HostPath := ExcludeTrailingHostPathDelimiter(AHostPath);
+  Result.IsDirectory := AIsDirectory;
+  Result.ReadWrite := AReadWrite;
+  Problem := '';
   if APin.IsSet then
   begin
-    FOrigins[Index].WriteRoot := APin.Root;
-    FOrigins[Index].WriteRootIdentity := APin.RootIdentity;
-    FOrigins[Index].WriteRoute := APin.Route;
-    if not TryHostDirectoryIdentityBeneath(APin.Root, APin.RootIdentity,
-       APin.Route, FOrigins[Index].WriteRouteIdentity, Problem) then
-      FOrigins[Index].WriteRouteIdentity := Default(THostDirectoryIdentity);
-    Exit;
+    Result.WriteRoot := APin.Root;
+    Result.WriteRootIdentity := APin.RootIdentity;
+    Result.WriteRoute := APin.Route;
+    Identified := TryHostDirectoryIdentityBeneath(APin.Root,
+      APin.RootIdentity, APin.Route, Result.WriteRouteIdentity, Problem);
+    { The pin was taken for the input as the config check found it: the
+      input itself for a directory, its directory for a file. An input that
+      has since turned from one into the other has a route that leads
+      elsewhere, so paths under it would be written in the wrong place. }
+    if Identified and not SameFileName(
+       CanonicalOrExpanded(OriginRootPath(Result)),
+       OriginWriteDirectory(Result)) then
+    begin
+      Identified := False;
+      Problem := 'it is not the directory its config entry was checked ' +
+        'against';
+    end;
+    { A config directory Windows gave no file ID for keeps its own refusal
+      of each file under it (OriginIdentityProblem). }
+    if not Identified and (HostDirectoryIdentityProblem(APin.Root,
+       APin.RootIdentity) <> '') then
+      Identified := True;
+  end
+  else
+  begin
+    Result.WriteRoot := CanonicalOrExpanded(OriginRootPath(Result));
+    Result.WriteRoute := '';
+    Identified := TryHostDirectoryIdentity(Result.WriteRoot,
+      Result.WriteRootIdentity);
   end;
-  FOrigins[Index].WriteRoot := CanonicalOrExpanded(OriginRootPath(
-    FOrigins[Index]));
-  TryHostDirectoryIdentity(FOrigins[Index].WriteRoot,
-    FOrigins[Index].WriteRootIdentity);
-  FOrigins[Index].WriteRoute := '';
+  if not Identified then
+  begin
+    if Problem = '' then
+      Problem := 'it could not be identified';
+    Result.IdentityProblem := Problem;
+  end;
 end;
 
-{ The input's directory still resolves to the one recorded at the copy, and
-  is still that directory. }
+procedure TSandboxHostInputs.AddOrigin(const AOrigin: TSandboxHostOrigin);
+begin
+  SetLength(FOrigins, Length(FOrigins) + 1);
+  FOrigins[High(FOrigins)] := AOrigin;
+end;
+
+{ The input's directory still resolves to the one recorded before the copy,
+  and is still that directory. }
 function TSandboxHostInputs.OriginRootUnchanged(
   const AOrigin: TSandboxHostOrigin): Boolean;
 var
@@ -537,6 +593,8 @@ end;
   replacement could not be noticed. }
 function OriginIdentityProblem(const AOrigin: TSandboxHostOrigin): string;
 begin
+  if AOrigin.IdentityProblem <> '' then
+    Exit(AOrigin.IdentityProblem);
   Result := HostDirectoryIdentityProblem(OriginWriteDirectory(AOrigin),
     AOrigin.WriteRootIdentity);
   if Result = '' then
@@ -592,6 +650,7 @@ function TSandboxHostInputs.CopyIn(const AHostPath, ASandboxPath: string;
   const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
 var
   HostPath: string;
+  Origin: TSandboxHostOrigin;
 begin
   { Strip any trailing separator before the symlink check: POSIX lstat()
     follows a final symlink when the path ends in '/', so without this a
@@ -612,8 +671,9 @@ begin
       raise ESandboxHostInputError.CreateFmt(
         'Cannot copy directory %s to %s: the sandbox already has a file ' +
         'there', [HostPath, Result]);
+    Origin := TakeOrigin(HostPath, Result, True, AReadWrite, APin);
     CopyDirectoryContents(HostPath, Result);
-    RecordOrigin(HostPath, Result, True, AReadWrite, APin);
+    AddOrigin(Origin);
     Exit;
   end;
 
@@ -622,8 +682,9 @@ begin
      FFs.IsDirectory(Result) then
     Result := FFs.Normalize(SandboxJoinPath(Result,
       ExtractFileName(HostPath)));
+  Origin := TakeOrigin(HostPath, Result, False, AReadWrite, APin);
   CopyFile(HostPath, Result);
-  RecordOrigin(HostPath, Result, False, AReadWrite, APin);
+  AddOrigin(Origin);
 end;
 
 function TSandboxHostInputs.SandboxPathOfHostFile(const AHostPath: string;
@@ -665,8 +726,7 @@ begin
     ASandboxPath := FOrigins[Best].SandboxPath;
     Exit(True);
   end;
-  Relative := Copy(FilePath,
-    Length(IncludeTrailingPathDelimiter(BestPath)) + 1, MaxInt);
+  Relative := HostPathBelow(FilePath, BestPath);
   Relative := StringReplace(Relative, PathDelim, SANDBOX_SEPARATOR,
     [rfReplaceAll]);
   ASandboxPath := FFs.Normalize(SandboxJoinPath(FOrigins[Best].SandboxPath,
@@ -823,9 +883,8 @@ begin
       begin
         Result[Count].HostPath := HostPath;
         Result[Count].OriginIndex := BestOrigin(Paths[I]);
-        Result[Count].RelativePath := Copy(HostPath,
-          Length(IncludeTrailingPathDelimiter(OriginRootPath(Origin))) + 1,
-          MaxInt);
+        Result[Count].RelativePath := HostPathBelow(HostPath,
+          OriginRootPath(Origin));
         if Origin.WriteRoute <> '' then
           Result[Count].RelativePath := Origin.WriteRoute + PathDelim +
             Result[Count].RelativePath;
@@ -848,7 +907,7 @@ function TSandboxHostInputs.ApplyWriteBack(const APlan: TSandboxWriteBackPlan;
   const AReport: TStrings): Boolean;
 var
   I, Written, Skipped: Integer;
-  ErrorMessage: string;
+  ErrorMessage, ReplacedLine: string;
   Ok, Replaced: Boolean;
   Origin: TSandboxHostOrigin;
 begin
@@ -881,21 +940,28 @@ begin
 
   { Every input written under must still be the directory that was copied.
     One that is not has been moved or swapped for a link while the run was
-    going on, and a half-applied write-back is worse than none, so nothing
-    is written. }
+    going on, and one that could not be pinned when it was copied has no
+    directory to compare against; a half-applied write-back is worse than
+    none, so nothing is written. }
   Replaced := False;
   for I := 0 to High(APlan) do
     if (APlan[I].Action in [swaWrite, swaSkipOutside]) and
        (APlan[I].OriginIndex >= 0) and
-       FOrigins[APlan[I].OriginIndex].ReadWrite and
-       (OriginIdentityProblem(FOrigins[APlan[I].OriginIndex]) = '') and
-       not OriginRootUnchanged(FOrigins[APlan[I].OriginIndex]) then
+       FOrigins[APlan[I].OriginIndex].ReadWrite then
     begin
       Origin := FOrigins[APlan[I].OriginIndex];
-      if AReport.IndexOf(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
-         ' was replaced during the run; nothing written') < 0 then
-        AReport.Add(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
-          ' was replaced during the run; nothing written');
+      if Origin.IdentityProblem <> '' then
+        ReplacedLine := WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+          ' could not be pinned when it was copied (' +
+          Origin.IdentityProblem + '); nothing written'
+      else if (OriginIdentityProblem(Origin) = '') and
+         not OriginRootUnchanged(Origin) then
+        ReplacedLine := WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+          ' was replaced during the run; nothing written'
+      else
+        Continue;
+      if AReport.IndexOf(ReplacedLine) < 0 then
+        AReport.Add(ReplacedLine);
       Replaced := True;
     end;
   if Replaced then
