@@ -168,6 +168,16 @@ function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boole
 
 procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
+{ Under --strict-types, records the strict type of each annotated parameter
+  in AScope and ATemplate; EmitParameterTypeChecks then checks the arguments
+  on entry. Every function, method, constructor and setter body calls both. }
+procedure ApplyParameterTypeAnnotations(
+  const AScope: TGocciaCompilerScope;
+  const ATemplate: TGocciaFunctionTemplate;
+  const AParameters: TGocciaParameterArray;
+  const AStrictTypes: Boolean);
+procedure EmitParameterTypeChecks(const ACtx: TGocciaCompilationContext;
+  const AParameters: TGocciaParameterArray);
 procedure EmitBodyVarEnvironment(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray; const ABody: TGocciaASTNode);
 procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;

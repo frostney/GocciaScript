@@ -6271,6 +6271,9 @@ begin
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AMethod.Parameters,
+    ACtx.StrictTypes);
+
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
     if Assigned(ACtx.SetDerivedConstructorThisGuard) then
@@ -6293,6 +6296,7 @@ begin
         UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
     EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+    EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6461,6 +6465,9 @@ begin
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
     ChildTemplate.SourceText);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
+    ACtx.StrictTypes);
+
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
     ChildCtx := ACtx;
@@ -6474,6 +6481,7 @@ begin
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
     EmitParameterInitialization(ChildCtx, SetterParams);
+    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6644,6 +6652,9 @@ begin
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
     ChildTemplate.SourceText);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
+    ACtx.StrictTypes);
+
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
     ChildCtx := ACtx;
@@ -6657,6 +6668,7 @@ begin
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
     EmitParameterInitialization(ChildCtx, SetterParams);
+    EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6752,6 +6764,9 @@ begin
   if Assigned(ACtx.FormalParameterCounts) then
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
+  ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AMethod.Parameters,
+    ACtx.StrictTypes);
+
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
     EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
@@ -6768,6 +6783,7 @@ begin
       Length(AMethod.Parameters));
 
     EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+    EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
