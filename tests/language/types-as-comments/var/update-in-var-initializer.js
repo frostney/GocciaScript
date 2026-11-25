@@ -1,5 +1,5 @@
 /*---
-description: Under strict types, a var initializer that updates a binding typed other than number throws before either binding changes
+description: Under strict types, a var redeclaration whose initializer updates a typed binding throws, and the var keeps its value; an update of a number binding stores the old value
 features: [types-as-comments, strict-type-enforcement, compat-var]
 ---*/
 
