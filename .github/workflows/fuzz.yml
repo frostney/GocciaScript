@@ -147,37 +147,40 @@ jobs:
           # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
           # above it — otherwise process overhead around a legitimate slow input
           # lands it in hangs/ and false-fails the job.
-          # -k 60: afl-fuzz does not reliably exit on the SIGTERM `timeout`
-          # sends at the deadline — run 31771115536 sat 43 further minutes on a
-          # delivered SIGTERM until the job's own 60-minute cap cancelled it,
-          # leaving `timeout` and afl-fuzz behind as orphans. The kill
-          # signal makes FUZZ_SECONDS an actual bound. Findings are written to
-          # crashes/ and hangs/ as they are discovered, so a hard kill loses no
-          # reproducers — only the final stats summary.
+          # -V: afl-fuzz stops itself after FUZZ_SECONDS of fuzzing, not
+          # counting the seeds' calibration, and writes its final stats. It
+          # does not reliably exit on a SIGTERM: run 31771115536 sat 43
+          # further minutes on one until the job's own 60-minute cap cancelled
+          # it, and v5.03c ignored `timeout`'s every time (run 45623922253).
+          # `timeout -k 60` stays as the backstop, 20 minutes past FUZZ_SECONDS
+          # for the calibration (about 3 minutes for the script corpus). Findings
+          # are written to crashes/ and hangs/ as they are discovered, so a
+          # hard kill loses no reproducers — only the final stats summary.
           status=0
           started=${SECONDS}
+          deadline=$(( FUZZ_SECONDS + 1200 ))
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
+          timeout -k 60 "${deadline}" afl-fuzz -V "${FUZZ_SECONDS}" -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
             -- ./build/GocciaFuzzHarnessAfl @@ || status=$?
           elapsed=$(( SECONDS - started ))
           echo "afl-fuzz exit status: ${status} after ${elapsed}s"
-          # 0 = afl-fuzz returned on its own; 124 = deadline reached and the
-          # SIGTERM was honored; 137 = SIGKILL — expected only when it is
-          # timeout's -k escalation at the deadline. A 137 long before the
-          # deadline is an outside kill (OOM killer) and must not pass as a
-          # completed fuzz run, so 137 is accepted only once the deadline
-          # elapsed. Anything else is afl-fuzz never getting off the ground
-          # (bad arguments, missing binary, 127 from a missing afl-fuzz) and
-          # must fail the job rather than pass as a fuzz run that found
-          # nothing. Crash triage still runs — "Report crashes" is
-          # `!cancelled()`.
+          # 0 = afl-fuzz returned on its own, at the -V limit; 124 = the
+          # backstop deadline reached and the SIGTERM was honored; 137 =
+          # SIGKILL — expected only when it is timeout's -k escalation at the
+          # deadline. A 137 before the deadline is an outside kill (OOM
+          # killer) and must not pass as a completed fuzz run, so 137 is
+          # accepted only once the deadline elapsed. Anything else is
+          # afl-fuzz never getting off the ground (bad arguments, missing
+          # binary, 127 from a missing afl-fuzz) and must fail the job rather
+          # than pass as a fuzz run that found nothing. Crash triage still
+          # runs — "Report crashes" is `!cancelled()`.
           case "${status}" in
             0 | 124) ;;
             137)
-              if [ "${elapsed}" -lt "${FUZZ_SECONDS}" ]; then
-                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${FUZZ_SECONDS}s deadline (OOM killer?)"
+              if [ "${elapsed}" -lt "${deadline}" ]; then
+                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${deadline}s deadline (OOM killer?)"
                 exit "${status}"
               fi
               ;;
@@ -319,8 +322,9 @@ jobs:
           mkdir -p build/fuzz/heap-snapshot-out
           status=0
           started=${SECONDS}
+          deadline=$(( FUZZ_SECONDS + 1200 ))
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
+          timeout -k 60 "${deadline}" afl-fuzz -V "${FUZZ_SECONDS}" -t 5000 \
             -i build/fuzz/heap-snapshot-corpus \
             -o build/fuzz/heap-snapshot-out \
             -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@ || status=$?
@@ -329,8 +333,8 @@ jobs:
           case "${status}" in
             0 | 124) ;;
             137)
-              if [ "${elapsed}" -lt "${FUZZ_SECONDS}" ]; then
-                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${FUZZ_SECONDS}s deadline (OOM killer?)"
+              if [ "${elapsed}" -lt "${deadline}" ]; then
+                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${deadline}s deadline (OOM killer?)"
                 exit "${status}"
               fi
               ;;
