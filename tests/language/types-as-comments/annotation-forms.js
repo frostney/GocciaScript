@@ -49,11 +49,6 @@ test("a mapped type over a primitive accepts that primitive", () => {
   expect(s + t).toBe("st");
 });
 
-test("a generic it does not know accepts a primitive", () => {
-  const s: NonNullable<string> = "s";
-  expect(s).toBe("s");
-});
-
 test("Object accepts a primitive", () => {
   const o: Object = 5;
   expect(o).toBe(5);
@@ -62,6 +57,38 @@ test("Object accepts a primitive", () => {
 test("an object type literal accepts a primitive with its members", () => {
   const sized: { length: number } = "abc";
   expect(sized.length).toBe(3);
+});
+
+test("keyof applies to the whole array type after it", () => {
+  const key: keyof string[] = "length";
+  expect(key).toBe("length");
+});
+
+test("a template literal type keeps its quotes, brackets and comments inside it", () => {
+  const closed: `a${"}" | `]`}` | string[] = "a}";
+  expect(closed).toBe("a}");
+});
+
+test("a library type name can be rebound by a local type alias", () => {
+  const read = () => {
+    type Array<T> = T;
+    const s: Array<string> = "s";
+    return s;
+  };
+  expect(read()).toBe("s");
+});
+
+test("a name is not enforced, generic or not", () => {
+  const xs: Array<number> = 5;
+  const m: Map<string, number> = 5;
+  const p: Promise<number> = 5;
+  const f: Function = 5;
+  expect(xs + m + p + f).toBe(20);
+});
+
+test("a union stays unenforced, even with a leading operator", () => {
+  const n: | number = "s";
+  expect(n).toBe("s");
 });
 
 }); // describe
@@ -78,23 +105,31 @@ test("a tuple type rejects a primitive", () => {
   expect(() => { const pair: [string, number] = "s"; }).toThrow(TypeError);
 });
 
-test("Array and the collection generics reject a primitive", () => {
-  expect(() => { const xs: Array<number> = 5; }).toThrow(TypeError);
-  expect(() => { const nested: Array<Array<number>> = 5; }).toThrow(TypeError);
-  expect(() => { const m: Map<string, number> = 5; }).toThrow(TypeError);
-  expect(() => { const p: Promise<number> = 5; }).toThrow(TypeError);
+test("an array of a template literal type rejects a primitive", () => {
+  expect(() => { const xs: `a${string /* ${ */}b`[] = 1; }).toThrow(TypeError);
+});
+
+test("a type query with an array suffix is an array", () => {
+  const y = 1;
+  expect(() => { const xs: typeof y[] = 1; }).toThrow(TypeError);
 });
 
 test("a function type rejects a primitive", () => {
   expect(() => { const f: () => void = 5; }).toThrow(TypeError);
+  expect(() => { const f: (a: number) => string | number = 5; }).toThrow(TypeError);
+  expect(() => { const f: () => {} & {} = 1; }).toThrow(TypeError);
+  expect(() => { const f: (() => void)[] = 5; }).toThrow(TypeError);
+});
+
+test("a constructor type rejects a primitive", () => {
+  expect(() => { const c: new () => {} & {} = 1; }).toThrow(TypeError);
 });
 
 test("an object-only form still accepts an object", () => {
   const xs: number[] = [1];
   const pair: [string, number] = ["a", 1];
-  const m: Map<string, number> = new Map();
   const f: () => void = () => {};
-  expect(xs.length + pair.length + m.size).toBe(3);
+  expect(xs.length + pair.length).toBe(3);
   expect(typeof f).toBe("function");
 });
 

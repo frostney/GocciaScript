@@ -12,10 +12,9 @@ uses
 
 { Convert a TypeScript-style type annotation string into the strict
   TGocciaLocalType enum used by the compiler and runtime guards, read from
-  the type's outermost form. Returns sltUntyped when the annotation is
-  empty or its type can hold a value outside every strict type: a union,
-  an indexed access, a conditional or mapped type, `keyof`, an object type
-  literal, a literal type, or a name it does not know. }
+  the type's outermost form. Only `number`, `string`, `boolean`, `object`,
+  array and tuple types and function and constructor types get one; every
+  other form, names such as `Array<T>` included, returns sltUntyped. }
 function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 
 { Infer a strict type from an initializer AST expression.  Returns
@@ -46,35 +45,32 @@ uses
   Goccia.Constants.TypeNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved,
   Goccia.Values.ErrorHelper;
 
 type
   TTypeAnnotationTokens = array of string;
 
 const
-  { Generic types whose every value is an object: a primitive has none of the
-    members their interfaces require, so `tsc` admits no primitive for them.
-    A homomorphic mapped type such as Partial, Readonly or Record over a
-    primitive is that primitive, and an object type literal admits any
-    primitive with the members it names, so neither is listed. }
-  REFERENCE_GENERIC_NAMES: array[0..9] of string = (
-    'Array', 'ReadonlyArray', 'Map', 'ReadonlyMap', 'Set', 'ReadonlySet',
-    'WeakMap', 'WeakSet', 'WeakRef', 'Promise');
+  // Extra token slots TokenizeTypeAnnotation allocates each time it grows.
+  TOKEN_CAPACITY_STEP = 8;
 
 { Splits a collected annotation into its tokens. The parser joins token
-  lexemes with spaces and keeps string and template literal types as their
-  source text, so a literal is one token however many spaces, brackets or
-  keywords its text holds. Punctuation splits even without spaces, so a
-  compact spelling such as `number[]` reads the same. }
+  lexemes with spaces, keeps a string literal type as its source text and a
+  template literal type as one backtick-quoted token with every backslash and
+  backtick inside it escaped, so a literal is one token whatever its text
+  holds. Punctuation splits even without spaces, so a compact spelling such as
+  `number[]` reads the same. }
 function TokenizeTypeAnnotation(const AAnnotation: string): TTypeAnnotationTokens;
 var
-  Count, I, Len, Start, TemplateDepth: Integer;
+  Count, I, Len, Start: Integer;
   Quote: Char;
 
   procedure Add(const AToken: string);
   begin
     if Count = Length(Result) then
-      SetLength(Result, Count * 2 + 8);
+      SetLength(Result, Count * 2 + TOKEN_CAPACITY_STEP);
     Result[Count] := AToken;
     Inc(Count);
   end;
@@ -93,7 +89,7 @@ begin
           Inc(I);
           Continue;
         end;
-      '''', '"':
+      '''', '"', '`':
         begin
           Quote := AAnnotation[I];
           Inc(I);
@@ -101,30 +97,6 @@ begin
           begin
             if AAnnotation[I] = '\' then
               Inc(I);
-            Inc(I);
-          end;
-          Inc(I);
-        end;
-      '`':
-        begin
-          { A substitution holds a type, which may hold another template;
-            the literal ends at the backtick outside every substitution. }
-          TemplateDepth := 0;
-          Inc(I);
-          while I <= Len do
-          begin
-            if AAnnotation[I] = '\' then
-              Inc(I)
-            else if (AAnnotation[I] = '$') and (I < Len) and
-                    (AAnnotation[I + 1] = '{') then
-            begin
-              Inc(TemplateDepth);
-              Inc(I);
-            end
-            else if (AAnnotation[I] = '}') and (TemplateDepth > 0) then
-              Dec(TemplateDepth)
-            else if (AAnnotation[I] = '`') and (TemplateDepth = 0) then
-              Break;
             Inc(I);
           end;
           Inc(I);
@@ -182,6 +154,27 @@ begin
   Result := -1;
 end;
 
+{ The index of the bracket that opens the one closed at AClose, or -1. }
+function OpeningTypeToken(const ATokens: TTypeAnnotationTokens;
+  const AFirst, AClose: Integer): Integer;
+var
+  Depth, I: Integer;
+begin
+  Depth := 0;
+  for I := AClose downto AFirst do
+  begin
+    if IsClosingTypeToken(ATokens[I]) then
+      Inc(Depth)
+    else if IsOpeningTypeToken(ATokens[I]) then
+    begin
+      Dec(Depth);
+      if Depth = 0 then
+        Exit(I);
+    end;
+  end;
+  Result := -1;
+end;
+
 { Whether a token outside every bracket of ATokens[AFirst..ALast] is one of
   ATargets. }
 function HasTopLevelTypeToken(const ATokens: TTypeAnnotationTokens;
@@ -204,103 +197,99 @@ begin
   Result := False;
 end;
 
-function IsReferenceGenericName(const AName: string): Boolean;
+{ Whether ATokens[AFirst..ALast] is a function or constructor type. Its
+  return type runs to the end, so what follows its `=>` is part of it:
+  `() => A & B` is a function type, not an intersection. }
+function IsFunctionTypeTokens(const ATokens: TTypeAnnotationTokens;
+  const AFirst, ALast: Integer): Boolean;
 var
-  I: Integer;
+  Close: Integer;
 begin
-  for I := 0 to High(REFERENCE_GENERIC_NAMES) do
-    if AName = REFERENCE_GENERIC_NAMES[I] then
-      Exit(True);
   Result := False;
+  if not HasTopLevelTypeToken(ATokens, AFirst, ALast, ['=>']) then
+    Exit;
+  // `<T>(a: T) => T`, `new (a: T) => R`, `abstract new (a: T) => R`
+  if (ATokens[AFirst] = '<') or (ATokens[AFirst] = KEYWORD_NEW) or
+     (ATokens[AFirst] = KEYWORD_ABSTRACT) then
+    Exit(True);
+  // `(a: T) => R`, but not `(A)[]` or `(A) | B`
+  if ATokens[AFirst] = '(' then
+  begin
+    Close := MatchingTypeToken(ATokens, AFirst, ALast);
+    Result := (Close > 0) and (Close < ALast) and
+      (ATokens[Close + 1] = '=>');
+  end;
 end;
 
 { The strict type every value of the type spelled by ATokens[AFirst..ALast]
-  has, read from the type's outermost form. Only a form whose every value
-  passes the check gets one: the check runs where `tsc` would accept the
-  program, so a form that can hold a value outside the strict type stays
-  unenforced (sltUntyped). }
+  has, read from the type's outermost form in TypeScript's precedence. Only a
+  form whose every value passes the check gets one: the check must never
+  reject a value `tsc` accepts for the annotation. A name is never enforced,
+  `Array<T>` and `Function` included, because a type alias, interface or
+  import in the program can rebind it; the predefined type keywords cannot be
+  rebound. }
 function ClassifyTypeTokens(const ATokens: TTypeAnnotationTokens;
-  AFirst: Integer; const ALast: Integer): TGocciaLocalType;
+  const AFirst, ALast: Integer): TGocciaLocalType;
 var
-  Close: Integer;
+  Open: Integer;
 begin
   Result := sltUntyped;
   if AFirst > ALast then
     Exit;
-  // A union or intersection may start with its operator.
-  if (ATokens[AFirst] = '|') or (ATokens[AFirst] = '&') then
-    Inc(AFirst);
-  if AFirst > ALast then
-    Exit;
+
+  if IsFunctionTypeTokens(ATokens, AFirst, ALast) then
+    Exit(sltReference);
 
   { A union may hold values of several kinds, and an intersection or a
-    conditional type is read from its members, which this does not do. }
+    conditional type is read from its members, which this does not do. A
+    leading `|` or `&` counts as one. }
   if HasTopLevelTypeToken(ATokens, AFirst, ALast,
-       ['|', '&', '?', 'extends']) then
+       ['|', '&', '?', KEYWORD_EXTENDS]) then
     Exit;
-
-  // `(a: T) => R`, `<T>(a: T) => R`, `new (a: T) => R`, `abstract new ...`
-  if HasTopLevelTypeToken(ATokens, AFirst, ALast, ['=>']) then
-  begin
-    if (ATokens[AFirst] = '(') or (ATokens[AFirst] = '<') or
-       (ATokens[AFirst] = 'new') or (ATokens[AFirst] = 'abstract') then
-      Result := sltReference;
-    Exit;
-  end;
 
   // `readonly T[]` and `readonly [A, B]` are arrays.
-  if ATokens[AFirst] = 'readonly' then
+  if ATokens[AFirst] = KEYWORD_READONLY then
   begin
     if ClassifyTypeTokens(ATokens, AFirst + 1, ALast) = sltReference then
       Result := sltReference;
     Exit;
   end;
 
+  { `keyof T[]` is the keys of an array, and `unique symbol` a symbol. A type
+    query (`typeof x`) is a primary type, so `typeof x[]` is an array and
+    reads on. }
+  if (ATokens[AFirst] = KEYWORD_KEYOF) or (ATokens[AFirst] = KEYWORD_UNIQUE) or
+     (ATokens[AFirst] = KEYWORD_INFER) or (ATokens[AFirst] = KEYWORD_ASSERTS) then
+    Exit;
+
   if ATokens[ALast] = ']' then
   begin
+    Open := OpeningTypeToken(ATokens, AFirst, ALast);
     // `[A, B]`: a tuple is an array.
-    if (ATokens[AFirst] = '[') and
-       (MatchingTypeToken(ATokens, AFirst, ALast) = ALast) then
+    if Open = AFirst then
       Exit(sltReference);
     { `T[]` is an array; `T[K]` is an indexed access type, which is whatever
       type the property K has. }
-    if (ALast - 1 > AFirst) and (ATokens[ALast - 1] = '[') then
+    if (Open > AFirst) and (Open = ALast - 1) then
       Result := sltReference;
     Exit;
   end;
 
-  if ATokens[AFirst] = '(' then
-  begin
-    Close := MatchingTypeToken(ATokens, AFirst, ALast);
-    if Close = ALast then
-      Result := ClassifyTypeTokens(ATokens, AFirst + 1, ALast - 1);
-    Exit;
-  end;
-
-  // `Array<T>`, `Map<K, V>`, `Promise<T>`
-  if (AFirst < ALast) and (ATokens[AFirst + 1] = '<') and
-     (ATokens[ALast] = '>') and
-     (MatchingTypeToken(ATokens, AFirst + 1, ALast) = ALast) then
-  begin
-    if IsReferenceGenericName(ATokens[AFirst]) then
-      Result := sltReference;
-    Exit;
-  end;
+  if (ATokens[AFirst] = '(') and
+     (MatchingTypeToken(ATokens, AFirst, ALast) = ALast) then
+    Exit(ClassifyTypeTokens(ATokens, AFirst + 1, ALast - 1));
 
   if AFirst <> ALast then
     Exit;
-  { A single name. A string literal type is quoted and a template literal
-    type starts with a backtick, so neither reads as a keyword. `Object`, like
-    the empty object type, admits every value but null and undefined, so it
-    is not listed. }
+  { A single token. A string literal type is quoted and a template literal
+    type starts with a backtick, so neither reads as a keyword. }
   if ATokens[AFirst] = NUMBER_TYPE_NAME then
     Result := sltFloat
   else if ATokens[AFirst] = STRING_TYPE_NAME then
     Result := sltString
   else if ATokens[AFirst] = BOOLEAN_TYPE_NAME then
     Result := sltBoolean
-  else if (ATokens[AFirst] = OBJECT_TYPE_NAME) or
-          (ATokens[AFirst] = 'Function') then
+  else if ATokens[AFirst] = OBJECT_TYPE_NAME then
     Result := sltReference;
 end;
 

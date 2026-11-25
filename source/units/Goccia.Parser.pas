@@ -10737,17 +10737,20 @@ begin
     // operand-aware skipper: lexing them token by token under the default goal
     // would let the substitution's '}' close a structural brace and re-lex the
     // trailing chunk as a fresh, unterminated template literal.
-    // The collected text keeps a literal type as it was written, so that
-    // `"number"` or `` `a${string}` `` cannot read as the keyword or the
-    // brackets inside it (Goccia.Types.Enforcement reads the text).
+    // The collected text keeps a literal type whole, so that `"number"` or
+    // `` `a${"}"}` `` cannot read as the keyword, quote or bracket inside it
+    // (Goccia.Types.Enforcement reads the text). A template literal type is
+    // one backtick-quoted token with its backslashes and backticks escaped, so
+    // its end is the first unescaped backtick, whatever its substitutions hold.
     if (TokenType = gttTemplate) or (TokenType = gttTemplateHead) then
     begin
       TemplateStart := FCurrent;
       SkipTemplateLiteral;
       if FCurrent > TemplateStart then
       begin
-        AppendLexeme(LiteralTypeText(FTokens[TemplateStart],
-          FTokens[FCurrent - 1]));
+        AppendLexeme('`' + StringReplace(StringReplace(
+          LiteralTypeText(FTokens[TemplateStart], FTokens[FCurrent - 1]),
+          '\', '\\', [rfReplaceAll]), '`', '\`', [rfReplaceAll]) + '`');
         PreviousTypeToken := FTokens[FCurrent - 1];
       end;
       Continue;
