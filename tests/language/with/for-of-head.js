@@ -88,6 +88,41 @@ test("an object rest assignment head resolves its name before the rest object is
   expect(f()).toEqual([{ a: 1 }, "added"]);
 });
 
+test("a var head whose store into the object throws closes the iterator", () => {
+  const log = [];
+  const error = new RangeError("setter");
+  const box = { set x(value) { log.push("set"); throw error; } };
+  const iterable = {
+    [Symbol.iterator]() {
+      return { next: () => ({ value: 1, done: false }), return: () => { log.push("close"); return {}; } };
+    },
+  };
+  const f = () => { var x; with (box) { for (var x of iterable) {} } };
+  let caught;
+  try { f(); } catch (e) { caught = e; }
+  expect(caught).toBe(error);
+  expect(log).toEqual(["set", "close"]);
+});
+
+test("a for-await var head whose store into the object throws closes the iterator", async () => {
+  const log = [];
+  const error = new RangeError("setter");
+  const box = { set x(value) { log.push("set"); throw error; } };
+  const iterable = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => Promise.resolve({ value: 1, done: false }),
+        return: () => { log.push("close"); return Promise.resolve({}); },
+      };
+    },
+  };
+  const f = async () => { var x; with (box) { for await (var x of iterable) {} } };
+  let caught;
+  try { await f(); } catch (e) { caught = e; }
+  expect(caught).toBe(error);
+  expect(log).toEqual(["set", "close"]);
+});
+
 test("a let head declares its own binding", () => {
   const box = { x: 0 };
   const seen = [];

@@ -1024,7 +1024,9 @@ end;
 // has the name receives it (§9.1.1.2.5). A var pattern is therefore compiled as
 // a destructuring assignment wherever a `with` object may be in scope, as it
 // already is where its vars are global bindings: each name is resolved before
-// its value is read, and falls back to the var only when no object has it.
+// its value is read (§14.3.3.3 KeyedBindingInitialization, §8.6.3
+// IteratorBindingInitialization, §14.3.3.2 RestBindingInitialization), and
+// falls back to the var only when no object has it.
 function VarPatternStoresByAssignment(
   const ACtx: TGocciaCompilationContext): Boolean;
 begin
@@ -3680,16 +3682,21 @@ end;
 // ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: a var-binding head
 // assigns each value to the binding hoisted by VarDeclaredNames (§8.2.8)
 // instead of creating a per-iteration binding.
-{ Whether a for-of's simple `var` head stores into a binding with a strict
-  type, whose check can throw between steps and so needs the iterator closed
-  (ES2026 §14.7.5.7 step 6.i, IteratorClose). }
-function ForOfVarHeadIsChecked(const ACtx: TGocciaCompilationContext;
+{ Whether a for-of's simple `var` head's store can throw between steps and
+  so needs the iterator closed (ES2026 §14.7.5.7 step 6.i, IteratorClose): a
+  `with` object that has the name can run a setter or a Proxy trap
+  (EmitVarHeadNameStore), and a binding with a strict type checks the value. }
+function ForOfVarHeadStoreMayThrow(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement): Boolean;
 var
   LocalIdx: Integer;
 begin
   Result := False;
-  if not (ACtx.StrictTypes and AStmt.IsVar and (AStmt.BindingName <> '')) then
+  if not (AStmt.IsVar and (AStmt.BindingName <> '')) then
+    Exit;
+  if ShouldTryWithBinding(ACtx.Scope, AStmt.BindingName) then
+    Exit(True);
+  if not ACtx.StrictTypes then
     Exit;
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.BindingName);
   Result := (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped;
@@ -3944,7 +3951,7 @@ begin
 
   NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
     Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
-    ForOfVarHeadIsChecked(ACtx, AStmt) or
+    ForOfVarHeadStoreMayThrow(ACtx, AStmt) or
     StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
     CloseErrorReg := ACtx.Scope.AllocateRegister;
@@ -4211,7 +4218,7 @@ begin
 
   NeedsIteratorClose := AStmt.IsUsing or Assigned(AStmt.AssignmentTarget) or
     Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
-    ForOfVarHeadIsChecked(ACtx, AStmt) or
+    ForOfVarHeadStoreMayThrow(ACtx, AStmt) or
     StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
   begin
