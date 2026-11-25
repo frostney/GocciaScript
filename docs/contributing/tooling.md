@@ -346,7 +346,7 @@ compiler and make:
 ```bash
 scripts/afl/build-afl-as.sh
 mkdir -p build/compiled/targets/fuzzharness-afl
-fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
   -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
 afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
@@ -361,13 +361,15 @@ branch target and conditional branch, plus the fork server. AFL++ removed
 have none: `scripts/afl/build-afl-as.sh` builds it from the v4.21c release,
 checked against its SHA-256, into `build/afl/`. `scripts/afl/as` uses
 `AFL_PATH/afl-as` when `AFL_PATH` is set and not empty, else
-`build/afl/afl-as`, else `/usr/lib/afl/afl-as`. The package's own `afl-fuzz`
-and `afl-showmap` drive the harness: they still accept the fork server
-`afl-as` adds, and say "Old fork server model is used by the target, this
-still works though". FPC's runtime library stays uninstrumented. AFL keeps every mutant that reaches new
-coverage, so the queue grows past the seeds; `afl-showmap` on two different
-inputs shows different maps. Both builds come from the same source with the
-same checks, so either replays a finding.
+`build/afl/afl-as`, else `/usr/lib/afl/afl-as`; the build above empties
+`AFL_PATH` so that it takes the `afl-as` just built. The package's own
+`afl-fuzz` and `afl-showmap` drive the harness: they still accept the fork
+server `afl-as` adds, and say "Old fork server model is used by the target,
+this still works though". FPC's runtime library stays uninstrumented. AFL
+keeps every mutant that reaches new coverage, so the queue grows past the
+seeds; `afl-showmap` on two different inputs shows different maps. Both
+builds come from the same source with the same checks, so either replays a
+finding.
 
 ### Reproducing a finding
 

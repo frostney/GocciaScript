@@ -18,6 +18,10 @@ version=v4.21c
 sha256=11f7c77d37cff6e7f65ac7cc55bab7901e0c6208e845a38764394d04ed567b30
 url="https://github.com/AFLplusplus/AFLplusplus/archive/refs/tags/${version}.tar.gz"
 
+if [ $# -gt 1 ]; then
+  echo "usage: scripts/afl/build-afl-as.sh [<output directory>]" >&2
+  exit 2
+fi
 root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 out="${1:-$root/build/afl}"
 
@@ -25,7 +29,9 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/goccia-afl-as-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 curl -fsSL --retry 3 -o "$work/aflplusplus.tar.gz" "$url"
-echo "$sha256  $work/aflplusplus.tar.gz" | sha256sum -c --quiet -
+# The record names the archive relative to the work directory, so no part of
+# TMPDIR goes into sha256sum's line-based input.
+(cd "$work" && echo "$sha256  aflplusplus.tar.gz" | sha256sum -c --quiet -)
 mkdir "$work/src"
 tar -xzf "$work/aflplusplus.tar.gz" -C "$work/src" --strip-components=1
 make -C "$work/src" -s afl-as > "$work/make.log" 2>&1 || {
