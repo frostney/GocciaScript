@@ -125,6 +125,10 @@ describe("Math.pow precision", () => {
     expect(Math.pow(7e307, -1)).toBe(1.4285714285714287e-308);
   });
 
+  test("rounds a subnormal square once for exponent 2", () => {
+    expect(Math.pow(1.2113425480323198e-154, 2)).toBe(1.467350768673433e-308);
+  });
+
   test("returns NaN for a NaN base with exponent -1", () => {
     expect(Math.pow(NaN, -1)).toBe(NaN);
   });

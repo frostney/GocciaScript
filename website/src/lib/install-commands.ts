@@ -8,10 +8,15 @@ const installScriptUrl = (path: string) =>
 
 const UNIX_INSTALL_COMMAND = `curl -fsSL ${installScriptUrl("/install")} | sh`;
 
+const WINDOWS_X86_REQUIREMENT =
+  "# 32-bit Windows needs a CPU with SSE2: a Pentium 4, Athlon 64 or later.";
+
 export const QUICK_INSTALL_COMMANDS = {
   macos: UNIX_INSTALL_COMMAND,
   linux: UNIX_INSTALL_COMMAND,
-  windows: `irm ${installScriptUrl("/install.ps1")} | iex`,
+  // The installer picks the x86 build on 32-bit Windows; the comment travels
+  // with the command to every page that shows it.
+  windows: `${WINDOWS_X86_REQUIREMENT}\nirm ${installScriptUrl("/install.ps1")} | iex`,
 } as const;
 
 export const HOMEBREW_INSTALL_COMMAND =
