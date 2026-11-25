@@ -4901,8 +4901,17 @@ begin
   if APattern is TGocciaIdentifierDestructuringPattern then
   begin
     IdentPat := TGocciaIdentifierDestructuringPattern(APattern);
-    EmitBindingAssignmentFromRegister(ACtx, IdentPat.Name, ASrcReg,
-      AAssignmentMode);
+    // An assignment target that is a bare name, such as a for-in or for-of
+    // head's, is resolved when its value is stored (ES2026 §14.7.5.7 step
+    // 6.g.ii), so a `with` object that has the name receives it. A name inside
+    // a pattern is resolved before its value is read
+    // (PrepareDestructuringAssignmentTarget) and is stored through that
+    // resolution instead.
+    if AAssignmentMode and ShouldTryWithBinding(ACtx.Scope, IdentPat.Name) then
+      EmitWithAssignmentOrFallback(ACtx, IdentPat.Name, ASrcReg)
+    else
+      EmitBindingAssignmentFromRegister(ACtx, IdentPat.Name, ASrcReg,
+        AAssignmentMode);
     if (not AAssignmentMode) and
        (ACtx.GlobalLexicalPatternScope = ACtx.Scope) and
        (ACtx.Scope.Depth = 0) then
@@ -4930,6 +4939,14 @@ begin
 
       if Prop.Pattern is TGocciaRestDestructuringPattern then
       begin
+        // ES2026 §14.3.3.2 RestBindingInitialization and §13.15.5.4
+        // RestDestructuringAssignmentEvaluation, step 1: the target is
+        // resolved before the rest object is built, as each property's
+        // target is below.
+        InitPreparedDestructuringTarget(PreparedTarget);
+        if AAssignmentMode then
+          PrepareDestructuringAssignmentTarget(ACtx, Prop.Pattern,
+            PreparedTarget);
         IdxReg := ACtx.Scope.AllocateRegister;
         EmitInstruction(ACtx, EncodeABC(OP_NEW_ARRAY, IdxReg, UInt16(I), 0));
         for JumpIdx := 0 to I - 1 do
@@ -4957,12 +4974,12 @@ begin
           EmitInstruction(ACtx, EncodeABC(OP_MOVE, AdjacentReg, IdxReg, 0));
         EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, DestSlot,
           COLLECTION_OP_OBJECT_REST, ASrcReg));
-        EmitDestructuring(ACtx,
-          TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot,
-          AAssignmentMode);
+        EmitDestructuringWithPreparedTarget(ACtx, Prop.Pattern, DestSlot,
+          AAssignmentMode, PreparedTarget);
         ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
+        ReleasePreparedDestructuringTarget(ACtx, PreparedTarget);
         Break;
       end;
 

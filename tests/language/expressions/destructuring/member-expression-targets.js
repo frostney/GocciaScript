@@ -87,6 +87,15 @@ test("rest element with member expression target", () => {
   expect(obj.rest).toEqual([2, 3, 4]);
 });
 
+test("an object rest member target is evaluated before the rest object is built", () => {
+  const order = [];
+  const target = {};
+  const source = { get a() { order.push("get a"); return 1; } };
+  ({ ...(order.push("target"), target).p } = source);
+  expect(order).toEqual(["target", "get a"]);
+  expect(target.p).toEqual({ a: 1 });
+});
+
 test("fibonacci iterator using this.a/this.b swap", () => {
   class FibIterator {
     constructor() {
