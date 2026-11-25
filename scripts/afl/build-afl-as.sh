@@ -7,18 +7,18 @@
 # AFL++ removed afl-as after v4.21c (AFLplusplus/AFLplusplus@7b24f4a329,
 # released in 4.30c), so newer AFL++ packages, Ubuntu 26.04's among them,
 # have none. This takes it from the v4.21c release, checked against its
-# SHA-256, and builds only afl-as, which needs a C compiler and make. The
-# afl-fuzz and afl-showmap of a current AFL++ drive the harness it
-# instruments: its fork server speaks the original handshake, which AFL++
-# still accepts ("Old fork server model is used by the target, this still
-# works though").
+# SHA-256, and builds only afl-as, which needs curl with access to GitHub, a
+# C compiler and make. The afl-fuzz and afl-showmap of a current AFL++ drive
+# the harness it instruments: its fork server speaks the original handshake,
+# which AFL++ still accepts ("Old fork server model is used by the target,
+# this still works though").
 set -euo pipefail
 
 version=v4.21c
 sha256=11f7c77d37cff6e7f65ac7cc55bab7901e0c6208e845a38764394d04ed567b30
 url="https://github.com/AFLplusplus/AFLplusplus/archive/refs/tags/${version}.tar.gz"
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 out="${1:-$root/build/afl}"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/goccia-afl-as-XXXXXX")
@@ -33,6 +33,5 @@ make -C "$work/src" -s afl-as > "$work/make.log" 2>&1 || {
   exit 1
 }
 
-mkdir -p "$out"
-install -m 755 "$work/src/afl-as" "$out/afl-as"
+install -D -T -m 755 -- "$work/src/afl-as" "$out/afl-as"
 echo "afl-as from AFL++ ${version} is at $out/afl-as"

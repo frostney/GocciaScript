@@ -15,21 +15,21 @@
 #   labels as branch targets. `.L0j<n>` is still unique in the file: no other
 #   FPC label starts with `.L0`. String data is left as it is.
 #
-# afl-as comes from AFL_PATH when it is set. Otherwise it is build/afl/afl-as,
-# which scripts/afl/build-afl-as.sh builds, or else /usr/lib/afl/afl-as, where
-# Debian and Ubuntu installed it until AFL++ dropped it after v4.21c. FPC
-# passes the source file last.
+# afl-as comes from AFL_PATH when it is set and not empty. Otherwise it is
+# build/afl/afl-as, which scripts/afl/build-afl-as.sh builds, or else
+# /usr/lib/afl/afl-as, where Debian and Ubuntu installed it until AFL++
+# dropped it after v4.21c. FPC passes the source file last.
 set -euo pipefail
 
 if [ -n "${AFL_PATH:-}" ]; then
   candidates=("$AFL_PATH/afl-as")
 else
-  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
   candidates=("$root/build/afl/afl-as" /usr/lib/afl/afl-as)
 fi
 afl_as=
 for candidate in "${candidates[@]}"; do
-  if [ -x "$candidate" ]; then
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
     afl_as=$candidate
     break
   fi
