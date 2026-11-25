@@ -278,3 +278,21 @@ describe("exponentiation with exponent -1", () => {
     expect(power(-4, -1)).toBe(-0.25);
   });
 });
+
+describe("exponentiation with exponent 2 and a subnormal result", () => {
+  // x ** 2 is x * x; x87 rounded each of these squares twice.
+  const squares = [
+    [5.3259942652121085e-155, 2.83662149130723e-309],
+    [1.2113425480323198e-154, 1.467350768673433e-308],
+    [1.2051227599178144e-154, 1.4523208664719304e-308],
+  ];
+
+  test.each(squares)("%s ** 2 rounds once to %s", (x, expected) => {
+    expect(power(x, 2)).toBe(expected);
+    expect(boxed(x, 2)).toBe(expected);
+  });
+
+  test("a constant operand folds to the square rounded once", () => {
+    expect(5.3259942652121085e-155 ** 2).toBe(2.83662149130723e-309);
+  });
+});

@@ -625,8 +625,9 @@ end;
 
 // 1 / x for |x| >= 2^1022, whose reciprocal is subnormal or, at 2^1022
 // itself, the smallest normal 2^-1022, rounded once in integer arithmetic.
-// x87 keeps its extended exponent range even at double precision, so a
-// floating-point division can round a subnormal reciprocal twice.
+// x87, which Delphi's Win32 build computes on, keeps its extended exponent
+// range even at double precision, so a floating-point division can round a
+// subnormal reciprocal twice.
 function LargeBaseReciprocal(const ABits: UInt64): Double;
 var
   Mantissa, Quotient, Remainder: UInt64;
