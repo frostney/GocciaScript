@@ -25,7 +25,30 @@ procedure WriteConsoleLine(const AToStderr: Boolean; const ALine: UnicodeString)
 implementation
 
 uses
+  {$IFDEF DARWIN}BaseUnix,{$ENDIF}
   SigPipeGuard;
+
+{$IFDEF DARWIN}
+const
+  { fcntl: a write to the descriptor's pipe whose reader has gone fails with EPIPE and raises no SIGPIPE }
+  F_SETNOSIGPIPE = 73;
+  F_GETNOSIGPIPE = 74;
+
+{ Darwin raises a pipe write's SIGPIPE for the process, not the writing thread (XNU's dofilewrite), so a console
+  line written from an engine's thread would end the process through another thread that does not hold it off.
+  The descriptor's own no-SIGPIPE flag covers the write instead; True when it was set here, to be cleared after. }
+function HoldOffPipeSignal(const AHandle: THandle): Boolean;
+begin
+  Result := (FpFcntl(cint(AHandle), F_GETNOSIGPIPE) = 0) and
+    (FpFcntl(cint(AHandle), F_SETNOSIGPIPE, 1) = 0);
+end;
+
+procedure ReleasePipeSignal(const AHandle: THandle; const ASet: Boolean);
+begin
+  if ASet then
+    FpFcntl(cint(AHandle), F_SETNOSIGPIPE, 0);
+end;
+{$ENDIF}
 
 function ConsoleMethodWritesToStderr(const AMethod: string): Boolean;
 begin
@@ -44,7 +67,14 @@ end;
 procedure WriteConsoleLine(const AToStderr: Boolean; const ALine: UnicodeString);
 var
   Guard: TSigPipeGuard;
+  {$IFDEF DARWIN}
+  OutHeld, ErrHeld: Boolean;
+  {$ENDIF}
 begin
+  {$IFDEF DARWIN}
+  OutHeld := HoldOffPipeSignal(TextRec(Output).Handle);
+  ErrHeld := AToStderr and HoldOffPipeSignal(TextRec(ErrOutput).Handle);
+  {$ENDIF}
   BeginSigPipeGuard(Guard);
   try
     {$I-}
@@ -73,6 +103,11 @@ begin
       failed one clears the failure, so a SIGPIPE is looked for whatever the
       last write's status. }
     EndSigPipeGuard(Guard);
+    {$IFDEF DARWIN}
+    ReleasePipeSignal(TextRec(Output).Handle, OutHeld);
+    if AToStderr then
+      ReleasePipeSignal(TextRec(ErrOutput).Handle, ErrHeld);
+    {$ENDIF}
   end;
 end;
 
