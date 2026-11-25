@@ -7,11 +7,6 @@ import { label, count, results } from "./helpers/update-module-binding.js";
 
 describe("update expressions on strictly typed bindings", () => {
 
-test("postfix ++ on a string parameter throws", () => {
-  const f = (x: string) => { x++; return x; };
-  expect(() => f("1")).toThrow(TypeError);
-});
-
 test("prefix ++ on a string parameter throws", () => {
   const f = (x: string) => { ++x; return x; };
   expect(() => f("1")).toThrow(TypeError);

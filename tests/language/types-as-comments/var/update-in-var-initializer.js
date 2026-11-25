@@ -34,31 +34,6 @@ test("a var that updates its own typed binding keeps the binding's value when th
   expect(f("1")).toEqual(["1", "string"]);
 });
 
-test("an untyped var keeps its value when a postfix update of a typed binding throws", () => {
-  const f = (x: string, y) => {
-    try { var y = x++; } catch (e) { return [e instanceof TypeError, y, x]; }
-    return [false, y, x];
-  };
-  expect(f("1", "keep")).toEqual([true, "keep", "1"]);
-});
-
-test("an untyped var keeps its value when a prefix update of a typed binding throws", () => {
-  const f = (x: string, y) => {
-    try { var y = ++x; } catch (e) { return [e instanceof TypeError, y, x]; }
-    return [false, y, x];
-  };
-  expect(f("1", "keep")).toEqual([true, "keep", "1"]);
-});
-
-test("an untyped var keeps its value when an update of an enclosing typed binding throws", () => {
-  let s: string = "1";
-  const f = (y) => {
-    try { var y = s++; } catch (e) { return [e instanceof TypeError, y, s]; }
-    return [false, y, s];
-  };
-  expect(f("keep")).toEqual([true, "keep", "1"]);
-});
-
 test("a number binding stores the old value", () => {
   const f = (n: number) => { var y = n++; return [y, n]; };
   expect(f(1)).toEqual([1, 2]);

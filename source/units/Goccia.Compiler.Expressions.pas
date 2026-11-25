@@ -8741,11 +8741,9 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-// Compiles an update whose result, when kept, goes to ADest as soon as it is
-// computed. CompileIncrement decides when that would be too early.
-procedure CompileIncrementIntoDest(const ACtx: TGocciaCompilationContext;
+procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt16;
-  const AKeepResult: Boolean);
+  const AKeepResult: Boolean = True);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegResult, ObjReg, KeyReg, CondReg: UInt16;
@@ -8911,6 +8909,22 @@ begin
         Exit;
       end;
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      // ES2026 §13.4.2.1 and §13.4.3.1: a postfix update stores the new value
+      // and then returns the old one, so its result cannot share the binding's
+      // register. A default parameter initializer and a var initializer compile
+      // straight into the register of the binding they initialize, and so does
+      // any comma or conditional expression around them; an update of that same
+      // binding there takes its result in a temporary, which then replaces the
+      // binding's value as the initializer's PutValue or InitializeBinding
+      // does (§14.3.2.1, §10.2.11).
+      if AKeepResult and not AExpr.IsPrefix and (ADest = Slot) then
+      begin
+        RegResult := ACtx.Scope.AllocateRegister;
+        CompileIncrement(ACtx, AExpr, RegResult);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+        ACtx.Scope.FreeRegister;
+        Exit;
+      end;
       // A strictly typed binding can be handed a new value its type rejects,
       // so the update runs on a temporary whose value is checked like an
       // assignment's before it replaces the binding's; an update in place
@@ -8971,36 +8985,6 @@ begin
     if ReservedDestRegister then
       ACtx.Scope.FreeRegister;
   end;
-end;
-
-procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaIncrementExpression; const ADest: UInt16;
-  const AKeepResult: Boolean = True);
-var
-  RegResult: UInt16;
-begin
-  // ES2026 §13.4.2.1-§13.4.5.1: an update gives its result only once PutValue
-  // has stored the new value, and that store can throw: a strict type check,
-  // a setter, a const. A var or default parameter initializer compiles
-  // straight into the register of the binding it initializes, and so does any
-  // comma or conditional expression around it, so a result bound for a
-  // binding's register is produced in a temporary and moved there only after
-  // the store. That register can be the updated binding's own, as in
-  // `var x = x++`, which also needs it: a postfix update stores the new value
-  // and returns the old one, so its result cannot share the binding's
-  // register (§14.3.2.1, §10.2.11).
-  if AKeepResult and ACtx.Scope.SlotHoldsLocal(ADest) then
-  begin
-    RegResult := ACtx.Scope.AllocateRegister;
-    try
-      CompileIncrementIntoDest(ACtx, AExpr, RegResult, True);
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-    finally
-      ACtx.Scope.FreeRegister;
-    end;
-  end
-  else
-    CompileIncrementIntoDest(ACtx, AExpr, ADest, AKeepResult);
 end;
 
 procedure AddOptionalChainJump(const ACtx: TGocciaCompilationContext;
