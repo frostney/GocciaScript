@@ -559,7 +559,7 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry{$IFDEF DARWIN}, Goccia.NumberExponentiation{$ENDIF};
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation;
 
 {$IFDEF MSWINDOWS}
 { (declared here: the Windows unit's names would hide SysUtils' in this unit) }
@@ -861,7 +861,8 @@ begin
   if D - Result >= 0.5 then Result := Result + 1;
 end;
 
-{ ES2026 6.1.6.1.3 Number::exponentiate. On macOS through Goccia.NumberExponentiation, a port of the pow glibc and
+{ ES2026 6.1.6.1.3 Number::exponentiate. Exponent -1 and, on macOS, every exponent through
+  Goccia.NumberExponentiation, a port of the pow glibc and
   musl ship (Arm optimized-routines), as macOS's libm rounds a subnormal result differently; elsewhere the system's
   pow, which is faster (glibc ships that algorithm), except where ECMAScript differs: a NaN exponent, and |base| 1
   with an infinite exponent, are NaN }
@@ -872,6 +873,10 @@ begin
   { a positive finite base to the power 0.5: its square root, correctly rounded on every target (the Universal
     CRT's pow is not) }
   if (E = 0.5) and (B > 0) and not IsInfinite(B) then Exit(Sqrt(B));
+  { exponent -1: the correctly rounded 1 / x, which libm's pow (within an ULP) misses for about one base in a
+    thousand; Goccia.NumberExponentiation divides, or for |x| >= 2^1022 rounds the reciprocal in integer
+    arithmetic }
+  if E = -1 then Exit(NumberExponentiation(B, E));
   {$IFDEF DARWIN}
   Result := NumberExponentiation(B, E);
   {$ELSE}
