@@ -363,11 +363,10 @@ checked against its SHA-256, into `build/afl/`. `scripts/afl/as` uses
 `/usr/lib/afl/afl-as`. The package's own `afl-fuzz` and `afl-showmap` drive
 the harness: they still accept the fork server `afl-as` adds, and say "Old
 fork server model is used by the target, this still works though". FPC's
-runtime library stays
-uninstrumented. AFL keeps every mutant that reaches new coverage, so the queue
-grows past the seeds; `afl-showmap` on two different inputs shows different
-maps. Both builds come from the same source with the same checks, so either
-replays a finding.
+runtime library stays uninstrumented. AFL keeps every mutant that reaches new
+coverage, so the queue grows past the seeds; `afl-showmap` on two different
+inputs shows different maps. Both builds come from the same source with the
+same checks, so either replays a finding.
 
 ### Reproducing a finding
 
