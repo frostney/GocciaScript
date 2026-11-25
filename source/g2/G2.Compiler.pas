@@ -1990,7 +1990,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames, BodyEnvParams: TStringList;
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
-  SavedTail: Integer;
+  SavedTail, SavedLine, SavedCol: Integer;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -2177,7 +2177,20 @@ begin
            Assigned(Params[I].DefaultValue) then Continue;
         K := StrictTypeCode(Params[I].TypeAnnotation, nil);
         if K = 0 then Continue;
-        if not Params[I].IsRest then Emit(Ins(opCheckType, J, 0, K));
+        if not Params[I].IsRest then
+        begin
+          { a failed check is located at the parameter it is for }
+          SavedLine := FS.CurLine;
+          SavedCol := FS.CurCol;
+          if Params[I].Line > 0 then
+          begin
+            FS.CurLine := Params[I].Line;
+            FS.CurCol := Params[I].Column;
+          end;
+          Emit(Ins(opCheckType, J, 0, K));
+          FS.CurLine := SavedLine;
+          FS.CurCol := SavedCol;
+        end;
         SetBindingType(UnicodeString(Params[I].Name), K);
       end;
     end;
