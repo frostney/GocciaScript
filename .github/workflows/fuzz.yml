@@ -40,6 +40,12 @@ jobs:
   # reaches new coverage, so the queue grows past the seeds. The plain
   # harness still sweeps the seeds and replays findings; the two builds come
   # from the same source with the same checks (-Ct -Cr -Sa).
+  #
+  # AFL++ removed afl-as after v4.21c, and the runner image's afl++ package
+  # follows upstream (Ubuntu 26.04's 4.33c has none), so
+  # scripts/afl/build-afl-as.sh builds it from the v4.21c release. afl-fuzz
+  # and afl-showmap stay the image's: they accept afl-as's fork server, and
+  # the coverage probe below fails the job if a later release stops doing so.
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -59,6 +65,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install afl++ -qq > /dev/null
+
+      - name: Build afl-as
+        run: scripts/afl/build-afl-as.sh
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
@@ -230,6 +239,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install afl++ valgrind -qq > /dev/null
+
+      - name: Build afl-as
+        # As in the script fuzz job.
+        run: scripts/afl/build-afl-as.sh
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
