@@ -1016,7 +1016,9 @@ function DefineManifestPath(const P, Written: UnicodeString; var Err: UnicodeStr
 var Ext: string;
 begin
   Ext := LowerCase(ExtractFileExt(UTF8Encode(P)));
-  ManifestPath := P;
+  { spelled as the loader is asked for it (DefineModuleManifestVirtualModules expands it): a config joins a relative
+    manifest with '/', which Windows spells '\' once expanded }
+  ManifestPath := UnicodeString(ExpandFileName(UTF8Encode(P)));
   ManifestWritten := Written;
   try
     if (Ext = '.js') or (Ext = '.mjs') or (Ext = '.ts') or (Ext = '.mts') or (Ext = '.jsx') or (Ext = '.tsx') then
