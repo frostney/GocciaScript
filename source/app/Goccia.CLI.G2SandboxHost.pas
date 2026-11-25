@@ -447,6 +447,19 @@ begin
           end;
         end;
       except
+        on E: EOutOfMemory do
+        begin
+          { a nested run's engine the process has no memory for (on a 32-bit build the nesting limit's engines,
+            each with its register stack and frames, fill the address space first): the host's ceiling, which a
+            guest reaches by nesting, as the nesting depth is }
+          Result.Ok := False;
+          Result.ExitCode := 1;
+          Result.ErrorMessage := E.Message;
+          if Run.Parent <> nil then
+            Result.FailureKind := sfkResourceLimit
+          else
+            Result.FailureKind := sfkHostError;
+        end;
         on E: Exception do
         begin
           Result.Ok := False;
