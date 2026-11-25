@@ -2163,6 +2163,24 @@ begin
       FreeTo(Tmp);
       PushWithEntry(EnvName, FS, 0, 1, 0);
     end;
+    { strict-types: an annotated parameter's argument is checked on entry, before the parameter list's code runs
+      (a default can read it, or replace it), and so is every later store }
+    if ProfileStrictTypes then
+    begin
+      { an optional parameter or one with a default is not checked; a rest parameter's type applies to later
+        stores only }
+      J := 0;
+      for I := 0 to High(Params) do
+      begin
+        if not Params[I].IsRest then Inc(J);
+        if Params[I].IsPattern or (Params[I].TypeAnnotation = '') or Params[I].IsOptional or
+           Assigned(Params[I].DefaultValue) then Continue;
+        K := StrictTypeCode(Params[I].TypeAnnotation, nil);
+        if K = 0 then Continue;
+        if not Params[I].IsRest then Emit(Ins(opCheckType, J, 0, K));
+        SetBindingType(UnicodeString(Params[I].Name), K);
+      end;
+    end;
     { default values and destructuring of parameters }
     J := 0;
     InParamInit := True;
@@ -2286,23 +2304,6 @@ begin
         B := FS.Scopes[0].Find(Params[I].Name);
         if B >= 0 then FS.Scopes[0].Bindings[B].IsLexical := False;
       end;
-    { strict-types: an annotated parameter's argument (or default) is checked, and so is every later store }
-    if ProfileStrictTypes then
-    begin
-      { an optional parameter or one with a default is not checked; a rest parameter's type applies to later
-        stores only }
-      J := 0;
-      for I := 0 to High(Params) do
-      begin
-        if not Params[I].IsRest then Inc(J);
-        if Params[I].IsPattern or (Params[I].TypeAnnotation = '') or Params[I].IsOptional or
-           Assigned(Params[I].DefaultValue) then Continue;
-        K := StrictTypeCode(Params[I].TypeAnnotation, nil);
-        if K = 0 then Continue;
-        if not Params[I].IsRest then Emit(Ins(opCheckType, J, 0, K));
-        SetBindingType(UnicodeString(Params[I].Name), K);
-      end;
-    end;
     InParamInit := False;
     F.ParamAwait := False;
     if SloppyEval and not T^.SimpleParams and not T^.IsStrict and not ((Outer <> nil) and Outer.IsEvalOuter) then
@@ -2420,6 +2421,9 @@ begin
             Emit(Ins(opMov, R, FS.Scopes[0].Bindings[K].Reg, 0));
             FS.Scopes[0].Bindings[K].Reg := R;
             FS.Scopes[0].Bindings[K].IsParam := False;
+            { strict-types: the new binding has no type of its own; a typed parameter's type stays the
+              parameter's }
+            FS.Scopes[0].Bindings[K].LType := 0;
           end
           else if FS.Scopes[0].Find(Names[I]) < 0 then
           begin
@@ -3285,7 +3289,7 @@ const
 
 procedure TCompiler.HoistBlock(L: TList<TGocciaASTNode>);
 var I: Integer; N: TGocciaASTNode; VD: TGocciaVariableDeclaration; K: Integer; FD: TGocciaFunctionDeclaration;
-  T: PFuncTemplate; R: Integer; HoistMask: Cardinal;
+  T: PFuncTemplate; R, Tmp: Integer; HoistMask: Cardinal;
 begin
   for I := 0 to L.Count - 1 do
   begin
@@ -3360,7 +3364,18 @@ begin
         Continue;
       end;
       NoteWrite(FD.Name);
-      EmitClosure(R, T);
+      if BindingType(FD.Name) <> 0 then
+      begin
+        { strict-types: a function declaration that shares a typed parameter's binding (10.2.11 step 29) is a
+          store into it, checked first, so code compiled against the type never sees the function }
+        Tmp := FS.FreeReg; AllocReg;
+        EmitClosure(Tmp, T);
+        Emit(Ins(opCheckType, Tmp, 0, BindingType(FD.Name)));
+        Emit(Ins(opMov, R, Tmp, 0));
+        FreeTo(Tmp);
+      end
+      else
+        EmitClosure(R, T);
     end;
   end;
 end;
@@ -4528,7 +4543,7 @@ begin
 end;
 
 procedure TCompiler.CompileVarDecl(D: TGocciaVariableDeclaration);
-var I, R, T: Integer; V: TGocciaVariableInfo;
+var I, R, T, Own: Integer; V: TGocciaVariableInfo;
 begin
   for I := 0 to High(D.Variables) do
   begin
@@ -4572,6 +4587,28 @@ begin
         Continue;
       end;
       R := DeclareLocal(V.Name, D.IsConst);
+    end;
+    if D.IsVar and V.HasInitializer and ProfileStrictTypes and
+       ((BindingType(V.Name) <> 0) or (StrictTypeCode(V.TypeAnnotation, V.Initializer) <> 0)) then
+    begin
+      { strict-types: a var store whose binding or own declaration is typed goes to a temporary, is checked
+        against the declaration's own type and the binding's, and only then reaches the binding, so a rejected
+        value never reaches it; the binding keeps the type it has, or takes the declaration's }
+      Own := StrictTypeCode(V.TypeAnnotation, V.Initializer);
+      T := FS.FreeReg; AllocReg;
+      if (V.Initializer is TGocciaFunctionExpression) or (V.Initializer is TGocciaArrowFunctionExpression) then
+        CompileFuncExpr(V.Initializer, T, V.Name)
+      else if V.Initializer is TGocciaClassExpression then
+        CompileClass(TGocciaClassExpression(V.Initializer).ClassDefinition, T, V.Name)
+      else
+        ExprTo(V.Initializer, T);
+      if Own <> 0 then Emit(Ins(opCheckType, T, 0, Own));
+      if (BindingType(V.Name) <> 0) and (BindingType(V.Name) <> Own) then
+        Emit(Ins(opCheckType, T, 0, BindingType(V.Name)));
+      Emit(Ins(opMov, R, T, 0));
+      FreeTo(T);
+      if BindingType(V.Name) = 0 then SetBindingType(V.Name, Own);
+      Continue;
     end;
     if V.HasInitializer then
     begin
