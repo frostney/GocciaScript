@@ -740,6 +740,13 @@ begin
     AError := 'not a regular file';
     Exit(rhfNotRegularFile);
   end;
+  {$ELSE}
+  { The Lakon/WASI filesystem has directories and regular files only. }
+  if DirectoryExists(APath) then
+  begin
+    AError := 'not a regular file';
+    Exit(rhfNotRegularFile);
+  end;
   {$ENDIF}
   try
     ABytes := ReadFileBytes(APath);
