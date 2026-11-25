@@ -13,7 +13,8 @@
 #
 # - AFL_SKIP_CPUFREQ and AFL_NO_AFFINITY are the usual accommodations for
 #   shared runners. AFL_MAP_SIZE and AFL_MAPSIZE are cleared, so the map is
-#   the 1 MiB that scripts/afl/build-afl.sh builds the tools with.
+#   the 1 MiB that scripts/afl/build-afl.sh builds the tools with, and
+#   AFL_AUTORESUME too: each campaign starts fresh.
 # - -t 5000: the harness's own budget is 1000 ms and a harness timeout is a
 #   normal exit-0 outcome, so AFL's exec threshold sits well above it;
 #   otherwise process overhead around a legitimate slow input lands it in
@@ -38,6 +39,12 @@ seconds=$1
 seeds=$2
 out=$3
 shift 4
+# A relative directory is named from ./, so no command below takes one that
+# starts with - for an option.
+case $out in
+  /*) ;;
+  *) out=./$out ;;
+esac
 
 # The workflow's dispatch input arrives as text. Its digits are checked
 # before any arithmetic, which would read 0900 as octal and wrap a long
@@ -51,10 +58,17 @@ fi
 seconds=$((10#$digits))
 deadline=$((seconds + 900))
 
-mkdir -p -- "$out"
+# A fresh campaign only: on a resume afl-fuzz's run_time includes the earlier
+# run, so the check below could not tell whether this one ran its course.
+if [ "$seeds" = - ] || [ -e "$out/default" ]; then
+  echo "::error::scripts/afl/fuzz.sh starts a fresh campaign: give it seeds and an output directory without a default/ campaign" >&2
+  exit 2
+fi
+
+mkdir -p "$out"
 status=0
 started=$SECONDS
-env -u AFL_MAP_SIZE -u AFL_MAPSIZE \
+env -u AFL_MAP_SIZE -u AFL_MAPSIZE -u AFL_AUTORESUME \
   AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
   timeout -k 60 "$deadline" afl-fuzz -V "$seconds" -t 5000 \
   -i "$seeds" -o "$out" -- "$@" || status=$?
@@ -83,10 +97,10 @@ case $status in
     ;;
 esac
 
-if compgen -G "$out/default/crashes/id:*" > /dev/null; then
+if [ -n "$(find "$out/default/crashes" -maxdepth 1 -name 'id:*' -print -quit 2> /dev/null)" ]; then
   exit 0
 fi
-fuzzed=$(awk -F' *: *' '$1 == "run_time" { print $2 }' "$out/default/fuzzer_stats" 2> /dev/null || true)
+fuzzed=$(awk -F' *: *' '$1 == "run_time" { print $2 }' < "$out/default/fuzzer_stats" 2> /dev/null || true)
 if ! [[ $fuzzed =~ ^[0-9]+$ ]] || [ "$fuzzed" -lt "$seconds" ]; then
   echo "::error::afl-fuzz exited 0 after ${fuzzed:-an unknown number of} seconds of fuzzing, short of its ${seconds}s limit, and saved no crash"
   exit 1

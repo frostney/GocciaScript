@@ -387,9 +387,10 @@ SIGSEGV writing past a 64 KiB map.
 `scripts/afl/as` uses `AFL_PATH/afl-as` when `AFL_PATH` is set and not empty,
 else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`; the build above empties
 `AFL_PATH` so that it takes the `afl-as` just built. The scheduled workflow
-runs each campaign through `scripts/afl/fuzz.sh`, which stops `afl-fuzz`
-after the given seconds of fuzzing (1 to 3600) and fails a run that ends
-any other way, unless it stopped on a crash it saved.
+runs each campaign through `scripts/afl/fuzz.sh`, which starts `afl-fuzz` in
+a fresh output directory, stops it after the given seconds of fuzzing (1 to
+3600) and fails a run that ends any other way, unless it stopped on a crash
+it saved.
 
 ### Reproducing a finding
 
