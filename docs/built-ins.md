@@ -44,12 +44,12 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | Method | Description |
 |--------|-------------|
 | `console.log(...args)` | Output to stdout with space-separated values |
-| `console.warn(...args)` | Output with "Warning:" prefix |
-| `console.error(...args)` | Output with "Error:" prefix |
+| `console.warn(...args)` | Output with "Warning:" prefix ([stderr](#console-streams)) |
+| `console.error(...args)` | Output with "Error:" prefix ([stderr](#console-streams)) |
 | `console.info(...args)` | Output with "Info:" prefix |
 | `console.debug(...args)` | Output with "Debug:" prefix |
 | `console.dir(obj)` | Display object properties |
-| `console.assert(condition, ...args)` | Print if assertion fails |
+| `console.assert(condition, ...args)` | Print if assertion fails ([stderr](#console-streams)) |
 | `console.count(label?)` | Increment and print named counter |
 | `console.countReset(label?)` | Reset named counter |
 | `console.time(label?)` | Start a named timer |
@@ -58,7 +58,7 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | `console.clear()` | No-op (placeholder for terminal clearing) |
 | `console.group(label?)` | Increase indentation level |
 | `console.groupEnd()` | Decrease indentation level |
-| `console.trace(...args)` | Print with "Trace:" prefix |
+| `console.trace(...args)` | Print with "Trace:" prefix ([stderr](#console-streams)) |
 | `console.table(data)` | Display data (formatted output) |
 
 **Value formatting:** Arguments are rendered the way Node's `util.inspect` renders them. Strings print as they are at the top level and quoted inside containers. A function prints as `[Function: name]`, or `[Function (anonymous)]` when its name is empty, with `AsyncFunction`, `GeneratorFunction` or `AsyncGeneratorFunction` in place of `Function` for those kinds. A class prints as `[class K]` or `[class K extends B]`. An `Error` prints its `stack`, or `[name: message]` when the stack lists no frames; `[cause]` and an `AggregateError`'s `[errors]` follow it. A function, class or error then lists its own enumerable properties in braces: `[Function: f] { a: 1 }`. A container or error holding a multi-line entry, such as another error's stack, puts each entry on its own line, indented by two spaces. Inside `console.group`, every line of a multi-line value is indented. Depth beyond `inspect-depth` reads `[Object]`, `[Array]`, `[Set]` or `[Map]`. Test-assertion messages keep the plain object rendering.
@@ -66,6 +66,10 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 **Output capture:** The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
 
 Separately, the `TGocciaCLIApplication`-based CLI hosts use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
+
+#### Console streams
+
+When the console writes to the process itself, as `GocciaRunner` does outside sandbox mode, `warn`, `error`, `assert` and `trace` write to standard error, as in Node, and every other method that prints a line writes to standard output. Each line is flushed as it is logged, so a process reading a piped stdout or stderr gets it while the script runs, and with both streams on one pipe the lines keep their order. A line whose write fails with an error (a closed or read-only descriptor, a full disk, a pipe whose reader has gone) is dropped and the script goes on; a signal the write raises other than SIGPIPE, such as SIGXFSZ past a file-size limit, keeps its default action. Where a host captures console output instead (an `OutputCallback`, sandbox mode, `--output=json`), it receives every line with its method name and decides where it goes; sandbox mode prints the captured lines to stdout after the run.
 
 ### Math (`Goccia.Builtins.Math.pas`)
 
