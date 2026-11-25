@@ -16,7 +16,7 @@
 #   FPC label starts with `.L0`. String data is left as it is.
 #
 # afl-as comes from AFL_PATH when it is set. Otherwise it is build/afl/afl-as,
-# which scripts/afl/build-afl-as.sh builds, or else /usr/lib/afl/afl-as, where
+# which scripts/afl/build-afl.sh builds, or else /usr/lib/afl/afl-as, where
 # Debian and Ubuntu installed it until AFL++ dropped it after v4.21c. FPC
 # passes the source file last.
 set -euo pipefail
@@ -35,7 +35,7 @@ for candidate in "${candidates[@]}"; do
   fi
 done
 if [ -z "$afl_as" ]; then
-  echo "scripts/afl/as: no afl-as at ${candidates[*]} (run scripts/afl/build-afl-as.sh, or set AFL_PATH)" >&2
+  echo "scripts/afl/as: no afl-as at ${candidates[*]} (run scripts/afl/build-afl.sh, or set AFL_PATH)" >&2
   exit 1
 fi
 
