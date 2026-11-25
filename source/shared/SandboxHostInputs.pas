@@ -273,9 +273,9 @@ begin
   Result := ExcludeTrailingPathDelimiter(Result);
 end;
 
-{ Copy-in judges a name's type without opening it
-  (FileUtils.HostPathIsRegularFile, which follows no link either) and refuses
-  anything that is neither a regular file nor a directory. }
+{ Copy-in judges a name's type without opening it (IsLinkOrSpecialFile, an
+  lstat of the name as the RTL spells it, the spelling FindFirst listed) and
+  refuses anything that is neither a regular file nor a directory. }
 procedure RefuseSpecialFile(const APath: string);
 begin
   raise ESandboxHostInputError.Create(
@@ -632,11 +632,11 @@ begin
       if (SearchRec.Attr and faDirectory) <> 0 then
         CopyDirectoryContents(HostChild,
           SandboxJoinPath(ASandboxDirectory, SearchRec.Name))
-      else if FileUtils.HostPathIsRegularFile(HostChild) then
-        CopyFile(HostChild, SandboxJoinPath(ASandboxDirectory,
-          SearchRec.Name))
+      else if IsLinkOrSpecialFile(HostChild) then
+        RefuseSpecialFile(HostChild)
       else
-        RefuseSpecialFile(HostChild);
+        CopyFile(HostChild, SandboxJoinPath(ASandboxDirectory,
+          SearchRec.Name));
     until FindNext(SearchRec) <> 0;
   finally
     FindClose(SearchRec);
@@ -681,7 +681,7 @@ begin
     Exit;
   end;
 
-  if not FileUtils.HostPathIsRegularFile(HostPath) then
+  if IsLinkOrSpecialFile(HostPath) then
     RefuseSpecialFile(HostPath);
   if (Result = SANDBOX_SEPARATOR) or
      SandboxPathHasTrailingSeparator(ASandboxPath) or

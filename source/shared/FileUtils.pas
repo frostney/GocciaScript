@@ -110,13 +110,14 @@ type
 
 { Every byte of APath, only when it is a regular file, read without waiting
   on it. On POSIX the name is opened without following a symbolic link and
-  without blocking, and the opened file's own type is checked before a byte
-  is read: a FIFO swapped in for the file opens at once instead of waiting
-  for a writer, and is refused like a socket or a device. A file that ends
-  before the size it had when it was opened is a failure, not a shorter
-  copy. Windows has no FIFOs in the filesystem; there a name that is not a
+  without blocking, spelled as the RTL spells file names, and the opened
+  file's own type is checked before a byte is read: a FIFO swapped in for
+  the file opens at once instead of waiting for a writer, and is refused
+  like a socket or a device. Exactly the size the file had when it was
+  opened is read; one that ends sooner is a failure, not a shorter copy.
+  Windows has no FIFOs in the filesystem; there a name that is not a
   regular file (a directory or a reparse point) is refused before it is
-  opened. AError says why, without repeating the path, whenever the result
+  opened, and one that cannot be looked up is a failure. AError says why, without repeating the path, whenever the result
   is not rhfRead. }
 function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
   out AError: string): TRegularHostFileRead;
@@ -608,25 +609,34 @@ end;
 function ReadRegularHostFileBytes(const APath: string; out ABytes: TBytes;
   out AError: string): TRegularHostFileRead;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  NOT_A_REGULAR_FILE = 'not a regular file';
 var
   Handle: cint;
   Info: Stat;
-  PathBytes: TBytes;
-  ErrorOffset: Integer;
+  PathBytes: RawByteString;
+  Offset: SizeInt;
+  Count: TSsize;
 begin
   ABytes := nil;
   AError := '';
   Result := rhfFailed;
-  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
-  begin
-    AError := 'path cannot be encoded for the host';
-    Exit;
-  end;
-  Handle := fpOpen(PAnsiChar(@PathBytes[0]),
+  { Spelled as the RTL spells file names, so the name opened is the one
+    FindFirst listed and FileExists checked, whatever the locale. }
+  PathBytes := ToSingleByteFileSystemEncodedFileName(APath);
+  Handle := fpOpen(PAnsiChar(PathBytes),
     O_RDONLY or O_NONBLOCK or HOST_O_NOFOLLOW or HOST_O_CLOEXEC);
   if Handle < 0 then
   begin
     AError := SysErrorMessage(fpgeterrno);
+    { A socket does not open at all, and a link is not followed: either is
+      still something that is not a regular file. }
+    if (fpLStat(PAnsiChar(PathBytes), Info) = 0) and
+       not fpS_ISREG(Info.st_mode) then
+    begin
+      AError := NOT_A_REGULAR_FILE;
+      Result := rhfNotRegularFile;
+    end;
     Exit;
   end;
   try
@@ -637,16 +647,28 @@ begin
     end;
     if not fpS_ISREG(Info.st_mode) then
     begin
-      AError := 'not a regular file';
+      AError := NOT_A_REGULAR_FILE;
       Exit(rhfNotRegularFile);
     end;
-    if not ReadHostHandleBytes(Handle, ABytes, AError) then
-      Exit;
-    if Length(ABytes) < Info.st_size then
+    { Exactly the size the file had when it was opened: a file that grows
+      meanwhile is copied as it was, one that ends sooner is a failure. }
+    SetLength(ABytes, Info.st_size);
+    Offset := 0;
+    while Offset < Length(ABytes) do
     begin
-      ABytes := nil;
-      AError := 'the file shrank while it was read';
-      Exit;
+      Count := fpRead(Handle, ABytes[Offset], Length(ABytes) - Offset);
+      if (Count < 0) and (fpgeterrno = ESysEINTR) then
+        Continue;
+      if Count <= 0 then
+      begin
+        if Count < 0 then
+          AError := SysErrorMessage(fpgeterrno)
+        else
+          AError := 'the file shrank while it was read';
+        ABytes := nil;
+        Exit;
+      end;
+      Inc(Offset, Count);
     end;
     Result := rhfRead;
   finally
@@ -654,28 +676,29 @@ begin
   end;
 end;
 {$ELSE}
+{$IFDEF MSWINDOWS}
 var
-  Stream: TFileStream;
+  Attributes: LongInt;
+{$ENDIF}
 begin
   ABytes := nil;
   AError := '';
   Result := rhfFailed;
   {$IFDEF MSWINDOWS}
-  if not HostPathIsRegularFile(APath) then
+  Attributes := FileGetAttr(APath);
+  if Attributes = -1 then
+  begin
+    AError := SysErrorMessage(GetLastOSError);
+    Exit;
+  end;
+  if (Attributes and (faDirectory or faSymLink)) <> 0 then
   begin
     AError := 'not a regular file';
     Exit(rhfNotRegularFile);
   end;
   {$ENDIF}
   try
-    Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
-    try
-      SetLength(ABytes, Stream.Size);
-      if Length(ABytes) > 0 then
-        Stream.ReadBuffer(ABytes[0], Length(ABytes));
-    finally
-      Stream.Free;
-    end;
+    ABytes := ReadFileBytes(APath);
   except
     on E: Exception do
     begin

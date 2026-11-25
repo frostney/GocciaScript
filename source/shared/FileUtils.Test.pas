@@ -650,7 +650,8 @@ begin
   FillChar(Action, SizeOf(Action), 0);
   Action.sa_handler := SigActionHandler(@InterruptOnAlarm);
   Action.sa_flags := 0;
-  FpSigAction(SIGALRM, @Action, @Previous);
+  if FpSigAction(SIGALRM, @Action, @Previous) <> 0 then
+    Exit('the deadline could not be set');
   FpAlarm(FIFO_DEADLINE_SECONDS);
   try
     Result := ReadRegularHostFileBytesOutcome(APath);
@@ -694,12 +695,12 @@ begin
     'not regular: not a regular file');
   Expect<string>(ReadRegularHostFileBytesOutcome('/dev/null')).ToBe(
     'not regular: not a regular file');
-  { A link to a regular file is not followed. }
+  { A link to a regular file is not followed: the link itself is not a
+    regular file. }
   Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Target)),
     PAnsiChar(AnsiString(FTempDir + PathDelim + 'link.bin')))).ToBe(0);
-  Outcome := ReadRegularHostFileBytesOutcome(FTempDir + PathDelim +
-    'link.bin');
-  Expect<string>(Copy(Outcome, 1, Length('failed: '))).ToBe('failed: ');
+  Expect<string>(ReadRegularHostFileBytesOutcome(FTempDir + PathDelim +
+    'link.bin')).ToBe('not regular: not a regular file');
   {$ENDIF}
 end;
 

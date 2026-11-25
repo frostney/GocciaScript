@@ -26,6 +26,19 @@ type
     function Now: TDateTime; override;
   end;
 
+  { A sandbox clock that, once armed, replaces a host file with a FIFO the
+    first time the sandbox asks it the time: a copy of a file into a new
+    sandbox directory asks when it makes the directory, after copy-in has
+    judged the file by its name and before it opens it. }
+  TSwapToFifoClock = class(TSandboxFsClock)
+  private
+    FPath: string;
+    FArmed: Boolean;
+  public
+    procedure Arm(const APath: string);
+    function Now: TDateTime; override;
+  end;
+
   TSandboxHostInputsTests = class(TTestSuite)
   private
     FRoot: string;
@@ -39,10 +52,12 @@ type
     procedure TestDirectoryTargets;
     procedure TestMissingHostPath;
     procedure TestSymlinksRejected;
-    function SpecialFileError(const AInput, ASandboxPath: string): string;
+    function SpecialFileError(const AInputs: TSandboxHostInputs;
+      const AInput, ASandboxPath: string): string;
     procedure TestFifoInsideADirectoryRejected;
     procedure TestFifoInputRejected;
     procedure TestDeviceInputRejected;
+    procedure TestFifoSwappedInAfterTheNameCheckRejected;
     procedure TestEntryInsideInput;
     procedure TestLongestOriginWins;
     procedure TestWriteBackOnlyReadWriteOrigins;
@@ -106,11 +121,25 @@ begin
   Test('A missing host path is refused', TestMissingHostPath);
   Test('Symbolic links are refused, at the top and inside a directory',
     TestSymlinksRejected);
+  {$IFDEF UNIX}
   Test('A FIFO inside a copied directory is refused without waiting',
     TestFifoInsideADirectoryRejected);
   Test('A FIFO given as the input is refused without waiting',
     TestFifoInputRejected);
   Test('A device given as the input is refused', TestDeviceInputRejected);
+  Test('A FIFO swapped in after the name check is refused the same way',
+    TestFifoSwappedInAfterTheNameCheckRejected);
+  {$ELSE}
+  Skip('A FIFO inside a copied directory is refused without waiting',
+    TestFifoInsideADirectoryRejected, 'Windows has no FIFOs in the filesystem');
+  Skip('A FIFO given as the input is refused without waiting',
+    TestFifoInputRejected, 'Windows has no FIFOs in the filesystem');
+  Skip('A device given as the input is refused', TestDeviceInputRejected,
+    'a Windows device such as NUL is not a file in a directory');
+  Skip('A FIFO swapped in after the name check is refused the same way',
+    TestFifoSwappedInAfterTheNameCheckRejected,
+    'Windows has no FIFOs in the filesystem');
+  {$ENDIF}
   Test('A host file inside a copied input maps to its sandbox path',
     TestEntryInsideInput);
   Test('The longest matching origin supplies a sandbox path',
@@ -299,80 +328,127 @@ end;
 const
   FIFO_MODE = $1B6;
   SPECIAL_FILE_REFUSAL = 'Copy path is not a regular file (not supported): ';
+  { Long enough for any copy that does not wait, short enough not to stall
+    the suite. }
+  FIFO_DEADLINE_SECONDS = 5;
 
-{ A FIFO at APath, held open for reading and writing until the returned
-  descriptor is closed: a copy that did open the FIFO would then not wait
-  forever, so a regression fails its test rather than hanging the suite. }
-function MakeHeldFifo(const APath: string): cint;
+{ Does nothing: a blocked open(2) or read(2) that the alarm interrupts
+  returns EINTR, because the handler is installed without SA_RESTART. }
+procedure InterruptOnAlarm(ASignal: cint; AInfo: PSigInfo;
+  AContext: PSigContext); cdecl;
 begin
-  if FpMkfifo(PAnsiChar(AnsiString(APath)), FIFO_MODE) <> 0 then
-    Exit(-1);
-  Result := FpOpen(PAnsiChar(AnsiString(APath)), O_RDWR or O_NONBLOCK);
 end;
 {$ENDIF}
 
-{ CopyError for AInput copied to ASandboxPath, with nothing left at
-  ASandboxPath. }
-function TSandboxHostInputsTests.SpecialFileError(const AInput,
-  ASandboxPath: string): string;
+procedure TSwapToFifoClock.Arm(const APath: string);
 begin
-  Result := CopyError(AInput, ASandboxPath);
-  Expect<Boolean>(FFs.IsFile(ASandboxPath)).ToBe(False);
+  FPath := APath;
+  FArmed := True;
+end;
+
+function TSwapToFifoClock.Now: TDateTime;
+begin
+  if FArmed then
+  begin
+    FArmed := False;
+    {$IFDEF UNIX}
+    if not DeleteFile(FPath) or
+       (FpMkfifo(PAnsiChar(AnsiString(FPath)), FIFO_MODE) <> 0) then
+      raise Exception.Create('could not swap ' + FPath + ' for a FIFO');
+    {$ENDIF}
+  end;
+  Result := SysUtils.Now;
+end;
+
+{ The refusal AInputs gives for copying AInput to ASandboxPath, under a
+  deadline, so a copy that waited on a FIFO fails the test instead of hanging
+  the suite. }
+function TSandboxHostInputsTests.SpecialFileError(
+  const AInputs: TSandboxHostInputs;
+  const AInput, ASandboxPath: string): string;
+{$IFDEF UNIX}
+var
+  Action, Previous: SigActionRec;
+{$ENDIF}
+begin
+  Result := '';
+  {$IFDEF UNIX}
+  FillChar(Action, SizeOf(Action), 0);
+  Action.sa_handler := SigActionHandler(@InterruptOnAlarm);
+  Action.sa_flags := 0;
+  Expect<Integer>(FpSigAction(SIGALRM, @Action, @Previous)).ToBe(0);
+  FpAlarm(FIFO_DEADLINE_SECONDS);
+  try
+    try
+      AInputs.CopyIn(AInput, ASandboxPath, False);
+    except
+      on E: ESandboxHostInputError do
+        Result := E.Message;
+    end;
+  finally
+    FpAlarm(0);
+    FpSigAction(SIGALRM, @Previous, nil);
+  end;
+  {$ENDIF}
 end;
 
 procedure TSandboxHostInputsTests.TestFifoInsideADirectoryRejected;
-{$IFDEF UNIX}
-var
-  Held: cint;
-{$ENDIF}
 begin
   {$IFDEF UNIX}
   WriteHostFile('in/a.txt', 'a');
-  Held := MakeHeldFifo(HostPath('in/pipe'));
-  Expect<Boolean>(Held >= 0).ToBe(True);
-  try
-    Expect<string>(SpecialFileError(HostPath('in'), '/in/pipe')).ToBe(
-      SPECIAL_FILE_REFUSAL + HostPath('in/pipe'));
-  finally
-    if Held >= 0 then
-      FpClose(Held);
-  end;
-  {$ELSE}
-  { Windows has no FIFOs in the filesystem. }
-  Expect<Boolean>(True).ToBe(True);
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('in/pipe'))),
+    FIFO_MODE)).ToBe(0);
+  Expect<string>(SpecialFileError(FInputs, HostPath('in'), '/in')).ToBe(SPECIAL_FILE_REFUSAL + HostPath('in/pipe'));
+  Expect<Boolean>(FFs.IsFile('/in/pipe')).ToBe(False);
   {$ENDIF}
 end;
 
 procedure TSandboxHostInputsTests.TestFifoInputRejected;
-{$IFDEF UNIX}
-var
-  Held: cint;
-{$ENDIF}
 begin
   {$IFDEF UNIX}
-  Held := MakeHeldFifo(HostPath('top'));
-  Expect<Boolean>(Held >= 0).ToBe(True);
-  try
-    Expect<string>(SpecialFileError(HostPath('top'), '/top')).ToBe(
-      SPECIAL_FILE_REFUSAL + HostPath('top'));
-  finally
-    if Held >= 0 then
-      FpClose(Held);
-  end;
-  {$ELSE}
-  { Windows has no FIFOs in the filesystem. }
-  Expect<Boolean>(True).ToBe(True);
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('top'))),
+    FIFO_MODE)).ToBe(0);
+  Expect<string>(SpecialFileError(FInputs, HostPath('top'), '/top'))
+    .ToBe(SPECIAL_FILE_REFUSAL + HostPath('top'));
+  Expect<Boolean>(FFs.IsFile('/top')).ToBe(False);
   {$ENDIF}
 end;
 
 procedure TSandboxHostInputsTests.TestDeviceInputRejected;
 begin
   {$IFDEF UNIX}
-  Expect<string>(SpecialFileError('/dev/null', '/null')).ToBe(
-    SPECIAL_FILE_REFUSAL + '/dev/null');
-  {$ELSE}
-  { A Windows device name such as NUL is not a file in a directory. }
-  Expect<Boolean>(True).ToBe(True);
+  Expect<string>(SpecialFileError(FInputs, '/dev/null', '/null'))
+    .ToBe(SPECIAL_FILE_REFUSAL + '/dev/null');
+  Expect<Boolean>(FFs.IsFile('/null')).ToBe(False);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestFifoSwappedInAfterTheNameCheckRejected;
+{$IFDEF UNIX}
+var
+  Clock: TSwapToFifoClock;
+  Fs: TSandboxVirtualFileSystem;
+  Inputs: TSandboxHostInputs;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { The read checks what it opened, so the swap gets the same refusal as a
+    FIFO the name check saw, and nothing waits on it. }
+  WriteHostFile('later.txt', 'regular when checked');
+  Clock := TSwapToFifoClock.Create;
+  Fs := TSandboxVirtualFileSystem.Create(SWAP_TEST_QUOTA_BYTES, Clock);
+  Inputs := TSandboxHostInputs.Create(Fs);
+  try
+    Clock.Arm(HostPath('later.txt'));
+    Expect<string>(SpecialFileError(Inputs, HostPath('later.txt'),
+      '/sub/later.txt')).ToBe(SPECIAL_FILE_REFUSAL +
+      HostPath('later.txt'));
+    Expect<Boolean>(Fs.IsFile('/sub/later.txt')).ToBe(False);
+  finally
+    Inputs.Free;
+    Fs.Free;
+    Clock.Free;
+  end;
   {$ENDIF}
 end;
 
