@@ -171,6 +171,11 @@ type
 function TryPinBeneath(const ARoot, APath: string; out APin: TSandboxHostPin;
   out AError: string): Boolean;
 
+{ The directory write-back writes AOrigin's files under, as a path: the
+  input itself, or a file input's directory. A root stays a root, so a file
+  directly under `/` (or `C:\`) has `/` (or `C:\`) as its directory. }
+function OriginRootPath(const AOrigin: TSandboxHostOrigin): string;
+
 { Writes ABytes to APath, a path the user named on the command line: a
   regular file (or none) is replaced atomically, through a temporary beside
   it; anything else the user chose — a link, /dev/null, a FIFO — is opened
@@ -235,7 +240,7 @@ begin
 end;
 
 { True when APath is ARoot or lies under it. Both are absolute host paths
-  without a trailing separator. }
+  without a trailing separator, except a root, which keeps its own. }
 function HostPathIsWithin(const APath, ARoot: string): Boolean;
 var
   Root: string;
@@ -259,7 +264,7 @@ begin
   Result := CanonicalHostPath(APath);
   if Result = '' then
     Result := ExpandHostFileName(APath);
-  Result := ExcludeTrailingPathDelimiter(Result);
+  Result := ExcludeTrailingHostPathDelimiter(Result);
 end;
 
 function ReadHostBytes(const APath: string): TBytes;
@@ -282,7 +287,7 @@ function CanonicalWithMissingTail(const APath: string): string;
 var
   Existing, Tail: string;
 begin
-  Existing := ExcludeTrailingPathDelimiter(ExpandHostFileName(APath));
+  Existing := ExcludeTrailingHostPathDelimiter(ExpandHostFileName(APath));
   Tail := '';
   while (Existing <> '') and not HostFileExists(Existing) and
      not HostDirectoryExists(Existing) and
@@ -292,7 +297,7 @@ begin
       Tail := ExtractFileName(Existing)
     else
       Tail := ExtractFileName(Existing) + PathDelim + Tail;
-    Existing := ExcludeTrailingPathDelimiter(ExtractFileDir(Existing));
+    Existing := ExcludeTrailingHostPathDelimiter(ExtractFileDir(Existing));
   end;
   Result := CanonicalOrExpanded(Existing);
   if Tail <> '' then
@@ -467,14 +472,13 @@ begin
       AOrigin.WriteRoute;
 end;
 
-{ The directory write-back writes an origin's files under, as a path: the
-  input itself, or a file input's directory. }
 function OriginRootPath(const AOrigin: TSandboxHostOrigin): string;
 begin
   if AOrigin.IsDirectory then
     Result := AOrigin.HostPath
   else
-    Result := ExcludeTrailingPathDelimiter(ExtractFileDir(AOrigin.HostPath));
+    Result := ExcludeTrailingHostPathDelimiter(ExtractFileDir(
+      AOrigin.HostPath));
 end;
 
 procedure TSandboxHostInputs.RecordOrigin(const AHostPath,
@@ -487,7 +491,7 @@ begin
   Index := Length(FOrigins);
   SetLength(FOrigins, Index + 1);
   FOrigins[Index].SandboxPath := ASandboxPath;
-  FOrigins[Index].HostPath := ExcludeTrailingPathDelimiter(AHostPath);
+  FOrigins[Index].HostPath := ExcludeTrailingHostPathDelimiter(AHostPath);
   FOrigins[Index].IsDirectory := AIsDirectory;
   FOrigins[Index].ReadWrite := AReadWrite;
   if APin.IsSet then
@@ -592,8 +596,8 @@ begin
   { Strip any trailing separator before the symlink check: POSIX lstat()
     follows a final symlink when the path ends in '/', so without this a
     symlinked leaf would be rejected as `linkdir` but dereferenced as
-    `linkdir/`. }
-  HostPath := ExcludeTrailingPathDelimiter(ExpandHostFileName(AHostPath));
+    `linkdir/`. A root keeps its separator, which no link can be. }
+  HostPath := ExcludeTrailingHostPathDelimiter(ExpandHostFileName(AHostPath));
   if HostPathIsSymlink(HostPath) then
     raise ESandboxHostInputError.Create(
       'Copy path is a symlink (not supported): ' + HostPath);
@@ -625,7 +629,7 @@ end;
 function TSandboxHostInputs.SandboxPathOfHostFile(const AHostPath: string;
   out ASandboxPath: string): Boolean;
 var
-  FilePath, OriginPath, Relative: string;
+  FilePath, OriginPath, BestPath, Relative: string;
   I, Best, BestLength: Integer;
 begin
   Result := False;
@@ -633,6 +637,7 @@ begin
   FilePath := CanonicalOrExpanded(AHostPath);
   Best := -1;
   BestLength := -1;
+  BestPath := '';
   for I := 0 to High(FOrigins) do
   begin
     OriginPath := CanonicalOrExpanded(FOrigins[I].HostPath);
@@ -649,6 +654,7 @@ begin
     begin
       Best := I;
       BestLength := Length(OriginPath);
+      BestPath := OriginPath;
     end;
   end;
   if Best < 0 then
@@ -659,7 +665,8 @@ begin
     ASandboxPath := FOrigins[Best].SandboxPath;
     Exit(True);
   end;
-  Relative := Copy(FilePath, BestLength + 2, MaxInt);
+  Relative := Copy(FilePath,
+    Length(IncludeTrailingPathDelimiter(BestPath)) + 1, MaxInt);
   Relative := StringReplace(Relative, PathDelim, SANDBOX_SEPARATOR,
     [rfReplaceAll]);
   ASandboxPath := FFs.Normalize(SandboxJoinPath(FOrigins[Best].SandboxPath,
@@ -754,21 +761,21 @@ var
 begin
   if HostPathIsSymlink(ExcludeTrailingPathDelimiter(AHostPath)) then
     Exit(False);
-  Ancestor := ExcludeTrailingPathDelimiter(ExtractFileDir(AHostPath));
+  Ancestor := ExcludeTrailingHostPathDelimiter(ExtractFileDir(AHostPath));
   while (Ancestor <> '') and not HostDirectoryExists(Ancestor) do
   begin
     if ExtractFileDir(Ancestor) = Ancestor then
       Break;
-    Ancestor := ExcludeTrailingPathDelimiter(ExtractFileDir(Ancestor));
+    Ancestor := ExcludeTrailingHostPathDelimiter(ExtractFileDir(Ancestor));
   end;
   CanonicalAncestor := CanonicalHostPath(Ancestor);
   if CanonicalAncestor = '' then
     { The host cannot canonicalize (Lakon/WASI, no links); the lexical check
       in HostPathForSandboxPath already holds. }
     Exit(True);
-  Result := HostPathIsWithin(ExcludeTrailingPathDelimiter(CanonicalAncestor),
-    AWriteRoot) or HostPathIsWithin(AWriteRoot,
-    ExcludeTrailingPathDelimiter(CanonicalAncestor));
+  CanonicalAncestor := ExcludeTrailingHostPathDelimiter(CanonicalAncestor);
+  Result := HostPathIsWithin(CanonicalAncestor, AWriteRoot) or
+    HostPathIsWithin(AWriteRoot, CanonicalAncestor);
 end;
 
 function TSandboxHostInputs.PlanWriteBack(

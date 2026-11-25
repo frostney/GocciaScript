@@ -240,6 +240,7 @@ end;
 procedure TSandboxModeTests.TestCopySpecExplicitTargets;
 var
   Input: TGocciaSandboxInput;
+  Root: string;
 begin
   Input := ParseCopySpec('fixtures=/data', FRoot, '--copy', False);
   Expect<string>(Input.HostPath).ToBe(FRoot + PathDelim + 'fixtures');
@@ -247,6 +248,15 @@ begin
 
   Input := ParseCopySpec('dir=/', FRoot, '--copy', False);
   Expect<string>(Input.SandboxPath).ToBe('/');
+
+  { A filesystem root stays a root: `/`, or on Windows a drive root such as
+    `C:\`, never the drive-relative `C:`. }
+  Root := IncludeTrailingPathDelimiter(ExtractFileDrive(FRoot));
+  Input := ParseCopySpec(Root + '=/host', FRoot, '--copy', False);
+  Expect<string>(Input.HostPath).ToBe(Root);
+  Input := ParseCopySpec(Root + 'f.txt', FRoot, '--copy-rw', True);
+  Expect<string>(Input.HostPath).ToBe(Root + 'f.txt');
+  Expect<string>(Input.SandboxPath).ToBe('/f.txt');
 
   Input := ParseCopySpec('a.txt=/inbox/', FRoot, '--copy', False);
   Expect<string>(Input.SandboxPath).ToBe('/inbox/');

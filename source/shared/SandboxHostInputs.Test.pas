@@ -48,6 +48,9 @@ type
     procedure TestUnavailableIdentityMatchesNothing;
     procedure TestOutputFileRefusesUnidentifiedDirectory;
     procedure TestUnidentifiedInputGetsNothingWritten;
+    function FilesystemRoot: string;
+    procedure TestInputDirectlyUnderARootHasTheRootAsItsDirectory;
+    procedure TestInputPinnedAtARootWritesBackUnderIt;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -103,6 +106,10 @@ begin
     TestOutputFileRefusesUnidentifiedDirectory);
   Test('An input that could not be identified gets nothing written back',
     TestUnidentifiedInputGetsNothingWritten);
+  Test('An input directly under a filesystem root has the root as its ' +
+    'directory', TestInputDirectlyUnderARootHasTheRootAsItsDirectory);
+  Test('An input pinned at a filesystem root writes back under it',
+    TestInputPinnedAtARootWritesBackUnderIt);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -857,6 +864,62 @@ begin
          'gives no file ID for ', Report[I]) = 1) then
         Refused := True;
     Expect<Boolean>(Refused).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+end;
+
+
+{ The root of the filesystem the test files live on: `/`, or on Windows that
+  drive's root, such as `C:\`. Nothing is written there; it is only the
+  expected answer. }
+function TSandboxHostInputsTests.FilesystemRoot: string;
+begin
+  Result := IncludeTrailingPathDelimiter(ExtractFileDrive(FRoot));
+end;
+
+procedure TSandboxHostInputsTests.TestInputDirectlyUnderARootHasTheRootAsItsDirectory;
+var
+  Origin: TSandboxHostOrigin;
+begin
+  { Stripping the separator from the root would leave `''` (or `C:`), which
+    name the working directory (or the drive's): a file written back there
+    would replace one the user never named. }
+  Origin := Default(TSandboxHostOrigin);
+  Origin.HostPath := FilesystemRoot + 'f.txt';
+  Origin.IsDirectory := False;
+  Expect<string>(OriginRootPath(Origin)).ToBe(FilesystemRoot);
+  Origin.HostPath := FilesystemRoot;
+  Origin.IsDirectory := True;
+  Expect<string>(OriginRootPath(Origin)).ToBe(FilesystemRoot);
+  Origin.HostPath := HostPath('in/f.txt');
+  Origin.IsDirectory := False;
+  Expect<string>(OriginRootPath(Origin)).ToBe(HostPath('in'));
+end;
+
+procedure TSandboxHostInputsTests.TestInputPinnedAtARootWritesBackUnderIt;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+begin
+  WriteHostFile('rw/f.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(FilesystemRoot, HostPath('rw'), Pin,
+    Problem)).ToBe(True);
+  Expect<string>(Problem).ToBe('');
+  Expect<string>(Pin.Root).ToBe(FilesystemRoot);
+  Expect<string>(IncludeTrailingPathDelimiter(Pin.Root) + Pin.Route).ToBe(
+    CanonicalHostPath(HostPath('rw')));
+  FInputs.CopyIn(HostPath('rw/f.txt'), '/f.txt', True, Pin);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/f.txt', 'NEW');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(True);
+    Expect<string>(ReadHostText('rw/f.txt')).ToBe('NEW');
   finally
     Report.Free;
     Baseline.Free;

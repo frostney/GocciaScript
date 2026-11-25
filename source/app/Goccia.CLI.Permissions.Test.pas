@@ -845,7 +845,7 @@ end;
 
 procedure TPermissionsTests.TestSandboxSectionIsARequest;
 var
-  Path, Directory: string;
+  Path, Directory, Root: string;
   Request: TGocciaConfigPermissionRequest;
 begin
   Path := WriteConfig('sandbox/goccia.json', '{"sandbox": {' +
@@ -887,6 +887,15 @@ begin
     '  sandbox.diff: unified' + sLineBreak +
     '  sandbox.diff-file: ' + Directory + 'changes.diff' + sLineBreak +
     '  sandbox.entry: /src/main.js' + sLineBreak);
+
+  { A filesystem root stays a root: `/`, or on Windows a drive root such as
+    `C:\`, never the drive-relative `C:`. }
+  Root := IncludeTrailingPathDelimiter(ExtractFileDrive(FRoot));
+  Path := WriteConfig('root/goccia.json', '{"sandbox": {"copy-rw": ["' +
+    StringReplace(Root, '\', '\\', [rfReplaceAll]) + '=/host"]}}');
+  Request := ReadRequest(Path);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(1);
+  Expect<string>(Request.Sandbox.Inputs[0].HostPath).ToBe(Root);
 end;
 
 procedure TPermissionsTests.TestEmptySandboxSectionIsARequest;
