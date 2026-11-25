@@ -18,13 +18,18 @@ export function verifyOutputEncoding(runner = RUNNER): void {
   ] as const;
   let failures = 0;
   for (const [label, expression, expected] of cases) {
-    for (const [method, prefix] of [["log", ""], ["info", "Info: "], ["debug", "Debug: "], ["warn", "Warning: "], ["error", "Error: "]] as const) {
+    // warn and error write to stderr, the others to stdout (as in Node).
+    for (const [method, prefix, toStderr] of [["log", "", false], ["info", "Info: ", false], ["debug", "Debug: ", false], ["warn", "Warning: ", true], ["error", "Error: ", true]] as const) {
       const result = Bun.spawnSync([runner, "-"], {
         stdin: Buffer.from(`console.${method}(${expression});`),
         stdout: "pipe", stderr: "pipe",
       });
       const bytes = Buffer.from(prefix + expected + (process.platform === "win32" ? "\r\n" : "\n"));
-      if (result.exitCode !== 0 || !result.stdout.subarray(0, result.stdout.indexOf(10) + 1).equals(bytes) || result.stderr.length !== 0) {
+      const firstStdoutLine = result.stdout.subarray(0, result.stdout.indexOf(10) + 1);
+      const ok = toStderr
+        ? result.stderr.equals(bytes) && !firstStdoutLine.equals(bytes)
+        : firstStdoutLine.equals(bytes) && result.stderr.length === 0;
+      if (result.exitCode !== 0 || !ok) {
         console.error(`${method} ${label}: expected ${bytes.toString("hex")}, got ${result.stdout.toString("hex")} stderr=${result.stderr.toString("hex")}`);
         failures++;
       }

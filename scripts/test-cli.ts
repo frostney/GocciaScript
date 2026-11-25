@@ -4525,6 +4525,92 @@ console.log("Console timer lifecycle...");
     throw new Error(`Console timers should route output to stdout, got stderr: ${json.stderr}`);
 }
 
+// A host reading a piped GocciaRunner acts on console output mid-run: each
+// line reaches the pipe as it is logged, and error, warn, assert and trace go
+// to stderr, as in Node. The script logs, then fetches a loopback server whose
+// handler answers only once both lines were read from the pipes, so an output
+// held back until exit would fail the check rather than race it.
+console.log("Console lines reach a piped stdout and stderr while the script runs...");
+{
+  const tmp = mkdtemp("goccia-console-pipes-");
+  let stdoutText = "";
+  let stderrText = "";
+  let seenMidRun = false;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        if (stdoutText.includes("running\n") && stderrText.includes("Error: failing\n")) {
+          seenMidRun = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      return new Response("ok");
+    },
+  });
+  try {
+    const file = join(tmp, "pipes.js");
+    writeFileSync(
+      file,
+      [
+        'console.log("running");',
+        'console.error("failing");',
+        `await fetch("http://127.0.0.1:${server.port}/");`,
+        'console.log("after");',
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawn([RUNNER, file, "--allow-net=127.0.0.1"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const drain = async (stream: ReadableStream<Uint8Array>, append: (text: string) => void) => {
+      const decoder = new TextDecoder();
+      for await (const chunk of stream) append(decoder.decode(chunk, { stream: true }));
+    };
+    await Promise.all([
+      drain(proc.stdout, (text) => { stdoutText += text; }),
+      drain(proc.stderr, (text) => { stderrText += text; }),
+      proc.exited,
+    ]);
+    stdoutText = normalizeLineEndings(stdoutText);
+    stderrText = normalizeLineEndings(stderrText);
+    if (proc.exitCode !== 0)
+      throw new Error(`Piped console run should exit 0, got ${proc.exitCode}: ${stdoutText}${stderrText}`);
+    if (!seenMidRun)
+      throw new Error(`Console lines should reach the pipes before the script finishes, got stdout ${JSON.stringify(stdoutText)}, stderr ${JSON.stringify(stderrText)}`);
+    if (!stdoutText.startsWith("running\nafter\n") || stdoutText.includes("failing"))
+      throw new Error(`console.log lines belong on stdout and console.error lines do not, got ${JSON.stringify(stdoutText)}`);
+    if (stderrText !== "Error: failing\n")
+      throw new Error(`console.error should write to stderr, got ${JSON.stringify(stderrText)}`);
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+}
+
+// With both streams on one file, the lines keep the order they were logged in.
+console.log("Console lines keep their order with stdout and stderr on one file...");
+{
+  const tmp = mkdtemp("goccia-console-merged-");
+  try {
+    const file = join(tmp, "merged.js");
+    writeFileSync(
+      file,
+      ['console.log("one");', 'console.error("two");', 'console.log("three");', 'console.warn("four");', ""].join("\n"),
+    );
+    const merged = await $`${RUNNER} ${file} 2>&1`.nothrow().text();
+    const lines = normalizeLineEndings(merged).split("\n").slice(0, 4);
+    if (JSON.stringify(lines) !== JSON.stringify(["one", "Error: two", "three", "Warning: four"]))
+      throw new Error(`Merged console streams should keep their order, got ${JSON.stringify(merged)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- --log option (Loader) ------------------------------------------------------
 
 console.log("--log option...");

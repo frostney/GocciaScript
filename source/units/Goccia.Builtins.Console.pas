@@ -71,6 +71,11 @@ type
     property LogCallback: TGocciaConsoleOutputCallback read GetLogCallback write SetLogCallback;
   end;
 
+{ Whether the console method AMethod (as passed to an output callback) writes
+  to standard error: warn, error, assert and trace do, as in Node; every other
+  method writes to standard output. }
+function ConsoleMethodWritesToStderr(const AMethod: string): Boolean;
+
 implementation
 
 uses
@@ -78,6 +83,12 @@ uses
 
   ProcessEncoding,
   TimingUtils;
+
+function ConsoleMethodWritesToStderr(const AMethod: string): Boolean;
+begin
+  Result := (AMethod = 'warn') or (AMethod = 'error') or
+    (AMethod = 'assert') or (AMethod = 'trace');
+end;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -135,8 +146,22 @@ begin
       FOutputCallback(AMethod, Line)
     else if Assigned(FOutputLines) then
       FOutputLines.Add(Line)
+    else if ConsoleMethodWritesToStderr(AMethod) then
+    begin
+      { Both streams are block-buffered when they are not a terminal. What
+        is still in standard output's buffer goes first, so with both streams
+        on one pipe or file the lines keep the order they were logged in. }
+      Flush(Output);
+      WriteLn(ErrOutput, Line);
+      Flush(ErrOutput);
+    end
     else
+    begin
+      { Each line reaches a pipe or file as it is logged, not when the buffer
+        fills or the process ends, so a reader can act on it mid-run. }
       WriteLn(Line);
+      Flush(Output);
+    end;
   end;
   if Assigned(FLogCallback) then
     FLogCallback(AMethod, Line);

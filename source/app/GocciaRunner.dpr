@@ -267,8 +267,7 @@ end;
 function TScriptLoaderConsoleCapture.MethodWritesToStderr(
   const AMethod: string): Boolean;
 begin
-  Result := (AMethod = 'warn') or (AMethod = 'error') or
-    (AMethod = 'assert') or (AMethod = 'trace');
+  Result := ConsoleMethodWritesToStderr(AMethod);
 end;
 
 function TScriptLoaderConsoleCapture.UnformatLine(const AMethod,
