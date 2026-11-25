@@ -339,8 +339,8 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 ### Fuzzing locally
 
 AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
-the instrumentation comes from the assembler. On x86-64 Linux with a C
-compiler and make:
+the instrumentation comes from the assembler. On x86-64 Linux with `curl`
+and access to GitHub, a C compiler and make:
 
 ```bash
 scripts/afl/build-afl.sh
@@ -373,8 +373,8 @@ fuzzing. `afl-as` writes the map size into every trampoline, and AFL++ sizes
 the map of such a target at its own build's size whatever `AFL_MAP_SIZE`
 says. So use the `afl-fuzz` and `afl-showmap` from `build/afl/`: a packaged
 one gives the harness a 64 KiB map, and the harness dies of SIGSEGV writing
-past it. `scripts/afl/as` uses `AFL_PATH/afl-as` when `AFL_PATH` is set, else
-`build/afl/afl-as`, else `/usr/lib/afl/afl-as`.
+past it. `scripts/afl/as` uses `AFL_PATH/afl-as` when `AFL_PATH` is set and
+not empty, else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`.
 
 ### Reproducing a finding
 

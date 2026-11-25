@@ -11,7 +11,8 @@
 # and afl-showmap from a current one. Their fork server speaks the original
 # handshake afl-as adds, which AFL++ still accepts ("Old fork server model is
 # used by the target, this still works though"). Each release is checked
-# against its SHA-256, and building these needs a C compiler and make.
+# against its SHA-256; building them needs curl with access to GitHub, a C
+# compiler and make.
 #
 # All three are built with a 1 MiB coverage map in place of AFL++'s 64 KiB
 # (MAP_SIZE_POW2 16), which the harness's edges fill within minutes, so that
@@ -24,7 +25,7 @@ set -euo pipefail
 
 map_size_pow2=20
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 out="${1:-$root/build/afl}"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/goccia-afl-XXXXXX")
@@ -62,6 +63,7 @@ build as afl-as
 fetch v5.03c 07f089e8591209862898c770a569d8e2b74b459fe967db323fc6a3924dcc82b5 fuzz
 build fuzz -j"$(nproc)" NO_PYTHON=1 afl-fuzz afl-showmap
 
-mkdir -p "$out"
-install -m 755 "$work/as/afl-as" "$work/fuzz/afl-fuzz" "$work/fuzz/afl-showmap" "$out/"
+install -D -T -m 755 -- "$work/as/afl-as" "$out/afl-as"
+install -D -T -m 755 -- "$work/fuzz/afl-fuzz" "$out/afl-fuzz"
+install -D -T -m 755 -- "$work/fuzz/afl-showmap" "$out/afl-showmap"
 echo "afl-as (AFL++ v4.21c), afl-fuzz and afl-showmap (v5.03c) are in $out"
