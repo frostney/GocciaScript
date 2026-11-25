@@ -49,9 +49,14 @@ type
       command-line input, which is pinned at itself; the route from the
       config's directory for a config-named one (TSandboxHostPin). }
     WriteRoute: string;
-    { For a pinned input, which directory the route led to when the input
-      was copied: a directory put in its place later is a different one. }
+    { For a pinned input, which directory the route led to just before the
+      input was copied: a directory put in its place later is a different
+      one. }
     WriteRouteIdentity: THostDirectoryIdentity;
+    { Why the input's directory could not be pinned just before the copy, or
+      ''. Nothing is written back under such an input: an identity that was
+      never taken would match whatever directory has the name later. }
+    IdentityProblem: string;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
 
@@ -483,9 +488,9 @@ end;
   write-back goes under. It is taken before a byte of the input is read: an
   identity taken after the copy would belong to whatever directory had the
   name by then, so an input swapped during the copy would be written back
-  into its replacement. A read-write input whose directory cannot be
-  identified now is refused, because an identity not taken would match any
-  directory at write-back. }
+  into its replacement. When the directory cannot be pinned now, the origin
+  records why (IdentityProblem) and write-back refuses everything under it,
+  rather than recording an identity that would match any directory. }
 function TSandboxHostInputs.TakeOrigin(const AHostPath,
   ASandboxPath: string; const AIsDirectory, AReadWrite: Boolean;
   const APin: TSandboxHostPin): TSandboxHostOrigin;
@@ -498,6 +503,7 @@ begin
   Result.HostPath := ExcludeTrailingPathDelimiter(AHostPath);
   Result.IsDirectory := AIsDirectory;
   Result.ReadWrite := AReadWrite;
+  Problem := '';
   if APin.IsSet then
   begin
     Result.WriteRoot := APin.Root;
@@ -505,6 +511,19 @@ begin
     Result.WriteRoute := APin.Route;
     Identified := TryHostDirectoryIdentityBeneath(APin.Root,
       APin.RootIdentity, APin.Route, Result.WriteRouteIdentity, Problem);
+    { The pin was taken for the input as the config check found it: the
+      input itself for a directory, its directory for a file. An input that
+      has since turned from one into the other has a route that leads
+      elsewhere, so paths under it would be written in the wrong place. }
+    if Identified and not SameFileName(
+       CanonicalOrExpanded(OriginRootPath(Result)),
+       ExcludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(APin.Root) +
+       APin.Route)) then
+    begin
+      Identified := False;
+      Problem := OriginRootPath(Result) + ' is not the directory its ' +
+        'config entry was checked against';
+    end;
   end
   else
   begin
@@ -512,15 +531,14 @@ begin
     Result.WriteRoute := '';
     Identified := TryHostDirectoryIdentity(Result.WriteRoot,
       Result.WriteRootIdentity);
-    Problem := Result.WriteRoot + ' is not a directory';
   end;
-  { A directory Windows gives no file ID for is still copied; write-back
-    refuses it with that reason (OriginIdentityProblem). }
-  if AReadWrite and not Identified and (HostDirectoryIdentityProblem(
-     Result.WriteRoot, Result.WriteRootIdentity) = '') then
-    raise ESandboxHostInputError.CreateFmt(
-      'Copy path changed before it could be copied: %s (%s)',
-      [Result.HostPath, Problem]);
+  if not Identified then
+  begin
+    if Problem = '' then
+      Problem := OriginWriteDirectory(Result) +
+        ' could not be identified when it was copied';
+    Result.IdentityProblem := Problem;
+  end;
 end;
 
 procedure TSandboxHostInputs.AddOrigin(const AOrigin: TSandboxHostOrigin);
@@ -555,6 +573,8 @@ end;
   replacement could not be noticed. }
 function OriginIdentityProblem(const AOrigin: TSandboxHostOrigin): string;
 begin
+  if AOrigin.IdentityProblem <> '' then
+    Exit(AOrigin.IdentityProblem);
   Result := HostDirectoryIdentityProblem(OriginWriteDirectory(AOrigin),
     AOrigin.WriteRootIdentity);
   if Result = '' then
