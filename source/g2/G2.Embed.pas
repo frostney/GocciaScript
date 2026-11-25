@@ -815,6 +815,14 @@ begin
   inherited Destroy;
 end;
 
+{ an entry's module key: a host file's absolute path, or a sandbox path as it is (the sandbox's paths are its own,
+  rooted at /: ExpandFileName would make /entry.mjs C:\entry.mjs on Windows, and its imports would resolve there) }
+function EntryKeyOf(const FileName: string): UnicodeString;
+begin
+  if SandboxActive then Result := UnicodeString(FileName)
+  else Result := UnicodeString(ExpandFileName(FileName));
+end;
+
 { the read capability's project (ADR 0122), as GocciaScript's engine finds it: the directory of the nearest goccia
   config above the entry, or the entry's own directory }
 function DiscoverProjectRoot(const EntryFileName: string): string;
@@ -1042,7 +1050,7 @@ begin
     Failed(Err);
     Exit;
   end;
-  EntryKey := ArtifactModulePath(UnicodeString(ExpandFileName(FileName)), Src);
+  EntryKey := ArtifactModulePath(EntryKeyOf(FileName), Src);
   { the goal: the recorded one, unless the host names one }
   if PByte(FArtifactBytes) = nil then Exit;
   if not LoadArtifact(PByte(FArtifactBytes), Length(FArtifactBytes), EntryKey, 0, A, Err) then
@@ -1099,7 +1107,7 @@ var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PF
   Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
-  EntryKey := UnicodeString(ExpandFileName(FileName));
+  EntryKey := EntryKeyOf(FileName);
   Err := '';
   if not PrepareHost(Err) then
   begin

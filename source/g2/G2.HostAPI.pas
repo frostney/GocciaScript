@@ -1385,6 +1385,8 @@ begin
   end;
   Resolver := CurrentResolver;
   if (Referrer = '') or (Referrer[1] = '<') or IsVirtualKey(Referrer) then Ref := ''
+  { a sandbox's paths are its own, rooted at / (ExpandFileName would put a Windows drive in front) }
+  else if SandboxActive then Ref := UTF8Encode(Referrer)
   else Ref := ExpandFileName(UTF8Encode(Referrer));
   { the read policy judges every request while it is on: the run's (a function a host module left behind imports as
     the guest it runs for) and a config's loads; the host's own loads before the run are not judged }
