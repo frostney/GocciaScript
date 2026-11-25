@@ -44,9 +44,11 @@ same bits as the other targets. Every FPC i386 build needs a CPU with SSE2:
 a Pentium 4, Athlon 64 or later. A 32-bit Windows 8 or later requires SSE2
 to install, so only Windows 7 or XP on an older CPU loses the `i386-win32`
 build. In FPC's x86, x86-64 and AArch64 builds, a host that runs with
-flush-to-zero set still gets gradual underflow inside the engine, and a
-thread it starts during an engine call no longer inherits the engine's
-settings. Delphi builds keep the mask, rounding and precision setters alone. FPC's
+flush-to-zero set still gets gradual underflow inside the engine, and on
+x86 and x86-64 the scope no longer changes FPC's stored defaults. A thread
+started during an engine call can still copy the calling thread's live
+registers where its platform's thread start does not reset them. Delphi
+builds keep the mask, rounding and precision setters alone. FPC's
 i386 `GetRoundMode` reads the x87 control word, not MXCSR, so the decimal
 parser's inexact fast path stays off on 32-bit x86. Delphi's Win32 compiler
 generates only x87 code, so its build still rounds a subnormal product or

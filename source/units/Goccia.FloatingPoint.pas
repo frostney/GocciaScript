@@ -69,9 +69,9 @@ const
 
 { FPC's Set8087CW and SetMXCSR, and the mask, rounding and precision setters
   built on them, also store the value in Default8087CW and DefaultMXCSR,
-  which every thread the process starts afterwards loads. The scope's
+  which FPC's thread start loads where it resets the FPU. The scope's
   settings belong to the calling thread alone, so it loads the registers
-  itself. As in Set8087CW, fnclex first clears pending x87 exceptions, so
+  itself and leaves those defaults as they were. As in Set8087CW, fnclex first clears pending x87 exceptions, so
   unmasking one cannot raise it. }
 procedure LoadControlWord(const AValue: Word);
 var
