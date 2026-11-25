@@ -1038,10 +1038,11 @@ end;
 // even: the value StringNumericValue specifies. That holds only in the
 // round-to-nearest mode, and a host may run this outside the engine's
 // floating-point setup, so an inexact product or quotient is taken only when
-// the mode is nearest; an exact product is exact in every mode. The x87 FPU
-// of an i386 build rounds to a 64-bit significand first and could round
-// twice, so there only an exact product is taken. Anything else takes the
-// exact rational path.
+// the mode is nearest; an exact product is exact in every mode. On 32-bit
+// x86 only an exact product is taken: Delphi's Win32 build computes on the
+// x87 FPU, which could round twice, and FPC's i386 GetRoundMode reads the
+// x87 control word, not the MXCSR that its SSE2 arithmetic rounds by.
+// Anything else takes the exact rational path.
 function TryFastDecimalToNumber(const ADigits: string;
   const ADecimalExponent: Int64; const ANegative: Boolean;
   out ANumber: Double): Boolean;

@@ -85,7 +85,7 @@ Invoke-SafeSEHControl $Executable {
 
     $modes = @('finally', 'except', 'typed-on', 'reraise', 'cleanup-raises',
         'except-raises', 'safecall', 'access-violation', 'integer-divide',
-        'floating-point', 'default-pascal', 'default-hardware',
+        'floating-point', 'sse2-floating-point', 'default-pascal', 'default-hardware',
         'signals-access', 'signals-divide', 'thread-caught', 'thread-default',
         'signals-restore', 'signals-api-restore')
     foreach ($mode in $modes) {

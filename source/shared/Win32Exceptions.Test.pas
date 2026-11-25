@@ -28,9 +28,9 @@ type
   TSafeCallResult = function: LongInt; stdcall;
 
 const
-  CASES: array[0..9] of string = ('finally', 'except', 'typed-on', 'reraise',
+  CASES: array[0..10] of string = ('finally', 'except', 'typed-on', 'reraise',
     'cleanup-raises', 'except-raises', 'safecall', 'access-violation',
-    'integer-divide', 'floating-point');
+    'integer-divide', 'floating-point', 'sse2-floating-point');
   UNEXPECTED_HRESULT = LongInt(-2147418113); // E_UNEXPECTED ($8000FFFF).
   THREAD_TIMEOUT_MS = 5000;
   THREAD_SUCCESS = 37;
@@ -226,6 +226,16 @@ asm
   fstp st(0)
 end;
 
+// Double arithmetic runs in SSE2, whose traps reach the RTL as
+// STATUS_FLOAT_MULTIPLE_TRAPS rather than an x87 status.
+procedure SSE2FloatingPoint; assembler;
+asm
+  mov eax, 1
+  cvtsi2sd xmm0, eax
+  xorpd xmm1, xmm1
+  divsd xmm0, xmm1
+end;
+
 procedure TestHardware(const AMode: string);
 var
   Caught: Boolean;
@@ -240,6 +250,13 @@ begin
         AccessViolation
       else if AMode = 'integer-divide' then
         IntegerDivide
+      else if AMode = 'sse2-floating-point' then
+      begin
+        // The RTL names an SSE2 trap after the first MXCSR status flag set,
+        // so clear the flags earlier masked operations left.
+        SetMXCSR(GetMXCSR and not LongWord($3F));
+        SSE2FloatingPoint;
+      end
       else
         FloatingPoint;
     except
@@ -248,7 +265,8 @@ begin
         Caught := True;
         Check(((AMode = 'access-violation') and (E is EAccessViolation)) or
           ((AMode = 'integer-divide') and (E is EDivByZero)) or
-          ((AMode = 'floating-point') and (E is EZeroDivide)), 'hardware exception class');
+          (((AMode = 'floating-point') or (AMode = 'sse2-floating-point')) and
+            (E is EZeroDivide)), 'hardware exception class');
       end;
     end;
   finally
@@ -450,7 +468,7 @@ begin
   else if AMode = 'cleanup-raises' then TestReplacement(True)
   else if AMode = 'except-raises' then TestReplacement(False)
   else if (AMode = 'safecall') or (AMode = 'access-violation') or (AMode = 'integer-divide') or
-    (AMode = 'floating-point') then
+    (AMode = 'floating-point') or (AMode = 'sse2-floating-point') then
   begin
     {$IFDEF WIN32_SEH_PROBES}
     if AMode = 'safecall' then TestSafeCall
