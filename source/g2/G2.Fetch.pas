@@ -38,8 +38,8 @@ uses
 const
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
-  { how long past the run's deadline a request's socket may wait: the run's deadline ends it first }
-  FETCH_RUN_DEADLINE_SLACK_MS = 2000;
+  { how long past the run's or its signal's deadline a request's socket may wait: that deadline ends it first }
+  FETCH_DEADLINE_SLACK_MS = 2000;
   { the slice the event loop waits in, so that the run's interrupt is seen }
   WAIT_SLICE_MS = 50;
 
@@ -309,12 +309,15 @@ begin
     Res := MkInt(-1);
     Exit(True);
   end;
-  { the request's deadline: the signal's, or past the run's. The run's own deadline ends the run (the event loop sees
-    its interrupt), so a socket timeout at the same moment must not settle the request first: on a loaded runner it
-    can, and the script then catches a TypeError instead of being ended. The slack keeps the run's deadline first. }
+  { the socket's timeout: past the run's deadline, or past the signal's. Each deadline is the event loop's to act on:
+    the run's ends the run (the loop sees its interrupt), and the signal's aborts the signal, which rejects the
+    request with the signal's reason (Fetch, "abort fetch"). A socket timeout at the same moment must not settle the
+    request first: the pump takes a finished worker before it looks at deadlines, so on a loaded runner the script
+    then catches a TypeError instead. The slack keeps each deadline first. }
   Timeout := LimitRemainingMs;
-  if Timeout > 0 then Timeout := Timeout + FETCH_RUN_DEADLINE_SLACK_MS;
-  if (SignalMs >= 0) and ((Timeout = 0) or (SignalMs < Timeout)) then Timeout := Max(SignalMs, 1);
+  if Timeout > 0 then Timeout := Timeout + FETCH_DEADLINE_SLACK_MS;
+  if (SignalMs >= 0) and ((Timeout = 0) or (Int64(SignalMs) + FETCH_DEADLINE_SLACK_MS < Timeout)) then
+    Timeout := Int64(SignalMs) + FETCH_DEADLINE_SLACK_MS;
   if Owner = nil then Owner := TFetchOwner.Create;
   Id := NextId;
   Inc(NextId);
