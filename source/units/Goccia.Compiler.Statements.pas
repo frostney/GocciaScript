@@ -1707,6 +1707,16 @@ begin
   end;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
+  { A declaration named like a parameter with a strict type stores into the
+    parameter's binding (ES2026 §10.2.11 step 36), which the body's code
+    trusts to hold that type; the store is checked like an assignment, so a
+    function in a `number` parameter throws a TypeError instead of reaching
+    a numeric instruction. }
+  if (LocalIdx >= 0) and ACtx.StrictTypes and
+     ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped and
+     (ACtx.Scope.GetLocal(LocalIdx).Slot = Slot) then
+    EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
+      UInt8(Ord(ACtx.Scope.GetLocal(LocalIdx).TypeHint)), 0));
   if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
@@ -6295,8 +6305,8 @@ begin
       EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
         UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
-    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
+    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6480,8 +6490,8 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6667,8 +6677,8 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -6782,8 +6792,8 @@ begin
       ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
       Length(AMethod.Parameters));
 
-    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitParameterTypeChecks(ChildCtx, AMethod.Parameters);
+    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,

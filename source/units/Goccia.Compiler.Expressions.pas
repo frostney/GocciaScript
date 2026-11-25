@@ -5390,8 +5390,8 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := OldDerivedGuard;
 
-    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -7042,8 +7042,8 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -7208,8 +7208,8 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
@@ -7894,8 +7894,8 @@ begin
       ChildCtx.NonStrictMode and ParameterListIsSimple(AExpr.Parameters),
       Length(AExpr.Parameters));
 
-    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
