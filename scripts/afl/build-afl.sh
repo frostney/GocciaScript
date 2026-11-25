@@ -25,6 +25,10 @@ set -euo pipefail
 
 map_size_pow2=20
 
+if [ $# -gt 1 ]; then
+  echo "usage: scripts/afl/build-afl.sh [<output directory>]" >&2
+  exit 2
+fi
 root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 out="${1:-$root/build/afl}"
 
@@ -34,10 +38,12 @@ trap 'rm -rf "$work"' EXIT
 # fetch <release> <sha256> <directory>: downloads and checks the release,
 # unpacks it into <directory> and sets its map size.
 fetch() {
-  local release=$1 sha256=$2 dir=$work/$3
+  local release=$1 sha256=$2 name=$3 dir=$work/$3
   curl -fsSL --retry 3 -o "$dir.tar.gz" \
     "https://github.com/AFLplusplus/AFLplusplus/archive/refs/tags/${release}.tar.gz"
-  echo "$sha256  $dir.tar.gz" | sha256sum -c --quiet -
+  # The record names the archive relative to the work directory, so no part
+  # of TMPDIR goes into sha256sum's line-based input.
+  (cd "$work" && echo "$sha256  $name.tar.gz" | sha256sum -c --quiet -)
   mkdir "$dir"
   tar -xzf "$dir.tar.gz" -C "$dir" --strip-components=1
   sed -i.orig "s/^#define MAP_SIZE_POW2 16\$/#define MAP_SIZE_POW2 ${map_size_pow2}/" \

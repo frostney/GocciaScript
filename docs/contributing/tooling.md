@@ -346,7 +346,7 @@ and access to GitHub, a C compiler and make:
 scripts/afl/build-afl.sh
 export PATH="$PWD/build/afl:$PATH"
 mkdir -p build/compiled/targets/fuzzharness-afl
-fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
   -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
 afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
@@ -374,7 +374,8 @@ the map of such a target at its own build's size whatever `AFL_MAP_SIZE`
 says. So use the `afl-fuzz` and `afl-showmap` from `build/afl/`: a packaged
 one gives the harness a 64 KiB map, and the harness dies of SIGSEGV writing
 past it. `scripts/afl/as` uses `AFL_PATH/afl-as` when `AFL_PATH` is set and
-not empty, else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`.
+not empty, else `build/afl/afl-as`, else `/usr/lib/afl/afl-as`; the build
+above empties `AFL_PATH` so that it takes the `afl-as` just built.
 
 ### Reproducing a finding
 
