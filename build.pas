@@ -449,39 +449,77 @@ begin
   Result := GCompilerIdentity;
 end;
 
+{ Stamps are read and written while test-build workers start compilers. FPC's
+  TProcess hands the child every open descriptor (it closes none, and the RTL
+  opens files without O_CLOEXEC), and on Unix a TFileStream holds an flock on
+  its descriptor, so a stamp open at that moment stays locked for the whole
+  compile. TStrings.SaveToFile locks exclusively (fmCreate), which such a
+  leaked descriptor of the same stamp refuses with EAGAIN; shared locks
+  (fmShareDenyNone) never refuse one another. }
+const
+  STAMP_SHARE = fmShareDenyNone;
+
+function ReadStamp(const APath: string): string;
+var
+  Stream: TFileStream;
+  Stamp: TStringList;
+begin
+  Stamp := TStringList.Create;
+  try
+    Stream := TFileStream.Create(APath, fmOpenRead or STAMP_SHARE);
+    try
+      Stamp.LoadFromStream(Stream);
+    finally
+      Stream.Free;
+    end;
+    Result := Trim(Stamp.Text);
+  finally
+    Stamp.Free;
+  end;
+end;
+
+procedure WriteStamp(const APath, AText: string);
+var
+  Stream: TFileStream;
+  Stamp: TStringList;
+begin
+  Stamp := TStringList.Create;
+  try
+    Stamp.Text := AText;
+    Stream := TFileStream.Create(APath, fmCreate or STAMP_SHARE);
+    try
+      Stamp.SaveToStream(Stream);
+    finally
+      Stream.Free;
+    end;
+  finally
+    Stamp.Free;
+  end;
+end;
+
 { Creates ADirectory when missing. A directory whose units another compiler
   build made, or that has no stamp, is emptied first: a switch between two
   builds of one FPC release (3.3.1+6 to 3.3.1+7) otherwise links the old
   build's objects, miscompiles and all. }
 function EnsureUnitOutputDirectory(const ADirectory: string): string;
 var
-  Stamp: TStringList;
   StampPath, Previous: string;
 begin
   if not DirectoryExists(ADirectory) then
     ForceDirectories(ADirectory);
   StampPath := IncludeTrailingPathDelimiter(ADirectory) + COMPILER_STAMP;
-  Stamp := TStringList.Create;
-  try
-    Previous := '';
-    if FileExists(StampPath) then
-    begin
-      Stamp.LoadFromFile(StampPath);
-      Previous := Trim(Stamp.Text);
-    end;
+  Previous := '';
+  if FileExists(StampPath) then
+    Previous := ReadStamp(StampPath);
     if Previous <> CompilerIdentity then
-    begin
-      if RemoveCompiledArtifacts(ADirectory) > 0 then
-        if Previous = '' then
-          WriteLn('No compiler stamp in ', ADirectory, ': compiling its units again with ', CompilerIdentity)
-        else
-          WriteLn('Units in ', ADirectory, ' were made by FPC ', Previous, ': compiling them again with ',
-            CompilerIdentity);
-      Stamp.Text := CompilerIdentity;
-      Stamp.SaveToFile(StampPath);
-    end;
-  finally
-    Stamp.Free;
+  begin
+    if RemoveCompiledArtifacts(ADirectory) > 0 then
+      if Previous = '' then
+        WriteLn('No compiler stamp in ', ADirectory, ': compiling its units again with ', CompilerIdentity)
+      else
+        WriteLn('Units in ', ADirectory, ' were made by FPC ', Previous, ': compiling them again with ',
+          CompilerIdentity);
+    WriteStamp(StampPath, CompilerIdentity);
   end;
   Result := ADirectory;
 end;
