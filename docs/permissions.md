@@ -796,12 +796,17 @@ the host paths they were copied from, including new files created inside a
 - each file is written to an exclusively created temporary beside it and then
   replaces it in one rename, so a failed write leaves the original intact.
 
-Each input's directory is pinned: a command-line input when it is copied (its
-canonical path and which directory it is — device and inode on POSIX, the
-64-bit volume serial number and 128-bit file ID from
+Each input's directory is pinned: a command-line input just before it is
+copied (its canonical path and which directory it is — device and inode on
+POSIX, the 64-bit volume serial number and 128-bit file ID from
 `GetFileInformationByHandleEx(FileIdInfo)` on Windows), and a config-named one
 when the config is checked, as the config's directory plus the route from it,
-and again when it is copied, as the directory that route led to. A Windows
+and again just before it is copied, as the directory that route leads to.
+Pinning before the copy reads anything means an input swapped while it is
+being copied is compared against the directory the copy started from, so its
+replacement gets nothing written. A read-write input that cannot be pinned
+then, because it is no longer a directory or a config input's route no longer
+leads to one without passing a link, is refused before it is copied. A Windows
 directory that call cannot identify gets nothing written back — each of its
 files is refused with that reason and the run exits 1 — rather than falling
 back to the 64-bit file index, which ReFS does not keep unique. Before
