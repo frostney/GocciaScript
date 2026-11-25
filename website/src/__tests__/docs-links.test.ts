@@ -54,4 +54,54 @@ describe("repository links in Markdown responses", () => {
       ].join("\n"),
     );
   });
+
+  test("replace only the destination, never a title that repeats it", () => {
+    const markdown = [
+      '[guide](value-system.md "Read value-system.md first") and [ref][v].',
+      "",
+      '[v]: value-system.md "value-system.md"',
+    ].join("\n");
+    expect(resolveRepositoryLinks(markdown, page("built-ins"))).toBe(
+      [
+        '[guide](/docs/value-system "Read value-system.md first") and [ref][v].',
+        "",
+        '[v]: /docs/value-system "value-system.md"',
+      ].join("\n"),
+    );
+  });
+
+  test("resolve an escaped destination and leave an empty one empty", () => {
+    expect(
+      resolveRepositoryLinks(
+        "[query](value-system.md\\?a=1) and [empty]().",
+        page("built-ins"),
+      ),
+    ).toBe("[query](/docs/value-system?a=1) and [empty]().");
+  });
+
+  test("keep image sources, including a definition only an image uses", () => {
+    const markdown = [
+      "![logo][logo] and ![inline](./logo.png)",
+      "",
+      "[logo]: ./logo.png",
+    ].join("\n");
+    expect(resolveRepositoryLinks(markdown, page("built-ins"))).toBe(markdown);
+  });
+
+  test("resolve a link inside a footnote and keep the footnote's prose", () => {
+    const markdown = [
+      "Text.[^note]",
+      "",
+      "[^note]: Explanation",
+      "    with [values](value-system.md).",
+    ].join("\n");
+    expect(resolveRepositoryLinks(markdown, page("built-ins"))).toBe(
+      [
+        "Text.[^note]",
+        "",
+        "[^note]: Explanation",
+        "    with [values](/docs/value-system).",
+      ].join("\n"),
+    );
+  });
 });
