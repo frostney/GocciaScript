@@ -43,9 +43,11 @@ jobs:
   #
   # AFL++ removed afl-as after v4.21c, and the runner image's afl++ package
   # follows upstream (Ubuntu 26.04's 4.33c has none), so
-  # scripts/afl/build-afl-as.sh builds it from the v4.21c release. afl-fuzz
-  # and afl-showmap stay the image's: they accept afl-as's fork server, and
-  # the coverage probe below fails the job if a later release stops doing so.
+  # scripts/afl/build-afl-as.sh builds it from the v4.21c release, with a
+  # 1 MiB coverage map rather than AFL's 64 KiB, which the harness's edges
+  # crowd. afl-fuzz and afl-showmap stay the image's: they accept afl-as's
+  # fork server, and the coverage probe below fails the job if a later
+  # release stops doing so.
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -67,7 +69,12 @@ jobs:
           sudo apt-get install afl++ -qq > /dev/null
 
       - name: Build afl-as
-        run: scripts/afl/build-afl-as.sh
+        # Its 1 MiB coverage map is written to build/afl/map-size; every
+        # afl-showmap and afl-fuzz below must use a map that large, or the
+        # instrumented harness writes past theirs.
+        run: |
+          scripts/afl/build-afl-as.sh
+          echo "AFL_MAP_SIZE=$(cat build/afl/map-size)" >> "$GITHUB_ENV"
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
@@ -241,8 +248,10 @@ jobs:
           sudo apt-get install afl++ valgrind -qq > /dev/null
 
       - name: Build afl-as
-        # As in the script fuzz job.
-        run: scripts/afl/build-afl-as.sh
+        # As in the script fuzz job, map size included.
+        run: |
+          scripts/afl/build-afl-as.sh
+          echo "AFL_MAP_SIZE=$(cat build/afl/map-size)" >> "$GITHUB_ENV"
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness

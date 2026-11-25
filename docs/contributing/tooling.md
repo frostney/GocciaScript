@@ -344,6 +344,7 @@ installed (`afl++` on Debian and Ubuntu), a C compiler and make:
 
 ```bash
 scripts/afl/build-afl-as.sh
+export AFL_MAP_SIZE=$(cat build/afl/map-size)
 mkdir -p build/compiled/targets/fuzzharness-afl
 fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
   -FUbuild/compiled/targets/fuzzharness-afl \
@@ -358,7 +359,11 @@ recognises, and `afl-as` adds a coverage trampoline at every function entry,
 branch target and conditional branch, plus the fork server. AFL++ removed
 `afl-as` after v4.21c, so current packages (Ubuntu 26.04's 4.33c, for one)
 have none: `scripts/afl/build-afl-as.sh` builds it from the v4.21c release,
-checked against its SHA-256, into `build/afl/`. `scripts/afl/as` uses
+checked against its SHA-256, into `build/afl/`, with a 1 MiB coverage map in
+place of AFL's 64 KiB, which the harness's edges crowd. `afl-fuzz` and
+`afl-showmap` must use a map that large, so `AFL_MAP_SIZE` comes from
+`build/afl/map-size`: without it, Ubuntu 26.04's `afl-showmap` sizes its map
+at 64 KiB and the harness dies of SIGSEGV. `scripts/afl/as` uses
 `AFL_PATH/afl-as` when `AFL_PATH` is set, else `build/afl/afl-as`, else
 `/usr/lib/afl/afl-as`. The package's own `afl-fuzz` and `afl-showmap` drive
 the harness: they still accept the fork server `afl-as` adds, and say "Old
