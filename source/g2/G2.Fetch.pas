@@ -38,6 +38,8 @@ uses
 const
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
+  { how long past the run's deadline a request's socket may wait: the run's deadline ends it first }
+  FETCH_RUN_DEADLINE_SLACK_MS = 2000;
   { the slice the event loop waits in, so that the run's interrupt is seen }
   WAIT_SLICE_MS = 50;
 
@@ -307,8 +309,11 @@ begin
     Res := MkInt(-1);
     Exit(True);
   end;
-  { the request's deadline: the run's or the signal's, whichever comes first }
+  { the request's deadline: the signal's, or past the run's. The run's own deadline ends the run (the event loop sees
+    its interrupt), so a socket timeout at the same moment must not settle the request first: on a loaded runner it
+    can, and the script then catches a TypeError instead of being ended. The slack keeps the run's deadline first. }
   Timeout := LimitRemainingMs;
+  if Timeout > 0 then Timeout := Timeout + FETCH_RUN_DEADLINE_SLACK_MS;
   if (SignalMs >= 0) and ((Timeout = 0) or (SignalMs < Timeout)) then Timeout := Max(SignalMs, 1);
   if Owner = nil then Owner := TFetchOwner.Create;
   Id := NextId;
