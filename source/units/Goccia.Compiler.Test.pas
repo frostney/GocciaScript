@@ -6133,7 +6133,8 @@ var
   Module: TGocciaBytecodeModule;
 begin
   // Each update of a binding typed other than `number` is checked; one typed
-  // `number` is not, since its new value is always a Number.
+  // `number` whose initializer was checked is not, since ToNumeric of a
+  // Number is a Number.
   Module := CompileSource(
     'let a: string = "1"; a++; ++a; let b: boolean = true; b--; --b; ' +
     'let n: number = 1; n++; --n; [a, b, n];',

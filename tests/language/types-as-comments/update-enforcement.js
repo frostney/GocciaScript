@@ -32,6 +32,30 @@ test("++ on an object parameter throws", () => {
   expect(() => f({})).toThrow(TypeError);
 });
 
+test("the operand is converted to a number before the check", () => {
+  const hints = [];
+  const operand = { [Symbol.toPrimitive](hint) { hints.push(hint); return 1; } };
+  const f = (x: object) => { x++; };
+  expect(() => f(operand)).toThrow(TypeError);
+  expect(hints).toEqual(["number"]);
+});
+
+test("an error from the conversion propagates instead of the check's", () => {
+  const operand = { valueOf() { throw new RangeError("conversion"); } };
+  const f = (x: object) => { x++; };
+  expect(() => f(operand)).toThrow(RangeError);
+});
+
+test("++ on a rest parameter whose conversion gives a BigInt throws", () => {
+  const f = (...xs: number) => {
+    xs[Symbol.toPrimitive] = () => 1n;
+    let threw = false;
+    try { xs++; } catch (e) { threw = e instanceof TypeError; }
+    return [threw, Array.isArray(xs)];
+  };
+  expect(f(1)).toEqual([true, true]);
+});
+
 test("++ on a typed let in the same function throws", () => {
   let s: string = "1";
   let threw = false;

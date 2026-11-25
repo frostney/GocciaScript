@@ -597,6 +597,15 @@ begin
   ACtx.Template.SetLocalType(Local.Slot, sltUntyped);
 end;
 
+// True when a value of AProducedType stored into ALocal needs OP_CHECK_TYPE:
+// the binding's type is enforced and the value is not known to have it.
+function StrictLocalNeedsTypeCheck(const ALocal: TGocciaCompilerLocal;
+  const AProducedType: TGocciaLocalType): Boolean;
+begin
+  Result := ALocal.IsStrictlyTyped and (ALocal.TypeHint <> sltUntyped) and
+    not TypesAreCompatible(AProducedType, ALocal.TypeHint);
+end;
+
 procedure EmitStrictLocalTypeCheck(const ACtx: TGocciaCompilationContext;
   const ALocalIdx: Integer; const AValueReg: UInt16;
   const AProducedType: TGocciaLocalType);
@@ -607,8 +616,7 @@ begin
     Exit;
 
   Local := ACtx.Scope.GetLocal(ALocalIdx);
-  if Local.IsStrictlyTyped and (Local.TypeHint <> sltUntyped) and
-     not TypesAreCompatible(AProducedType, Local.TypeHint) then
+  if StrictLocalNeedsTypeCheck(Local, AProducedType) then
     EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, AValueReg,
       UInt8(Ord(Local.TypeHint)), 0));
 end;
@@ -8630,18 +8638,19 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AValueReg, 0));
 end;
 
-// ES2026 §13.4.2.1-§13.4.5.1: an update's new value comes from ToNumeric, so
-// it is a Number or a BigInt. A strictly typed binding whose type is `number`
-// holds no BigInt (its parameter or assignment check refused one), so only a
-// binding of any other strict type can be handed a value its type rejects.
-function StrictLocalRejectsNumber(const ACtx: TGocciaCompilationContext;
-  const ALocalIdx: Integer): Boolean;
-var
-  Local: TGocciaCompilerLocal;
+// ES2026 §13.4.2.1-§13.4.5.1: an update's new value comes from ToNumeric of
+// the binding's value, so it is a Number or a BigInt. A binding whose value
+// was checked against `number` gives a Number. One that can hold an unchecked
+// value (HoldsUncheckedValue: a rest parameter's array, an annotated var
+// before its initializer, a script var written through the global object)
+// can convert to a BigInt, so its result type is unknown, as compound
+// assignment takes it to be.
+function UpdateResultType(const ALocal: TGocciaCompilerLocal): TGocciaLocalType;
 begin
-  Local := ACtx.Scope.GetLocal(ALocalIdx);
-  Result := Local.IsStrictlyTyped and (Local.TypeHint <> sltUntyped) and
-    not TypesAreCompatible(sltFloat, Local.TypeHint);
+  if ALocal.HoldsUncheckedValue then
+    Result := sltUntyped
+  else
+    Result := sltFloat;
 end;
 
 procedure CompileIncrementMember(const ACtx: TGocciaCompilationContext;
@@ -8732,9 +8741,11 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
+// Compiles an update whose result, when kept, goes to ADest as soon as it is
+// computed. CompileIncrement decides when that would be too early.
+procedure CompileIncrementIntoDest(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIncrementExpression; const ADest: UInt16;
-  const AKeepResult: Boolean = True);
+  const AKeepResult: Boolean);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegResult, ObjReg, KeyReg, CondReg: UInt16;
@@ -8890,7 +8901,8 @@ begin
         EmitGetDeclaredGlobal(ACtx, Ident.Name, RegResult);
         EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
           PostNumericOp, AKeepResult);
-        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult, sltFloat);
+        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult,
+          UpdateResultType(ACtx.Scope.GetLocal(LocalIdx)));
         EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
@@ -8899,33 +8911,19 @@ begin
         Exit;
       end;
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      // ES2026 §13.4.2.1 and §13.4.3.1: a postfix update stores the new value
-      // and then returns the old one, so its result cannot share the binding's
-      // register. A default parameter initializer and a var initializer compile
-      // straight into the register of the binding they initialize, and so does
-      // any comma or conditional expression around them; an update of that same
-      // binding there takes its result in a temporary, which then replaces the
-      // binding's value as the initializer's PutValue or InitializeBinding
-      // does (§14.3.2.1, §10.2.11).
-      if AKeepResult and not AExpr.IsPrefix and (ADest = Slot) then
-      begin
-        RegResult := ACtx.Scope.AllocateRegister;
-        CompileIncrement(ACtx, AExpr, RegResult);
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
-        ACtx.Scope.FreeRegister;
-        Exit;
-      end;
-      // A strictly typed binding whose type is not `number` can be handed a
-      // new value its type rejects, so the update runs on a temporary whose
-      // value is checked like an assignment's before it replaces the
-      // binding's; an update in place would store it unchecked.
-      if StrictLocalRejectsNumber(ACtx, LocalIdx) then
+      // A strictly typed binding can be handed a new value its type rejects,
+      // so the update runs on a temporary whose value is checked like an
+      // assignment's before it replaces the binding's; an update in place
+      // would store it unchecked.
+      if StrictLocalNeedsTypeCheck(ACtx.Scope.GetLocal(LocalIdx),
+           UpdateResultType(ACtx.Scope.GetLocal(LocalIdx))) then
       begin
         RegResult := ACtx.Scope.AllocateRegister;
         EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegResult, Slot));
         EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
           PostNumericOp, AKeepResult);
-        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult, sltFloat);
+        EmitStrictLocalTypeCheck(ACtx, LocalIdx, RegResult,
+          UpdateResultType(ACtx.Scope.GetLocal(LocalIdx)));
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, RegResult, Slot));
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
@@ -8973,6 +8971,36 @@ begin
     if ReservedDestRegister then
       ACtx.Scope.FreeRegister;
   end;
+end;
+
+procedure CompileIncrement(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaIncrementExpression; const ADest: UInt16;
+  const AKeepResult: Boolean = True);
+var
+  RegResult: UInt16;
+begin
+  // ES2026 §13.4.2.1-§13.4.5.1: an update gives its result only once PutValue
+  // has stored the new value, and that store can throw: a strict type check,
+  // a setter, a const. A var or default parameter initializer compiles
+  // straight into the register of the binding it initializes, and so does any
+  // comma or conditional expression around it, so a result bound for a
+  // binding's register is produced in a temporary and moved there only after
+  // the store. That register can be the updated binding's own, as in
+  // `var x = x++`, which also needs it: a postfix update stores the new value
+  // and returns the old one, so its result cannot share the binding's
+  // register (§14.3.2.1, §10.2.11).
+  if AKeepResult and ACtx.Scope.SlotHoldsLocal(ADest) then
+  begin
+    RegResult := ACtx.Scope.AllocateRegister;
+    try
+      CompileIncrementIntoDest(ACtx, AExpr, RegResult, True);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+    finally
+      ACtx.Scope.FreeRegister;
+    end;
+  end
+  else
+    CompileIncrementIntoDest(ACtx, AExpr, ADest, AKeepResult);
 end;
 
 procedure AddOptionalChainJump(const ACtx: TGocciaCompilationContext;
