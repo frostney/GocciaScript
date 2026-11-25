@@ -96,7 +96,7 @@ for explicit targets, test selection, parallelism and scoped cleaning.
 
 ### FPC 3.2.2 and 3.2.4
 
-CI builds with FPC 3.3.1 from fpc-toolchain (`3.3.1+7`), which the engine in `source/g2` needs (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)). The source outside `source/g2` must keep building on FPC 3.2.2 and 3.2.4 as well. Three RTL interfaces differ between those two, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+CI builds with FPC 3.3.1 from fpc-toolchain (`3.3.1+8`), which the engine in `source/g2` needs (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)). The source outside `source/g2` must keep building on FPC 3.2.2 and 3.2.4 as well. Three RTL interfaces differ between those two, and `Shared.inc` defines a symbol for each on 3.2.2 only:
 
 - `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
 - `GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY` — a `Generics.Collections` list's virtual `Notify` takes its value as `constref` on 3.2.2 and `const` on 3.2.4 (and Delphi); an override declares it the same way (`TUnicodeStringList`).

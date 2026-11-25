@@ -353,13 +353,13 @@ native thread-local variables and code generator fixes, and `build.pas` stops
 with a message on an older compiler. The FPC 3.2.2 that package managers
 install builds only the code outside `source/g2`.
 
-CI is pinned to the build `3.3.1-b7`. To build with the same compiler on Linux
+CI is pinned to the build `3.3.1-b8`. To build with the same compiler on Linux
 or macOS, install it next to any other FPC and put it first on `PATH`
 (Windows: see its README):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
-sh install.sh 3.3.1-b7
+sh install.sh 3.3.1-b8
 eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.3.1)"
 ```
 

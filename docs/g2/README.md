@@ -29,7 +29,7 @@ the Web Tooling Benchmark.
 ## Build
 
 G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
-later; CI and `scripts/g2/build.sh` use 3.3.1+7 (release `3.3.1-b7`), selected by `fpc-toolchain env 3.3.1+7` or
+later; CI and `scripts/g2/build.sh` use 3.3.1+8 (release `3.3.1-b8`), selected by `fpc-toolchain env 3.3.1+8` or
 any command given in `G2_FPC_ENV`. Builds before 3.3.1+4 hang in the DFA pass on some units and drop the `@tpoff`
 relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs` prefix of a threadvar the peephole optimizer folds
 into an instruction at -O1 (patch 0123 in 3.3.1+5); 3.3.1+5 can fail an incremental compile after a used unit was
@@ -487,7 +487,7 @@ every collection. `scripts/g2/artifact-roundtrip-tests.py` and `scripts/g2/artif
 holds the expected lines.
 
 `.github/workflows/g2.yml` runs part of this in CI on every pull request and on pushes to `main` and `feat/g2-**`,
-with FPC `3.3.1-b7`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
+with FPC `3.3.1-b8`, as the rest of CI. On Linux x86-64 three jobs build what they run: GocciaTestRunner over
 `tests/` with `--heap-snapshots`, GocciaTest262Runner over the pinned test262, and the limits test, both
 bytecode-file tests and a 1,000-case grammar fuzz campaign. `platform-build` builds GocciaTestRunner for
 macOS and Linux on aarch64, x86-64 macOS and the two Windows targets, and `platform-test` runs `tests/` on each target's own runner. Any

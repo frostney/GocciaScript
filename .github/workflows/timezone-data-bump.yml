@@ -13,7 +13,7 @@ on:
 
 env:
   # The frostney/fpc-toolchain build, as in ci.yml.
-  FPC_VERSION: "3.3.1-b7"
+  FPC_VERSION: "3.3.1-b8"
 
 jobs:
   bump:

@@ -22,7 +22,14 @@ FPC-SAFESEH 2
 #
 # 3.3.1+7 (patches 0129 to 0134: the SLP optimizer and aarch64 branches): each
 # object below hashes the same as in 3.3.1+6, so the 3.3.1+6 audit holds.
-version 3.3.1+7
+#
+# 3.3.1+8 (patches 0135 to 0141): only rtl/system.o changed. Compared with
+# 3.3.1+7 by objdump -dr: LinkExceptEntry's last parameter is now a Boolean and
+# it stores the exception object's own address or nil in that object's field
+# (+0x18); __FPC_DEFAULT_HANDLER and CommonHandler pass it a constant. No
+# changed routine touches FS, the FS accesses are the same section by section,
+# and the handler symbols referenced are the same, so the audit holds.
+version 3.3.1+8
 target i386-win32
 
 object fcl-base/contnrs.o d428913b0f1e5df6305e272ea1f0761e4b1cc9920caa64d7bb259255c9e7482d
@@ -156,7 +163,7 @@ object rtl/sysconst.o 9ecb10b522de31b9c93920bf7f43959cedab4e6fccb97525b653bc3e1d
 object rtl/sysinitcyg.o baf99743161d4323401d2bd27818af25dc66808ec4cee27194836624b6e771a8
 object rtl/sysinitgprof.o 4093aba09313945c703896fe3df9aeea632cc5a682566c911d9c3206b4ce7580
 required-object rtl/sysinitpas.o c55421c0d0cb456e33b74dfee2610ef219a7662e717773e43a72953ae9e6beff
-required-object rtl/system.o 7d525c8e88f6b3f9432555afaccbbaf2dcfad4e599c6379ba4a237a143e45702
+required-object rtl/system.o 9151c97d72f82b90e8e1503a4b57da539a92d5cb8f7842021b9a30e5447c5147
 object rtl/sysutils.o 42fbd3c55314c5f004eda901727b767eebedd6c177b2f7df3a2e1d257eca99b6
 object rtl/types.o 386e08654728e4f3c37fea24037723743463b3f00ffca3c45b9bdc7af089d9db
 object rtl/typinfo.o ec8715f5f13b7ae8156acea7aabc2c77229c6663b3857d1921bbdc241951825e
