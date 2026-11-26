@@ -309,6 +309,38 @@ Linux and macOS the unit installs `cwstring`, which converts through iconv, and
 in front of it a direct conversion for ASCII text to and from UTF-8 or
 US-ASCII, which produces the same bytes without an iconv call.
 
+### Starting a Child Process on Unix
+
+FPC's `TProcess` forks and execs without closing the descriptors the child
+inherits, and the RTL opens files and `TProcess` creates pipes without
+close-on-exec (`FD_CLOEXEC`). Every such descriptor the parent has open at the
+fork, in any thread, stays open in the child until it exits. A `TFileStream`
+holds an `flock` on its descriptor, so while the child runs, the `flock` of
+the parent's next exclusive open of that file (`fmCreate`,
+`TStrings.SaveToFile`) is refused with `EAGAIN`, and the open fails with
+`EFCreateError`. Its message gives `EAGAIN`'s text, or `EBADF`'s when the RTL
+has already closed the refused descriptor; both texts differ by platform. The
+parent's end of a child's input pipe is inherited as well, so a child reading
+its standard input sees end of file only once every child started while that
+end was open has exited.
+
+Start processes with `TChildProcess` from `source/shared/ChildProcess.pas`.
+It closes every descriptor above standard error in the child, just before
+exec. On Linux 5.9 and later on x86-64, i386 and AArch64 it does so with one
+`close_range(2)` call. Elsewhere it closes them one by one, up to the higher
+of the descriptor limit (at least 65,536 when unlimited) and the parent's
+highest open descriptor, which it lists from `/proc/self/fd` or `/dev/fd`
+before the fork. Linux's and macOS's lists are complete; FreeBSD's `/dev/fd`
+names only descriptors 0 to 2 unless `fdescfs` is mounted, so there a
+descriptor opened above the limit before the limit was lowered can stay open.
+Listing the unit in a program's uses also makes `RunCommand` and its
+variants create a `TChildProcess`. The child still holds the parent's
+descriptors between the fork and that close, so a parent that reopens a file
+exclusively right after starting a process can still be refused for that
+moment, but no longer for the child's lifetime. Windows needs nothing:
+`TProcess` makes only the child's ends of its pipes inheritable there, and the
+RTL opens files non-inheritable.
+
 ## Fuzzing and Memory Safety
 
 `GocciaFuzzHarness` runs a single input twice, each time on an engine of its
