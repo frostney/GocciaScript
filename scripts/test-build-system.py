@@ -9,6 +9,7 @@ import os
 import resource
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 
@@ -191,16 +192,22 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-cache-") as directory:
     launches = []
     try:
         for checkout in checkouts:
+            # Each launch leads its own process group, so cleanup reaches the
+            # compiler instantfpc starts as well as instantfpc itself.
             launches.append(subprocess.Popen(
                 ["./build.pas", "nosuchtarget"], cwd=checkout, env=cache_env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                start_new_session=True))
         outputs = [launch.communicate(timeout=600)[0] for launch in launches]
     finally:
-        # A launch or wait that failed leaves no child writing into the
+        # A launch or wait that failed leaves no process writing into the
         # fixture while it is removed.
         for launch in launches:
             if launch.poll() is None:
-                launch.kill()
+                try:
+                    os.killpg(launch.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 launch.wait()
     for checkout, output in zip(checkouts, outputs):
         assert "Unknown build target: nosuchtarget" in output, (checkout, output)
