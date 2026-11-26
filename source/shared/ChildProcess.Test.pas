@@ -3,9 +3,11 @@ program ChildProcess.Test;
 {$I Shared.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}
+  cthreads,
+  BaseUnix,
+  {$ENDIF}
   Classes,
-  DateUtils,
   Process,
   SysUtils,
 
@@ -20,7 +22,8 @@ type
     {$IFDEF UNIX}
     procedure TestAChildDoesNotHoldTheParentsLock;
     procedure TestAChildDoesNotHoldAnotherChildsInput;
-    procedure TestARunCommandChildHasOnlyStandardDescriptors;
+    procedure TestARunCommandChildDoesNotSeeAParentDescriptor;
+    procedure TestOneByOneCloseReachesAboveALoweredLimit;
     {$ENDIF}
   protected
     procedure BeforeEach; override;
@@ -30,6 +33,11 @@ type
   end;
 
 {$IFDEF UNIX}
+const
+  // How long a reader may take to see end of file, or the parent to reopen
+  // a file, once nothing else holds it.
+  DEADLINE_MS = 2500;
+
 function StartChild(const AExecutable: string;
   const AArguments: array of string;
   const AOptions: TProcessOptions): TChildProcess;
@@ -43,6 +51,48 @@ begin
   Result.Options := AOptions;
   Result.Execute;
 end;
+
+{ A cat reading a pipe the parent writes: it stays alive until the parent
+  closes its input, so a test controls exactly how long it runs. }
+function StartHolder: TChildProcess;
+begin
+  Result := StartChild('/bin/cat', [], [poUsePipes]);
+end;
+
+procedure StopHolder(var AHolder: TChildProcess);
+begin
+  if not Assigned(AHolder) then
+    Exit;
+  AHolder.CloseInput;
+  AHolder.WaitOnExit;
+  FreeAndNil(AHolder);
+end;
+
+{ Waits until AProcess exits or the deadline passes, and whether it exited. }
+function ExitsWithin(const AProcess: TProcess;
+  const AMilliseconds: QWord): Boolean;
+var
+  Started: QWord;
+begin
+  Started := GetTickCount64;
+  while AProcess.Running and (GetTickCount64 - Started < AMilliseconds) do
+    Sleep(5);
+  Result := not AProcess.Running;
+end;
+
+{ Whether a read of ADescriptor reaches end of file within the deadline. }
+function ReachesEndOfFile(const ADescriptor: cint;
+  const AMilliseconds: clong): Boolean;
+var
+  Poll: TPollFd;
+  Byte_: Byte;
+begin
+  Poll.fd := ADescriptor;
+  Poll.events := POLLIN;
+  Poll.revents := 0;
+  Result := (FpPoll(@Poll, 1, AMilliseconds) = 1) and
+    (FpRead(ADescriptor, Byte_, 1) = 0);
+end;
 {$ENDIF}
 
 procedure TChildProcessTests.SetupTests;
@@ -54,8 +104,10 @@ begin
     TestAChildDoesNotHoldTheParentsLock);
   Test('A child does not hold the write end of another child''s input',
     TestAChildDoesNotHoldAnotherChildsInput);
-  Test('A RunCommand child has only its standard descriptors open',
-    TestARunCommandChildHasOnlyStandardDescriptors);
+  Test('A RunCommand child does not see a descriptor the parent has open',
+    TestARunCommandChildDoesNotSeeAParentDescriptor);
+  Test('Without close_range, a child closes a descriptor above a lowered limit',
+    TestOneByOneCloseReachesAboveALoweredLimit);
   {$ENDIF}
 end;
 
@@ -70,6 +122,8 @@ begin
   DeleteFile(FPath);
 end;
 
+{ build.pas and FPCSafeSEH start their compilers through RunCommand, which
+  creates DefaultTProcess; this is also the check that runs on Windows. }
 procedure TChildProcessTests.TestRunCommandStartsAChildProcess;
 begin
   Expect<Boolean>(DefaultTProcess = TChildProcess).ToBe(True);
@@ -78,29 +132,28 @@ end;
 {$IFDEF UNIX}
 { A TFileStream created with fmCreate holds an exclusive flock. A child that
   inherited its descriptor would keep the lock for as long as it runs after
-  the parent closes the file, and the parent's exclusive opens would fail with
-  EAGAIN. The forked child does hold it from the fork until it closes its
-  descriptors just before exec, so the parent retries for up to a second,
-  well short of the sleeper's five. }
+  the parent closes the file, and the parent's exclusive opens would fail
+  with EFCreateError. The forked child does hold it from the fork until it
+  closes its descriptors just before exec, so the parent retries until the
+  deadline, while the holder is still running. }
 procedure TChildProcessTests.TestAChildDoesNotHoldTheParentsLock;
 const
-  RETRY_LIMIT_MS = 1000;
   RETRY_INTERVAL_MS = 10;
 var
   Held: TFileStream;
-  Sleeper: TChildProcess;
-  Started: TDateTime;
+  Holder: TChildProcess;
+  Started: QWord;
   Reopened: Boolean;
 begin
-  Sleeper := nil;
-  Held := TFileStream.Create(FPath, fmCreate);
+  Holder := nil;
   try
+    Held := TFileStream.Create(FPath, fmCreate);
     try
-      Sleeper := StartChild('/bin/sleep', ['5'], []);
+      Holder := StartHolder;
     finally
       Held.Free;
     end;
-    Started := Now;
+    Started := GetTickCount64;
     repeat
       try
         TFileStream.Create(FPath, fmCreate).Free;
@@ -112,15 +165,11 @@ begin
           Sleep(RETRY_INTERVAL_MS);
         end;
       end;
-    until Reopened or (MilliSecondsBetween(Now, Started) > RETRY_LIMIT_MS);
+    until Reopened or (GetTickCount64 - Started > DEADLINE_MS);
     Expect<Boolean>(Reopened).ToBe(True);
+    Expect<Boolean>(Holder.Running).ToBe(True);
   finally
-    if Assigned(Sleeper) then
-    begin
-      Sleeper.Terminate(0);
-      Sleeper.WaitOnExit;
-      Sleeper.Free;
-    end;
+    StopHolder(Holder);
   end;
 end;
 
@@ -129,32 +178,29 @@ end;
   too, and cat would see end of file only when that child exits. }
 procedure TChildProcessTests.TestAChildDoesNotHoldAnotherChildsInput;
 var
-  Cat, Sleeper: TChildProcess;
-  Closed: TDateTime;
-  Elapsed: Int64;
+  Cat, Holder: TChildProcess;
 begin
+  Holder := nil;
   Cat := StartChild('/bin/cat', [], [poUsePipes]);
-  Sleeper := nil;
   try
-    Sleeper := StartChild('/bin/sleep', ['5'], []);
-    Closed := Now;
+    Holder := StartHolder;
     Cat.CloseInput;
-    Cat.WaitOnExit;
-    Elapsed := MilliSecondsBetween(Now, Closed);
-    Expect<Boolean>(Elapsed < 2500).ToBe(True);
+    Expect<Boolean>(ExitsWithin(Cat, DEADLINE_MS)).ToBe(True);
+    Expect<Integer>(Cat.ExitStatus).ToBe(0);
+    Expect<Boolean>(Holder.Running).ToBe(True);
   finally
-    if Assigned(Sleeper) then
+    StopHolder(Holder);
+    if Cat.Running then
     begin
-      Sleeper.Terminate(0);
-      Sleeper.WaitOnExit;
-      Sleeper.Free;
+      Cat.Terminate(1);
+      Cat.WaitOnExit;
     end;
     Cat.Free;
   end;
 end;
 
 { /dev/fd/<n> exists in a process exactly while its descriptor n is open. }
-procedure TChildProcessTests.TestARunCommandChildHasOnlyStandardDescriptors;
+procedure TChildProcessTests.TestARunCommandChildDoesNotSeeAParentDescriptor;
 var
   Held: TFileStream;
   Descriptor: THandle;
@@ -172,6 +218,46 @@ begin
   end;
   Expect<string>(Trim(string(Output))).ToBe(Format('1 open' + LineEnding + '%d closed',
     [Descriptor]));
+end;
+
+{ Lowering the soft descriptor limit leaves a descriptor opened above it open.
+  Without close_range, as on macOS and the BSDs, the child must still close
+  it: here the write end of a pipe at descriptor 200, under a limit of 64. }
+procedure TChildProcessTests.TestOneByOneCloseReachesAboveALoweredLimit;
+const
+  HIGH_DESCRIPTOR = 200;
+  LOWERED_LIMIT = 64;
+var
+  Ends: TFilDes;
+  Saved, Lowered: TRLimit;
+  SavedCloseFrom: TChildProcessCloseFrom;
+  Holder: TChildProcess;
+begin
+  Holder := nil;
+  Expect<Integer>(FpPipe(Ends)).ToBe(0);
+  Expect<Integer>(FpDup2(Ends[1], HIGH_DESCRIPTOR)).ToBe(HIGH_DESCRIPTOR);
+  FpClose(Ends[1]);
+  Expect<Integer>(FpGetRLimit(RLIMIT_NOFILE, @Saved)).ToBe(0);
+  SavedCloseFrom := ChildProcessCloseFrom;
+  ChildProcessCloseFrom := nil;
+  try
+    Lowered := Saved;
+    Lowered.rlim_cur := LOWERED_LIMIT;
+    Expect<Integer>(FpSetRLimit(RLIMIT_NOFILE, @Lowered)).ToBe(0);
+    try
+      Holder := StartHolder;
+    finally
+      FpSetRLimit(RLIMIT_NOFILE, @Saved);
+    end;
+    FpClose(HIGH_DESCRIPTOR);
+    Expect<Boolean>(ReachesEndOfFile(Ends[0], DEADLINE_MS)).ToBe(True);
+    Expect<Boolean>(Holder.Running).ToBe(True);
+  finally
+    ChildProcessCloseFrom := SavedCloseFrom;
+    StopHolder(Holder);
+    FpClose(HIGH_DESCRIPTOR);
+    FpClose(Ends[0]);
+  end;
 end;
 {$ENDIF}
 
