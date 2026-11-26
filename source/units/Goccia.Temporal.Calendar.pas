@@ -308,7 +308,6 @@ const
   );
 
 var
-  HebrewDate: TTemporalDateRecord;
   CalendarICU: TTemporalCalendarICU;
   CalendarICULoadAttempted: Boolean;
   CalendarICUAvailable: Boolean;
@@ -1222,6 +1221,8 @@ type
   end;
 
 var
+  // Shared by every thread: filled once under CalendarICULock, Valid set
+  // last, so a reader that sees Valid reads both anchors whole.
   LunisolarModelAnchors: array[1..2] of TLunisolarModelAnchors;
 
 function TryFindICULunisolarNewYear(const ACalendarId: string;
@@ -1253,20 +1254,36 @@ function TryGetLunisolarModelAnchors(const ACalendarId: string;
   out AUpper, ALower: Int64): Boolean;
 var
   Code: Integer;
+  Upper, Lower: Int64;
 begin
   AUpper := 0;
   ALower := 0;
   Code := LunisolarCalendarCode(ACalendarId);
   if Code = 0 then
     Exit(False);
-  if not LunisolarModelAnchors[Code].Valid then
+  if LunisolarModelAnchors[Code].Valid then
+    ReadBarrier
+  else
   begin
+    // found outside the lock (the ICU lookups take it) into locals: another
+    // thread may be reading the shared anchors meanwhile
     if not TryFindICULunisolarNewYear(ACalendarId,
-         LUNISOLAR_MODEL_LIMIT_YEAR + 1, LunisolarModelAnchors[Code].Upper) or
+         LUNISOLAR_MODEL_LIMIT_YEAR + 1, Upper) or
        not TryFindICULunisolarNewYear(ACalendarId,
-         -LUNISOLAR_MODEL_LIMIT_YEAR, LunisolarModelAnchors[Code].Lower) then
+         -LUNISOLAR_MODEL_LIMIT_YEAR, Lower) then
       Exit(False);
-    LunisolarModelAnchors[Code].Valid := True;
+    CriticalSectionEnter(CalendarICULock);
+    try
+      if not LunisolarModelAnchors[Code].Valid then
+      begin
+        LunisolarModelAnchors[Code].Upper := Upper;
+        LunisolarModelAnchors[Code].Lower := Lower;
+        WriteBarrier;
+        LunisolarModelAnchors[Code].Valid := True;
+      end;
+    finally
+      CriticalSectionLeave(CalendarICULock);
+    end;
   end;
   AUpper := LunisolarModelAnchors[Code].Upper;
   ALower := LunisolarModelAnchors[Code].Lower;
@@ -3360,6 +3377,7 @@ var
   Status: TICUErrorCode;
   Millis: TICUDate;
   ShouldClose: Boolean;
+  HebrewDate: TTemporalDateRecord;
 begin
   Result := False;
   ACalendarDate.Year := 0;
