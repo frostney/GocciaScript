@@ -42,60 +42,58 @@ uses
 type
   TFileCovPair = TBaseMap<string, TGocciaFileCoverage>.TKeyValuePair;
 
-function LcovFunctionName(const AFileCov: TGocciaFileCoverage;
-  const AIndex: Integer): string;
+{ A location through the file's source map, when it has one: the start and the end each translate on their own
+  (the map's positions are 1-based, Istanbul's columns 0-based). }
+function TranslateLoc(const ASrcMap: TGocciaSourceMap;
+  const ALoc: TGocciaCoverageLoc): TGocciaCoverageLoc;
 var
-  I: Integer;
-  Func: TGocciaCoverageFunction;
+  OrigLine, OrigCol: Integer;
 begin
-  Func := AFileCov.Functions[AIndex];
-  Result := Func.Name;
-  if Result = '' then
-    Result := Format('(anonymous_%d)', [AIndex + 1])
-  else
-    for I := 0 to AFileCov.Functions.Count - 1 do
-      if (I <> AIndex) and (AFileCov.Functions[I].Name = Result) then
-      begin
-        Result := Format('%s@%d:%d', [Result, Func.Line, Func.Column]);
-        Break;
-      end;
-  Result := StringReplace(Result, '\', '\\', [rfReplaceAll]);
-  Result := StringReplace(Result, #13, '\r', [rfReplaceAll]);
-  Result := StringReplace(Result, #10, '\n', [rfReplaceAll]);
-end;
-
-{ Build an array mapping original source lines (1-based index) to aggregated
-  hit counts by translating each transformed line through the source map. }
-procedure BuildTranslatedLineHits(const AFileCov: TGocciaFileCoverage;
-  const ASrcMap: TGocciaSourceMap; const AOrigLineCount: Integer;
-  var AHits: array of Integer);
-var
-  I, HitCount, OrigLine, OrigCol: Integer;
-begin
-  for I := 0 to High(AHits) do
-    AHits[I] := 0;
-  for I := 1 to AFileCov.LineHitCount - 1 do
+  Result := ALoc;
+  if (ASrcMap = nil) or (ALoc.StartLine <= 0) then Exit;
+  if ASrcMap.Translate(ALoc.StartLine, ALoc.StartColumn + 1, OrigLine, OrigCol) then
   begin
-    HitCount := AFileCov.GetLineHitCount(I);
-    if HitCount > 0 then
-      if ASrcMap.Translate(I, 0, OrigLine, OrigCol) then
-        if (OrigLine >= 1) and (OrigLine <= AOrigLineCount) then
-          Inc(AHits[OrigLine], HitCount);
+    Result.StartLine := OrigLine;
+    Result.StartColumn := OrigCol - 1;
+  end;
+  if ASrcMap.Translate(ALoc.EndLine, ALoc.EndColumn + 1, OrigLine, OrigCol) then
+  begin
+    Result.EndLine := OrigLine;
+    Result.EndColumn := OrigCol - 1;
   end;
 end;
 
+{ Istanbul's name of a function: its own identifier, else (anonymous_<index>) with its index in the file's
+  function map, as its newFunction names it. }
+function FunctionName(const AFunc: TGocciaCoverageFunction;
+  const AKey: Integer): string;
+begin
+  Result := AFunc.Name;
+  if Result = '' then
+    Result := '(anonymous_' + IntToStr(AKey) + ')';
+end;
+
 { Console Summary }
+
+function Percent(const AHit, ATotal: Integer): Double;
+begin
+  if ATotal > 0 then
+    Result := (AHit / ATotal) * 100.0
+  else
+    Result := 100.0;
+end;
 
 procedure PrintCoverageSummary(const ATracker: TGocciaCoverageTracker);
 var
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
-  LinesHit, LinesTotal, BranchesHit, BranchesTotal: Integer;
+  StatementsHit, StatementsTotal, LinesHit, LinesTotal, BranchesHit, BranchesTotal: Integer;
   FunctionsHit, FunctionsTotal: Integer;
-  TotalLinesHit, TotalLinesTotal, TotalBranchesHit, TotalBranchesTotal: Integer;
-  TotalFunctionsHit, TotalFunctionsTotal: Integer;
-  LinePct, BranchPct, FunctionPct: Double;
+  TotalStatementsHit, TotalStatementsTotal, TotalLinesHit, TotalLinesTotal: Integer;
+  TotalBranchesHit, TotalBranchesTotal, TotalFunctionsHit, TotalFunctionsTotal: Integer;
 begin
+  TotalStatementsHit := 0;
+  TotalStatementsTotal := 0;
   TotalLinesHit := 0;
   TotalLinesTotal := 0;
   TotalBranchesHit := 0;
@@ -105,68 +103,48 @@ begin
 
   WriteLn;
   WriteLn('Coverage Summary:');
-  WriteLn(Format('  %-52s %-18s %-18s %s',
-    ['File', 'Lines', 'Branches', 'Functions']));
+  WriteLn(Format('  %-52s %-18s %-18s %-18s %s',
+    ['File', 'Statements', 'Lines', 'Branches', 'Functions']));
 
   for Pair in ATracker.Files do
   begin
     FileCov := Pair.Value;
+    StatementsHit := FileCov.StatementsHit;
+    StatementsTotal := FileCov.StatementsFound;
     LinesHit := FileCov.LinesHit;
-    LinesTotal := LinesHit;
-    if FileCov.ExecutableLines > LinesTotal then
-      LinesTotal := FileCov.ExecutableLines;
+    LinesTotal := FileCov.LinesFound;
     BranchesHit := FileCov.BranchesHit;
     BranchesTotal := FileCov.BranchesFound;
     FunctionsHit := FileCov.FunctionsHit;
     FunctionsTotal := FileCov.FunctionsFound;
 
-    if LinesTotal > 0 then
-      LinePct := (LinesHit / LinesTotal) * 100.0
-    else
-      LinePct := 100.0;
+    WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
+      [FileCov.FileName,
+       StatementsHit, StatementsTotal, Percent(StatementsHit, StatementsTotal),
+       LinesHit, LinesTotal, Percent(LinesHit, LinesTotal),
+       BranchesHit, BranchesTotal, Percent(BranchesHit, BranchesTotal),
+       FunctionsHit, FunctionsTotal, Percent(FunctionsHit, FunctionsTotal)]));
 
-    if BranchesTotal > 0 then
-      BranchPct := (BranchesHit / BranchesTotal) * 100.0
-    else
-      BranchPct := 100.0;
-    if FunctionsTotal > 0 then
-      FunctionPct := (FunctionsHit / FunctionsTotal) * 100.0
-    else
-      FunctionPct := 100.0;
-
-    WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
-      [FileCov.FileName, LinesHit, LinesTotal, LinePct,
-       BranchesHit, BranchesTotal, BranchPct,
-       FunctionsHit, FunctionsTotal, FunctionPct]));
-
-    TotalLinesHit := TotalLinesHit + LinesHit;
-    TotalLinesTotal := TotalLinesTotal + LinesTotal;
-    TotalBranchesHit := TotalBranchesHit + BranchesHit;
-    TotalBranchesTotal := TotalBranchesTotal + BranchesTotal;
-    TotalFunctionsHit := TotalFunctionsHit + FunctionsHit;
-    TotalFunctionsTotal := TotalFunctionsTotal + FunctionsTotal;
+    Inc(TotalStatementsHit, StatementsHit);
+    Inc(TotalStatementsTotal, StatementsTotal);
+    Inc(TotalLinesHit, LinesHit);
+    Inc(TotalLinesTotal, LinesTotal);
+    Inc(TotalBranchesHit, BranchesHit);
+    Inc(TotalBranchesTotal, BranchesTotal);
+    Inc(TotalFunctionsHit, FunctionsHit);
+    Inc(TotalFunctionsTotal, FunctionsTotal);
   end;
 
-  if TotalLinesTotal > 0 then
-    LinePct := (TotalLinesHit / TotalLinesTotal) * 100.0
-  else
-    LinePct := 100.0;
-  if TotalBranchesTotal > 0 then
-    BranchPct := (TotalBranchesHit / TotalBranchesTotal) * 100.0
-  else
-    BranchPct := 100.0;
-  if TotalFunctionsTotal > 0 then
-    FunctionPct := (TotalFunctionsHit / TotalFunctionsTotal) * 100.0
-  else
-    FunctionPct := 100.0;
-
-  WriteLn(Format('  %-52s %-18s %-18s %s', [
+  WriteLn(Format('  %-52s %-18s %-18s %-18s %s', [
     '----------------------------------------------------',
-    '------------------', '------------------', '------------------']));
-  WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
-    ['Total', TotalLinesHit, TotalLinesTotal, LinePct,
-     TotalBranchesHit, TotalBranchesTotal, BranchPct,
-     TotalFunctionsHit, TotalFunctionsTotal, FunctionPct]));
+    '------------------', '------------------', '------------------',
+    '------------------']));
+  WriteLn(Format('  %-52s %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)  %d/%d (%5.1f%%)',
+    ['Total',
+     TotalStatementsHit, TotalStatementsTotal, Percent(TotalStatementsHit, TotalStatementsTotal),
+     TotalLinesHit, TotalLinesTotal, Percent(TotalLinesHit, TotalLinesTotal),
+     TotalBranchesHit, TotalBranchesTotal, Percent(TotalBranchesHit, TotalBranchesTotal),
+     TotalFunctionsHit, TotalFunctionsTotal, Percent(TotalFunctionsHit, TotalFunctionsTotal)]));
 end;
 
 { Line-by-Line Detail }
@@ -178,8 +156,10 @@ var
   FileCov: TGocciaFileCoverage;
   SourceLines: TStringList;
   OwnsSource: Boolean;
-  ExecutableFlags: array of Boolean;
-  I, HitCount, LineWidth: Integer;
+  Lines: TGocciaCoverageLineArray;
+  { per source line: -1 no statement starts on it, else the line's count }
+  Counts: array of Int64;
+  I, LineWidth: Integer;
   Gutter, SourcePath: string;
 begin
   FileCov := ATracker.GetFileCoverage(AFilePath);
@@ -204,9 +184,14 @@ begin
   try
     if SourceLines.Count = 0 then Exit;
 
-    // Build per-line executable flags using the shared scanner
-    SetLength(ExecutableFlags, SourceLines.Count);
-    BuildExecutableLineFlags(SourceLines, ExecutableFlags);
+    { the lines Istanbul lists (a statement starts on them) and their counts }
+    SetLength(Counts, SourceLines.Count);
+    for I := 0 to High(Counts) do
+      Counts[I] := -1;
+    Lines := FileCov.LineCoverage;
+    for I := 0 to High(Lines) do
+      if (Lines[I].Line >= 1) and (Lines[I].Line <= SourceLines.Count) then
+        Counts[Lines[I].Line - 1] := Lines[I].HitCount;
 
     // Determine gutter width from line count
     LineWidth := Length(IntToStr(SourceLines.Count));
@@ -220,11 +205,9 @@ begin
 
     for I := 0 to SourceLines.Count - 1 do
     begin
-      HitCount := FileCov.GetLineHitCount(I + 1);
-
-      if HitCount > 0 then
-        Gutter := Format('%*dx', [LineWidth + 3, HitCount])
-      else if ExecutableFlags[I] then
+      if Counts[I] > 0 then
+        Gutter := Format('%*dx', [LineWidth + 3, Counts[I]])
+      else if Counts[I] = 0 then
         Gutter := Format('%*s', [LineWidth + 2, '']) + '!!'
       else
         Gutter := Format('%*s', [LineWidth + 4, '']);
@@ -237,28 +220,21 @@ begin
   end;
 end;
 
-{ lcov Format }
+{ lcov Format (istanbul-reports' lcovonly: TN, SF, FN, FNF, FNH, FNDA, DA, LF, LH, BRDA, BRF, BRH) }
 
 procedure WriteCoverageLcov(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 var
   Output: TStringList;
-  SourceLines: TStringList;
-  ExecutableFlags: array of Boolean;
-  TranslatedHits: array of Integer;
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
-  I, HitCount, LineCount, LinesHitCount, BranchCount, BranchHitCount: Integer;
-  FunctionCount, FunctionHitCount, FunctionLine: Integer;
-  Branch: TGocciaCoverageBranch;
-  Func: TGocciaCoverageFunction;
-  BranchBlockIndex: Integer;
-  PrevLine, PrevColumn: Integer;
-  HasSource: Boolean;
   SrcMap: TGocciaSourceMap;
-  OrigLine, OrigCol: Integer;
-  BranchLine, BranchCol: Integer;
-  SourcePath: string;
+  FunctionOrder, BranchOrder: TGocciaCoverageIndexArray;
+  Lines: TGocciaCoverageLineArray;
+  I, J, LinesHitCount: Integer;
+  Func: TGocciaCoverageFunction;
+  Branch: TGocciaCoverageBranch;
+  Decl, BranchLoc: TGocciaCoverageLoc;
 begin
   Output := TStringList.Create;
   try
@@ -271,140 +247,47 @@ begin
         which is what Codecov matches against and what genhtml resolves. }
       Output.Add('SF:' + FileCov.FileName);
       SrcMap := ATracker.GetSourceMap(FileCov.FileName);
-      SourcePath := ATracker.ResolvedSourcePath(FileCov.FileName);
 
-      // Load source to identify executable lines for zero-hit entries
-      HasSource := False;
-      SourceLines := nil;
-      try
-        if FileExists(SourcePath) then
-        begin
-          SourceLines := CreateFileTextLines(ReadUTF8FileText(SourcePath));
-          if SourceLines.Count > 0 then
-          begin
-            SetLength(ExecutableFlags, SourceLines.Count);
-            BuildExecutableLineFlags(SourceLines, ExecutableFlags);
-            HasSource := True;
-          end;
-        end;
-
-        // Line coverage data — emit DA: for all executable lines (hit or zero)
-        LineCount := 0;
-        LinesHitCount := 0;
-        if HasSource and Assigned(SrcMap) then
-        begin
-          // JSX file: pre-build translated hit counts, then emit
-          SetLength(TranslatedHits, SourceLines.Count + 1);
-          BuildTranslatedLineHits(FileCov, SrcMap, SourceLines.Count,
-            TranslatedHits);
-          for I := 0 to SourceLines.Count - 1 do
-            if ExecutableFlags[I] then
-            begin
-              HitCount := TranslatedHits[I + 1];
-              Output.Add(Format('DA:%d,%d', [I + 1, HitCount]));
-              Inc(LineCount);
-              if HitCount > 0 then
-                Inc(LinesHitCount);
-            end;
-        end
-        else if HasSource then
-        begin
-          for I := 0 to SourceLines.Count - 1 do
-            if ExecutableFlags[I] then
-            begin
-              HitCount := FileCov.GetLineHitCount(I + 1);
-              Output.Add(Format('DA:%d,%d', [I + 1, HitCount]));
-              Inc(LineCount);
-              if HitCount > 0 then
-                Inc(LinesHitCount);
-            end;
-        end
-        else
-          for I := 1 to FileCov.LineHitCount - 1 do
-          begin
-            HitCount := FileCov.GetLineHitCount(I);
-            if HitCount > 0 then
-            begin
-              if Assigned(SrcMap) and SrcMap.Translate(I, 0, OrigLine, OrigCol) then
-                Output.Add(Format('DA:%d,%d', [OrigLine, HitCount]))
-              else
-                Output.Add(Format('DA:%d,%d', [I, HitCount]));
-              Inc(LineCount);
-              Inc(LinesHitCount);
-            end;
-          end;
-      finally
-        SourceLines.Free;
-      end;
-
-      // Function definitions and hit counts
-      FunctionCount := FileCov.Functions.Count;
-      FunctionHitCount := 0;
-      for I := 0 to FileCov.Functions.Count - 1 do
+      { functions: the declaration's line and the name, in Istanbul's order }
+      FunctionOrder := FileCov.FunctionOrder;
+      for I := 0 to High(FunctionOrder) do
       begin
-        Func := FileCov.Functions[I];
-        FunctionLine := Func.Line;
-        if Assigned(SrcMap) and
-           SrcMap.Translate(Func.Line, Func.Column, OrigLine, OrigCol) then
-          FunctionLine := OrigLine;
-        Output.Add(Format('FN:%d,%s',
-          [FunctionLine, LcovFunctionName(FileCov, I)]));
+        Func := FileCov.Functions[FunctionOrder[I]];
+        Decl := TranslateLoc(SrcMap, Func.Decl);
+        Output.Add(Format('FN:%d,%s', [Decl.StartLine, FunctionName(Func, I)]));
       end;
-      for I := 0 to FileCov.Functions.Count - 1 do
+      Output.Add(Format('FNF:%d', [FileCov.FunctionsFound]));
+      Output.Add(Format('FNH:%d', [FileCov.FunctionsHit]));
+      for I := 0 to High(FunctionOrder) do
       begin
-        Func := FileCov.Functions[I];
-        Output.Add(Format('FNDA:%d,%s',
-          [Func.HitCount, LcovFunctionName(FileCov, I)]));
-        if Func.HitCount > 0 then
-          Inc(FunctionHitCount);
-      end;
-      Output.Add(Format('FNF:%d', [FunctionCount]));
-      Output.Add(Format('FNH:%d', [FunctionHitCount]));
-
-      // Branch coverage data
-      // BRDA format: BRDA:line,block,branch,hit_count
-      BranchCount := 0;
-      BranchHitCount := 0;
-      BranchBlockIndex := 0;
-      PrevLine := -1;
-      PrevColumn := -1;
-      for I := 0 to FileCov.Branches.Count - 1 do
-      begin
-        Branch := FileCov.Branches[I];
-        // Translate branch position through source map if available
-        if Assigned(SrcMap) and
-           SrcMap.Translate(Branch.Line, Branch.Column, OrigLine, OrigCol) then
-        begin
-          BranchLine := OrigLine;
-          BranchCol := OrigCol;
-        end
-        else
-        begin
-          BranchLine := Branch.Line;
-          BranchCol := Branch.Column;
-        end;
-        if (BranchLine <> PrevLine) or (BranchCol <> PrevColumn) then
-        begin
-          Inc(BranchBlockIndex);
-          PrevLine := BranchLine;
-          PrevColumn := BranchCol;
-        end;
-        if Branch.HitCount > 0 then
-          Output.Add(Format('BRDA:%d,%d,%d,%d',
-            [BranchLine, BranchBlockIndex, Branch.BranchIndex,
-             Branch.HitCount]))
-        else
-          Output.Add(Format('BRDA:%d,%d,%d,-',
-            [BranchLine, BranchBlockIndex, Branch.BranchIndex]));
-        Inc(BranchCount);
-        if Branch.HitCount > 0 then
-          Inc(BranchHitCount);
+        Func := FileCov.Functions[FunctionOrder[I]];
+        Output.Add(Format('FNDA:%d,%s', [Func.HitCount, FunctionName(Func, I)]));
       end;
 
-      Output.Add(Format('BRF:%d', [BranchCount]));
-      Output.Add(Format('BRH:%d', [BranchHitCount]));
-      Output.Add(Format('LF:%d', [LineCount]));
+      { lines: each line a statement starts on, with the most hits among those statements }
+      Lines := FileCov.LineCoverage(SrcMap);
+      LinesHitCount := 0;
+      for I := 0 to High(Lines) do
+      begin
+        Output.Add(Format('DA:%d,%d', [Lines[I].Line, Lines[I].HitCount]));
+        if Lines[I].HitCount > 0 then
+          Inc(LinesHitCount);
+      end;
+      Output.Add(Format('LF:%d', [Length(Lines)]));
       Output.Add(Format('LH:%d', [LinesHitCount]));
+
+      { branches: BRDA:<line of the branch>,<branch's key in the map>,<path>,<hits> }
+      BranchOrder := FileCov.BranchOrder;
+      for I := 0 to High(BranchOrder) do
+      begin
+        Branch := FileCov.Branches[BranchOrder[I]];
+        BranchLoc := TranslateLoc(SrcMap, Branch.Loc);
+        for J := 0 to High(Branch.HitCounts) do
+          Output.Add(Format('BRDA:%d,%d,%d,%d',
+            [BranchLoc.StartLine, I, J, Branch.HitCounts[J]]));
+      end;
+      Output.Add(Format('BRF:%d', [FileCov.BranchesFound]));
+      Output.Add(Format('BRH:%d', [FileCov.BranchesHit]));
       Output.Add('end_of_record');
     end;
 
@@ -414,29 +297,32 @@ begin
   end;
 end;
 
-{ JSON Format (Istanbul-compatible) }
+{ JSON Format: Istanbul's coverage map (istanbul-lib-coverage's FileCoverage data per file) }
+
+function JsonLocation(const ALoc: TGocciaCoverageLoc): string;
+begin
+  { a location with no start line is Istanbul's undefined one: the empty alternate of an `if` without `else` }
+  if ALoc.StartLine <= 0 then
+    Exit('{"start":{},"end":{}}');
+  Result := Format('{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}}',
+    [ALoc.StartLine, ALoc.StartColumn, ALoc.EndLine, ALoc.EndColumn]);
+end;
 
 procedure WriteCoverageJSON(const ATracker: TGocciaCoverageTracker;
   const AOutputPath: string);
 var
   Buf: TStringBuffer;
-  SourceLines: TStringList;
-  ExecutableFlags: array of Boolean;
-  TranslatedHits: array of Integer;
   Pair: TFileCovPair;
   FileCov: TGocciaFileCoverage;
-  I, HitCount, StatementIndex, BranchBlockIndex: Integer;
-  Branch: TGocciaCoverageBranch;
-  PrevLine, PrevColumn: Integer;
-  FirstFile, FirstEntry: Boolean;
-  HasSource: Boolean;
-  Output: TStringList;
   SrcMap: TGocciaSourceMap;
-  OrigLine, OrigCol: Integer;
-  BranchLine, BranchCol: Integer;
-  FunctionLine, FunctionCol: Integer;
+  StatementOrder, FunctionOrder, BranchOrder: TGocciaCoverageIndexArray;
+  I, J: Integer;
+  FirstFile: Boolean;
+  Output: TStringList;
+  Stmt: TGocciaCoverageStatement;
   Func: TGocciaCoverageFunction;
-  SourcePath: string;
+  Branch: TGocciaCoverageBranch;
+  Loc, FuncLoc: TGocciaCoverageLoc;
 begin
   Buf := TStringBuffer.Create(4096);
   Buf.Append('{');
@@ -449,7 +335,9 @@ begin
       Buf.AppendChar(',');
     FirstFile := False;
     SrcMap := ATracker.GetSourceMap(FileCov.FileName);
-    SourcePath := ATracker.ResolvedSourcePath(FileCov.FileName);
+    StatementOrder := FileCov.StatementOrder;
+    FunctionOrder := FileCov.FunctionOrder;
+    BranchOrder := FileCov.BranchOrder;
 
     Buf.Append(#10'  "');
     Buf.Append(EscapeJSONString(FileCov.FileName));
@@ -460,232 +348,96 @@ begin
     Buf.Append(EscapeJSONString(FileCov.FileName));
     Buf.Append('",');
 
-    // Load source to identify executable lines for zero-hit entries
-    HasSource := False;
-    SourceLines := nil;
-    try
-      if FileExists(SourcePath) then
-      begin
-        SourceLines := CreateFileTextLines(ReadUTF8FileText(SourcePath));
-        if SourceLines.Count > 0 then
-        begin
-          SetLength(ExecutableFlags, SourceLines.Count);
-          BuildExecutableLineFlags(SourceLines, ExecutableFlags);
-          HasSource := True;
-        end;
-      end;
-
-      // s (statement hit counts) — emit for all executable lines
-      Buf.Append(#10'    "s": {');
-      StatementIndex := 0;
-      FirstEntry := True;
-      if HasSource and Assigned(SrcMap) then
-      begin
-        // JSX file: pre-build translated hit counts, then emit
-        SetLength(TranslatedHits, SourceLines.Count + 1);
-        BuildTranslatedLineHits(FileCov, SrcMap, SourceLines.Count,
-          TranslatedHits);
-        for I := 0 to SourceLines.Count - 1 do
-          if ExecutableFlags[I] then
-          begin
-            if not FirstEntry then
-              Buf.AppendChar(',');
-            FirstEntry := False;
-            Inc(StatementIndex);
-            Buf.Append(Format('"%d":%d', [StatementIndex, TranslatedHits[I + 1]]));
-          end;
-      end
-      else if HasSource then
-      begin
-        for I := 0 to SourceLines.Count - 1 do
-          if ExecutableFlags[I] then
-          begin
-            if not FirstEntry then
-              Buf.AppendChar(',');
-            FirstEntry := False;
-            Inc(StatementIndex);
-            Buf.Append(Format('"%d":%d',
-              [StatementIndex, FileCov.GetLineHitCount(I + 1)]));
-          end;
-      end
-      else
-        for I := 1 to FileCov.LineHitCount - 1 do
-        begin
-          HitCount := FileCov.GetLineHitCount(I);
-          if HitCount > 0 then
-          begin
-            if not FirstEntry then
-              Buf.AppendChar(',');
-            FirstEntry := False;
-            Inc(StatementIndex);
-            Buf.Append(Format('"%d":%d', [StatementIndex, HitCount]));
-          end;
-        end;
-      Buf.Append('},');
-
-      // statementMap — emit for all executable lines
-      Buf.Append(#10'    "statementMap": {');
-      StatementIndex := 0;
-      FirstEntry := True;
-      if HasSource then
-      begin
-        for I := 0 to SourceLines.Count - 1 do
-          if ExecutableFlags[I] then
-          begin
-            if not FirstEntry then
-              Buf.AppendChar(',');
-            FirstEntry := False;
-            Inc(StatementIndex);
-            Buf.Append(Format(
-              '"%d":{"start":{"line":%d,"column":0},"end":{"line":%d,"column":0}}',
-              [StatementIndex, I + 1, I + 1]));
-          end;
-      end
-      else
-        for I := 1 to FileCov.LineHitCount - 1 do
-        begin
-          HitCount := FileCov.GetLineHitCount(I);
-          if HitCount > 0 then
-          begin
-            if not FirstEntry then
-              Buf.AppendChar(',');
-            FirstEntry := False;
-            Inc(StatementIndex);
-            Buf.Append(Format(
-              '"%d":{"start":{"line":%d,"column":0},"end":{"line":%d,"column":0}}',
-              [StatementIndex, I, I]));
-          end;
-        end;
-      Buf.Append('},');
-    finally
-      SourceLines.Free;
-    end;
-
-    // b (branch hit counts)
-    Buf.Append(#10'    "b": {');
-    BranchBlockIndex := 0;
-    PrevLine := -1;
-    PrevColumn := -1;
-    FirstEntry := True;
-    I := 0;
-    while I < FileCov.Branches.Count do
+    // statementMap
+    Buf.Append(#10'    "statementMap": {');
+    for I := 0 to High(StatementOrder) do
     begin
-      Branch := FileCov.Branches[I];
-      if (Branch.Line <> PrevLine) or (Branch.Column <> PrevColumn) then
-      begin
-        if not FirstEntry then
-          Buf.AppendChar(']');
-        if BranchBlockIndex > 0 then
-          Buf.AppendChar(',');
-        Inc(BranchBlockIndex);
-        PrevLine := Branch.Line;
-        PrevColumn := Branch.Column;
-        FirstEntry := False;
-        Buf.Append(Format('"%d":[', [BranchBlockIndex]));
-        Buf.Append(Format('%d', [Branch.HitCount]));
-      end
-      else
-      begin
+      if I > 0 then
         Buf.AppendChar(',');
-        Buf.Append(Format('%d', [Branch.HitCount]));
-      end;
-      Inc(I);
+      Stmt := FileCov.Statements[StatementOrder[I]];
+      Buf.Append(Format(#10'      "%d": %s',
+        [I, JsonLocation(TranslateLoc(SrcMap, Stmt.Loc))]));
     end;
-    if not FirstEntry then
-      Buf.AppendChar(']');
+    if Length(StatementOrder) > 0 then
+      Buf.Append(#10'    ');
     Buf.Append('},');
 
-    // branchMap — translate positions through source map if available
-    Buf.Append(#10'    "branchMap": {');
-    BranchBlockIndex := 0;
-    PrevLine := -1;
-    PrevColumn := -1;
-    I := 0;
-    while I < FileCov.Branches.Count do
+    // fnMap
+    Buf.Append(#10'    "fnMap": {');
+    for I := 0 to High(FunctionOrder) do
     begin
-      Branch := FileCov.Branches[I];
-      if (Branch.Line <> PrevLine) or (Branch.Column <> PrevColumn) then
-      begin
-        if BranchBlockIndex > 0 then
-          Buf.AppendChar(',');
-        Inc(BranchBlockIndex);
-        PrevLine := Branch.Line;
-        PrevColumn := Branch.Column;
-        // Translate position for display
-        if Assigned(SrcMap) and
-           SrcMap.Translate(Branch.Line, Branch.Column, OrigLine, OrigCol) then
-        begin
-          BranchLine := OrigLine;
-          BranchCol := OrigCol;
-        end
-        else
-        begin
-          BranchLine := Branch.Line;
-          BranchCol := Branch.Column;
-        end;
-        Buf.Append(Format('"%d":{"type":"branch","loc":{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}},"locations":[',
-          [BranchBlockIndex, BranchLine, BranchCol,
-           BranchLine, BranchCol]));
-        Buf.Append(Format('{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}}',
-          [BranchLine, BranchCol, BranchLine, BranchCol]));
-      end
-      else
-      begin
-        // Same block — use same translated position
-        if Assigned(SrcMap) and
-           SrcMap.Translate(Branch.Line, Branch.Column, OrigLine, OrigCol) then
-        begin
-          BranchLine := OrigLine;
-          BranchCol := OrigCol;
-        end
-        else
-        begin
-          BranchLine := Branch.Line;
-          BranchCol := Branch.Column;
-        end;
+      if I > 0 then
         Buf.AppendChar(',');
-        Buf.Append(Format('{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}}',
-          [BranchLine, BranchCol, BranchLine, BranchCol]));
+      Func := FileCov.Functions[FunctionOrder[I]];
+      Loc := TranslateLoc(SrcMap, Func.Decl);
+      FuncLoc := TranslateLoc(SrcMap, Func.Loc);
+      Buf.Append(Format(#10'      "%d": {"name":"%s","decl":%s,"loc":%s,"line":%d}',
+        [I, EscapeJSONString(FunctionName(Func, I)), JsonLocation(Loc),
+         JsonLocation(FuncLoc), FuncLoc.StartLine]));
+    end;
+    if Length(FunctionOrder) > 0 then
+      Buf.Append(#10'    ');
+    Buf.Append('},');
+
+    // branchMap
+    Buf.Append(#10'    "branchMap": {');
+    for I := 0 to High(BranchOrder) do
+    begin
+      if I > 0 then
+        Buf.AppendChar(',');
+      Branch := FileCov.Branches[BranchOrder[I]];
+      Loc := TranslateLoc(SrcMap, Branch.Loc);
+      Buf.Append(Format(#10'      "%d": {"loc":%s,"type":"%s","locations":[',
+        [I, JsonLocation(Loc), EscapeJSONString(Branch.BranchType)]));
+      for J := 0 to High(Branch.Locations) do
+      begin
+        if J > 0 then
+          Buf.AppendChar(',');
+        Buf.Append(JsonLocation(TranslateLoc(SrcMap, Branch.Locations[J])));
       end;
-      // Check if next branch is same block
-      if (I + 1 >= FileCov.Branches.Count) or
-         (FileCov.Branches[I + 1].Line <> PrevLine) or
-         (FileCov.Branches[I + 1].Column <> PrevColumn) then
-        Buf.Append(']}');
-      Inc(I);
+      Buf.Append(Format('],"line":%d}', [Loc.StartLine]));
+    end;
+    if Length(BranchOrder) > 0 then
+      Buf.Append(#10'    ');
+    Buf.Append('},');
+
+    // s (statement hit counts)
+    Buf.Append(#10'    "s": {');
+    for I := 0 to High(StatementOrder) do
+    begin
+      if I > 0 then
+        Buf.AppendChar(',');
+      Buf.Append(Format('"%d":%d',
+        [I, FileCov.Statements[StatementOrder[I]].HitCount]));
     end;
     Buf.Append('},');
 
     // f (function hit counts)
     Buf.Append(#10'    "f": {');
-    for I := 0 to FileCov.Functions.Count - 1 do
+    for I := 0 to High(FunctionOrder) do
     begin
       if I > 0 then
         Buf.AppendChar(',');
-      Func := FileCov.Functions[I];
-      Buf.Append(Format('"%d":%d', [I + 1, Func.HitCount]));
+      Buf.Append(Format('"%d":%d',
+        [I, FileCov.Functions[FunctionOrder[I]].HitCount]));
     end;
     Buf.Append('},');
 
-    // fnMap (function definitions, translated through source maps)
-    Buf.Append(#10'    "fnMap": {');
-    for I := 0 to FileCov.Functions.Count - 1 do
+    // b (the hit counts of each branch's paths)
+    Buf.Append(#10'    "b": {');
+    for I := 0 to High(BranchOrder) do
     begin
       if I > 0 then
         Buf.AppendChar(',');
-      Func := FileCov.Functions[I];
-      FunctionLine := Func.Line;
-      FunctionCol := Func.Column;
-      if Assigned(SrcMap) and
-         SrcMap.Translate(Func.Line, Func.Column, OrigLine, OrigCol) then
+      Branch := FileCov.Branches[BranchOrder[I]];
+      Buf.Append(Format('"%d":[', [I]));
+      for J := 0 to High(Branch.HitCounts) do
       begin
-        FunctionLine := OrigLine;
-        FunctionCol := OrigCol;
+        if J > 0 then
+          Buf.AppendChar(',');
+        Buf.Append(IntToStr(Branch.HitCounts[J]));
       end;
-      Buf.Append(Format('"%d":{"name":"%s","decl":{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}},"loc":{"start":{"line":%d,"column":%d},"end":{"line":%d,"column":%d}}}',
-        [I + 1, EscapeJSONString(Func.Name),
-         FunctionLine, FunctionCol, FunctionLine, FunctionCol,
-         FunctionLine, FunctionCol, FunctionLine, FunctionCol]));
+      Buf.AppendChar(']');
     end;
     Buf.Append('}');
 

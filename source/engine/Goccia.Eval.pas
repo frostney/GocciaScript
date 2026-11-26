@@ -137,7 +137,8 @@ begin
     if RoundTripOn then SetArtifactCompile(True);
   end;
   { the pre-parser does not apply a restricted profile's early errors to the bodies it skips }
-  Result := (LazyMode = 2) and not ActiveProfile.Restricted;
+  { coverage lists the statements of a function that is never called: every function compiles with its file }
+  Result := (LazyMode = 2) and not ActiveProfile.Restricted and not CompileCoverage;
 end;
 
 { the active profile's parser options (Goccia.Core TLangProfile): an unrestricted profile turns every form on }

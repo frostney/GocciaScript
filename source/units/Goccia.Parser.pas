@@ -6659,6 +6659,7 @@ end;
 
 function TGocciaParser.UnguardedStatement: TGocciaStatement;
 var
+  DebuggerSpan: TGocciaSourceSpan;
   ErasedFirstToken: Integer;
   Line, Column: Integer;
   TypeStart: Integer;
@@ -6856,10 +6857,12 @@ begin
   end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_DEBUGGER) then
   begin
-    // ES2026 14.16 DebuggerStatement: no debugger is attached, so it does nothing
+    // ES2026 14.16 DebuggerStatement: no debugger is attached, so it does nothing. The empty
+    // statement it becomes spans the statement, so coverage can tell it from a lone semicolon.
+    DebuggerSpan := Peek.Span;
     Advance;
     ConsumeSemicolonOrASI('Expected ";" after debugger', SSuggestAddSemicolon);
-    Result := TGocciaEmptyStatement.Create(Previous.Span);
+    Result := TGocciaEmptyStatement.Create(DebuggerSpan.Cover(Previous.Span));
   end
   else if Match(gttSwitch) then
     Result := SwitchStatement

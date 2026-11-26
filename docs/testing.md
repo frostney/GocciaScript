@@ -589,7 +589,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | GocciaRunner JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
 | GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as `GocciaRunner` and the test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
 | GocciaRunner error display | Syntax errors show source context, caret, and suggestions |
-| GocciaRunner coverage | `--coverage` summary, lcov/json file output, JSX source map translation for branch positions |
+| GocciaRunner coverage | `--coverage` summary, lcov/json file output, Istanbul's statement, line, branch (`if`, `cond-expr`, `binary-expr`, `switch`, `default-arg`) and function definitions, JSX positions |
 | GocciaRunner source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
@@ -610,7 +610,7 @@ Pascal unit tests are the tertiary testing layer for low-level internals that ar
 | `Goccia.Lexer.Test.pas` | Hashbang handling, Unicode line terminators in comments, identifier and keyword tokenization |
 | `Goccia.TOML.Test.pas` | `TGocciaTOMLParser.ParseDocument` scalar and array kinds, CRLF normalization in multiline strings, Unicode escapes and keys |
 | `Goccia.NumberConversion.Test.pas` | `ToUint32`, `ToInt32`, `ToUint16`, `ToUint8Clamp` and float32 rounding |
-| `Goccia.Coverage.Test.pas` | `TGocciaCoverageTracker.MergeFrom` summing line, branch and function hits, and report path keys |
+| `Goccia.Coverage.Test.pas` | `TGocciaCoverageTracker.MergeFrom` summing statement, branch and function hits by location, the line count as the most among the statements starting on a line, Istanbul's ordering of sites, and report path keys |
 | `Goccia.Builtins.Testing.Snapshots.Test.pas` | Snapshot creation, comparison, update and pruning in each update mode |
 
 These compile as standalone executables and run directly:
@@ -786,7 +786,9 @@ cross-shard merge, profile aggregation, and comment rendering.
 
 ## Coverage
 
-The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime, over the entry file and every module it imports.
+The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which statements, lines, branches, and functions of JavaScript source code are executed at runtime, over the entry file and every module it imports.
+
+The definitions are **Istanbul's**, not those of any particular runtime: what counts as a statement, a line, a branch or a function, and how each is located and numbered, follow [istanbul-lib-instrument](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-lib-instrument) (its code visitor), [istanbul-lib-coverage](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-lib-coverage) (`FileCoverage`, `getLineCoverage`) and the `lcovonly` reporter of [istanbul-reports](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-reports). Run on a CommonJS file, `nyc` and GocciaScript produce the same `lcov.info` records and the same `statementMap`, `fnMap`, `branchMap`, `s`, `f` and `b`, apart from the `SF:` path (see [Report Path Keys](#report-path-keys)).
 
 ### Usage
 
@@ -797,7 +799,7 @@ The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage r
 # lcov output (for Codecov, Coveralls, or genhtml)
 ./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 
-# JSON output (Istanbul-compatible)
+# JSON output (Istanbul's coverage map)
 ./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
 
 # GocciaRunner also supports coverage
@@ -806,26 +808,40 @@ The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage r
 
 ### What is Tracked
 
-**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop: a line is hit each time a frame enters it, so a function called five times hits its body's lines five times, and a one-line function's line also counts its declaration. Consecutive instructions of one frame on one line count as one hit, so a loop whose body stays on its own line counts once per entry, not once per iteration.
+Locations are Babel's: line 1-based, column 0-based (in UTF-16 code units), end column exclusive. A counter runs each time execution reaches its site, so a loop statement's own counter runs once per entry and the statements in its body once per iteration. Istanbul instruments the whole file, so a function that is never called still lists its statements, with 0.
 
-**Branch coverage:** Which branch arms were taken at:
+**Statements (`s`, `statementMap`):** one counter for each of
 
-- `if`/`else` statements (branch 0 = consequent, branch 1 = alternate)
-- Ternary expressions (`? :`)
-- Short-circuit operators (`&&`, `||`, `??`)
-- `switch` statement case clauses
+- an expression statement and `break`, `continue`, `debugger`, `return`, `throw`, `try`, `if`, `for`, `for...in`, `for...of` (including `for await`), `while`, `do...while`, `switch`, `with` and labeled statements (each label is a statement of its own);
+- the initializer of each declarator that has one, located at the initializer: `let`, `const`, `var`, destructuring and `using` declarations, the declarators of a `for(;;)` head, and exported declarations;
+- the value of each class property, located at the value and counted each time the field initializer runs (an instance field once per construction, a static field once);
+- an arrow function's concise body, which Istanbul turns into `return <expression>`, located at the expression and counted on each call.
 
-**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated and is reported at its declaration line (what LCOV's `FN:` means), not at the first line of its body; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are never created and therefore do not appear.
+Function and class declarations, blocks, export wrappers, directives (`"use strict"`) and empty statements are not statements.
 
-**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end, so line, branch, and function hit counts for a given run are identical whatever `--jobs` is set to.
+**Lines (lcov `DA:`):** `FileCoverage.getLineCoverage`. Each statement is taken at its start line, and a line's count is the **most** among the statements that start on it. Only those lines are listed: a line no statement starts on (the closing brace of a block, a blank line, the second line of a multi-line statement) has no record. `LF` is the number of listed lines, `LH` the number with a count above 0. So `const f = () => 1;` called five times from a `for...of` on the next line is `DA:1,5` (the declarator's initializer ran once and the arrow's body five times; the line takes the greater count) and `DA:2,5`.
+
+**Functions (`f`, `fnMap`, lcov `FN:`/`FNDA:`):** every function declaration, function expression, arrow function, class method (the constructor, getters and setters included) and object method (getters and setters included); private methods are not listed, as in Istanbul, and neither are static blocks. `decl` is the identifier's location for a function declaration or expression that has one, otherwise the first character of the node; `loc` is the body; the count is the number of calls (a generator's, when its body first runs). Only a function declaration or expression with an identifier of its own has a name: any other function, an arrow bound to a `const` included, is named `(anonymous_<index>)` by its index in the file's function list, in source order.
+
+**Branches (`b`, `branchMap`, lcov `BRDA:`):** each branch has a type, a `loc` and one location and counter per path.
+
+| Type | Paths |
+|------|-------|
+| `if` | 2: the consequent (located at the whole `if` statement) and the alternate, which Istanbul counts without an `else` too (the empty block it adds has no location; its counter runs when the test is false) |
+| `cond-expr` | 2: the consequent and the alternate of `? :` |
+| `binary-expr` | one per leaf of a maximal chain of `&&`, `\|\|` and `??`: nested logical expressions flatten whatever their operator, and parentheses make no difference, so `(a && b) \|\| c` has the leaves `a`, `b` and `c`. A leaf counts how many times it was evaluated |
+| `switch` | one per case clause, `default` included: the counter is the clause's first statement, so a fall-through into it counts |
+| `default-arg` | 1 per default parameter or destructuring default, counted when the default value is evaluated |
+
+**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end (statements, branches and functions are matched by location, since each worker meets them in its own order), so every count for a given run is identical whatever `--jobs` is set to.
 
 ### Output Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after execution |
-| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
-| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
+| Console | `--coverage` | Summary table with statement, line, branch, and function totals printed to stdout after execution; with one file, its source with the count of each line a statement starts on (`!!` marks a listed line that never ran) |
+| lcov | `--coverage-format=lcov --coverage-output=<file>` | The `lcovonly` tracefile, in its order: `TN`, `SF`, the `FN` lines, `FNF`, `FNH`, the `FNDA` lines, the `DA` lines, `LF`, `LH`, the `BRDA` lines, `BRF`, `BRH`, `end_of_record`. `BRDA:<line>,<branch>,<path>,<count>` carries the line the branch starts on and the branch's 0-based index in the file, and prints a count of 0 rather than a dash |
+| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul's coverage map: per file, `path`, `statementMap`, `fnMap` (`name`, `decl`, `loc`, `line`), `branchMap` (`type`, `loc`, `locations`, `line`), `s`, `f` and `b`, keyed `"0"`, `"1"`, ... in the order Istanbul numbers its sites (source order, an enclosing site before the ones inside it). The alternate of an `if` without `else` has the empty location `{"start":{},"end":{}}`, as in Istanbul |
 
 ### Report Path Keys
 
@@ -866,10 +882,12 @@ outside the repository.
 
 ### JSX Source Map Integration
 
-When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The report writer can translate through such a map, but no host registers it with the coverage tracker, so lcov and JSON reports give the positions the parser saw in the transformed source (see [Architecture](#architecture)). The CLI suite checks that a `.jsx` file's branches and functions are reported on their original lines.
+When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The report writer can translate the location of every statement, branch path and function through such a map (`TGocciaSourceMap.Translate`), but no host registers it with the coverage tracker, so lcov and JSON reports give the positions the parser saw in the transformed source (see [Architecture](#architecture)). The CLI suite checks that a `.jsx` file's branches and functions are reported on their original lines.
 
 ### Architecture
 
-Coverage is recorded by the interpreter. With `TGocciaEngine.Coverage` set, `Goccia.Compiler` gives every executed source line an instruction (`opCovLine` where it would have none), and `Goccia.VM`'s `Execute` runs every instruction through its coverage hook (`CovStep`), which records line hits (once per entry of a frame into a line), the outcome of each conditional jump as a branch, and function registrations and calls. A coverage run takes neither `FastLoop` nor compiled code; without `--coverage` nothing is recorded. No separate build is needed.
+Coverage is recorded by the interpreter, which counts the sites the compiler marks. With `TGocciaEngine.Coverage` set, `Goccia.Compiler` registers each Istanbul site of a covered source with the thread's `TGocciaCoverageTracker` (`Goccia.Coverage.pas`) and emits a counter instruction at it: `opCovStmt` at a statement (its `C` operand is the statement's index in the file's list), `opCovBranch` at the start of a branch path (`A` the path, `C` the branch) and `opCovFn` at the start of a function's body (`C` the function). Branches are registered with their type, location and the location of every path before their paths are emitted. The instructions do nothing in normal dispatch; with coverage on, `Goccia.VM`'s `Execute` runs every instruction through the coverage hook (`CovStep`), which counts these three. A coverage run takes neither `FastLoop` nor compiled code, and compiles every function eagerly (a lazily compiled function would not list its statements until it was called); without `--coverage` nothing is registered or recorded. No separate build is needed. Engine preludes (`<goccia:...>`) and eval code are not covered.
 
-Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker. Each file's thread initializes its own instance and, when the file ends, merges it into the run's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the source hit *counts* into the destination (via `AddLineHits` / `AddBranchHits`) rather than registering a single hit per covered entry. Output formatting is in `Goccia.Coverage.Report.pas`, which can translate positions through a source map registered with `TGocciaCoverageTracker.RegisterSourceMap` (`BuildTranslatedLineHits` for lines, `TGocciaSourceMap.Translate` for branches). The hosts register no map: positions come from the source the parser saw, which for `.jsx`/`.tsx` is the JSX transformer's output.
+Locations come from the AST's source spans, converted to Babel's. The parser gives an operator expression (a binary or conditional expression, a call, a member access) the span of its operator or last token, so the compiler takes an expression's location as the extent of the node and its operands, parentheses included, as Babel's node covers them.
+
+Data is collected by `TGocciaCoverageTracker`, a per-thread tracker holding, per file, the statement list (location and count), the branches (type, location, path locations and counts) and the functions, each with an index by location so that compiling a site again (the code of a `finally` block, which runs through two paths) finds the same counter. Each file's thread initializes its own instance and, when the file ends, merges it into the run's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the counts site by site, matched by location, because the indexes differ between threads. The lines, the totals and Istanbul's numbering of the maps are derived when a report is written (`LineCoverage`, `StatementOrder`, `BranchOrder`, `FunctionOrder`). Output formatting is in `Goccia.Coverage.Report.pas`, which can translate positions through a source map registered with `TGocciaCoverageTracker.RegisterSourceMap`. The hosts register no map: positions come from the source the parser saw, which for `.jsx`/`.tsx` is the JSX transformer's output.

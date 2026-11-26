@@ -82,7 +82,7 @@ Bytecode files use the `.gbc` extension (`Goccia.Artifact`).
 - object and array literals, class setup, fields, private names and private members
 - iteration (`opGetIter`, `opIterNext`, `opForIn`, the async iterator steps), `yield`, `yield*`, `await`
 - module cells, `import()`, `import.meta`, `with` object environments, direct-eval hints
-- `opIntrinsic` (calls into the `builtins5` prelude for constructs the compiler lowers), `opCheckType`, `opCovLine`
+- `opIntrinsic` (calls into the `builtins5` prelude for constructs the compiler lowers), `opCheckType`, and the coverage counters `opCovStmt`, `opCovBranch` and `opCovFn`
 
 The hot set is a table, not a range: `InitFastOps` marks the 79 opcodes `FastLoop` has fast paths for (`FastOp`). Opcode numbers are the enum's order, so adding, removing or renaming an opcode changes `EngineFingerprint` and every `.gbc` file written before it is refused.
 

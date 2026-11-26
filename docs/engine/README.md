@@ -185,13 +185,14 @@ fires after the request settles.
 ### Coverage
 
 `--coverage` (and `--coverage-format`, `--coverage-output`) report through GocciaScript's tracker and writers
-(`Goccia.Coverage`, `Goccia.Coverage.Report`). Under coverage the compiler gives every source line the code runs an
-instruction, an `opCovLine` where it would have none (an operand a register already holds, a declaration whose
-initializer starts on a later line), and the VM runs every instruction through a hook, in the interpreter only (no
-fast loop, no compiled code). The hook counts a line each time its frame enters it, a function when a call starts
-it (and registers each closure it creates, so one never called reports 0), and the outcome of each conditional
-jump: branch 0 when it jumps, 1 when it falls through. A function is located where its source starts. Each file's
-thread keeps its own tracker, merged into the run's when the file ends.
+(`Goccia.Coverage`, `Goccia.Coverage.Report`), with Istanbul's definitions of a statement, a line, a branch and a
+function ([docs/testing.md](../testing.md#coverage)). Under coverage the compiler registers each Istanbul site of a
+covered source with the thread's tracker (by source name and location, so compiling a site again finds the same
+index) and emits a counter at it: `opCovStmt` at a statement, `opCovBranch` at the start of a branch path and
+`opCovFn` at the start of a function's body; every function compiles eagerly, so one never called still lists its
+statements. The instructions do nothing in normal dispatch. The VM runs every instruction through a hook, in the
+interpreter only (no fast loop, no compiled code), which counts each counter as it runs. Each file's thread keeps its
+own tracker, merged into the run's by location when the file ends.
 
 ### Read capability
 

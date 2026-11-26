@@ -107,8 +107,11 @@ type
                                a construct the compiler lowers to a call (INTRINSIC_* in Goccia.VM) }
     ,opCheckType             { a TypeError unless R[A] has type C (strict-types: TYPE_NUMBER, TYPE_BOOLEAN,
                                TYPE_STRING, TYPE_OBJECT) }
-    ,opCovLine               { nothing: under coverage, the instruction of a source line that would have none (an
-                               operand a register already holds), so the line counts as executed }
+    ,opCovStmt               { nothing: under coverage, an Istanbul statement counter (the site's index in the file's statement
+                               list is C): Goccia.VM's coverage hook counts it each time execution reaches it }
+    ,opCovBranch             { nothing: under coverage, an Istanbul branch counter: path A of the branch registered at index C }
+    ,opCovFn                 { nothing: under coverage, an Istanbul function counter at the start of a function's body: the
+                               function registered at index C is called }
   );
 
   PFuncTemplate = ^TFuncTemplate;

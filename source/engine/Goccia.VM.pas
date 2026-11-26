@@ -106,7 +106,8 @@ threadvar
   { an instruction limit is armed: Execute counts every instruction (InstrLeft) and runs no FastLoop }
   InstrCounted: Boolean;
   { coverage is on (Goccia.Embed Coverage): Execute runs every instruction through the coverage hook (CovStep, which
-    records lines, branches and functions in the thread's Goccia.Coverage tracker), no FastLoop and no compiled
+    counts the statements, branches and functions the compiler put counters for (opCovStmt, opCovBranch, opCovFn) in
+    the thread's Goccia.Coverage tracker), no FastLoop and no compiled
     code; set before the run, kept by LimitsArm and LimitsDisarm }
   CoverageOn: Boolean;
   { the profiler is on (Goccia.Profile): like coverage, every instruction through its hook (ProfStepHook) and every
@@ -8506,104 +8507,41 @@ end;
 { ---------------- coverage ---------------- }
 
 threadvar
-  { the conditional jump whose outcome the next instruction of its frame shows (CovPendTpl nil: none) }
-  CovPendTpl: PFuncTemplate;
-  CovPendFrame, CovPendPC: Integer;
-  { each frame's last line recorded (by frame index; a call starts at 0): a line counts once each time its frame
-    enters it, not again when a call it makes returns }
-  CovFrameLine: array of Integer;
+  { the coverage record of the source the last counter belonged to: a counter looks its file up once per source, not
+    once per hit (CovFile is valid for CovTracker's CovSource) }
+  CovSerial: Integer;
+  CovSource: Pointer;
+  CovFile: TGocciaFileCoverage;
 
-{ whether code of SourceName is the user's: a file, <stdin>, or eval code; not the preludes (<goccia:...>) }
-function CoveredSource(const SourceName: UnicodeString): Boolean; inline;
+{ the coverage record of a source's file (nil: none); out of line, as its string conversion would give CovStep an
+  implicit exception frame }
+function CovFileFor(Tr: TGocciaCoverageTracker; Tpl: PFuncTemplate): TGocciaFileCoverage; noinline;
 begin
-  Result := (SourceName <> '') and ((SourceName[1] <> '<') or (SourceName = '<stdin>'));
+  Result := Tr.FileFor(Tpl^.SourceName);
 end;
 
-{ a function's name for coverage: '' for an anonymous one }
-function CovFunctionName(T: PFuncTemplate): UnicodeString;
-begin
-  if T^.Name = nil then Exit('');
-  Result := StrToUnicode(T^.Name);
-end;
-
-{ a function's position for coverage: where its source starts, else its first located instruction }
-procedure CovFunctionPos(T: PFuncTemplate; out L, C: Integer);
-var I: Integer;
-begin
-  L := T^.DeclLine;
-  C := T^.DeclCol;
-  if L > 0 then Exit;
-  C := 0;
-  for I := 0 to T^.CodeLen - 1 do
-    if T^.Lines[I] > 0 then
-    begin
-      L := T^.Lines[I];
-      if I <= High(T^.Cols) then C := T^.Cols[I];
-      Exit;
-    end;
-end;
-
-{ a function the report lists: not a script's or module's top level, nor the engine's own pieces of a class (its
-  field and static initializers, named <...>, and an implicit constructor) }
-function CovIsFunction(T: PFuncTemplate): Boolean;
-var N: UnicodeString;
-begin
-  if T^.TopLevel or (T^.DeclLine < 0) then Exit(False);
-  N := CovFunctionName(T);
-  Result := (N = '') or (N[1] <> '<');
-end;
-
-{ the coverage of instruction PC of frame Fr, before it runs: the outcome of the conditional jump this frame ran
-  last (branch 0 the jump, 1 the fall-through), a call's function hit, the line, and the closures it creates
-  registered as functions (so one never called reports 0) }
+{ the coverage of instruction PC of frame Fr: the compiler put Istanbul's counters in the code (opCovStmt a
+  statement, opCovBranch a path of a branch, opCovFn a function's body), and each counts as it runs }
 procedure CovStep(Fr: PFrame; PC: Integer); noinline;
-var T, Child: PFuncTemplate; Tr: TGocciaCoverageTracker; L, C: Integer; Src: UnicodeString;
+var T: PFuncTemplate; Tr: TGocciaCoverageTracker; I: QWord; Op: TOp;
 begin
+  T := Fr^.Tpl;
+  I := T^.Code[PC];
+  Op := InsOp(I);
+  if (Op <> opCovStmt) and (Op <> opCovBranch) and (Op <> opCovFn) then Exit;
   Tr := TGocciaCoverageTracker.Instance;
   if (Tr = nil) or not Tr.Enabled then Exit;
-  T := Fr^.Tpl;
-  if (CovPendTpl <> nil) and (CovPendFrame = FrameTop - 1) then
+  { the file of the template's source; a template of the same source as the last one reuses its record }
+  if (Tr.Serial <> CovSerial) or (CovFile = nil) or (Pointer(T^.SourceName) <> CovSource) then
   begin
-    if CovPendTpl = T then
-    begin
-      if PC = CovPendPC + 1 then L := 1 else L := 0;
-      C := 0;
-      if CovPendPC <= High(T^.Cols) then C := T^.Cols[CovPendPC];
-      Tr.RecordBranchHit(T^.SourceName, T^.Lines[CovPendPC], C, L);
-    end;
-    CovPendTpl := nil;
+    CovFile := CovFileFor(Tr, T);
+    CovSerial := Tr.Serial;
+    CovSource := Pointer(T^.SourceName);
   end;
-  if not CoveredSource(T^.SourceName) then Exit;
-  Src := T^.SourceName;
-  if (PC = 0) and CovIsFunction(T) then
-  begin
-    CovFunctionPos(T, L, C);
-    Tr.RecordFunctionHit(Src, CovFunctionName(T), L, C);
-  end;
-  if FrameTop > Length(CovFrameLine) then SetLength(CovFrameLine, FrameTop + 64);
-  if PC = 0 then CovFrameLine[FrameTop - 1] := 0;
-  L := T^.Lines[PC];
-  if (L > 0) and (L <> CovFrameLine[FrameTop - 1]) then
-  begin
-    Tr.RecordLineHit(Src, L);
-    CovFrameLine[FrameTop - 1] := L;
-  end;
-  case InsOp(T^.Code[PC]) of
-    opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq:
-      begin
-        CovPendTpl := T;
-        CovPendFrame := FrameTop - 1;
-        CovPendPC := PC;
-      end;
-    opClosure:
-      begin
-        Child := T^.Children[T^.Code[PC] shr 40];
-        if CovIsFunction(Child) then
-        begin
-          CovFunctionPos(Child, L, C);
-          Tr.RegisterFunction(Src, CovFunctionName(Child), L, C);
-        end;
-      end;
+  case Op of
+    opCovStmt: CovFile.RecordStatementHit(InsCU(I));
+    opCovBranch: CovFile.RecordBranchHit(InsCU(I), InsA(I));
+    opCovFn: CovFile.RecordFunctionHit(InsCU(I));
   end;
 end;
 
@@ -8699,7 +8637,7 @@ LReload:
     Inc(PC);
     {$IFDEF GOCCIA_OPSTATS}Inc(OpCounts[I and $FF]); Inc(PairCounts[PrevOp * 256 + (I and $FF)]); PrevOp := I and $FF;{$ENDIF}
     case TOp(I and $FF) of
-      opNop, opCovLine: ;
+      opNop, opCovStmt, opCovBranch, opCovFn: ;
       opMov: R[A] := R[(I shr 24) and $FFFF];
       opLoadK: R[A] := K[I shr 40];
       opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));
@@ -10984,7 +10922,9 @@ begin
   SymbolKeys := nil;
   PreludePrivAt := nil;
   PreludePrivKey := nil;
-  CovFrameLine := nil;
+  CovFile := nil;
+  CovSource := nil;
+  CovSerial := 0;
 end;
 
 initialization

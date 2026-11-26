@@ -27,9 +27,13 @@ function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; R
 threadvar
   { the eval code starts with a "use strict" directive the caller inserted to make it strict: not its value }
   EvalStrictPrefix: Boolean;
-  { coverage (Goccia.Embed Coverage): every source line the code runs gets an instruction (opCovLine where it would
-    have none), so the VM's coverage hook counts it }
+  { coverage (Goccia.Embed Coverage): the code carries Istanbul's counters (opCovStmt, opCovBranch, opCovFn at each
+    statement, branch path and function entry of the source), which the VM's coverage hook counts }
   CompileCoverage: Boolean;
+
+{ whether coverage covers code of SourceName: a file, <stdin> or the like, not an engine prelude (<goccia:...>) or eval
+  code }
+function CoverageCoversSource(const SourceName: UnicodeString): Boolean;
 
 { a lazy stub's function (Goccia.Lazy), from Goccia's parse of its own source range: compiled in a stand-in for its
   enclosing code whose bindings are the stub's upvalues, in the stub's order }
@@ -95,7 +99,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.SourceSpan, Goccia.Types.LocalType, Goccia.Profiler.Compile, Goccia.VM, Goccia.Lazy, Goccia.PreParse, Goccia.ThreadCleanupRegistry;
+  TypInfo, Goccia.SourceSpan, Goccia.Coverage, Goccia.Types.LocalType, Goccia.Profiler.Compile, Goccia.VM, Goccia.Lazy, Goccia.PreParse, Goccia.ThreadCleanupRegistry;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -131,6 +135,78 @@ type
       const AFlags: TGocciaASTPartFlags); override;
     procedure LeavePart; override;
   end;
+
+type
+  { the extent of an expression for coverage: the parser gives an operator's node (a binary or conditional
+    expression, a call, a member access, an update) the span of its last token or operator, where Babel's node
+    runs from its first token to its last. Parenthesized operands count with their parentheses, as Babel's do. }
+  TExtentScan = class(TGocciaASTChildVisitor)
+  public
+    Coords: TGocciaSourceCoordinates;
+    Root: TGocciaASTNode;
+    Lo, Hi: Integer;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+procedure TExtentScan.VisitChild(const ANode: TGocciaASTNode);
+var Sp: TGocciaSourceSpan; A, B: Integer;
+begin
+  if ANode = nil then Exit;
+  Sp := ANode.Span;
+  if Sp.Coordinates = Coords then
+  begin
+    A := Sp.StartOffset;
+    B := Sp.EndOffset;
+    if (ANode <> Root) and (ANode is TGocciaExpression) and TGocciaExpression(ANode).Parenthesized and
+       TGocciaExpression(ANode).HasParenRange then
+    begin
+      if TGocciaExpression(ANode).ParenStartOffset < A then A := TGocciaExpression(ANode).ParenStartOffset;
+      if TGocciaExpression(ANode).ParenEndOffset > B then B := TGocciaExpression(ANode).ParenEndOffset;
+    end;
+    if B > A then
+    begin
+      if A < Lo then Lo := A;
+      if B > Hi then Hi := B;
+    end;
+  end;
+  { a function, class, object, array or template has brackets of its own: its span is its extent }
+  if (ANode is TGocciaFunctionExpression) or (ANode is TGocciaArrowFunctionExpression) or
+     (ANode is TGocciaClassExpression) or (ANode is TGocciaObjectExpression) or (ANode is TGocciaArrayExpression) or
+     (ANode is TGocciaTemplateWithInterpolationExpression) or (ANode is TGocciaObjectMethodDefinition) then Exit;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TExtentScan.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TExtentScan.LeavePart;
+begin
+end;
+
+{ the location of a node as Babel has it: an expression's from its first token to its last, a statement's as the
+  parser has it }
+function CovLocOf(N: TGocciaASTNode): TGocciaCoverageLoc;
+var Scan: TExtentScan; Sp: TGocciaSourceSpan;
+begin
+  Sp := N.Span;
+  if (Sp.Coordinates = nil) or not (N is TGocciaExpression) then Exit(CoverageLocOfSpan(Sp));
+  Scan := TExtentScan.Create;
+  try
+    Scan.Coords := Sp.Coordinates;
+    Scan.Root := N;
+    Scan.Lo := Sp.StartOffset;
+    Scan.Hi := Sp.EndOffset;
+    N.ForEachChild(Scan);
+    Result := CoverageLocOfOffsets(Sp, Scan.Lo, Scan.Hi);
+  finally
+    Scan.Free;
+  end;
+end;
 
 procedure TSuspendScan.VisitChild(const ANode: TGocciaASTNode);
 begin
@@ -534,6 +610,22 @@ type
     EvalFlags: array of Integer;    { goal 4: per caller binding (its register in the stand-in), the ef* flags }
     EvalSkipLocal: TStringList;     { goal 4: the eval code's var names its caller already binds (no local of its own) }
     PendingInitStatic: Boolean;     { the next class initializer CompileFunction makes is the static one }
+    { coverage: the function the next CompileFunction compiles, as the source writes it (CovFunctionNote): the node's
+      start and its identifier's, so the function is registered with Istanbul's decl; PendingCovOn False for code
+      that is no function of the source }
+    PendingCovOn: Boolean;
+    PendingCovSpan: TGocciaSourceSpan;
+    PendingCovStart, PendingCovIdStart, PendingCovIdEnd: Integer;
+    PendingCovName: string;
+    { coverage: the branch whose leaves a logical chain is counting (-1 none) and the next leaf's path; a nested
+      logical expression of the chain (CovInnerLogical) joins it }
+    CovChainActive: Boolean;
+    CovChainBranch, CovChainNext: Integer;
+    CovInnerLogical: Boolean;
+    { coverage: code the parser made up (an auto-accessor's getter and setter) is no code of the source }
+    CovMute: Boolean;
+    { coverage: the directives of function bodies (`"use strict"`), which Istanbul does not count as statements }
+    CovDirectives: array of TGocciaASTNode;
     DeclaringLexical: Boolean;      { HoistBlock's lexical declarations: DeclareInScope marks them }
     { emission }
     function Emit(I: QWord): Integer;
@@ -593,7 +685,19 @@ type
     procedure CompileEnum(D: TGocciaEnumDeclaration);
     procedure RaiseEvalAware(const Msg, What: UnicodeString; F: TFuncState = nil);
     procedure NotePosition(N: TGocciaASTNode; Always: Boolean);
-    procedure CovMark;
+    { coverage: Istanbul's statement, branch and function sites (Goccia.Coverage) }
+    function CovOn: Boolean;
+    procedure CovCount(const Loc: TGocciaCoverageLoc; const OrderLine: Integer; const OrderColumn: Integer);
+    procedure CovCountInitializer(Init: TGocciaASTNode; Order: TGocciaASTNode);
+    procedure CovCountFieldValue(Value: TGocciaExpression; MemberStart: Integer);
+    procedure CovCountNode(N: TGocciaASTNode);
+    procedure CovStatement(S: TGocciaASTNode);
+    function CovBranch(const BranchType: string; const Loc: TGocciaCoverageLoc;
+      const Locs: TGocciaCoverageLocArray): Integer;
+    procedure CovPath(Branch, Path: Integer);
+    procedure CovDefaultArg(const Start: TGocciaSourceSpan; StartOffset: Integer; Value: TGocciaExpression);
+    procedure CovPatternDefault(P: TGocciaAssignmentDestructuringPattern);
+    procedure CovFunctionNote(const NodeSpan: TGocciaSourceSpan; StartOffset: Integer; const OwnName: string);
     procedure NoteOffset(const Sp: TGocciaSourceSpan; Off: Integer);
     procedure NoteMemberPosition(M: TGocciaMemberExpression);
     procedure NoteCallPosition(Callee: TGocciaExpression; OptionalCall: Boolean);
@@ -990,15 +1094,176 @@ begin
   end;
 end;
 
-{ under coverage: an instruction at the current line when the last one emitted is on another, so a line whose code
-  emits nothing (an operand a register holds, a declaration whose initializer starts below it) still counts }
-procedure TCompiler.CovMark;
-var T: PFuncTemplate;
+{ ---------------- coverage: Istanbul's sites (istanbul-lib-instrument's visitor) ---------------- }
+
+function CoverageCoversSource(const SourceName: UnicodeString): Boolean;
 begin
-  if not CompileCoverage or (FS.CurLine <= 0) then Exit;
-  T := FS.Tpl;
-  if (T^.CodeLen > 0) and (T^.Lines[T^.CodeLen - 1] = FS.CurLine) then Exit;
-  Emit(Ins(opCovLine, 0, 0, 0));
+  Result := (SourceName <> '') and ((SourceName[1] <> '<') or (SourceName = '<stdin>'));
+end;
+
+function TCompiler.CovOn: Boolean;
+begin
+  Result := CompileCoverage and not CovMute and (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled and CoverageCoversSource(SourceName);
+end;
+
+{ a statement counter at Loc: the VM counts it each time execution reaches it }
+procedure TCompiler.CovCount(const Loc: TGocciaCoverageLoc; const OrderLine: Integer; const OrderColumn: Integer);
+var Idx: Integer;
+begin
+  if Loc.StartLine <= 0 then Exit;
+  Idx := TGocciaCoverageTracker.Instance.RegisterStatement(SourceName, Loc, OrderLine, OrderColumn);
+  if Idx <= $7FFFFF then Emit(Ins(opCovStmt, 0, 0, Idx));
+end;
+
+procedure TCompiler.CovCountNode(N: TGocciaASTNode);
+begin
+  if (N <> nil) and CovOn then CovCount(CovLocOf(N), 0, 0);
+end;
+
+{ a declarator's initializer (Order, the declarator's pattern when it has one: Istanbul registers the initializer
+  on entering the declarator, ahead of whatever the pattern holds) }
+procedure TCompiler.CovCountInitializer(Init: TGocciaASTNode; Order: TGocciaASTNode);
+var OrderLoc: TGocciaCoverageLoc;
+begin
+  if (Init = nil) or not CovOn then Exit;
+  OrderLoc.StartLine := 0;
+  OrderLoc.StartColumn := 0;
+  if (Order <> nil) and (Order.Span.Coordinates <> nil) then OrderLoc := CovLocOf(Order);
+  CovCount(CovLocOf(Init), OrderLoc.StartLine, OrderLoc.StartColumn);
+end;
+
+{ a class property's value, registered when Istanbul enters the property: at the member's first character }
+procedure TCompiler.CovCountFieldValue(Value: TGocciaExpression; MemberStart: Integer);
+var OrderLoc: TGocciaCoverageLoc;
+begin
+  if (Value = nil) or not CovOn then Exit;
+  { a field without an initializer has the parser's undefined, spanning a token of the member }
+  if (Value is TGocciaLiteralExpression) and (TGocciaLiteralExpression(Value).Kind = lkUndefined) and
+     (Value.Span.Text <> 'undefined') then Exit;
+  OrderLoc.StartLine := 0;
+  OrderLoc.StartColumn := 0;
+  if (MemberStart >= 0) and (Value.Span.Coordinates <> nil) then
+    OrderLoc := CoverageLocOfOffsets(Value.Span, MemberStart, MemberStart);
+  CovCount(CovLocOf(Value), OrderLoc.StartLine, OrderLoc.StartColumn);
+end;
+
+{ the statements Istanbul counts: its visitor's list (an expression statement, break, continue, debugger, return,
+  throw, try, if, for, for-in, for-of, while, do-while, switch, with, a labeled statement); declarations, blocks
+  and the empty statement are not, and a declarator's initializer is (CompileVarDecl) }
+procedure TCompiler.CovStatement(S: TGocciaASTNode);
+var I, Start: Integer; Sp: TGocciaSourceSpan; Starts: array of Integer; Counted: Boolean;
+begin
+  if not CovOn then Exit;
+  Sp := S.Span;
+  if Sp.Coordinates = nil then Exit;
+  Counted := (S is TGocciaExpressionStatement) or (S is TGocciaBreakStatement) or (S is TGocciaContinueStatement) or
+    (S is TGocciaReturnStatement) or (S is TGocciaThrowStatement) or (S is TGocciaTryStatement) or
+    (S is TGocciaIfStatement) or (S is TGocciaForStatement) or (S is TGocciaForInStatement) or
+    (S is TGocciaForOfStatement) or (S is TGocciaWhileStatement) or (S is TGocciaDoWhileStatement) or
+    (S is TGocciaSwitchStatement) or (S is TGocciaWithStatement);
+  { the parser reads `debugger;` as an empty statement }
+  if (S is TGocciaEmptyStatement) and (Copy(Sp.Text, 1, 8) = 'debugger') then Counted := True;
+  { a directive prologue's string is a Directive, not a statement }
+  if S is TGocciaExpressionStatement then
+    for I := 0 to High(CovDirectives) do
+      if CovDirectives[I] = S then Exit;
+  { the labels, outermost first: each is a LabeledStatement that runs through its body }
+  if (S is TGocciaStatement) and (TGocciaStatement(S).LabelCount > 0) then
+  begin
+    SetLength(Starts, TGocciaStatement(S).LabelCount);
+    Start := Sp.StartOffset;
+    for I := 0 to High(Starts) do
+    begin
+      Starts[I] := CoverageLabelStart(Sp, Start);
+      if Starts[I] < 0 then Starts[I] := Start;
+      Start := Starts[I];
+    end;
+    for I := High(Starts) downto 0 do
+      CovCount(CoverageLocOfOffsets(Sp, Starts[I], Sp.EndOffset), 0, 0);
+  end;
+  if Counted then CovCount(CoverageLocOfSpan(Sp), 0, 0);
+end;
+
+function TCompiler.CovBranch(const BranchType: string; const Loc: TGocciaCoverageLoc;
+  const Locs: TGocciaCoverageLocArray): Integer;
+begin
+  Result := TGocciaCoverageTracker.Instance.RegisterBranch(SourceName, BranchType, Loc, Locs);
+  if Result > $7FFFFF then Result := -1;
+end;
+
+{ the counter of one path of a registered branch (-1: none registered) }
+procedure TCompiler.CovPath(Branch, Path: Integer);
+begin
+  if (Branch >= 0) and (Path >= 0) and (Path <= $FFFF) then Emit(Ins(opCovBranch, Path, 0, Branch));
+end;
+
+{ Istanbul's default-arg branch: the AssignmentPattern, from where its target starts (StartOffset, -1: the default
+  value's) to the end of its default value (parentheses around it included), one path at the value }
+procedure TCompiler.CovDefaultArg(const Start: TGocciaSourceSpan; StartOffset: Integer; Value: TGocciaExpression);
+var Locs: TGocciaCoverageLocArray; Sp: TGocciaSourceSpan; Whole, Closing: TGocciaCoverageLoc;
+begin
+  if not CovOn then Exit;
+  Sp := Value.Span;
+  if Sp.Coordinates = nil then Exit;
+  if StartOffset < 0 then StartOffset := Start.StartOffset;
+  SetLength(Locs, 1);
+  Locs[0] := CovLocOf(Value);
+  Whole := CoverageLocOfOffsets(Sp, StartOffset, StartOffset);
+  Whole.EndLine := Locs[0].EndLine;
+  Whole.EndColumn := Locs[0].EndColumn;
+  if Value.Parenthesized and Value.HasParenRange then
+  begin
+    Closing := CoverageLocOfOffsets(Sp, Value.ParenEndOffset, Value.ParenEndOffset);
+    Whole.EndLine := Closing.StartLine;
+    Whole.EndColumn := Closing.StartColumn;
+  end;
+  CovPath(CovBranch('default-arg', Whole, Locs), 0);
+end;
+
+{ a destructuring default (a = 1 in an object or array pattern): an AssignmentPattern, so a default-arg branch too }
+procedure TCompiler.CovPatternDefault(P: TGocciaAssignmentDestructuringPattern);
+var Start: Integer; Scan: TExtentScan;
+begin
+  Start := P.Span.StartOffset;
+  if (P.Left <> nil) and (P.Left.Span.Coordinates <> nil) then
+  begin
+    { the target's first token (a member target's span starts at its last operator) }
+    Scan := TExtentScan.Create;
+    try
+      Scan.Coords := P.Left.Span.Coordinates;
+      Scan.Root := P.Left;
+      Scan.Lo := P.Left.Span.StartOffset;
+      Scan.Hi := P.Left.Span.EndOffset;
+      P.Left.ForEachChild(Scan);
+      Start := Scan.Lo;
+    finally
+      Scan.Free;
+    end;
+  end;
+  CovDefaultArg(P.Right.Span, Start, P.Right);
+end;
+
+{ the next CompileFunction compiles a function of the source: NodeSpan the function node's (StartOffset where the
+  node starts, which a class member's decorators and modifiers move before its span), OwnName its own identifier
+  (a FunctionDeclaration's or FunctionExpression's, not the name it is given by its binding), '' for none }
+procedure TCompiler.CovFunctionNote(const NodeSpan: TGocciaSourceSpan; StartOffset: Integer; const OwnName: string);
+begin
+  PendingCovOn := False;
+  if not CovOn or (NodeSpan.Coordinates = nil) then Exit;
+  PendingCovOn := True;
+  PendingCovName := '';
+  PendingCovSpan := NodeSpan;
+  if StartOffset < 0 then StartOffset := NodeSpan.StartOffset;
+  PendingCovStart := StartOffset;
+  PendingCovIdStart := -1;
+  PendingCovIdEnd := -1;
+  if OwnName <> '' then
+  begin
+    PendingCovName := OwnName;
+    PendingCovIdStart := CoverageFunctionNameStart(NodeSpan, StartOffset, OwnName);
+    if PendingCovIdStart >= 0 then PendingCovIdEnd := PendingCovIdStart + Length(UTF8Encode(OwnName));
+  end;
 end;
 
 { where V8 locates a failure (a stack trace's frame): the instructions emitted next are at offset Off of Sp's source }
@@ -1993,6 +2258,12 @@ begin
   T^.Lazy := Stub;
 end;
 
+{ where a parameter starts for Istanbul's default-arg branch: the parser's record of it, else -1 }
+function ParamStart(const P: TGocciaParameter): Integer;
+begin
+  if P.EndOffset > P.StartOffset then Result := P.StartOffset else Result := -1;
+end;
+
 function TCompiler.CompileFunction(const Name: UnicodeString; const Params: TGocciaParameterArray; Body: TGocciaASTNode;
   IsArrow, IsMethod, IsClassCtor, IsDerived, IsGenerator, IsAsync: Boolean; FieldInit: TGocciaClassDefinition;
   BodyNodes: TList<TGocciaASTNode>): PFuncTemplate;
@@ -2002,7 +2273,29 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames, BodyEnvParams: TStringList;
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
   SavedTail, SavedLine, SavedCol: Integer;
+  CovFnIdx: Integer; CovLocBody, CovDecl: TGocciaCoverageLoc; CovHas: Boolean;
 begin
+  { coverage: the function as the source wrote it (CovFunctionNote), registered with Istanbul's decl and loc }
+  CovFnIdx := -1;
+  CovHas := PendingCovOn;
+  if CovHas then
+  begin
+    PendingCovOn := False;
+    if (Body <> nil) and (Body.Span.Coordinates <> nil) then
+    begin
+      CovLocBody := CovLocOf(Body);
+      if PendingCovIdStart >= 0 then
+        CovDecl := CoverageLocOfOffsets(PendingCovSpan, PendingCovIdStart, PendingCovIdEnd)
+      else
+      begin
+        CovDecl := CoverageLocOfOffsets(PendingCovSpan, PendingCovStart, PendingCovStart);
+        CovDecl.EndLine := CovDecl.StartLine;
+        CovDecl.EndColumn := CovDecl.StartColumn + 1;
+      end;
+      CovFnIdx := TGocciaCoverageTracker.Instance.RegisterFunction(SourceName, PendingCovName, CovDecl, CovLocBody);
+      if CovFnIdx > $7FFFFF then CovFnIdx := -1;
+    end;
+  end;
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
   InParamInit := False;
@@ -2289,6 +2582,8 @@ begin
         if Assigned(Params[I].DefaultValue) then
         begin
           Skip := EmitJ(opJNotUndef, ArgKeep[I], 0);
+          if CompileCoverage then
+            CovDefaultArg(Params[I].DefaultValue.Span, ParamStart(Params[I]), Params[I].DefaultValue);
           ExprToNamed(Params[I].DefaultValue, ArgKeep[I], Params[I].Name);
           PatchHere(Skip);
         end;
@@ -2298,6 +2593,8 @@ begin
       else if Assigned(Params[I].DefaultValue) then
       begin
         Skip := EmitJ(opJNotUndef, R, 0);
+        if CompileCoverage then
+          CovDefaultArg(Params[I].DefaultValue.Span, ParamStart(Params[I]), Params[I].DefaultValue);
         { 10.2.11 / 8.4.5: an anonymous function default of a plain parameter takes its name }
         if Params[I].IsPattern then ExprTo(Params[I].DefaultValue, R)
         else ExprToNamed(Params[I].DefaultValue, R, Params[I].Name);
@@ -2482,6 +2779,19 @@ begin
       if (Outer = nil) and (Goal = 3) then EmitModulePrologue;
       { a generator is made once its declarations are instantiated (its parameters evaluated) }
       if IsGenerator then Emit(Ins(opGenStart, 0, 0, 0));
+      { coverage: the function counts from the start of its body (after its parameters, and for a generator at the
+        first resumption), and a directive prologue's strings are no statements }
+      if CovFnIdx >= 0 then Emit(Ins(opCovFn, 0, 0, CovFnIdx));
+      if CompileCoverage then
+        for I := 0 to Nodes.Count - 1 do
+        begin
+          if not ((Nodes[I] is TGocciaExpressionStatement) and
+             (TGocciaExpressionStatement(Nodes[I]).Expression is TGocciaLiteralExpression) and
+             (TGocciaLiteralExpression(TGocciaExpressionStatement(Nodes[I]).Expression).Kind = lkString) and
+             not TGocciaExpressionStatement(Nodes[I]).Expression.Parenthesized) then Break;
+          SetLength(CovDirectives, Length(CovDirectives) + 1);
+          CovDirectives[High(CovDirectives)] := Nodes[I];
+        end;
       if GlobalTop and (Outer = nil) then
       begin
         GlobalTop := False;
@@ -2515,6 +2825,12 @@ begin
       Ret := AllocReg;
       SavedTail := TailCallCount;
       if TailEligible then CollectTailCalls(TGocciaExpression(Body));
+      { coverage: the body is the return statement Istanbul turns it into, counted on each call }
+      if CovFnIdx >= 0 then
+      begin
+        Emit(Ins(opCovFn, 0, 0, CovFnIdx));
+        if IsArrow then CovCountNode(Body);
+      end;
       ExprTo(TGocciaExpression(Body), Ret);
       TailCallCount := SavedTail;
       Emit(Ins(opRet, Ret, 0, 0));
@@ -2596,6 +2912,7 @@ begin
     NextSloppyEval := deuSloppyDirectEval in AE.DirectEvalUsage;
     { an arrow's own "use strict" directive makes its code strict (11.2.2) }
     if HasUseStrictDirective(AE.Body) then PendingStrict := 1;
+    if CompileCoverage then CovFunctionNote(AE.Span, -1, '');
     T := ProfAt(AE).CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
     T^.SourceRange := AE.SourceRange;
     EmitClosure(Dest, T);
@@ -2623,6 +2940,11 @@ begin
     else Self_ := -1;
     PendingStrict := Ord(FE.ParsedInStrictMode);
     NextSloppyEval := deuSloppyDirectEval in FE.DirectEvalUsage;
+    { an object literal's method is an ObjectMethod, anonymous for Istanbul; a function expression has its own name }
+    if CompileCoverage then
+    begin
+      if ObjLiteralMethod then CovFunctionNote(FE.Span, -1, '') else CovFunctionNote(FE.Span, -1, FE.Name);
+    end;
     if FE.Name <> '' then
       T := ProfAt(FE).CompileFunction(FE.Name, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync)
     else
@@ -3379,6 +3701,7 @@ begin
       FD := TGocciaFunctionDeclaration(N);
       PendingStrict := Ord(FD.FunctionExpression.ParsedInStrictMode);
       NextSloppyEval := deuSloppyDirectEval in FD.FunctionExpression.DirectEvalUsage;
+      if CompileCoverage then CovFunctionNote(FD.Span, -1, FD.Name);
       T := ProfAt(FD.FunctionExpression).CompileFunction(FD.Name, FD.FunctionExpression.Parameters, FD.FunctionExpression.Body, False, False, False,
         False, FD.FunctionExpression.IsGenerator, FD.FunctionExpression.IsAsync);
       T^.SourceRange := FD.FunctionExpression.SourceRange;
@@ -4240,6 +4563,7 @@ begin
   begin
     V := D.Variables[I];
     R := DeclareLocal(V.Name, True);
+    if CompileCoverage and V.HasInitializer then CovCountNode(V.Initializer);
     if V.HasInitializer then ExprToNamed(V.Initializer, R, V.Name)
     else Emit(Ins(opLoadUndef, R, 0, 0));
     MarkInitialized(V.Name);
@@ -4445,7 +4769,7 @@ begin
   if S = nil then Exit;
   if Prof <> nil then Prof.CountNode(S.ClassType);
   NotePosition(S, True);
-  CovMark;
+  if CompileCoverage then CovStatement(S);
   if (S is TGocciaStatement) and (TGocciaStatement(S).LabelCount > 0) then
     StmtLabeled(TGocciaStatement(S))
   else
@@ -4521,6 +4845,8 @@ begin
     2: begin
          R := FS.FreeReg;
          AllocReg;
+         if CompileCoverage then
+           CovCountInitializer(TGocciaDestructuringDeclaration(S).Initializer, TGocciaDestructuringDeclaration(S).Pattern);
          ExprTo(TGocciaDestructuringDeclaration(S).Initializer, R);
          BindPattern(TGocciaDestructuringDeclaration(S).Pattern, R, True, TGocciaDestructuringDeclaration(S).IsConst);
          FreeTo(R);
@@ -4586,6 +4912,11 @@ begin
   for I := 0 to High(D.Variables) do
   begin
     V := D.Variables[I];
+    { Istanbul counts each declarator's initializer, before it runs }
+    if CompileCoverage and V.HasInitializer then
+    begin
+      if V.IsPattern then CovCountInitializer(V.Initializer, V.Pattern) else CovCountNode(V.Initializer);
+    end;
     if V.IsPattern then
     begin
       T := FS.FreeReg; AllocReg;
@@ -4685,7 +5016,7 @@ begin
 end;
 
 procedure TCompiler.CompileIf(S: TGocciaIfStatement);
-var FalseL: TJumpList; J: Integer;
+var FalseL: TJumpList; J, Br: Integer; Locs: TGocciaCoverageLocArray;
   { B.3.3: a function declaration as a clause is a block of its own }
   procedure ClauseStmt(C: TGocciaASTNode);
   var One: TList<TGocciaASTNode>;
@@ -4706,13 +5037,26 @@ begin
   SetLength(FalseL, 0);
   CheckStatementBody(S.Consequent, True, FS.Tpl^.IsStrict);
   CheckStatementBody(S.Alternate, True, FS.Tpl^.IsStrict);
+  { Istanbul's if branch: two paths, the consequent (located at the whole statement) and the alternate, which it
+    counts without an else too (the empty block it adds, which has no location) }
+  Br := -1;
+  if CompileCoverage and CovOn then
+  begin
+    SetLength(Locs, 2);
+    Locs[0] := CoverageLocOfSpan(S.Span);
+    if Assigned(S.Alternate) then Locs[1] := CoverageLocOfSpan(S.Alternate.Span)
+    else FillChar(Locs[1], SizeOf(Locs[1]), 0);
+    Br := CovBranch('if', Locs[0], Locs);
+  end;
   if HasMatchCondition(S.Condition) then
   begin
     { the condition's pattern bindings are in scope for the consequent only }
     PushScope(False);
     MatchCondition(S.Condition, FalseL);
+    CovPath(Br, 0);
     ClauseStmt(S.Consequent);
     PopMatchScope(FalseL, J);
+    if J >= 0 then CovPath(Br, 1);
     if Assigned(S.Alternate) then
     begin
       if J < 0 then J := EmitJ(opJmp, 0, 0);
@@ -4722,12 +5066,22 @@ begin
     Exit;
   end;
   BranchFalse(S.Condition, FalseL);
+  CovPath(Br, 0);
   ClauseStmt(S.Consequent);
   if Assigned(S.Alternate) then
   begin
     J := EmitJ(opJmp, 0, 0);
     PatchListHere(FalseL);
+    CovPath(Br, 1);
     ClauseStmt(S.Alternate);
+    PatchHere(J);
+  end
+  else if Br >= 0 then
+  begin
+    { the false path counts too: the consequent jumps around it }
+    J := EmitJ(opJmp, 0, 0);
+    PatchListHere(FalseL);
+    CovPath(Br, 1);
     PatchHere(J);
   end
   else
@@ -5095,9 +5449,17 @@ begin
 end;
 
 procedure TCompiler.CompileSwitch(S: TGocciaSwitchStatement);
-var D, T, I, K, DefaultIdx: Integer; CaseJumps: array of Integer; JDefault: Integer; Bodies: array of Integer;
-  Nodes: TList<TGocciaASTNode>;
+var D, T, I, K, DefaultIdx, Br: Integer; CaseJumps: array of Integer; JDefault: Integer; Bodies: array of Integer;
+  Nodes: TList<TGocciaASTNode>; Locs: TGocciaCoverageLocArray;
 begin
+  { Istanbul's switch branch: a path per case clause, default included }
+  Br := -1;
+  if CompileCoverage and CovOn then
+  begin
+    SetLength(Locs, S.Cases.Count);
+    for I := 0 to S.Cases.Count - 1 do Locs[I] := CoverageLocOfSpan(S.Cases[I].Span);
+    Br := CovBranch('switch', CoverageLocOfSpan(S.Span), Locs);
+  end;
   PushScope;
   FS.Scopes[FS.ScopeCount - 1].IsSwitch := True;
   D := AllocReg;
@@ -5145,6 +5507,8 @@ begin
     Bodies[I] := Here;
     if CaseJumps[I] >= 0 then PatchHere(CaseJumps[I]);
     if I = DefaultIdx then PatchHere(JDefault);
+    { the clause's first statement, so a fall-through into it counts too }
+    CovPath(Br, I);
     StmtList(S.Cases[I].Consequent);
   end;
   if DefaultIdx < 0 then PatchHere(JDefault);
@@ -5543,12 +5907,6 @@ begin
        ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0)) then
     begin
       if Prof <> nil then ProfExpr(E);
-      { the register is the operand: under coverage its line still gets an instruction }
-      if CompileCoverage then
-      begin
-        NotePosition(E, False);
-        CovMark;
-      end;
       Exit(R);
     end;
     if (K = 2) and not FS.IsArrow then
@@ -5706,6 +6064,28 @@ begin
 end;
 
 { the body of the instance (Static False) or static initializer; this (register 0) is the target }
+{ where a class member starts for coverage: its first decorator or modifier, else -1 (the parser kept none) }
+function ElementStartOf(const E: TGocciaClassElement): Integer;
+begin
+  if E.EndOffset > E.StartOffset then Result := E.StartOffset else Result := -1;
+end;
+
+function ElementStart(Def: TGocciaClassDefinition; M: TGocciaClassMethod; const Name: string): Integer;
+var I: Integer;
+begin
+  Result := -1;
+  for I := 0 to High(Def.FElements) do
+    if Def.FElements[I].MethodNode = M then Exit(ElementStartOf(Def.FElements[I]));
+end;
+
+{ where a field of the instance initializer starts for coverage }
+function FieldEntryStart(Def: TGocciaClassDefinition; const F: TGocciaFieldOrderEntry): Integer;
+begin
+  if (F.ElementIndex >= 0) and (F.ElementIndex <= High(Def.FElements)) then
+    Exit(ElementStartOf(Def.FElements[F.ElementIndex]));
+  if F.EndOffset > F.StartOffset then Result := F.StartOffset else Result := -1;
+end;
+
 procedure TCompiler.EmitClassInit(Def: TGocciaClassDefinition; Static: Boolean);
 var I, V, K, C, D: Integer; F: TGocciaFieldOrderEntry; E: TGocciaClassElement; T: PFuncTemplate;
   NoParams: TGocciaParameterArray;
@@ -5743,6 +6123,8 @@ begin
       end
       else if F.IsPrivate then
       begin
+        { Istanbul counts a class property's value each time the initializer runs }
+        if CompileCoverage then CovCountFieldValue(F.FieldInitializer, FieldEntryStart(Def, F));
         CompileFieldValue(F.FieldInitializer, V, PrivKeyName(F.Name));
         EmitDecoratedFieldValue(D, V);
         LoadIdent(PrivKeyName(F.Name), K);
@@ -5751,12 +6133,14 @@ begin
       else if F.IsComputed then
       begin
         LoadIdent('%k' + IntToStr(F.ElementIndex), K);
+        if CompileCoverage then CovCountFieldValue(F.FieldInitializer, FieldEntryStart(Def, F));
         CompileKeyedValue(F.FieldInitializer, V, K);
         EmitDecoratedFieldValue(D, V);
         Emit(Ins(opDefFieldC, 0, V, K));
       end
       else
       begin
+        if CompileCoverage then CovCountFieldValue(F.FieldInitializer, FieldEntryStart(Def, F));
         CompileFieldValue(F.FieldInitializer, V, UnicodeString(F.Name));
         EmitDecoratedFieldValue(D, V);
         Emit(Ins(opDefField, 0, V, NewIC(F.Name)));
@@ -5778,6 +6162,7 @@ begin
           K := AllocReg;
           if E.IsPrivate then
           begin
+            if CompileCoverage then CovCountFieldValue(E.FieldInitializer, ElementStartOf(E));
             CompileFieldValue(E.FieldInitializer, V, PrivKeyName(E.Name));
             EmitDecoratedFieldValue(D, V);
             LoadIdent(PrivKeyName(E.Name), K);
@@ -5786,12 +6171,14 @@ begin
           else if E.IsComputed then
           begin
             LoadIdent('%k' + IntToStr(I), K);
+            if CompileCoverage then CovCountFieldValue(E.FieldInitializer, ElementStartOf(E));
             CompileKeyedValue(E.FieldInitializer, V, K);
             EmitDecoratedFieldValue(D, V);
             Emit(Ins(opDefFieldC, 0, V, K));
           end
           else
           begin
+            if CompileCoverage then CovCountFieldValue(E.FieldInitializer, ElementStartOf(E));
             CompileFieldValue(E.FieldInitializer, V, UnicodeString(E.Name));
             EmitDecoratedFieldValue(D, V);
             Emit(Ins(opDefField, 0, V, NewIC(E.Name)));
@@ -5987,8 +6374,11 @@ begin
   { 15.7.15: an anonymous class is named by its binding (NamedEvaluation) }
   if Def.Name = '' then CName := NameHint else CName := UnicodeString(Def.Name);
   if Assigned(CtorMethod) then
+  begin
+    if CompileCoverage then CovFunctionNote(CtorMethod.Span, ElementStart(Def, CtorMethod, 'constructor'), '');
     T := CompileFunction(CName, CtorMethod.Parameters, CtorMethod.Body, False, True, True, Derived, False, False,
-      TGocciaClassDefinition(nil))
+      TGocciaClassDefinition(nil));
+  end
   else if Derived then
   begin
     SetLength(NoParams, 1);
@@ -6064,6 +6454,7 @@ begin
           Tmp := AllocReg;
           if E.Kind = cekMethod then
           begin
+            if CompileCoverage then CovFunctionNote(E.MethodNode.Span, ElementStartOf(E), '');
             T := ProfAt(E.MethodNode).CompileFunction(Name, E.MethodNode.Parameters, E.MethodNode.Body, False, True, False, False,
               E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
             T^.SourceRange := E.MethodNode.SourceRange;
@@ -6072,8 +6463,10 @@ begin
             if KeyReg >= 0 then Emit(Ins(opDefMethodC, Target, Tmp, KeyReg))
             else Emit(Ins(opDefMethod, Target, Tmp, AtomConst(Name)));
           end;
+          CovMute := E.Kind = cekAccessor;
           if E.Kind in [cekGetter, cekAccessor] then
           begin
+            if CompileCoverage and (E.Kind = cekGetter) then CovFunctionNote(E.GetterNode.Span, ElementStartOf(E), '');
             if KeyReg < 0 then T := CompileFunction('get ' + Name, NoParams, E.GetterNode.Body, False, True, False,
               False, False, False)
             else T := CompileFunction('', NoParams, E.GetterNode.Body, False, True, False, False, False, False);
@@ -6087,6 +6480,7 @@ begin
           end;
           if E.Kind in [cekSetter, cekAccessor] then
           begin
+            if CompileCoverage and (E.Kind = cekSetter) then CovFunctionNote(E.SetterNode.Span, ElementStartOf(E), '');
             if KeyReg < 0 then T := CompileFunction('set ' + Name, E.SetterNode.Parameters, E.SetterNode.Body, False,
               True, False, False, False, False)
             else T := CompileFunction('', E.SetterNode.Parameters, E.SetterNode.Body, False, True, False, False,
@@ -6097,6 +6491,7 @@ begin
             if KeyReg >= 0 then Emit(Ins(opDefSetterC, Target, Tmp, KeyReg))
             else Emit(Ins(opDefSetter, Target, Tmp, AtomConst(Name)));
           end;
+          CovMute := False;
           if (KeyReg >= 0) and (Length(E.Decorators) = 0) and (E.Kind <> cekAccessor) then FreeTo(KeyReg)
           else FreeTo(IterBase);
         end;
@@ -6215,18 +6610,57 @@ begin
 end;
 
 procedure TCompiler.CompileBinary(E: TGocciaBinaryExpression; Dest: Integer);
-var Save, L, R: Integer; J: Integer; Op: TOp; V: TValue; JoinLine: Integer;
-  { a short circuit's join, compiled for coverage with the right operand ending on another line than the left one:
-    what follows takes no line, so line coverage neither counts the right operand's line when the jump skipped it nor
-    counts the left operand's line again after the right one ran }
+var Save, L, R: Integer; J: Integer; Op: TOp; V: TValue;
+  OwnChain: Boolean; SavedActive: Boolean; SavedBranch, SavedNext: Integer;
+  { an operand of a logical chain: under coverage a leaf (anything but a logical expression, whatever its operator)
+    counts its own path of the chain's one branch just before it is evaluated; a logical operand continues the chain }
+  procedure Operand(X: TGocciaExpression);
+  begin
+    if not CovChainActive then begin ExprTo(X, Dest); Exit; end;
+    if (X is TGocciaBinaryExpression) and (TGocciaBinaryExpression(X).Operator in [gttAnd, gttOr, gttNullishCoalescing]) then
+    begin
+      CovInnerLogical := True;
+      ExprTo(X, Dest);
+      CovInnerLogical := False;
+    end
+    else
+    begin
+      CovPath(CovChainBranch, CovChainNext);
+      Inc(CovChainNext);
+      ExprTo(X, Dest);
+    end;
+  end;
   procedure ShortCircuit(JumpOp: TOp);
   begin
-    ExprTo(E.Left, Dest);
-    JoinLine := FS.CurLine;
+    Operand(E.Left);
     J := EmitJ(JumpOp, Dest, 0);
-    ExprTo(E.Right, Dest);
+    Operand(E.Right);
     PatchHere(J);
-    if CompileCoverage and (FS.CurLine <> JoinLine) then FS.CurLine := 0;
+  end;
+  { Istanbul's binary-expr branch: one per maximal chain of &&, || and ??, a path per leaf, in source order }
+  procedure BeginChain;
+  var Leaves: TList<TGocciaExpression>; Locs: TGocciaCoverageLocArray; I: Integer;
+    procedure Collect(X: TGocciaExpression);
+    begin
+      if (X is TGocciaBinaryExpression) and (TGocciaBinaryExpression(X).Operator in [gttAnd, gttOr, gttNullishCoalescing]) then
+      begin
+        Collect(TGocciaBinaryExpression(X).Left);
+        Collect(TGocciaBinaryExpression(X).Right);
+      end
+      else Leaves.Add(X);
+    end;
+  begin
+    Leaves := TList<TGocciaExpression>.Create;
+    try
+      Collect(E);
+      SetLength(Locs, Leaves.Count);
+      for I := 0 to Leaves.Count - 1 do Locs[I] := CovLocOf(Leaves[I]);
+      CovChainBranch := CovBranch('binary-expr', CovLocOf(E), Locs);
+    finally
+      Leaves.Free;
+    end;
+    CovChainNext := 0;
+    CovChainActive := CovChainBranch >= 0;
   end;
 begin
   NoBareYield(E.Left);
@@ -6252,10 +6686,34 @@ begin
     FreeTo(Save);
     Exit;
   end;
-  case E.Operator of
-    gttAnd: begin ShortCircuit(opJF); Exit; end;
-    gttOr: begin ShortCircuit(opJT); Exit; end;
-    gttNullishCoalescing: begin ShortCircuit(opJNotNullish); Exit; end;
+  if E.Operator in [gttAnd, gttOr, gttNullishCoalescing] then
+  begin
+    OwnChain := False;
+    if CompileCoverage then
+    begin
+      if CovInnerLogical then CovInnerLogical := False
+      else if CovOn then
+      begin
+        SavedActive := CovChainActive;
+        SavedBranch := CovChainBranch;
+        SavedNext := CovChainNext;
+        OwnChain := True;
+        BeginChain;
+      end
+      else CovChainActive := False;
+    end;
+    case E.Operator of
+      gttAnd: ShortCircuit(opJF);
+      gttOr: ShortCircuit(opJT);
+    else ShortCircuit(opJNotNullish);
+    end;
+    if OwnChain then
+    begin
+      CovChainActive := SavedActive;
+      CovChainBranch := SavedBranch;
+      CovChainNext := SavedNext;
+    end;
+    Exit;
   end;
   Save := FS.FreeReg;
   Op := BinOpFor(E.Operator);
@@ -7035,6 +7493,7 @@ begin
           { an accessor's own "use strict" directive (10.2.1.1: its code is strict mode code) }
           if HasUseStrictDirective(TGocciaGetterExpression(P.Accessor).Body) then PendingStrict := 1;
           NextSloppyEval := deuSloppyDirectEval in TGocciaGetterExpression(P.Accessor).DirectEvalUsage;
+          if CompileCoverage then CovFunctionNote(P.Accessor.Span, CoverageAccessorStart(P.Accessor.Span, P.Accessor.Span.StartOffset, 'get'), '');
           T := CompileFunction('get ' + P.StaticKey, NoParams, TGocciaGetterExpression(P.Accessor).Body,
             False, True, False, False, False, False);
           T^.SourceRange := TGocciaGetterExpression(P.Accessor).SourceRange;
@@ -7046,6 +7505,7 @@ begin
           ObjLiteralMethod := True;
           if HasUseStrictDirective(TGocciaSetterExpression(P.Accessor).Body) then PendingStrict := 1;
           NextSloppyEval := deuSloppyDirectEval in TGocciaSetterExpression(P.Accessor).DirectEvalUsage;
+          if CompileCoverage then CovFunctionNote(P.Accessor.Span, CoverageAccessorStart(P.Accessor.Span, P.Accessor.Span.StartOffset, 'set'), '');
           T := CompileFunction('set ' + P.StaticKey, TGocciaSetterExpression(P.Accessor).Parameters,
             TGocciaSetterExpression(P.Accessor).Body, False, True, False, False, False, False);
           T^.SourceRange := TGocciaSetterExpression(P.Accessor).SourceRange;
@@ -7061,6 +7521,7 @@ begin
             ObjLiteralMethod := True;
             if HasUseStrictDirective(TGocciaGetterExpression(Pair.Value).Body) then PendingStrict := 1;
             NextSloppyEval := deuSloppyDirectEval in TGocciaGetterExpression(Pair.Value).DirectEvalUsage;
+            if CompileCoverage then CovFunctionNote(Pair.Value.Span, CoverageAccessorStart(Pair.Value.Span, Pair.Value.Span.StartOffset, 'get'), '');
             T := CompileFunction('get', NoParams, TGocciaGetterExpression(Pair.Value).Body,
               False, True, False, False, False, False);
             T^.SourceRange := TGocciaGetterExpression(Pair.Value).SourceRange;
@@ -7073,6 +7534,7 @@ begin
             ObjLiteralMethod := True;
             if HasUseStrictDirective(TGocciaSetterExpression(Pair.Value).Body) then PendingStrict := 1;
             NextSloppyEval := deuSloppyDirectEval in TGocciaSetterExpression(Pair.Value).DirectEvalUsage;
+            if CompileCoverage then CovFunctionNote(Pair.Value.Span, CoverageAccessorStart(Pair.Value.Span, Pair.Value.Span.StartOffset, 'set'), '');
             T := CompileFunction('set', TGocciaSetterExpression(Pair.Value).Parameters,
               TGocciaSetterExpression(Pair.Value).Body, False, True, False, False, False, False);
             T^.SourceRange := TGocciaSetterExpression(Pair.Value).SourceRange;
@@ -7642,14 +8104,25 @@ begin
 end;
 
 procedure TCompiler.CompileConditional(C: TGocciaConditionalExpression; Dest: Integer);
-var J: Integer; FalseL: TJumpList;
+var J, Br: Integer; FalseL: TJumpList; Locs: TGocciaCoverageLocArray;
 begin
   NoBareYield(C.Condition);
   SetLength(FalseL, 0);
+  { Istanbul's cond-expr branch: the consequent and the alternate }
+  Br := -1;
+  if CompileCoverage and CovOn then
+  begin
+    SetLength(Locs, 2);
+    Locs[0] := CovLocOf(C.Consequent);
+    Locs[1] := CovLocOf(C.Alternate);
+    Br := CovBranch('cond-expr', CovLocOf(C), Locs);
+  end;
   BranchFalse(C.Condition, FalseL);
+  CovPath(Br, 0);
   ExprTo(C.Consequent, Dest);
   J := EmitJ(opJmp, 0, 0);
   PatchListHere(FalseL);
+  CovPath(Br, 1);
   ExprTo(C.Alternate, Dest);
   PatchHere(J);
 end;
@@ -7850,8 +8323,8 @@ begin
     BranchTrue(TGocciaUnaryExpression(E).Operand, L);
     Exit;
   end;
-  { under coverage a logical operator's value is computed as an expression, its own branch, and the test is one
-    more: the records GocciaScript's coverage reports for it }
+  { under coverage a logical operator is compiled as an expression (CompileBinary): its leaves carry the counters of
+    Istanbul's binary-expr branch }
   if (E is TGocciaBinaryExpression) and not (CompileCoverage and
      (TGocciaBinaryExpression(E).Operator in [gttAnd, gttOr])) then
   begin
@@ -8023,6 +8496,7 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
       begin
         AD := TGocciaAssignmentDestructuringPattern(Pat);
         Sk := EmitJ(opJNotUndef, ValReg, 0);
+        if CompileCoverage then CovPatternDefault(AD);
         CompileFieldValue(AD.Right, ValReg, TGocciaIdentifierDestructuringPattern(AD.Left).Name);
         PatchHere(Sk);
         StoreIdentRef(TGocciaIdentifierDestructuringPattern(AD.Left).Name, Rf.O, ValReg);
@@ -8038,6 +8512,7 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
       if Pat is TGocciaAssignmentDestructuringPattern then
       begin
         Sk := EmitJ(opJNotUndef, ValReg, 0);
+        if CompileCoverage then CovPatternDefault(TGocciaAssignmentDestructuringPattern(Pat));
         ExprTo(TGocciaAssignmentDestructuringPattern(Pat).Right, ValReg);
         PatchHere(Sk);
       end;
@@ -8047,6 +8522,7 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
     begin
       AD := TGocciaAssignmentDestructuringPattern(Pat);
       Sk := EmitJ(opJNotUndef, ValReg, 0);
+      if CompileCoverage then CovPatternDefault(AD);
       if AD.Left is TGocciaIdentifierDestructuringPattern then
         ExprToNamed(AD.Right, ValReg, TGocciaIdentifierDestructuringPattern(AD.Left).Name)
       else ExprTo(AD.Right, ValReg);
@@ -8233,6 +8709,7 @@ begin
     V := AllocReg;
     Emit(Ins(opMov, V, Src, 0));
     J := EmitJ(opJNotUndef, V, 0);
+    if CompileCoverage then CovPatternDefault(TGocciaAssignmentDestructuringPattern(P));
     if TGocciaAssignmentDestructuringPattern(P).Left is TGocciaIdentifierDestructuringPattern then
       ExprToNamed(TGocciaAssignmentDestructuringPattern(P).Right, V,
         TGocciaIdentifierDestructuringPattern(TGocciaAssignmentDestructuringPattern(P).Left).Name)
@@ -8329,6 +8806,11 @@ begin
       { a function declaration: its name is the (mutable) module binding, not a self binding }
       with TGocciaFunctionExpression(D.Expression) do
       begin
+        if CompileCoverage then
+        begin
+          if D.LocalName = GOCCIA_DEFAULT_EXPORT_BINDING then CovFunctionNote(Span, -1, '')
+          else CovFunctionNote(Span, -1, D.LocalName);
+        end;
         if D.LocalName = GOCCIA_DEFAULT_EXPORT_BINDING then
           T := CompileFunction('default', Parameters, Body, False, False, False, False, IsGenerator, IsAsync)
         else T := CompileFunction(D.LocalName, Parameters, Body, False, False, False, False, IsGenerator, IsAsync);

@@ -5921,413 +5921,347 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
 
-    console.log("Loader: line coverage of an expression spread over several lines...");
-    // Each operand sits on its own line. The compiler can use a const local's
-    // register as an operand without emitting an instruction for it, and a
-    // line with no instruction would be reported as never executed.
-    const operandSourcePath = join(tmp, "operand-coverage.js");
-    writeFileSync(
-      operandSourcePath,
-      [
-        "const id = (x) => x;",
-        "const price = (unitPrice, quantity, discount) => {",
-        "  const subtotal = id(unitPrice);",
-        "  const count = id(quantity);",
-        "  const rebate = id(discount);",
-        "  const total =",
-        "    subtotal *",
-        "    count -",
-        "    rebate;",
-        "  return total;",
-        "};",
-        "console.log(price(10, 3, 5));",
-        "",
-      ].join("\n"),
-    );
-    const operandLcovPath = join(tmp, "operand-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${operandLcovPath} ${operandSourcePath}`.quiet();
-    const operandLcov = readFileSync(operandLcovPath, "utf-8");
-    for (const line of [8, 9]) {
-      if (!operandLcov.includes(`DA:${line},1`)) {
-        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${operandLcov}`);
-      }
-    }
-    if (/^DA:\d+,0$/m.test(operandLcov)) {
-      throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
-    }
-
-    console.log("Loader: line coverage of top-level awaits that a short circuit takes or skips...");
-    // The registers an awaiting top-level statement clears belong to no
-    // source line: a skipped operand's line stays unexecuted and the
-    // statement's first line is counted once.
-    const awaitCoverageSourcePath = join(tmp, "await-coverage.js");
-    writeFileSync(
-      awaitCoverageSourcePath,
-      [
-        "const yes = () => true;",
-        "const no = () => false;",
-        "yes() &&",
-        "  (await Promise.resolve(1));",
-        "no() &&",
-        "  (await Promise.resolve(1));",
-        "await null;",
-        "",
-      ].join("\n"),
-    );
-    const awaitCoverageLcovPath = join(tmp, "await-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${awaitCoverageLcovPath} ${awaitCoverageSourcePath}`.quiet();
-    const awaitCoverageLcov = readFileSync(awaitCoverageLcovPath, "utf-8");
-    const awaitCoverageRecords = awaitCoverageLcov.split(/\r?\n/);
-    for (const expected of ["DA:3,1", "DA:4,1", "DA:5,1", "DA:6,0", "DA:7,1"]) {
-      if (!awaitCoverageRecords.includes(expected)) {
-        throw new Error(`LCOV should contain ${expected} for the awaiting statements, got:\n${awaitCoverageLcov}`);
-      }
-    }
-
-    console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
-    // A lexical binding's TDZ hole is set when its block is entered, so the
-    // declaration itself needs none; under coverage it still sets it, because
-    // that instruction is the only one on a declaration line whose initializer
-    // starts below it, in a block, a switch clause, a loop body or a
-    // destructuring declaration.
-    const laterLineDeclarationSourcePath = join(tmp, "declaration-coverage.js");
-    writeFileSync(
-      laterLineDeclarationSourcePath,
-      [
-        "const id = (x) => x;",
-        "const run = (a) => {",
-        "  {",
-        "    let inner =",
-        "      id(a);",
-        "    a = inner;",
-        "  }",
-        "  switch (a) {",
-        "    case 1:",
-        "      const picked =",
-        "        id(a);",
-        "      a = picked;",
-        "  }",
-        "  for (const n of [1, 2]) {",
-        "    const step =",
-        "      id(n);",
-        "    a += step;",
-        "  }",
-        "  const { p } =",
-        "    { p: 1 };",
-        "  return a + p;",
-        "};",
-        "console.log(run(1));",
-        "",
-      ].join("\n"),
-    );
-    const laterLineDeclarationLcovPath = join(tmp, "declaration-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${laterLineDeclarationLcovPath} ${laterLineDeclarationSourcePath}`.quiet();
-    const laterLineDeclarationLcov = readFileSync(laterLineDeclarationLcovPath, "utf-8");
-    for (const line of [4, 10, 15, 19]) {
-      if (!laterLineDeclarationLcov.includes(`DA:${line},`) || laterLineDeclarationLcov.includes(`DA:${line},0\n`)) {
-        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${laterLineDeclarationLcov}`);
-      }
-    }
-    if (/^DA:\d+,0$/m.test(laterLineDeclarationLcov)) {
-      throw new Error(`LCOV should report no unexecuted line, got:\n${laterLineDeclarationLcov}`);
-    }
-
-    console.log("Loader: line coverage of let and parameter operands spread over several lines...");
-    // The same holds for a let binding and a parameter, which the compiler
-    // reads in place where nothing can rebind them before they are used, and
-    // for the branch records of a conditional and a logical expression that
-    // such an operand decides.
-    const mutableOperandSourcePath = join(tmp, "mutable-operand-coverage.js");
-    writeFileSync(
-      mutableOperandSourcePath,
-      [
-        "const price = (unitPrice, quantity, discount) => {",
-        "  let total =",
-        "    unitPrice *",
-        "    quantity -",
-        "    discount;",
-        "  total =",
-        "    total +",
-        "    quantity;",
-        "  total +=",
-        "    discount;",
-        "  const label =",
-        "    total <",
-        "    quantity",
-        "      ? unitPrice",
-        "      : total;",
-        "  return discount &&",
-        "    label;",
-        "};",
-        "console.log(price(10, 3, 5));",
-        "",
-      ].join("\n"),
-    );
-    const mutableOperandLcovPath = join(tmp, "mutable-operand-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${mutableOperandLcovPath} ${mutableOperandSourcePath}`.quiet();
-    const mutableOperandLcov = readFileSync(mutableOperandLcovPath, "utf-8");
-    for (const line of [3, 4, 5, 7, 8, 10, 12, 13, 15, 17]) {
-      if (!mutableOperandLcov.includes(`DA:${line},1`)) {
-        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${mutableOperandLcov}`);
-      }
-    }
-    // Line 13 ends the conditional's test, line 16 holds the `&&`: each keeps
-    // one taken and one untaken branch record.
-    for (const branch of [/^BRDA:13,\d+,0,1$/m, /^BRDA:13,\d+,1,-$/m, /^BRDA:16,\d+,1,1$/m, /^BRDA:16,\d+,0,-$/m]) {
-      if (!branch.test(mutableOperandLcov)) {
-        throw new Error(`LCOV should keep the branch record ${branch}, got:\n${mutableOperandLcov}`);
-      }
-    }
-
-    console.log("Loader: branch coverage of conditional and logical expressions a constant decides...");
-    // The compiler can decide these from a const local or a literal, and with
-    // strict types can read `flag && true` as `flag`. Under coverage each keeps
-    // its taken and its untaken branch record, and the report matches the one
-    // for a form the compiler cannot decide.
-    const branchRecords = (lcov: string) =>
-      [...lcov.matchAll(/^BRDA:(\d+),\d+,(\d+),(\S+)$/gm)].map((m) => `${m[1]}:${m[2]}:${m[3]}`).sort();
-    const constantBranchCases = [
-      {
-        name: "constant-branch",
-        lines: [4, 5, 6, 7, 8, 9, 10, 11],
-        // Line 9's `if` keeps its own two arms next to the `&&`'s two.
-        recordsOnLine: { 9: 4 } as Record<number, number>,
-        decided: { args: [] as string[], decl: "const" },
-        undecided: { args: [] as string[], decl: "let" },
-        source: (decl: string) => [
-          "const pick = (value) => {",
-          `  ${decl} verbose = false;`,
-          `  ${decl} missing = null;`,
-          '  const label = verbose ? "long" : "short";',
-          "  const shown = verbose && value;",
-          "  const fallback = verbose || value;",
-          '  const chosen = missing ?? "none";',
-          "  const size = (verbose ? 1 : 2) + 1;",
-          "  if (verbose && value) { return label; }",
-          "  const negated = !(verbose || false);",
-          '  const literal = true ? "yes" : "no";',
-          "  return [label, shown, fallback, chosen, size, negated, literal].join();",
-          "};",
-          "console.log(pick(1));",
-          "",
-        ],
-      },
-      {
-        name: "strict-type-branch",
-        lines: [3, 4],
-        recordsOnLine: {} as Record<number, number>,
-        decided: { args: ["--strict-types"], decl: "const" },
-        undecided: { args: [] as string[], decl: "const" },
-        source: (decl: string) => [
-          "const check = (value) => {",
-          `  ${decl} flag = value > 0;`,
-          "  const both = flag && true;",
-          "  const either = flag || false;",
-          "  return [both, either].join();",
-          "};",
-          "console.log(check(1));",
-          "",
-        ],
-      },
+    // Coverage follows Istanbul's definitions (istanbul-lib-instrument's visitor, istanbul-lib-coverage and the
+    // lcovonly reporter): docs/testing.md#coverage. Every expectation below follows from them, by hand, for the
+    // source it sits beside: a statement counter runs each time execution reaches the statement, a line's count is
+    // the most among the statements that start on it, a branch has a counter per path, a function counts calls.
+    const coverageFlags = [
+      "--compat-var",
+      "--compat-function",
+      "--compat-traditional-for-loop",
+      "--compat-while-loops",
+      "--compat-for-in-loop",
+      "--compat-label",
+      "--compat-non-strict-mode",
     ];
-    for (const { name, lines, recordsOnLine, decided, undecided, source } of constantBranchCases) {
-      const reports: Record<string, string> = {};
-      for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
-        const sourcePath = join(tmp, `${name}-${kind}.js`);
-        const lcovPath = join(tmp, `${name}-${kind}.lcov`);
-        writeFileSync(sourcePath, source(decl).join("\n"));
-        await $`${RUNNER} ${args} --coverage --coverage-format=lcov --coverage-output=${lcovPath} ${sourcePath}`.quiet();
-        reports[kind] = readFileSync(lcovPath, "utf-8");
-      }
-      for (const line of lines) {
-        if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
-            !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
-          throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+    const runCoverage = async (name: string, lines: string[], args: string[] = coverageFlags) => {
+      const sourcePath = join(tmp, `${name}.js`);
+      writeFileSync(sourcePath, lines.join("\n") + "\n");
+      const lcovPath = join(tmp, `${name}.lcov`);
+      const jsonPath = join(tmp, `${name}.json`);
+      await $`${RUNNER} ${args} --coverage --coverage-format=lcov --coverage-output=${lcovPath} ${sourcePath}`.quiet();
+      await $`${RUNNER} ${args} --coverage --coverage-format=json --coverage-output=${jsonPath} ${sourcePath}`.quiet();
+      const lcov = readFileSync(lcovPath, "utf-8");
+      const file = coverageEntryFor(jsonPath, sourcePath);
+      if (!file) throw new Error(`JSON coverage of ${name} should contain the source file`);
+      const ordered = (map: Record<string, any>) =>
+        Object.keys(map).sort((a, b) => Number(a) - Number(b)).map((key) => map[key]);
+      return { lcov, records: lcov.split(/\r?\n/), file, ordered };
+    };
+    const expectRecords = (what: string, report: { lcov: string; records: string[] }, expected: string[]) => {
+      for (const record of expected) {
+        if (!report.records.includes(record)) {
+          throw new Error(`${what}: LCOV should contain ${record}, got:\n${report.lcov}`);
         }
       }
-      for (const [line, count] of Object.entries(recordsOnLine)) {
-        const found = branchRecords(reports.undecided).filter((r) => r.startsWith(`${line}:`)).length;
-        if (found !== count) {
-          throw new Error(`${name}: LCOV should keep ${count} branch records on line ${line}, found ${found}:\n${reports.undecided}`);
+    };
+    const expectEqual = (what: string, actual: unknown, expected: unknown) => {
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        throw new Error(`${what}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+      }
+    };
+
+    console.log("Loader: coverage statements follow Istanbul's statement kinds...");
+    // One counter per ExpressionStatement, IfStatement, ForStatement, ForInStatement, ForOfStatement,
+    // WhileStatement, DoWhileStatement, SwitchStatement, TryStatement, BreakStatement, ReturnStatement and
+    // LabeledStatement, and one per declarator initializer; blocks and declarations are no statements. A loop's
+    // own counter runs once per entry, the statements of its body once per iteration. n runs 0, 1, 3, 4 (the for
+    // adds i = 0 and 1), 5, 8 (the for-of adds 1 and 2), 58 and 108 (two while iterations), 107, then the
+    // switch's default clause sets 2, the try and finally make it 3 and 4, and the labeled block 5.
+    {
+      const report = await runCoverage("statement-kinds", [
+        "let n = 0;",                                           //  1  init
+        "n += 1;",                                              //  2  expression
+        "if (n) { n += 2; }",                                   //  3  if, expression
+        "for (let i = 0; i < 2; i++) { n += i; }",              //  4  for, init, body x2
+        "for (const k in { a: 1 }) { n += 1; }",                //  5  for-in, body
+        "for (const v of [1, 2]) { n += v; }",                  //  6  for-of, body x2
+        "while (n < 100) { n += 50; }",                         //  7  while, body x2
+        "do { n -= 1; } while (n > 120);",                      //  8  do-while, body
+        "switch (n) { case 0: n = 1; break; default: n = 2; }", //  9  switch, 0, 0, default clause
+        "try { n += 1; } catch (e) { n = 0; } finally { n += 1; }", // 10  try, try, catch (0), finally
+        "lbl: { n += 1; break lbl; }",                          // 11  labeled, expression, break
+        "const run = () => { return n; };",                     // 12  init, return
+        "run();",                                               // 13  expression
+      ]);
+      expectEqual("statement counters", report.ordered(report.file.s), [
+        1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1,
+      ]);
+      // A line lists the most among the statements starting on it: line 4's body ran twice, line 9's untaken
+      // clause does not lower the switch's own count.
+      expectRecords("statement kinds", report, [
+        "DA:1,1", "DA:2,1", "DA:3,1", "DA:4,2", "DA:5,1", "DA:6,2", "DA:7,2", "DA:8,1", "DA:9,1", "DA:10,1",
+        "DA:11,1", "DA:12,1", "DA:13,1", "LF:13", "LH:13",
+      ]);
+    }
+
+    console.log("Loader: coverage counts a line as the most among the statements starting on it...");
+    // `const f = () => 1;` runs one initializer and, on each call, the arrow's concise body (Istanbul turns it into
+    // `return 1`), both starting on line 1: the line counts the most, 5. The for-of statement and the call
+    // statement `f();` start on line 2 and run 1 and 5 times.
+    {
+      const report = await runCoverage("line-maximum", [
+        "const f = () => 1;",
+        "for (const i of [1, 2, 3, 4, 5]) f();",
+      ]);
+      expectRecords("repeated calls", report, ["DA:1,5", "DA:2,5", "LF:2", "LH:2", "FN:1,(anonymous_0)", "FNDA:5,(anonymous_0)"]);
+      expectEqual("repeated calls statements", report.ordered(report.file.s), [1, 5, 1, 5]);
+    }
+
+    console.log("Loader: coverage lists a function never called with its statements at 0...");
+    // Istanbul instruments the whole file: the lines of a function that never runs are listed, with 0.
+    {
+      const report = await runCoverage("uncalled", [
+        "const never = () => {",
+        "  return 1;",
+        "};",
+      ]);
+      expectRecords("uncalled function", report, ["DA:1,1", "DA:2,0", "LF:2", "LH:1", "FN:1,(anonymous_0)", "FNDA:0,(anonymous_0)", "FNF:1", "FNH:0"]);
+      if (report.records.some((r) => r.startsWith("DA:3,"))) {
+        throw new Error(`A line no statement starts on (the closing brace) is not listed, got:\n${report.lcov}`);
+      }
+    }
+
+    console.log("Loader: coverage of an if without else counts the empty alternate...");
+    // An if is a branch of two paths, the consequent and the alternate, which Istanbul counts without an else:
+    // x is 0, so the consequent ran 0 times and the (empty) alternate once. The branch is located at the if
+    // statement; the second path has no location.
+    {
+      const report = await runCoverage("if-without-else", [
+        "let x = 0;",
+        "if (x) { x = 1; }",
+      ]);
+      expectRecords("if without else", report, ["BRDA:2,0,0,0", "BRDA:2,0,1,1", "BRF:2", "BRH:1", "DA:1,1", "DA:2,1"]);
+      const branch = report.file.branchMap["0"];
+      expectEqual("if branch", [branch.type, branch.locations.length, branch.line], ["if", 2, 2]);
+      expectEqual("if branch counts", report.file.b["0"], [0, 1]);
+      expectEqual("if consequent path is the whole statement", branch.locations[0], branch.loc);
+      expectEqual("the missing else has no location", branch.locations[1], { start: {}, end: {} });
+    }
+
+    console.log("Loader: coverage of a logical chain has a path per leaf...");
+    // findLeaves flattens nested logical expressions whatever their operator: a && b || c has the leaves a, b and
+    // c. pick(0, 1, 2) evaluates a, then c; pick(1, 0, 3) evaluates a, b, c; pick(1, 1, 4) evaluates a, b and
+    // stops (b is truthy, so the || is decided): a ran 3 times, b 2, c 2.
+    {
+      const report = await runCoverage("logical-chain", [
+        "const pick = (a, b, c) => a && b || c;",
+        "pick(0, 1, 2); pick(1, 0, 3); pick(1, 1, 4);",
+      ]);
+      expectRecords("logical chain", report, ["BRDA:1,0,0,3", "BRDA:1,0,1,2", "BRDA:1,0,2,2", "BRF:3", "BRH:3"]);
+      const branch = report.file.branchMap["0"];
+      expectEqual("binary-expr type", [branch.type, branch.locations.length], ["binary-expr", 3]);
+      // each leaf is located at its own operand: columns of a, b and c in the source
+      expectEqual("leaf columns", branch.locations.map((l: any) => l.start.column), [26, 31, 36]);
+    }
+
+    console.log("Loader: coverage of a switch counts a path per case clause, fall-through included...");
+    // The counter is the clause's first statement, so a fall-through into it counts: sw(1) enters clause 0 and
+    // falls into clause 1; sw(2) twice enters clause 1; sw(9) enters default: [1, 1 + 2, 1].
+    {
+      const report = await runCoverage("switch-fallthrough", [
+        "const out = [];",
+        "const sw = (v) => {",
+        "  switch (v) {",
+        "    case 1:",
+        "      out.push('one');",
+        "    case 2:",
+        "      out.push('two'); break;",
+        "    default:",
+        "      out.push('d');",
+        "  }",
+        "};",
+        "sw(1); sw(2); sw(2); sw(9);",
+      ]);
+      expectRecords("switch", report, ["BRDA:3,0,0,1", "BRDA:3,0,1,3", "BRDA:3,0,2,1", "BRF:3", "BRH:3"]);
+      expectEqual("switch type", report.file.branchMap["0"].type, "switch");
+    }
+
+    console.log("Loader: coverage of default parameters, destructuring defaults and conditional expressions...");
+    // A default-arg branch has one path, counted when the default is evaluated: dp(1) and dp(2) evaluate b's
+    // default, dp(1, 5) does not (2); the pattern default p = 1 runs, q = 2 does not (q is given). A cond-expr
+    // branch has two paths: cond(1) twice, cond(0) once. The one-line for runs its body on line 6 four times.
+    {
+      const report = await runCoverage("defaults-and-conditionals", [
+        "const dp = (a, b = a + 1) => b;",
+        "dp(1); dp(1, 5); dp(2);",
+        "const { p = 1, q = 2 } = { q: 3 };",
+        "const cond = (x) => x ? 'y' : 'n';",
+        "cond(1); cond(0); cond(1);",
+        "for (let i = 0; i < 4; i++) { i += 0; }",
+      ]);
+      expectRecords("defaults and conditionals", report, [
+        "BRDA:1,0,0,2", "BRDA:3,1,0,1", "BRDA:3,2,0,0", "BRDA:4,3,0,2", "BRDA:4,3,1,1", "BRF:5", "BRH:4", "DA:6,4",
+      ]);
+      expectEqual("branch types", Object.keys(report.file.branchMap).map((k) => report.file.branchMap[k].type), [
+        "default-arg", "default-arg", "default-arg", "cond-expr",
+      ]);
+    }
+
+    console.log("Loader: coverage names functions as Istanbul does...");
+    // Only a function declaration or expression with an identifier of its own has a name; every other function
+    // (an arrow, a method, a getter, a setter, a constructor) is (anonymous_<index>) with its index in the file's
+    // function list, in source order. FN: lists the line of the declaration (the identifier's, else the node's
+    // start); FNF and FNH come before the FNDA records.
+    {
+      const report = await runCoverage("function-names", [
+        "function declared() { return 1; }",
+        "const viaVar = function () { return 2; };",
+        "const named = function inner() { return 3; };",
+        "const arrow = () => 4;",
+        "const obj = { m() { return 5; }, get g() { return 6; }, set g(v) {} };",
+        "class C { constructor() {} static s() {} }",
+        "declared(); named(); new C();",
+      ]);
+      const records = report.records.filter((r) => /^FN/.test(r));
+      expectEqual("function records", records, [
+        "FN:1,declared", "FN:2,(anonymous_1)", "FN:3,inner", "FN:4,(anonymous_3)", "FN:5,(anonymous_4)",
+        "FN:5,(anonymous_5)", "FN:5,(anonymous_6)", "FN:6,(anonymous_7)", "FN:6,(anonymous_8)",
+        "FNF:9", "FNH:3",
+        "FNDA:1,declared", "FNDA:0,(anonymous_1)", "FNDA:1,inner", "FNDA:0,(anonymous_3)", "FNDA:0,(anonymous_4)",
+        "FNDA:0,(anonymous_5)", "FNDA:0,(anonymous_6)", "FNDA:1,(anonymous_7)", "FNDA:0,(anonymous_8)",
+      ]);
+      const fn = report.file.fnMap["0"];
+      expectEqual("fnMap entry", [fn.name, fn.decl.start.line, fn.decl.start.column, fn.decl.end.column, fn.line], ["declared", 1, 9, 17, 1]);
+      expectEqual("anonymous fnMap decl is the node's first character", report.file.fnMap["3"].decl, {
+        start: { line: 4, column: 14 },
+        end: { line: 4, column: 15 },
+      });
+    }
+
+    console.log("Loader: coverage counts a class field's value each time the initializer runs...");
+    // A class property's value is a statement located at the value: the instance field's runs on each
+    // construction (3), the static field's once; a directive ('use strict' at the top of a body) is no statement,
+    // and a debugger statement is.
+    {
+      const report = await runCoverage("class-fields", [
+        "class P {",
+        "  a = 1;",
+        "  static b = 2;",
+        "}",
+        "new P(); new P(); new P();",
+        "debugger;",
+      ]);
+      expectRecords("class fields", report, ["DA:2,3", "DA:3,1", "DA:5,1", "DA:6,1", "LF:4", "LH:4"]);
+      const directive = await runCoverage("directive", ["'use strict';", "debugger;"]);
+      expectRecords("directive", directive, ["DA:2,1", "LF:1", "LH:1"]);
+    }
+
+    console.log("Loader: coverage keeps every path of branches the compiler could decide...");
+    // verbose is a constant false and missing a constant null, so the compiler could settle each of these. A
+    // counter stays on each path the code runs and every path stays registered: a path never run has 0.
+    // pick(1) runs line 4's alternate; evaluates the left leaf of line 5's && and the right leaf of the ||
+    // (line 6) and ?? (line 7); runs the alternate of line 8's conditional and of line 9's if (whose test, a
+    // logical chain, is its own branch, evaluating only its left leaf); evaluates both leaves of line 10's ||
+    // (false is not short-circuited: verbose is false); and takes line 11's consequent.
+    {
+      const report = await runCoverage("constant-branches", [
+        "const pick = (value) => {",
+        "  const verbose = false;",
+        "  const missing = null;",
+        '  const label = verbose ? "long" : "short";',
+        "  const shown = verbose && value;",
+        "  const fallback = verbose || value;",
+        '  const chosen = missing ?? "none";',
+        "  const size = (verbose ? 1 : 2) + 1;",
+        "  if (verbose && value) { return label; }",
+        "  const negated = !(verbose || false);",
+        '  const literal = true ? "yes" : "no";',
+        "  return [label, shown, fallback, chosen, size, negated, literal].join();",
+        "};",
+        "console.log(pick(1));",
+      ]);
+      expectEqual("constant branches", report.ordered(report.file.b), [
+        [0, 1], [1, 0], [1, 1], [1, 1], [0, 1], [0, 1], [1, 0], [1, 1], [1, 0],
+      ]);
+      expectRecords("constant branches", report, ["BRDA:4,0,0,0", "BRDA:4,0,1,1", "BRDA:9,5,1,1", "BRDA:9,6,1,0", "BRF:18", "BRH:12"]);
+      // with strict types `flag && true` can read as `flag`: both leaves are still counted
+      const strict = await runCoverage("strict-type-branches", [
+        "const check = (value) => {",
+        "  const flag = value > 0;",
+        "  const both = flag && true;",
+        "  const either = flag || false;",
+        "  return [both, either].join();",
+        "};",
+        "console.log(check(1));",
+      ], [...coverageFlags, "--strict-types"]);
+      expectEqual("strict-type branches", strict.ordered(strict.file.b), [[1, 1], [1, 0]]);
+    }
+
+    console.log("Loader: coverage of with statements, using declarations and exported declarations...");
+    {
+      const withReport = await runCoverage("with-statement", [
+        "var o = { a: 1 };",
+        "with (o) { a; }",
+      ]);
+      // var init, with, the expression statement in its block
+      expectEqual("with statements", withReport.ordered(withReport.file.s), [1, 1, 1]);
+      const moduleReport = await runCoverage("module-declarations", [
+        "export const a = 1, b = () => 2;",
+        "export function ef() { return 3; }",
+        "export default function () { return 4; }",
+        "{ using r = null; }",
+      ]);
+      // the initializers of a and b, then b's body, ef's and the default function's returns (never called), the
+      // using declarator's initializer
+      expectEqual("module statements", moduleReport.ordered(moduleReport.file.s), [1, 1, 0, 0, 0, 1]);
+      expectRecords("module functions", moduleReport, ["FN:1,(anonymous_0)", "FN:2,ef", "FN:3,(anonymous_2)", "FNF:3", "FNH:0"]);
+    }
+
+    console.log("Loader: coverage JSON is Istanbul's coverage map...");
+    // Per file: path, statementMap, fnMap (name, decl, loc, line), branchMap (type, loc, locations, line), s, f
+    // and b, keyed "0", "1", ...; locations are Babel's (line 1-based, column 0-based, end exclusive).
+    {
+      const report = await runCoverage("istanbul-json", [
+        "const g = (a) => a ? 1 : 2;",
+        "g(1);",
+      ]);
+      expectEqual("file keys", Object.keys(report.file), ["path", "statementMap", "fnMap", "branchMap", "s", "f", "b"]);
+      expectEqual("statementMap", report.file.statementMap, {
+        "0": { start: { line: 1, column: 10 }, end: { line: 1, column: 26 } },
+        "1": { start: { line: 1, column: 17 }, end: { line: 1, column: 26 } },
+        "2": { start: { line: 2, column: 0 }, end: { line: 2, column: 5 } },
+      });
+      expectEqual("s", report.file.s, { "0": 1, "1": 1, "2": 1 });
+      expectEqual("fnMap", report.file.fnMap, {
+        "0": {
+          name: "(anonymous_0)",
+          decl: { start: { line: 1, column: 10 }, end: { line: 1, column: 11 } },
+          loc: { start: { line: 1, column: 17 }, end: { line: 1, column: 26 } },
+          line: 1,
+        },
+      });
+      expectEqual("f", report.file.f, { "0": 1 });
+      expectEqual("branchMap", report.file.branchMap, {
+        "0": {
+          loc: { start: { line: 1, column: 17 }, end: { line: 1, column: 26 } },
+          type: "cond-expr",
+          locations: [
+            { start: { line: 1, column: 21 }, end: { line: 1, column: 22 } },
+            { start: { line: 1, column: 25 }, end: { line: 1, column: 26 } },
+          ],
+          line: 1,
+        },
+      });
+      expectEqual("b", report.file.b, { "0": [1, 0] });
+    }
+
+    console.log("Loader: coverage lcov records come in lcovonly's order...");
+    {
+      const report = await runCoverage("lcov-order", [
+        "const g = (a) => a ? 1 : 2;",
+        "g(1);",
+      ]);
+      const kinds = report.records.map((r) => r.split(":")[0]);
+      const firstOf = (kind: string) => kinds.indexOf(kind);
+      const order = ["TN", "SF", "FN", "FNF", "FNH", "FNDA", "DA", "LF", "LH", "BRDA", "BRF", "BRH", "end_of_record"];
+      for (let i = 1; i < order.length; i++) {
+        if (!(firstOf(order[i]) > firstOf(order[i - 1]))) {
+          throw new Error(`lcov record ${order[i]} should follow ${order[i - 1]}, got:\n${report.lcov}`);
         }
       }
-      if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {
-        throw new Error(`${name}: a decided and an undecided form should report the same branches, got:\n${reports.decided}\nand:\n${reports.undecided}`);
-      }
-    }
-
-    console.log("Loader: function coverage...");
-    const functionSourcePath = join(tmp, "function-coverage.js");
-    writeFileSync(
-      functionSourcePath,
-      [
-        "const called = () => 1;",
-        "const neverCalled = () => 2;",
-        "called();",
-        "",
-      ].join("\n"),
-    );
-    const functionLcovPath = join(tmp, "function.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
-    const functionLcov = readFileSync(functionLcovPath, "utf-8");
-    if (!functionLcov.includes("FN:1,called")) throw new Error("LCOV should define called");
-    if (!functionLcov.includes("FN:2,neverCalled")) throw new Error("LCOV should define neverCalled");
-    if (!functionLcov.includes("FNDA:1,called")) throw new Error("LCOV should count called once");
-    if (!functionLcov.includes("FNDA:0,neverCalled")) throw new Error("LCOV should retain the uncalled function");
-    if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
-      throw new Error("LCOV should report function totals");
-    }
-    const functionNames = [...functionLcov.matchAll(/^FNDA:\d+,(.*)$/gm)]
-      .map((match) => match[1])
-      .sort();
-    if (functionNames.join(",") !== "called,neverCalled") {
-      throw new Error(`LCOV should contain only user functions, got ${functionNames.join(", ")}`);
-    }
-    const functionJsonPath = join(tmp, "function-coverage.json");
-    await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
-    const functionFile = coverageEntryFor(functionJsonPath, functionSourcePath);
-    if (!functionFile) throw new Error("JSON coverage should contain the source file");
-    const functionIdsByName = Object.fromEntries(
-      Object.entries(functionFile.fnMap).map(([id, entry]: [string, any]) => [entry.name, id]),
-    );
-    if (functionFile.f[functionIdsByName.called] !== 1) {
-      throw new Error("JSON f should count called once");
-    }
-    if (functionFile.f[functionIdsByName.neverCalled] !== 0) {
-      throw new Error("JSON f should retain neverCalled with zero hits");
-    }
-
-    console.log("Loader: generator function coverage...");
-    const generatorSourcePath = join(tmp, "generator-function-coverage.js");
-    writeFileSync(
-      generatorSourcePath,
-      [
-        "function* generatorFunction() { yield 1; }",
-        "function* generatorWithDefault(value = 2) { yield value; }",
-        "function* nestedGenerator() {",
-        "  function innerDeclaration() { return 6; }",
-        "  yield 0;",
-        "  const innerArrow = () => 7;",
-        "  innerDeclaration();",
-        "  innerArrow();",
-        "  yield 1;",
-        "}",
-        "async function* asyncGeneratorFunction() { yield 3; }",
-        "const holder = {",
-        "  *generatorMethod() { yield 4; },",
-        "  async *asyncGeneratorMethod() { yield 5; },",
-        "};",
-        "const generator = generatorFunction();",
-        "generator.next();",
-        "generator.next();",
-        "const defaultGenerator = generatorWithDefault();",
-        "defaultGenerator.next();",
-        "const nested = nestedGenerator();",
-        "nested.next();",
-        "nested.next();",
-        "nested.next();",
-        "asyncGeneratorFunction();",
-        "holder.generatorMethod();",
-        "holder.asyncGeneratorMethod();",
-        "",
-      ].join("\n"),
-    );
-    const generatorLcovPath = join(tmp, "generator-function.lcov");
-    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
-    const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
-    for (const name of [
-      "generatorFunction",
-      "generatorWithDefault",
-      "nestedGenerator",
-      "innerDeclaration",
-      "innerArrow",
-      "asyncGeneratorFunction",
-      "generatorMethod",
-      "asyncGeneratorMethod",
-    ]) {
-      if (!generatorLcov.includes(`FNDA:1,${name}`)) {
-        throw new Error(`LCOV should count ${name} once`);
-      }
-    }
-
-    console.log("Loader: uncalled declarations keep names...");
-    const declarationSourcePath = join(tmp, "function-declaration-coverage.js");
-    writeFileSync(
-      declarationSourcePath,
-      [
-        "function ordinaryNeverCalled() { return 1; }",
-        "function* generatorNeverCalled() { yield 2; }",
-        "",
-      ].join("\n"),
-    );
-    const declarationLcovPath = join(tmp, "function-declaration.lcov");
-    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
-    const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
-    for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
-      if (!declarationLcov.includes(`FNDA:0,${name}`)) {
-        throw new Error(`LCOV should retain the name of ${name}`);
-      }
-    }
-
-    console.log("Loader: LCOV counts a static field's function value, not its initializer...");
-    // A static field initializer runs as a function of its own, at the same
-    // position as an arrow or function it returns. Only the functions written
-    // in the source are counted.
-    const staticFieldSourcePath = join(tmp, "static-field-functions.js");
-    writeFileSync(
-      staticFieldSourcePath,
-      [
-        "class C {",
-        "  static never = () => 4;",
-        "  static neverFn = function named() { return 5; };",
-        "  static called = () => 6;",
-        "  static value = 7;",
-        "}",
-        "C.called();",
-        "",
-      ].join("\n"),
-    );
-    const staticFieldLcovPath = join(tmp, "static-field-functions.lcov");
-    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${staticFieldLcovPath} ${staticFieldSourcePath}`.quiet();
-    const staticFieldLcov = readFileSync(staticFieldLcovPath, "utf-8");
-    for (const record of ["FNDA:0,never", "FNDA:0,named", "FNDA:1,called", "FNF:3", "FNH:1"]) {
-      if (!staticFieldLcov.split(/\r?\n/).includes(record))
-        throw new Error(`Static field LCOV should contain ${record}: ${staticFieldLcov}`);
-    }
-
-    console.log("Loader: LCOV function names cannot inject tracefile records...");
-    const escapedFunctionNameSourcePath = join(tmp, "escaped-function-name.js");
-    writeFileSync(
-      escapedFunctionNameSourcePath,
-      // Static string-literal keys, not computed ones: a computed method key
-      // is not known at compile time and the function is named
-      // "<method>@<line>:<column>". Literal keys carry the real CR/LF and
-      // backslash characters this escaping check needs.
-      [
-        "const holder = {",
-        '  "line\\r\\nbreak"() { return 1; },',
-        '  "line\\\\r\\\\nbreak"() { return 2; },',
-        "};",
-        'holder["line\\r\\nbreak"]();',
-        'holder["line\\\\r\\\\nbreak"]();',
-        "",
-      ].join("\n"),
-    );
-    const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
-    const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
-    const escapedFunctionRecords = escapedFunctionNameLcov.split(/\r?\n/);
-    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
-        !escapedFunctionRecords.includes("FNDA:1,line\\r\\nbreak")) {
-      throw new Error("LCOV should escape carriage returns and newlines in function names");
-    }
-    if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\\\r\\\\nbreak$/.test(line)) ||
-        !escapedFunctionRecords.includes("FNDA:1,line\\\\r\\\\nbreak")) {
-      throw new Error("LCOV should preserve literal backslashes in function names");
-    }
-    if (escapedFunctionRecords.includes("break") ||
-        escapedFunctionRecords.filter((line) => line.startsWith("FNDA:1,line")).length !== 2) {
-      throw new Error("LCOV function names must not collide or create extra tracefile records");
+      // a path never taken prints its count, 0, not a dash
+      expectRecords("lcov order", report, ["BRDA:1,0,0,1", "BRDA:1,0,1,0"]);
     }
 
     console.log("TestRunner: parallel function coverage merges workers...");
@@ -6338,8 +6272,11 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const workerLcovPath = join(tmp, "function-workers.lcov");
     await $`${TESTRUNNER} ${workerOnePath} ${workerTwoPath} --jobs=2 --no-progress --coverage --coverage-format=lcov --coverage-output=${workerLcovPath}`.quiet();
     const workerLcov = readFileSync(workerLcovPath, "utf-8");
-    if (!workerLcov.includes("FNDA:1,workerOne") || !workerLcov.includes("FNDA:1,workerTwo")) {
-      throw new Error("Parallel LCOV should merge function hits from both workers");
+    // Each file holds two functions, the test's arrow and the arrow inside it, and each runs once; a merge that
+    // lost a worker would lose its file's record.
+    const workerRecords = workerLcov.split("end_of_record").filter((record) => record.includes("SF:"));
+    if (workerRecords.length !== 2 || !workerRecords.every((record) => /^FNF:2$/m.test(record) && /^FNH:2$/m.test(record))) {
+      throw new Error(`Parallel LCOV should merge function hits from both workers, got:\n${workerLcov}`);
     }
 
     console.log("Loader: coverage order-independent flags...");
@@ -6391,12 +6328,14 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       if (!helper) {
         throw new Error("Coverage should report the imported module helper.js");
       }
+      // classify and unused are arrows bound by a declarator: anonymous for Istanbul, in source order; classify ran
+      // twice, unused never.
       const helperFunctionNames = Object.values(helper.fnMap)
         .map((fn: any) => fn.name)
         .sort();
-      if (!helperFunctionNames.includes("classify") || !helperFunctionNames.includes("unused")) {
+      if (helperFunctionNames.join(",") !== "(anonymous_0),(anonymous_1)" || helper.f["0"] !== 2 || helper.f["1"] !== 0) {
         throw new Error(
-          `Coverage should report imported-module functions, got ${helperFunctionNames.join(", ")}`,
+          `Coverage should report imported-module functions, got ${helperFunctionNames.join(", ")} ${JSON.stringify(helper.f)}`,
         );
       }
       if (Object.keys(helper.branchMap).length === 0) {
@@ -6520,54 +6459,6 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
 
-    console.log("Loader: coverage reports functions at their declaration line...");
-    // LCOV FN: records where a function is declared. The bytecode VM used to
-    // report the first executed instruction instead, which lands on the body's
-    // first line for any function whose body starts on a later line.
-    const declLinePath = join(tmp, "declaration-line.js");
-    writeFileSync(
-      declLinePath,
-      [
-        "const oneLine = () => 1;",
-        "const multi = (a) => {",
-        "  const b = a + 1;",
-        "  return b;",
-        "};",
-        "oneLine();",
-        "multi(1);",
-        "",
-      ].join("\n"),
-    );
-    const declLineLcovPath = join(tmp, "declaration-line.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
-    const declLineRecords = readFileSync(declLineLcovPath, "utf-8").split(/\r?\n/);
-    for (const expected of ["FN:1,oneLine", "FN:2,multi", "FNDA:1,oneLine", "FNDA:1,multi"]) {
-      if (!declLineRecords.includes(expected)) {
-        throw new Error(
-          `LCOV should report ${expected}, got ${declLineRecords.filter((l) => l.startsWith("FN")).join(" ")}`,
-        );
-      }
-    }
-    // The per-call line hit still belongs to the first executed body line.
-    if (!declLineRecords.includes("DA:3,1")) {
-      throw new Error("Function body's first line should still record a line hit");
-    }
-
-    // Every call is a line hit of its own (each frame entering a line counts
-    // once, docs/testing.md): a one-line arrow declared once and called five
-    // times from another line is hit six times, even when nothing else is
-    // recorded between the calls (the calling line's frame stays on its line).
-    const repeatedPath = join(tmp, "repeated-calls.js");
-    writeFileSync(repeatedPath, "const f = () => 1;\nfor (const _ of [1, 2, 3, 4, 5]) f();\n");
-    const repeatedLcovPath = join(tmp, "repeated-calls.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${repeatedLcovPath} ${repeatedPath}`.quiet();
-    const repeatedRecords = readFileSync(repeatedLcovPath, "utf-8").split(/\r?\n/);
-    for (const expected of ["DA:1,6", "DA:2,1", "FNDA:5,f"]) {
-      if (!repeatedRecords.includes(expected)) {
-        throw new Error(`LCOV should report ${expected} for repeated calls, got ${repeatedRecords.filter((l) => l.startsWith("DA") || l.startsWith("FNDA")).join(" ")}`);
-      }
-    }
-
     console.log("TestRunner: coverage hit counts are identical across --jobs...");
     const jobsDir = join(tmp, "coverage-jobs");
     mkdirSync(jobsDir, { recursive: true });
@@ -6614,9 +6505,10 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       if (!shared) throw new Error(`--jobs=${jobs} coverage should report the shared module`);
       jobsCounts[jobs] = JSON.stringify({ s: shared.s, b: shared.b, f: shared.f });
     }
-    // A statement executed 5 times must report 5, not "2 workers touched it".
-    if (JSON.parse(jobsCounts["1"]).s["2"] !== 5) {
-      throw new Error(`--jobs=1 should count the shared statement 5 times, got ${jobsCounts["1"]}`);
+    // A statement executed 5 times must report 5, not "2 workers touched it": the arrow's body is the
+    // declarator `const doubled = n * 2` (statement 1) and the return (statement 2), run by the 5 calls.
+    if (JSON.parse(jobsCounts["1"]).s["1"] !== 5 || JSON.parse(jobsCounts["1"]).s["2"] !== 5) {
+      throw new Error(`--jobs=1 should count the shared statements 5 times, got ${jobsCounts["1"]}`);
     }
     for (const jobs of ["2", "4"]) {
       if (jobsCounts[jobs] !== jobsCounts["1"]) {
@@ -6688,7 +6580,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         counts[jobs] = JSON.stringify({ s: shared.s, b: shared.b, f: shared.f });
       }
       // The shared arrow runs 5 times in total across the two entry files.
-      if (JSON.parse(counts["1"]).f["1"] !== 5)
+      if (JSON.parse(counts["1"]).f["0"] !== 5)
         throw new Error(`Loader coverage (${label}) --jobs=1 should count 5 function hits, got ${counts["1"]}`);
       for (const jobs of ["2", "4"])
         if (counts[jobs] !== counts["1"])
@@ -6766,7 +6658,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
     const jsxLcov = readFileSync(jsxLcovPath, "utf-8");
     if (!jsxLcov.includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
-    if (!jsxLcov.includes("FN:2,Greet")) throw new Error("JSX LCOV should map Greet to original line 2");
+    if (!jsxLcov.includes("FN:2,(anonymous_1)")) throw new Error("JSX LCOV should map the Greet arrow to original line 2");
 
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
     await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();

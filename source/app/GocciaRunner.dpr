@@ -1016,14 +1016,14 @@ begin
     ConfigureModuleResolver(Resolver, AFileName, EngineOptions.ImportMap.ValueOr(''),
       EngineOptions.Aliases.Values, AliasBaseDirectory);
     HeapStart := GetHeapStatus;
-    { --coverage: this thread's tracker, the file registered with its executable lines in the run's }
+    { --coverage: this thread's tracker, the file registered in the run's }
     if Assigned(FCoverageMain) then
     begin
       TGocciaCoverageTracker.Initialize;
       TGocciaCoverageTracker.Instance.Enabled := True;
       EnterCriticalSection(FCoverageLock);
       try
-        FCoverageMain.RegisterSourceFile(AFileName, CountExecutableLines(ASource));
+        FCoverageMain.RegisterSourceFile(AFileName);
       finally
         LeaveCriticalSection(FCoverageLock);
       end;

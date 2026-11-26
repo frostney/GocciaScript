@@ -177,9 +177,12 @@ begin
     CS := C;
     C := InsCU(Ins_);
     case Op of
-      opNop, opLoadHome, opLoadNewTarget, opRetUndef, opImportMeta, opLoadCallee, opCovLine: ;
+      { the coverage counters' indices are checked where they count (TGocciaFileCoverage) }
+      opNop, opRetUndef, opCovStmt, opCovBranch, opCovFn: ;
+      { a register written from the frame or the module }
+      opLoadHome, opLoadNewTarget, opImportMeta, opLoadCallee: Reg(A);
       opMov, opNeg, opBitNot, opNot, opTypeof, opToNum, opToNumeric, opToStr, opWithObj, opSuperBase:
-        begin Reg(A); if not (Op in [opLoadHome, opLoadNewTarget, opWithObj]) then Reg(B); end;
+        begin Reg(A); if Op <> opWithObj then Reg(B); end;
       opLoadK: begin Reg(A); Konst(C); end;
       opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opRet, opThrow, opCheckThis,
       opIterClose, opIterCheckObj:
