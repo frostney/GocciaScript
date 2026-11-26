@@ -1,4 +1,6 @@
-#!/usr/bin/env -S instantfpc --set-cache=./build/instantfpc -Fu./source/shared
+#!/usr/bin/env -S instantfpc -Fu./source/shared '--set-cache=./build/instantfpc cache'
+{ The shebang compiles this script into the checkout's own "build/instantfpc cache";
+  docs/build-system.md (Prerequisites) explains the quoted name with a space. }
 
 {$mode delphi}
 {$H+}

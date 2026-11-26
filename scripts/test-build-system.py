@@ -166,4 +166,33 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
     assert not (root / "build/compiled/targets/runner/keep.ppu").exists()
     assert (root / "build/compiled/keep.ppu").exists()
 
-print("Build-system checks passed (real FPC selection, parallel isolation, clean and failures)")
+# Two checkouts launch the real ./build.pas, shebang and all, at the same
+# moment. instantfpc caches a compiled script under its file name, so a cache
+# the checkouts shared made one run fail before build.pas started, or compile
+# and run the other checkout's script. The second checkout's path has an
+# apostrophe, which instantfpc's compiler command line survives only because
+# the cache directory's name has a space, so instantfpc quotes it.
+if not shutil.which("instantfpc"):
+    raise SystemExit("instantfpc is required")
+with tempfile.TemporaryDirectory(prefix="goccia-build-cache-") as directory:
+    checkouts = [Path(directory) / "plain", Path(directory) / "O'Brien" / "marked"]
+    for checkout in checkouts:
+        (checkout / "source/units").mkdir(parents=True)
+        (checkout / "source/shared").symlink_to(REPO / "source/shared")
+        script = (REPO / "build.pas").read_text()
+        if checkout.name == "marked":
+            head, _, tail = script.rpartition("\nbegin\n")
+            script = head + "\nbegin\n  WriteLn('marked checkout');\n" + tail
+        (checkout / "build.pas").write_text(script)
+        (checkout / "build.pas").chmod(0o755)
+    launches = [subprocess.Popen(["./build.pas", "nosuchtarget"], cwd=checkout,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True) for checkout in checkouts]
+    outputs = [launch.communicate(timeout=600)[0] for launch in launches]
+    for checkout, output in zip(checkouts, outputs):
+        assert "Unknown build target: nosuchtarget" in output, (checkout, output)
+        assert (checkout / "build/instantfpc cache/build").exists(), checkout
+    assert "marked checkout" not in outputs[0], outputs[0]
+    assert "marked checkout" in outputs[1], outputs[1]
+
+print("Build-system checks passed (real FPC selection, parallel isolation, clean, failures and per-checkout script caches)")
