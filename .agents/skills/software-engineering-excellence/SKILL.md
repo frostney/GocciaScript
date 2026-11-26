@@ -8,7 +8,7 @@ description: >-
 license: Unlicense OR MIT
 metadata:
   agents-role: ambient
-  agents-text: Base each material claim about current project state or a completed action on a file, command result or page read this session, or on what the person said, and keep what was observed apart from what was inferred; keep the agreed scope, re-run checks that return nothing, finish verified work, and stop only for a secret, a paid or account action, or the person's decision.
+  agents-text: Base each material claim about current project state or a completed action on a file, command result or page read this session, or on what the person said, and keep what was observed apart from what was inferred; keep the agreed scope, re-run checks that return nothing, and finish verified work; when a worker hands back, read its change or evidence before accepting its report and give each item it left an owner and a next action; file a defect you find that the work neither caused nor addresses and deliver its fix, and report it without filing only when the fix needs the person's decision or the work may not write to its repository; stop only for a secret, a paid or account action, or the person's decision.
 ---
 
 # Software engineering excellence
@@ -49,9 +49,11 @@ Implementation authority persists across questions, corrections, diagnoses,
 worker returns and compaction. Update the affected decision or requirement while
 retaining the parent objective. A question calls for an answer; it does not
 silently cancel the remaining work. Follow an explicit change of direction.
-Before acting on a request, restate its literal ask in one line. When offering
-options, include the direction the person named; never swap in a different
-approach without saying so.
+Before acting on a request, restate its literal ask in one line. Carry each item
+at the reach its text states; narrowing one, for example from "everywhere" to
+some surfaces, is the person's decision. When offering options, include the
+direction the person named; never swap in a different approach without saying
+so.
 
 When a check fails, diagnose it and fix an established in-scope cause. Use the
 registered `diagnosing-bugs` skill when available and relevant. After a
@@ -121,10 +123,10 @@ unresolved concerns.
 Keep independent review judgment. Never weaken coverage or hide a failure to
 obtain a pass. Diagnose an observed anomaly that affects acceptance. Fix every
 instance of the defect the change addresses in this change or a stacked layer;
-never defer in-scope work to an issue. Record a different defect, even one
-nearby, as a follow-up in the handoff, or in the harness's task mechanism where
-one exists, without asking; open an external issue only when the work's
-authority or repository policy covers it.
+never defer in-scope work to an issue. A defect the change itself causes is in
+scope wherever it shows up, including in a file another lane owns. A different
+defect, even one nearby, is
+[filed and fixed as its own work item](#defects-the-work-did-not-cause).
 
 Write regression tests for observable behavior or consequential invariants,
 with expectations derived from independent requirements, never from the
@@ -149,6 +151,27 @@ impossible, and state why. Keep implementation, local validation, external
 validation and publication status distinct. Read a gate result before performing the dependent
 action. Capture shell exit status before another command can overwrite it.
 
+### Defects the work did not cause
+
+When you find a different defect, one the work neither caused nor addresses,
+file it and fix it without asking. File its own issue through `/create-issue`
+in the repository that owns the defect, or reuse the open issue that already
+tracks it, and deliver its fix through `/deliver` as a separate work item, in
+this pass or in a lane started for it. Lack of time, scope or a free lane does not change this. The fix stays
+outside this change's completion bar unless the defect blocks the requested
+result.
+
+Report the defect to the person without filing it only when its fix needs their
+[decision](#blockers-and-decisions), or when the work may not write to the
+repository that owns it, such as assessment-only work or a repository outside
+its authority; name that decision or the missing authority. Never settle such a
+defect as a follow-up, and never offer to file an issue without its fix.
+
+A defect is something wrong now, such as failing behavior, a broken check, or a
+comment, document or rule that contradicts the code. An improvement to
+something that works is not a defect: it stays outside the completion bar and
+this rule does not file it.
+
 ## Performance and maintainability
 
 Consider both product performance and time from an edit to trustworthy
@@ -171,24 +194,39 @@ host supports delegation; keep small or tightly coupled work local.
 `no-subagents` or an equivalent user instruction keeps all of the work local.
 An applicable orchestrator owns its more specific coordination contract.
 
-Give each worker the selected decisions, repository and work-item identity,
-starting state, owned scope, dependencies, required behavior and gates. Prefer
-an isolated context; include recent conversation only when needed to understand
-the deliverable. Request an outcome, changed state, observed validation,
-limitations and facts needed by dependent work. Keep investigation logs local
-to the worker. Bring material choices or conflicting evidence to the coordinator.
-A packet that includes publication or merge follows the delegation rule in
-[deliver](../deliver/SKILL.md).
+When you brief a worker, give it the [worker
+packet](references/workstream-continuity.md#worker-packet): the selected
+decisions, repository and work-item identity, starting state, owned scope,
+dependencies, required behavior and gates, and who repairs what its change
+breaks outside that scope: by default the worker, with the smallest edit called
+out in its result, or the exact edit returned when that edit would collide with
+another lane's open work. Prefer an isolated context; include recent
+conversation only when needed to understand the deliverable. Request the [result
+envelope](references/workstream-continuity.md#result-envelope). Keep
+investigation logs local to the worker. Bring material choices or conflicting
+evidence to the coordinator. A packet that includes publication or merge follows
+the delegation rule in [deliver](../deliver/SKILL.md).
 
-While workers run, continue the coordinator's work that does not depend on
-their results. Check each returned result's evidence before accepting and
-integrating it. Worker completion closes its lane, not the parent objective.
-For long commands or pending worker results, apply the shared
-[long-command and lane rules](../delivery-wait/SKILL.md#long-commands-and-delegated-lanes):
-record the owner and resume action, then end the turn when only waits remain.
-Continue the parent's remaining authorized work.
-If isolated workers are unavailable, disclose the limitation and use an allowed
-local route; do not claim delegation occurred or invent unavailable telemetry.
+While workers run, continue the coordinator's work that does not depend on their
+results. When a worker hands back, before you integrate or report its result,
+read its change or evidence and test its main claim against it yourself: trace
+the behavior it describes through that change, say whether it holds, and correct
+it where it does not. A worker's report is a lead, not evidence, and sending a
+claim back to the worker unverified does not test it. Then give every remaining
+obligation, whether the worker returned it, decided against it, or you found it
+in its change, one disposition: fixed, sent to a named lane, its own or a
+stacked PR opened, blocked by a named external dependency, or brought to the
+person as a decision. A different defect, one the work neither caused nor
+addresses, is settled as
+[Defects the work did not cause](#defects-the-work-did-not-cause) says. No item
+is settled as a follow-up.
+Worker completion closes its lane, not the parent objective. For long commands
+or pending worker results, apply the shared [long-command and lane
+rules](../delivery-wait/SKILL.md#long-commands-and-delegated-lanes): record the
+owner and resume action, then end the turn when only waits remain. Continue the
+parent's remaining authorized work. If isolated workers are unavailable,
+disclose the limitation and use an allowed local route; do not claim delegation
+occurred or invent unavailable telemetry.
 
 ## Communication and situational depth
 

@@ -52,12 +52,16 @@ than silently overriding it or asking the same question again.
 
 Default independent workers to the host equivalent of no inherited conversation
 history. A packet contains only applicable decision IDs and selected contracts,
-issue or PR identity, branch and exact head, owned scope, dependencies,
-requirements, applicable gates, capability tier, context envelope, and
-the required structured transition output. Include a small recent-turn slice
-only when immediately relevant. Full-history inheritance requires a recorded,
-scoped exception. Publication and merge in a packet follow the delegation rule
-in [deliver](../../deliver/SKILL.md).
+issue or PR identity, branch and exact head, owned scope, who repairs what the
+lane's change breaks outside that scope, dependencies, requirements, applicable
+gates, capability tier, context envelope, and the required structured transition
+output. Include a small recent-turn slice only when immediately relevant.
+Full-history inheritance requires a recorded, scoped exception. Publication and
+merge in a packet follow the delegation rule in
+[deliver](../../deliver/SKILL.md). When a lane hands back, settle its result as
+[Coordinating
+deliverables](../../software-engineering-excellence/SKILL.md#coordinating-deliverables)
+describes before integrating it.
 
 Before starting a worker, identify its actual model from host metadata. Deliver
 the applicable role, scope, authority, completion condition, and required skill
@@ -129,6 +133,6 @@ report the capability as unsupported.
 Apply the shared
 [long-command and lane rules](../../delivery-wait/SKILL.md#long-commands-and-delegated-lanes)
 to every worker packet, including who owns a pending command after its turn
-ends. When only waits remain, checkpoint and end the turn; use the stated
-bounded-check fallback only when the host cannot notify. Never substitute
+ends. When only waits remain, checkpoint and end the turn once each has a live
+wake; use the stated bounded-check fallback only when the host cannot notify. Never substitute
 repeated model inferences for waiting.

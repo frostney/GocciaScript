@@ -23,7 +23,7 @@ Read each as "for the work I am doing right now…"
 ## Quality
 
 - **8.** Is the result production-ready, correct on every real path, and clean enough to need little explanation?
-- **9.** Did I fix problems that invalidate the authorized outcome and record unrelated findings without expanding scope?
+- **9.** Did I fix problems that invalidate the authorized outcome, [file and fix](../SKILL.md#defects-the-work-did-not-cause) each other defect I found as its own work item, and keep improvements out of scope?
 - **10.** Did I fix at the *right layer* and leave the structure sounder rather than plaster over a symptom and let the bar drift down one tolerated compromise at a time?
 - **11.** For new or sizable work, did I start from a thin end-to-end slice that actually runs, deployed or live where a target exists, and grow it in runnable increments rather than integrating isolated layers late?
 
