@@ -299,6 +299,28 @@ Linux and macOS the unit installs `cwstring`, which converts through iconv, and
 in front of it a direct conversion for ASCII text to and from UTF-8 or
 US-ASCII, which produces the same bytes without an iconv call.
 
+### Starting a Child Process on Unix
+
+FPC's `TProcess` forks and execs without closing the descriptors the child
+inherits, and the RTL opens files and `TProcess` creates pipes without
+`O_CLOEXEC`. Every descriptor the parent has open at the fork, in any thread,
+stays open in the child until it exits. A `TFileStream` holds an `flock` on
+its descriptor, so the parent's next exclusive open of that file (`fmCreate`,
+`TStrings.SaveToFile`) fails with `EAGAIN` ("Try again") while the child runs.
+The parent's end of another child's pipe is inherited as well, so a child
+reading its standard input sees end of file only once every child started
+after it has exited.
+
+Start processes with `TChildProcess` from `source/shared/ChildProcess.pas`.
+It closes every descriptor above standard error in the child, just before
+exec. Listing the unit in a program's uses also makes `RunCommand` and its
+variants create a `TChildProcess`. The child still holds the parent's
+descriptors between the fork and that close, so a parent that reopens a file
+exclusively right after starting a process can still meet `EAGAIN` for that
+moment, but no longer for the child's lifetime. Windows needs nothing:
+`TProcess` makes only the child's ends of its pipes inheritable there, and the
+RTL opens files non-inheritable.
+
 ## Fuzzing and Memory Safety
 
 `GocciaFuzzHarness` drives a single input through lex, parse, bytecode

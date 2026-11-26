@@ -9,6 +9,7 @@ uses
   Process,
   SysUtils,
 
+  ChildProcess in 'source/shared/ChildProcess.pas',
   FileUtils in 'source/shared/FileUtils.pas',
   FPCSafeSEH in 'source/shared/FPCSafeSEH.pas',
   ProcessorDetection in 'source/shared/ProcessorDetection.pas';

@@ -104,6 +104,7 @@ uses
   StrUtils,
   SysUtils,
 
+  ChildProcess,
   FileUtils,
   Pipes,
   ProcessorDetection,
@@ -144,7 +145,7 @@ function RunComplianceProcess(const AExecutable: string;
   const ACurrentDirectory: string): TComplianceProcessResult;
 var
   I: Integer;
-  ProcessRunner: TProcess;
+  ProcessRunner: TChildProcess;
   StartedAt: QWord;
   StdOutStream, StdErrStream: TMemoryStream;
 begin
@@ -156,7 +157,7 @@ begin
   Result.StdErrText := '';
   Result.ErrorMessage := '';
 
-  ProcessRunner := TProcess.Create(nil);
+  ProcessRunner := TChildProcess.Create(nil);
   StdOutStream := TMemoryStream.Create;
   StdErrStream := TMemoryStream.Create;
   try
