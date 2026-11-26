@@ -36,8 +36,8 @@ the sources and pinned toolchain objects must remain available for checking.
 
 ## Reviewed registrations
 
-The manifest records the exact `-iW` version (`3.3.1+8`) and complete object
-SHA-256 values from the `3.3.1-b8` toolchain release. It covers supported
+The manifest records the exact `-iW` version (`3.3.1+9`) and complete object
+SHA-256 values from the `3.3.1-b9` toolchain release. It covers supported
 linked units that register handlers as well as the objects defining them.
 The map supplies their final addresses; it is not the completeness proof.
 

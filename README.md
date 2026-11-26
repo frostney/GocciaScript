@@ -357,13 +357,13 @@ A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in
 SSE2, so it runs only on a Pentium 4, Athlon 64 or later CPU
 ([ADR 0191](docs/adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)).
 
-CI is pinned to the build `3.3.1-b8`. To build with the same compiler on Linux
+CI is pinned to the build `3.3.1-b9`. To build with the same compiler on Linux
 or macOS, install it next to any other FPC and put it first on `PATH`
 (Windows: see its README):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
-sh install.sh 3.3.1-b8
+sh install.sh 3.3.1-b9
 eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.3.1)"
 ```
 

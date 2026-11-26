@@ -27,7 +27,7 @@ env:
   # The frostney/fpc-toolchain build that build and build-main both install, so
   # the benchmark comparison measures the diff, not a compiler change. ci.yml
   # names the same one.
-  FPC_VERSION: "3.3.1-b8"
+  FPC_VERSION: "3.3.1-b9"
 
 jobs:
   build:

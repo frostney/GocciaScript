@@ -17,7 +17,7 @@ env:
   # gc-stress.yml and timezone-data-bump.yml name the same one; moving to
   # another build changes this line in each, and the Win32 SafeSEH manifest
   # (config/win32-safeseh) is audited again for it.
-  FPC_VERSION: "3.3.1-b8"
+  FPC_VERSION: "3.3.1-b9"
 
 jobs:
   # A newer push to main cancels the CI run of any older main commit as a whole,

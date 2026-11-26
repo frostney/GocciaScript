@@ -29,7 +29,10 @@ FPC-SAFESEH 2
 # (+0x18); __FPC_DEFAULT_HANDLER and CommonHandler pass it a constant. No
 # changed routine touches FS, the FS accesses are the same section by section,
 # and the handler symbols referenced are the same, so the audit holds.
-version 3.3.1+8
+#
+# 3.3.1+9 (patches 0142 and 0143: an inlined function's MM-register result):
+# each object below hashes the same as in 3.3.1+8, so the 3.3.1+8 audit holds.
+version 3.3.1+9
 target i386-win32
 
 object fcl-base/contnrs.o d428913b0f1e5df6305e272ea1f0761e4b1cc9920caa64d7bb259255c9e7482d
