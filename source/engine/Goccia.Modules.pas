@@ -160,6 +160,10 @@ type
   TModRec = class
     Id: Integer;
     Path: UnicodeString;
+    { 16.2.1.5 [[Realm]]: the realm the record was made in. A module record is one realm's, so another realm that
+      imports the same path (a ShadowRealm's importValue, a test262 realm's import) loads a record of its own: the
+      records are found by realm and path (FindModule). }
+    Realm: Integer;
     Info: TModuleInfo;
     Tpl: PFuncTemplate;
     Status: TModStatus;
@@ -179,6 +183,7 @@ type
     Superseded: Boolean;
     { the source it was compiled from (SourceHash), 0 for none }
     Hash: QWord;
+    constructor Create;
     destructor Destroy; override;
   end;
   TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS, rkSource);
@@ -214,6 +219,12 @@ threadvar
   { the evaluation promise of the entry RunModuleFile ran last }
   EntryEvalPromise: TValue;
   ResolveErrorV: TValue;
+
+constructor TModRec.Create;
+begin
+  inherited Create;
+  Realm := CurRealm;
+end;
 
 destructor TModRec.Destroy;
 begin
@@ -541,11 +552,12 @@ begin
   Result := ReadModuleBytes(Path, B);
 end;
 
+{ the running realm's record of the module at Path }
 function FindModule(const Path: UnicodeString): TModRec;
 var M: TModRec;
 begin
   for M in Mods do
-    if (M.Path = Path) and not M.Superseded then Exit(M);
+    if (M.Path = Path) and (M.Realm = CurRealm) and not M.Superseded then Exit(M);
   Result := nil;
 end;
 
