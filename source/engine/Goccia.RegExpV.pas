@@ -706,6 +706,13 @@ begin
   Result := True;
 end;
 
+{ protoFrom(newTarget, default): 10.1.14 GetPrototypeFromConstructor, with new.target's realm's default and a revoked
+  proxy's TypeError }
+function N_ProtoFrom(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := GetPrototypeFromConstructor(Arg(Args, Argc, 1), Arg(Args, Argc, 2), Res);
+end;
+
 function N_Alloc(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   Res := AllocRegExp(Args[1], ToBool(Arg(Args, Argc, 2)));
@@ -1310,6 +1317,7 @@ begin
   Nat('exec', N_Exec, 2);
   Nat('isRE', N_IsRE, 1);
   Nat('alloc', N_Alloc, 1);
+  Nat('protoFrom', N_ProtoFrom, 2);
   Nat('init', N_Init, 3);
   Nat('source', N_Source, 1);
   Nat('flags', N_Flags, 1);

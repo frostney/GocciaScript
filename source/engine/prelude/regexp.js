@@ -124,8 +124,8 @@
       P = pattern;
       F = flags;
     }
-    var proto = newTarget.prototype;
-    if (!isObject(proto)) proto = RP;
+    // 22.2.3.1 RegExpAlloc: GetPrototypeFromConstructor(newTarget, "%RegExp.prototype%"), once
+    var proto = N.protoFrom(newTarget, RP);
     return initialize(alloc(proto, newTarget === RegExpCtor), P, F);
   }
 
