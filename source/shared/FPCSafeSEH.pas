@@ -39,6 +39,7 @@ implementation
 uses
   Process,
 
+  ChildProcess,
   FileUtils,
   FPCRoutineSource,
   SHA256;
