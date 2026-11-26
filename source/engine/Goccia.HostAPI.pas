@@ -1701,12 +1701,77 @@ begin
   {$ENDIF}
 end;
 
-{ fileURL(path): the file: URL of a host path }
+{ a sandbox path, Path against the directory Base, as the sandbox's file system canonicalizes it
+  (TSandboxVirtualFileSystem.Normalize, without its root-clamp audit, since resolving a name reads nothing): '/'-rooted,
+  either slash a separator, '.' dropped and '..' stopping at the root; a trailing slash stays. A host path would get a
+  Windows drive from ExpandFileName. }
+function SandboxPathOf(const Path, Base: string): string;
+var Combined, Segment: string; Parts: TStringList; I, Start: Integer;
+begin
+  Combined := StringReplace(Path, '\', '/', [rfReplaceAll]);
+  if (Combined = '') or (Combined[1] <> '/') then
+    Combined := StringReplace(Base, '\', '/', [rfReplaceAll]) + '/' + Combined;
+  Parts := TStringList.Create;
+  try
+    Start := 1;
+    for I := 1 to Length(Combined) + 1 do
+      if (I > Length(Combined)) or (Combined[I] = '/') then
+      begin
+        Segment := Copy(Combined, Start, I - Start);
+        Start := I + 1;
+        if Segment = '..' then
+        begin
+          if Parts.Count > 0 then Parts.Delete(Parts.Count - 1);
+        end
+        else if (Segment <> '') and (Segment <> '.') then
+          Parts.Add(Segment);
+      end;
+    Result := '';
+    for I := 0 to Parts.Count - 1 do Result := Result + '/' + Parts[I];
+    { a directory named with a trailing slash keeps it, as a URL does }
+    if (Result = '') or (Combined[Length(Combined)] = '/') then Result := Result + '/';
+  finally
+    Parts.Free;
+  end;
+end;
+
+{ the file: URL of a module's path: a sandbox's own path, or a host path (FileURLOf) }
+function ModuleFileURL(const Path: string): string;
+begin
+  if SandboxActive then Result := FILE_URL_SCHEME + '//' + PercentEncodePath(SandboxPathOf(Path, '/'))
+  else Result := FileURLOf(Path);
+end;
+
+{ the directory of a module's path, for a relative specifier: a sandbox's own path, or a host path }
+function ModuleDirOf(const Path: string): string;
+begin
+  if SandboxActive then Result := SandboxPathOf(Path + '/..', '/')
+  else Result := IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(Path)));
+end;
+
+threadvar
+  InspectDepth: Integer;   { 0: DEFAULT_INSPECT_DEPTH }
+
+procedure SetInspectDepth(ADepth: Integer);
+begin
+  if ADepth <= 0 then InspectDepth := 0
+  else if ADepth > MAX_INSPECT_DEPTH then InspectDepth := MAX_INSPECT_DEPTH
+  else InspectDepth := ADepth;
+end;
+
+{ inspectDepth(): how many levels deep console output renders objects (console.js) }
+function Host_InspectDepth(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if InspectDepth = 0 then Res := MkNumber(DEFAULT_INSPECT_DEPTH) else Res := MkNumber(InspectDepth);
+  Result := True;
+end;
+
+{ fileURL(path): the file: URL of a module's path }
 function Host_FileURL(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   { a virtual module's address is its URL already }
   if IsVirtualModuleURI(ArgStr(Args, Argc, 1)) then Res := StrFromUnicode(ArgStr(Args, Argc, 1))
-  else Res := StrFromUnicode(UTF8Decode(FileURLOf(UTF8Encode(ArgStr(Args, Argc, 1)))));
+  else Res := StrFromUnicode(UTF8Decode(ModuleFileURL(UTF8Encode(ArgStr(Args, Argc, 1)))));
   Result := True;
 end;
 
@@ -1737,23 +1802,28 @@ begin
   if not IsRelativeSpecifier(Spec) and (Spec <> '') and (Spec[1] <> '/') and (Spec[1] <> '\') and
      not ((Length(Spec) >= 2) and (Spec[2] = ':')) then
   begin
-    if IsVirtualKey(Ref) or (Ref = '') or (Ref[1] = '<') then RefPath := '' else RefPath := ExpandFileName(UTF8Encode(Ref));
+    if IsVirtualKey(Ref) or (Ref = '') or (Ref[1] = '<') then RefPath := ''
+    { a sandbox's paths are its own, as HostResolveSpec has them }
+    else if SandboxActive then RefPath := UTF8Encode(Ref)
+    else RefPath := ExpandFileName(UTF8Encode(Ref));
     try
       Path := CurrentResolver.Resolve(Spec, RefPath);
       if IsVirtualModuleURI(UnicodeString(Path)) then Res := StrFromUnicode(UnicodeString(Path))
-      else Res := StrFromUnicode(UTF8Decode(FileURLOf(ExpandFileName(Path))));
+      else Res := StrFromUnicode(UTF8Decode(ModuleFileURL(Path)));
       Exit;
     except
       on E: Exception do ;
     end;
   end;
-  if (Spec <> '') and ((Spec[1] = '/') or (Spec[1] = '\') or ((Length(Spec) >= 2) and (Spec[2] = ':'))) then
+  if SandboxActive and not IsVirtualKey(Ref) then
+    Path := SandboxPathOf(Spec, ModuleDirOf(UTF8Encode(Ref)))
+  else if (Spec <> '') and ((Spec[1] = '/') or (Spec[1] = '\') or ((Length(Spec) >= 2) and (Spec[2] = ':'))) then
     Path := ExpandFileName(Spec)
   else if IsVirtualKey(Ref) then
     Path := ExpandFileName(Spec)
   else
-    Path := ExpandFileName(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(UTF8Encode(Ref)))) + Spec);
-  Res := StrFromUnicode(UTF8Decode(FileURLOf(Path)));
+    Path := ExpandFileName(ModuleDirOf(UTF8Encode(Ref)) + Spec);
+  Res := StrFromUnicode(UTF8Decode(ModuleFileURL(Path)));
 end;
 
 { Goccia.Modules's import.meta hook: shared.initImportMeta(meta, path) (modules.js) }

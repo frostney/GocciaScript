@@ -41,7 +41,9 @@ function DecodeURI(const AString: string): string;
 function DecodeURIComponent(const AString: string): string;
 
 { RFC 3986 §2.3 — percent-encode file-path characters for file:// URLs.
-  Preserves unreserved characters plus sub-delims and '/', ':', '@'. }
+  Preserves unreserved characters plus sub-delims and '/', ':', '@'; every
+  other character is percent-encoded as its UTF-8 bytes (RFC 3986 §2.5), so
+  é is %C3%A9. }
 function PercentEncodePath(const APath: string): string;
 
 { RFC 8089 — the host path a `file:` URL names, the inverse of the URLs
@@ -382,20 +384,22 @@ end;
 function PercentEncodePath(const APath: string): string;
 var
   Buffer: TStringBuffer;
+  Bytes: RawByteString;
   I: Integer;
-  Ch: Char;
+  B: Byte;
 begin
   if Length(APath) = 0 then
     Exit('');
 
-  Buffer := TStringBuffer.Create(Length(APath));
-  for I := 1 to Length(APath) do
+  Bytes := UTF8Encode(UnicodeString(APath));
+  Buffer := TStringBuffer.Create(Length(Bytes));
+  for I := 1 to Length(Bytes) do
   begin
-    Ch := APath[I];
-    if Ch in PERCENT_ENCODE_PATH_UNESCAPED then
-      Buffer.Append(Ch)
+    B := Ord(Bytes[I]);
+    if (B < $80) and (Char(B) in PERCENT_ENCODE_PATH_UNESCAPED) then
+      Buffer.Append(Char(B))
     else
-      Buffer.Append(PercentEncodeByte(Ord(Ch)));
+      Buffer.Append(PercentEncodeByte(B));
   end;
   Result := Buffer.ToString;
 end;

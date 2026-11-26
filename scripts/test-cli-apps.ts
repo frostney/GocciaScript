@@ -9795,6 +9795,48 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
   }
 });
 
+await section("Runner sandbox mode: import.meta.url and import.meta.resolve name sandbox paths, with no host drive...", async () => {
+  // A sandbox's paths are its own, rooted at /: on Windows a host path
+  // expansion would put the current drive in front (file:///C:/main.js).
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/app/main.js",
+        text: [
+          "console.log(import.meta.url);",
+          'console.log(import.meta.resolve("./lib/x.js"));',
+          'console.log(import.meta.resolve("../../up.js"));',
+          'console.log(import.meta.resolve("/abs/y.js"));',
+          'console.log(import.meta.resolve("./dir/"));',
+          'console.log(import.meta.resolve("./a\\\\b.js"));',
+          'console.log(import.meta.resolve("./caf\\u00e9.js"));',
+        ].join("\n"),
+      },
+    ]);
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/app/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 7);
+    const expected = [
+      "file:///app/main.js",
+      "file:///app/lib/x.js",
+      "file:///up.js",
+      "file:///abs/y.js",
+      "file:///app/dir/",
+      "file:///app/a/b.js",
+      "file:///app/caf%C3%A9.js",
+    ];
+    if (proc.exitCode !== 0 || JSON.stringify(lines) !== JSON.stringify(expected))
+      throw new Error(
+        `Sandbox import.meta should name sandbox paths: expected ${JSON.stringify(expected)}, got exit ${proc.exitCode} ${JSON.stringify(lines)} ${proc.stderr.toString()}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a nested isolated child cannot read the parent's module source...", async () => {
   // Regression for the disclosure the source registry introduced: the parent
   // imports a module (registering its source), then runs an ISOLATED child
