@@ -671,7 +671,7 @@ function Re_HasIndices(Args: PValue; Argc: Integer; var Res: TValue): Boolean; b
 { 22.2.4.1 RegExp ( pattern, flags ): string arguments under RegExp itself build directly; the rest goes
   through the prelude's steps }
 function Re_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var P, F: TValue; PS, FS: UnicodeString; C: PCompiled; CA: array[0..2] of TValue;
+var P, F, NT: TValue; PS, FS: UnicodeString; C: PCompiled; CA: array[0..2] of TValue;
 begin
   P := Arg(Args, Argc, 1);
   F := Arg(Args, Argc, 2);
@@ -684,11 +684,13 @@ begin
     Res := NewRegExpObject(C);
     Exit(True);
   end;
-  CA[0] := P; CA[1] := F; CA[2] := CurNewTarget;
+  NT := CurNewTarget;
+  CA[0] := P; CA[1] := F; CA[2] := NT;
   Result := CallJS(JSF_Construct, VUndefined, @CA[0], 3, Res);
-  { the prelude read new.target's prototype at its step (10.1.13 reads it once), after the pattern's own reads; a
-    construct inside it cleared the flag }
-  ConstructProtoTaken := True;
+  { constructed: the prelude took new.target's prototype at RegExpAlloc's step (GetPrototypeFromConstructor reads it
+    once), after the pattern's own reads, and a construct inside it cleared the flag. A plain call leaves the flag
+    alone: it belongs to whatever native construct is running around it }
+  if NT <> VUndefined then ConstructProtoTaken := True;
 end;
 
 { ---- the prelude's natives ---- }

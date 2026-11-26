@@ -946,7 +946,7 @@ constructor TGocciaCoverageOptions.Create;
 begin
   inherited Create;
   FEnabled := TFlagOption.Create('coverage',
-    'Enable line and branch coverage', 'Coverage');
+    'Enable statement, line, branch and function coverage (Istanbul definitions)', 'Coverage');
   FFormat := TEnumOption<TGocciaCoverageFormat>.Create('coverage-format',
     'Coverage output format', 'Coverage');
   FOutputPath := TStringOption.Create('coverage-output',

@@ -448,6 +448,51 @@ begin
   end;
 end;
 
+{ the 1-based index of the last character before I's whitespace and comments, scanning back from I: a block
+  comment is skipped whole, and a line comment when the scan steps back over the line break that ends it (the
+  first // on that line outside a string starts it); 0 at the start of the source }
+function BackOverTrivia(const ASource: string; I: Integer): Integer;
+var
+  LineStart, J: Integer;
+  Quote: Char;
+begin
+  while I > 0 do
+  begin
+    if ASource[I] = #10 then
+    begin
+      { the line before this break: a // in it starts a comment to its end }
+      LineStart := I - 1;
+      while (LineStart > 0) and (ASource[LineStart] <> #10) do Dec(LineStart);
+      Inc(LineStart);
+      Quote := #0;
+      J := LineStart;
+      while J < I - 1 do
+      begin
+        if Quote <> #0 then
+        begin
+          if ASource[J] = '\' then Inc(J)
+          else if ASource[J] = Quote then Quote := #0;
+        end
+        else if (ASource[J] = '"') or (ASource[J] = '''') or (ASource[J] = '`') then Quote := ASource[J]
+        else if (ASource[J] = '/') and (ASource[J + 1] = '/') then Break;
+        Inc(J);
+      end;
+      if J < I - 1 then I := J - 1
+      else Dec(I);
+    end
+    else if IsSpaceChar(ASource[I]) then Dec(I)
+    else if (I > 1) and (ASource[I] = '/') and (ASource[I - 1] = '*') then
+    begin
+      J := I - 2;
+      while (J > 1) and not ((ASource[J - 1] = '/') and (ASource[J] = '*')) do Dec(J);
+      if J <= 1 then Exit(I);
+      I := J - 2;
+    end
+    else Break;
+  end;
+  Result := I;
+end;
+
 function CoverageLabelStart(const ASpan: TGocciaSourceSpan; const AOffset: Integer): Integer;
 var
   Source: string;
@@ -458,11 +503,10 @@ begin
   Source := ASpan.Source;
   I := AOffset;
   if I > Length(Source) then Exit;
-  { back over whitespace to the colon }
-  while (I > 0) and IsSpaceChar(Source[I]) do Dec(I);
+  { back over whitespace and comments to the colon }
+  I := BackOverTrivia(Source, I);
   if (I <= 0) or (Source[I] <> ':') then Exit;
-  Dec(I);
-  while (I > 0) and IsSpaceChar(Source[I]) do Dec(I);
+  I := BackOverTrivia(Source, I - 1);
   Stop := I;
   while (I > 0) and IsIdentifierChar(Source[I]) do Dec(I);
   if I = Stop then Exit;
@@ -482,7 +526,7 @@ begin
   if I > Length(Source) then Exit;
   { a computed key's span starts at its closing bracket }
   if (I < Length(Source)) and (Source[I + 1] = ']') then Inc(I);
-  while (I > 0) and IsSpaceChar(Source[I]) do Dec(I);
+  I := BackOverTrivia(Source, I);
   { a computed key: back over its brackets }
   if (I > 0) and (Source[I] = ']') then
   begin
@@ -494,7 +538,7 @@ begin
       Dec(I);
       if Depth = 0 then Break;
     end;
-    while (I > 0) and IsSpaceChar(Source[I]) do Dec(I);
+    I := BackOverTrivia(Source, I);
   end;
   if I < Length(AKeyword) then Exit;
   if Copy(Source, I - Length(AKeyword) + 1, Length(AKeyword)) <> AKeyword then Exit;

@@ -92,6 +92,7 @@ type
     FBenchMode: Boolean;
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
+    FSetupAborted: TGocciaAbort;
     FMaxFrames: Integer;
     FHostReady: Boolean;
     FExposeTimers: Boolean;
@@ -305,6 +306,9 @@ type
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
     { 0 for none }
     property TimeoutMs: Int64 read FTimeoutMs write FTimeoutMs;
+    { the limit that stopped the last InjectModuleGlobals (gaNone: none), which the host reports as it reports a
+      run's }
+    property SetupAborted: TGocciaAbort read FSetupAborted;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
@@ -956,10 +960,17 @@ begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
   { a globals module's code runs under the run's limits, as the entry's does }
+  FSetupAborted := gaNone;
   LimitsArm(FTimeoutMs, FMaxInstructions);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
+    case LimitAbortKind of
+      1: FSetupAborted := gaTimeout;
+      2: FSetupAborted := gaInstructionLimit;
+      3: FSetupAborted := gaMemoryLimit;
+      4: FSetupAborted := gaHostAbort;
+    end;
     LimitsDisarm;
   end;
 end;

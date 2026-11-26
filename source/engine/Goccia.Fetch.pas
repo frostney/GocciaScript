@@ -191,8 +191,9 @@ begin
   O := Owner;
   EnterCriticalSection(O.Lock);
   try
-    { an answer no one waits for frees itself }
-    if O.Detached or Cancelled then FreeOnTerminate := True
+    { the engine gone: no one frees the worker but itself. A cancelled request's worker still goes to Done, where
+      the engine frees it and its slot (its entry names it until then) }
+    if O.Detached then FreeOnTerminate := True
     else O.Done.Add(Self);
   finally
     LeaveCriticalSection(O.Lock);
@@ -278,6 +279,42 @@ begin
   Result := True;
 end;
 
+function PendingIndex(Id: Integer): Integer; forward;
+procedure RemovePending(I: Integer); forward;
+
+{ the finished workers of cancelled requests freed, with their entries }
+procedure ReapCancelled;
+var I, K: Integer; W: TFetchWorker; Keep, Free_: TList;
+begin
+  if Owner = nil then Exit;
+  Free_ := TList.Create;
+  try
+    EnterCriticalSection(Owner.Lock);
+    try
+      Keep := TList.Create;
+      try
+        for I := 0 to Owner.Done.Count - 1 do
+          if TFetchWorker(Owner.Done[I]).Cancelled then Free_.Add(Owner.Done[I]) else Keep.Add(Owner.Done[I]);
+        Owner.Done.Assign(Keep);
+      finally
+        Keep.Free;
+      end;
+    finally
+      LeaveCriticalSection(Owner.Lock);
+    end;
+    for I := 0 to Free_.Count - 1 do
+    begin
+      W := TFetchWorker(Free_[I]);
+      W.WaitFor;
+      K := PendingIndex(W.Id);
+      if K >= 0 then RemovePending(K);
+      W.Free;
+    end;
+  finally
+    Free_.Free;
+  end;
+end;
+
 { fetchStart(url, method, headers, redirect, signalTimeoutMs): the request handed to a worker; its id, or -1 when
   the thread's requests in flight are at their limit. headers is an array of [name, value] pairs; redirect 0
   follow, 1 error, 2 manual; signalTimeoutMs the time left on the request's AbortSignal.timeout (-1 none) }
@@ -312,6 +349,8 @@ begin
   end;
   if IsNumber(ArgOf(Args, Argc, 5)) then SignalMs := Trunc(NumOf(Args[5])) else SignalMs := -1;
   if not AuditDecision(akNetDispatch, True, URL, 'fetch dispatch is allowed') then Exit(False);
+  { the slots of cancelled requests whose workers finished free first }
+  if Length(Pendings) >= MAX_FETCH_WORKERS then ReapCancelled;
   if Length(Pendings) >= MAX_FETCH_WORKERS then
   begin
     Res := MkInt(-1);

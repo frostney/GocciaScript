@@ -983,7 +983,8 @@ var
   MemoryStart: TGocciaMemoryStats;
   Capabilities: TGocciaCapabilities;
   Effective: TGocciaCapabilityAuditEvent;
-  HostError: TGocciaRunResult;
+  HostError, SetupAbort: TGocciaRunResult;
+  SetupInfo: TCLIJSONErrorInfo;
 begin
   Start := GetNanoseconds;
   { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
@@ -1143,6 +1144,20 @@ begin
       end;
       if not InjectGlobals(Engine, GlobalsError) then
       begin
+        { a spent limit stopped a globals module: reported as the run's would be (a TimeoutError in JSON) }
+        if Engine.SetupAborted <> gaNone then
+        begin
+          SetupAbort := Default(TGocciaRunResult);
+          SetupAbort.Aborted := Engine.SetupAborted;
+          SetupAbort.ErrorText := UnicodeString(GlobalsError);
+          SetupInfo := ErrorInfoOf(AFileName, SetupAbort, EngineOptions);
+          if IsJsonOutput then
+            ReportSetupFailure(AReportIndex, AFileName, SetupInfo.ErrorType, SetupInfo.Message, Start)
+          else
+            WriteLn('Fatal error: ', SetupInfo.Message);
+          ExitCode := 1;
+          Exit;
+        end;
         if IsJsonOutput then
         begin
           { the file's entry in the JSON report carries the error, by its name when it has one }

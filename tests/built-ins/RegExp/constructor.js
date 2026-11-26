@@ -371,3 +371,14 @@ describe("RegExp construct with a new.target", () => {
     expect(re.flags).toBe("i");
   });
 });
+
+test("calling RegExp while a Number or String subclass converts its argument keeps the subclass prototype", () => {
+  const poke = {
+    valueOf() { RegExp({ toString() { return "a"; } }); return 1; },
+    toString() { RegExp({ toString() { return "a"; } }); return "m"; },
+  };
+  class N extends Number {}
+  class S extends String {}
+  expect(Object.getPrototypeOf(new N(poke))).toBe(N.prototype);
+  expect(Object.getPrototypeOf(new S(poke))).toBe(S.prototype);
+});

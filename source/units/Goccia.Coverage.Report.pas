@@ -317,7 +317,7 @@ var
   SrcMap: TGocciaSourceMap;
   StatementOrder, FunctionOrder, BranchOrder: TGocciaCoverageIndexArray;
   I, J: Integer;
-  FirstFile: Boolean;
+  FirstFile, Wrote: Boolean;
   Output: TStringList;
   Stmt: TGocciaCoverageStatement;
   Func: TGocciaCoverageFunction;
@@ -381,11 +381,17 @@ begin
 
     // branchMap
     Buf.Append(#10'    "branchMap": {');
+    { a branch with no paths (an empty switch) is pruned, as SourceCoverage.freeze does: the keys after it keep
+      their numbers }
+    Wrote := False;
     for I := 0 to High(BranchOrder) do
     begin
-      if I > 0 then
-        Buf.AppendChar(',');
       Branch := FileCov.Branches[BranchOrder[I]];
+      if Length(Branch.Locations) = 0 then
+        Continue;
+      if Wrote then
+        Buf.AppendChar(',');
+      Wrote := True;
       Loc := TranslateLoc(SrcMap, Branch.Loc);
       Buf.Append(Format(#10'      "%d": {"loc":%s,"type":"%s","locations":[',
         [I, JsonLocation(Loc), EscapeJSONString(Branch.BranchType)]));
@@ -397,7 +403,7 @@ begin
       end;
       Buf.Append(Format('],"line":%d}', [Loc.StartLine]));
     end;
-    if Length(BranchOrder) > 0 then
+    if Wrote then
       Buf.Append(#10'    ');
     Buf.Append('},');
 
@@ -425,11 +431,15 @@ begin
 
     // b (the hit counts of each branch's paths)
     Buf.Append(#10'    "b": {');
+    Wrote := False;
     for I := 0 to High(BranchOrder) do
     begin
-      if I > 0 then
-        Buf.AppendChar(',');
       Branch := FileCov.Branches[BranchOrder[I]];
+      if Length(Branch.Locations) = 0 then
+        Continue;
+      if Wrote then
+        Buf.AppendChar(',');
+      Wrote := True;
       Buf.Append(Format('"%d":[', [I]));
       for J := 0 to High(Branch.HitCounts) do
       begin

@@ -5961,6 +5961,9 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     };
 
+    const reportDecls = (report: { file: any; ordered: (map: Record<string, any>) => any[] }) =>
+      report.ordered(report.file.fnMap).map((fn: any) => [fn.decl.start.line, fn.decl.start.column, fn.decl.end.line, fn.decl.end.column]);
+
     console.log("Loader: coverage statements follow Istanbul's statement kinds...");
     // One counter per ExpressionStatement, IfStatement, ForStatement, ForInStatement, ForOfStatement,
     // WhileStatement, DoWhileStatement, SwitchStatement, TryStatement, BreakStatement, ReturnStatement and
@@ -5993,6 +5996,44 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "DA:1,1", "DA:2,1", "DA:3,1", "DA:4,2", "DA:5,1", "DA:6,2", "DA:7,2", "DA:8,1", "DA:9,1", "DA:10,1",
         "DA:11,1", "DA:12,1", "DA:13,1", "LF:13", "LH:13",
       ]);
+    }
+
+    console.log("Loader: coverage locates labels and accessors past comments, and keeps a static block's strings...");
+    // Expectations from nyc 17.1.0 on the same sources. A comment between a label and its statement, or between
+    // get/set and the key, does not move where the labeled statement or the accessor's declaration starts; a class
+    // static block has no directive prologue, so its strings are statements; a function's decl ends after its
+    // identifier in UTF-16 code units; an empty switch's branch has no paths and is pruned, as
+    // SourceCoverage.freeze prunes it, with the branches after it keeping their keys.
+    {
+      const labels = await runCoverage("label-comments", [
+        "a: /* c */ for (;;) { break a; }",
+        "b: // c",
+        "  c: for (;;) { break b; }",
+        "const o = {",
+        "  get /* x */ g() { return 1; },",
+        "  set // y",
+        "  s(v) {},",
+        "};",
+        "function /* n */ named() {}",
+      ]);
+      expectRecords("label and accessor comments", labels, [
+        "FN:5,(anonymous_0)", "FN:6,(anonymous_1)", "FN:9,named", "DA:1,1", "DA:2,1", "DA:3,1", "DA:4,1", "DA:5,0",
+        "LF:5", "LH:4",
+      ]);
+      const blocks = await runCoverage("static-block-strings", [
+        "class A {",
+        '  static { "s"; }',
+        '  static { "t"; this.x = 1; }',
+        "}",
+        '{ "blk"; }',
+        'label: "lab";',
+      ]);
+      expectRecords("static block strings", blocks, ["DA:2,1", "DA:3,1", "DA:5,1", "DA:6,1", "LF:4", "LH:4"]);
+      const unicode = await runCoverage("unicode-names", ["function \u00fc() {}", "function \u{1D4BB}() {}"]);
+      expectEqual("non-ASCII function decl", reportDecls(unicode), [[1, 9, 1, 10], [2, 9, 2, 11]]);
+      const empty = await runCoverage("empty-switch", ["switch (1) {}", "const a = 1 ? 2 : 3;", "switch (a) {}"]);
+      expectRecords("empty switch", empty, ["BRDA:2,1,0,1", "BRDA:2,1,1,0", "BRF:2", "BRH:1"]);
+      expectEqual("empty switch branch keys", Object.keys(empty.file.branchMap), ["1"]);
     }
 
     console.log("Loader: coverage counts a line as the most among the statements starting on it...");
@@ -16772,7 +16813,7 @@ await section("Runner: a globals module and a host-environment provider run unde
     ].join("\n"));
     writeFileSync(join(tmp, "main.js"), "console.log(1);\n");
     const cases: Array<[string, string[], string]> = [
-      ["--globals under --timeout", ["--globals=globals.js", "--timeout=300"], "timed out"],
+      ["--globals under --timeout", ["--globals=globals.js", "--timeout=300"], "file timed out after 300ms"],
       ["--globals under --max-instructions", ["--globals=globals.js", "--max-instructions=100000"], "instruction limit"],
       ["--host-environment under --timeout", ["--host-environment=env.js", "--timeout=300"], "timed out"],
     ];
@@ -16783,6 +16824,12 @@ await section("Runner: a globals module and a host-environment provider run unde
       if (run.exitCode !== 1 || !out.includes(expected) || out.includes("\n1\n") || Date.now() - started > 20000)
         throw new Error(`${label} should stop the set-up module with "${expected}", got (exit ${run.exitCode}):\n${out}`);
     }
+    // reported as the entry's own timeout is: a TimeoutError in the JSON report
+    const json = Bun.spawnSync([resolve(RUNNER), "main.js", "--globals=globals.js", "--timeout=300", "--output=json"], { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 30000 });
+    const envelope = JSON.parse(json.stdout.toString());
+    const error = envelope.files?.[0]?.error ?? envelope.error;
+    if (envelope.ok !== false || error?.type !== "TimeoutError")
+      throw new Error(`a --globals module that times out should report a TimeoutError, got ${JSON.stringify(error)}`);
   } finally {
     clean(tmp);
   }
@@ -16811,6 +16858,67 @@ await section("TestRunner: --test-timeout stops every test that runs past it, no
     if (proc.stdout.toString().includes("Unhandled promise rejection"))
       throw new Error(`a timed-out test should fail once, not again as an unhandled rejection:\n${proc.stdout}`);
   } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner and TestRunner: a cancelled fetch frees its worker slot once its worker finishes...", async () => {
+  // A request whose signal aborted, or that a timed-out test left, used to keep one of the 16 worker slots for the
+  // rest of the run, so later requests failed with "fetch worker limit exceeded".
+  const tmp = makeNativeTmp();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      await Bun.sleep(path.startsWith("/slow") ? 300 : path === "/later" ? 900 : 0);
+      return new Response("ok");
+    },
+  });
+  try {
+    const url = `http://127.0.0.1:${server.port}`;
+    const script = join(tmp, "aborted.mjs");
+    writeFileSync(script, [
+      "const pending = [];",
+      "for (const i of Array.from({ length: 15 }, (_, k) => k)) {",
+      "  const controller = new AbortController();",
+      `  pending.push(fetch("${url}/slow" + i, { signal: controller.signal }).catch(() => "aborted"));`,
+      "  controller.abort();",
+      "}",
+      "await Promise.all(pending);",
+      `console.log("later", (await fetch("${url}/later")).status);`,
+      `const both = await Promise.allSettled([fetch("${url}/fast"), fetch("${url}/fast")]);`,
+      'console.log(both.map((r) => r.status + ":" + (r.value ? r.value.status : String(r.reason))).join(" "));',
+      "",
+    ].join("\n"));
+    // spawned asynchronously: the server answers from this process's event loop
+    const run = Bun.spawn([resolve(RUNNER), script, "--allow-net=127.0.0.1"], { stdout: "pipe", stderr: "pipe", timeout: 30000 });
+    const out = (await new Response(run.stdout).text()) + (await new Response(run.stderr).text());
+    await run.exited;
+    if (run.exitCode !== 0 || !out.includes("later 200") || !out.includes("fulfilled:200 fulfilled:200"))
+      throw new Error(`fetches after 15 aborted ones should all get a slot, got (exit ${run.exitCode}):\n${out}`);
+
+    const suite = join(tmp, "slots.test.js");
+    const lines = ['describe("slots", () => {'];
+    for (const i of Array.from({ length: 17 }, (_, k) => k))
+      lines.push(`  test("waits ${i}", async () => { await fetch("${url}/slow${i}"); });`);
+    // by now the earlier tests' workers have finished (300 ms each, 100 ms per test): their slots are free again
+    lines.push(`  test("still fetches", async () => { expect((await fetch("${url}/fast")).status).toBe(200); });`);
+    lines.push("});", "");
+    writeFileSync(suite, lines.join("\n"));
+    const reportPath = join(tmp, "slots.json");
+    const tests = Bun.spawn(
+      [resolve(TESTRUNNER), suite, "-P", "--allow-net=127.0.0.1", "--test-timeout=100", "--no-progress", `--output=${reportPath}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 60000 },
+    );
+    await new Response(tests.stdout).text();
+    await tests.exited;
+    const report = JSON.parse(readFileSync(reportPath, "utf-8"));
+    const failures: string[] = report.files?.[0]?.failedTests ?? [];
+    if (report.failed !== 17 || report.passed !== 1)
+      throw new Error(`17 timed-out fetches should leave the last test a slot, got ${report.passed}/${report.failed}: ${failures.join(", ")}`);
+  } finally {
+    server.stop(true);
     clean(tmp);
   }
 });

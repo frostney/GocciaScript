@@ -1262,7 +1262,8 @@ begin
   begin
     PendingCovName := OwnName;
     PendingCovIdStart := CoverageFunctionNameStart(NodeSpan, StartOffset, OwnName);
-    if PendingCovIdStart >= 0 then PendingCovIdEnd := PendingCovIdStart + Length(UTF8Encode(OwnName));
+    { OwnName is the source's own UTF-8: its byte length is the identifier's extent in the source }
+    if PendingCovIdStart >= 0 then PendingCovIdEnd := PendingCovIdStart + Length(OwnName);
   end;
 end;
 
@@ -2780,9 +2781,10 @@ begin
       { a generator is made once its declarations are instantiated (its parameters evaluated) }
       if IsGenerator then Emit(Ins(opGenStart, 0, 0, 0));
       { coverage: the function counts from the start of its body (after its parameters, and for a generator at the
-        first resumption), and a directive prologue's strings are no statements }
+        first resumption), and a directive prologue's strings are no statements (a class static block has no
+        prologue: its strings are statements) }
       if CovFnIdx >= 0 then Emit(Ins(opCovFn, 0, 0, CovFnIdx));
-      if CompileCoverage then
+      if CompileCoverage and not StaticBlk then
         for I := 0 to Nodes.Count - 1 do
         begin
           if not ((Nodes[I] is TGocciaExpressionStatement) and
