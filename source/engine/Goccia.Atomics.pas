@@ -5,7 +5,8 @@ unit Goccia.Atomics;
   BufferData and BufferLen (Goccia.Typed) read through it, so typed arrays and DataViews over one need nothing
   else. A block reaches another engine through Goccia.Agent, which wraps it in a new object there.
 
-  BigInt64Array and BigUint64Array do not exist in the engine yet, so the BigInt forms of Atomics are absent. }
+  Every Atomics operation also takes a BigInt64Array or BigUint64Array, with BigInt values; wait and notify take an
+  Int32Array or a BigInt64Array. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}

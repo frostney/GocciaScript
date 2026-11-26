@@ -33,7 +33,7 @@ uses
 const
   GOCCIA_GBC_VERSION = 200;
   GOCCIA_GBC_RUNTIME_TAG = 'goccia-engine';
-  { as the old engine's reader (Goccia.Bytecode.Binary) }
+  { the old engine's reader's bounds (Goccia.Bytecode.Binary) }
   GOCCIA_GBC_MAX_FILE_BYTES = 64 * 1024 * 1024;
   GOCCIA_GBC_MAX_DEPTH = 256;
 

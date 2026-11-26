@@ -52,7 +52,7 @@ function ToObjectV(V: TValue; var O: TValue): Boolean;
 function SymbolDescription(S: TValue): TValue;
 { a data descriptor with all fields present }
 procedure DataDesc(var D: TPropDesc; V: TValue; W, E, C: Boolean);
-{ 7.2.10 SameValue }
+{ ES2026 7.2.9 SameValue }
 function SameValueV(A, B: TValue): Boolean;
 procedure InitObjModel;
 

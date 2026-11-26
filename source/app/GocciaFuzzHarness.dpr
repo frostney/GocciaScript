@@ -53,8 +53,7 @@ program GocciaFuzzHarness;
   reads the input, and the program then uses what restored, calling its
   functions. The engine's writer has no codec for a generator's frame, a Map's
   table or a buffer's bytes (Goccia.HeapSnapshot), so the seeds hold data
-  graphs, closures, bound functions, errors and wrapper objects. Linux on
-  x86-64 only, as the engine. }
+  graphs, closures, bound functions, errors and wrapper objects. }
 
 {$I Goccia.inc}
 

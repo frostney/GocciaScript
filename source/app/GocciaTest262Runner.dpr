@@ -3,7 +3,8 @@ program GocciaTest262Runner;
 {$I Goccia.inc}
 
 { GocciaTest262Runner: the command line, discovery, sharding, grading contract 4 and JSON
-  report, with each run in a forked process on the engine's test262 host (Goccia.Test262). Linux on x86-64 only. }
+  report, with each run on the engine's test262 host (Goccia.Test262): in a forked process on Unix, elsewhere on a
+  thread of its own. }
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}

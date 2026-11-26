@@ -4,18 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TESTRUNNER } from "./test-cli/binaries";
 
-// Each accepted root must restore the entry and its imported module records
-// into a fresh engine, without precompiling or replaying either module.
+// Each accepted root must restore into a fresh engine. Module records are not
+// written: the restore compiles the entry's imported module without evaluating
+// it, and the closures carry the module bindings they use.
 const modules = Bun.spawnSync([
   TESTRUNNER, "-P", "tests/language/modules/heap-snapshot-round-trip.js",
   "--heap-snapshots", "--silent", "--no-progress", "--output=json",
 ], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
 if (modules.exitCode !== 0 || JSON.parse(modules.stdout.toString()).ok !== true)
-  throw new Error(`Module-record round trip failed: ${modules.stderr}`);
+  throw new Error(`Module round trip failed: ${modules.stderr}`);
 if (!/Heap snapshots: observations=2 objects=2 passed=2 refused=0 failed=0/.test(
   modules.stderr.toString(),
 ))
-  throw new Error(`Unexpected module-record round-trip counts: ${modules.stderr}`);
+  throw new Error(`Unexpected module round-trip counts: ${modules.stderr}`);
 
 // Touch the imported file only after its first load, then acknowledge the
 // request. This forces a same-content reload without sleeps or guest host-module
@@ -113,4 +114,4 @@ const collected = Bun.spawnSync([
 ], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
 if (collected.exitCode !== 0 || JSON.parse(collected.stdout.toString()).ok !== true)
   throw new Error(`GC, dynamic-function or class-template round trip failed: ${collected.stderr}`);
-console.log("Heap snapshot CLI: module records, global and module-only expectations passed");
+console.log("Heap snapshot CLI: module, global and module-only expectations passed");

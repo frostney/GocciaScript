@@ -118,12 +118,10 @@ type
     FailureKind: TGocciaSandboxFailureKind;
     Diff: string;
     DiffRequested: Boolean;
-    { A nested run's completion value, copied into the calling program's
-      realm (the old engine's TGocciaValue); nil for the root run. }
-    ResultValue: TObject;
-    { The same copy for the engine, whose values cannot outlive their
-      thread: encoded by the child (Goccia.Sandbox EncodeSandboxValue), decoded in
-      the calling program's realm. }
+    { A nested run's completion value for the calling program's realm: the
+      engine's values cannot outlive their thread, so the child encodes it
+      (Goccia.Sandbox EncodeSandboxValue) and the caller decodes it in its
+      realm. }
     ResultEncoded: string;
     HasResultEncoded: Boolean;
     { The root run's completion value as --print shows it, when the host was

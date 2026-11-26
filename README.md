@@ -7,8 +7,8 @@ A drop of JavaScript, built for embedding.
 GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
 are easy to customize. An application embeds it to add scripting: the host
 chooses the runtime surface, grants the capabilities a script may use, and
-bounds a run by time, instructions and a memory budget. The budget gates
-allocations and does not cap resident memory, so a hard ceiling also needs an
+bounds a run by time, instructions and a memory budget. The budget bounds the
+collected heap, not resident memory, so a hard ceiling also needs an
 operating-system limit
 ([Garbage Collector](docs/garbage-collector.md#gated-growth-points)). Beyond the files of its own
 project's static module graph, a script reaches no filesystem, network or
@@ -77,12 +77,13 @@ environment.
 
 Native hosts can embed GocciaScript to run portable JavaScript with
 application-specific globals, modules, capabilities, and limits. A host can
-answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, and stop a run from another thread through an
-[abort handle](docs/embedding.md#aborting-a-run-from-another-thread). A stop
-takes effect at the engine's next check, so a native call blocked outside the
-engine is not interrupted until it returns; give such calls their own deadlines
-or isolate the process. A host can also snapshot the object graphs the snapshot
+grant or withhold `fetch` through the `net` capability
+([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
+read-only, and bound a run with a timeout
+([Execution Limits](docs/embedding.md#execution-limits)). The timeout takes
+effect at the engine's next check, so a native call blocked outside the engine
+is not interrupted until it returns; give such calls their own deadlines or
+isolate the process. A host can also snapshot the object graphs the snapshot
 codecs cover and restore them in a fresh engine. A graph it cannot write is
 refused, and the host resumes by replay instead; a run paused at a checkpoint
 still holds pending promises with no codec, so its snapshot is refused today
@@ -409,8 +410,8 @@ engine's VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 
 See [Bytecode VM](docs/bytecode-vm.md) for the compiler and VM architecture.
 Module artifacts can also satisfy imports: use `GocciaRunner
---prefer-bytecode app.mjs` for disk companions, or register cached buffers
-through the [embedding API](docs/bytecode-loading.md). Loading
+--prefer-bytecode app.mjs` for disk companions, or import a `.gbc` file
+explicitly ([Precompiled bytecode modules](docs/bytecode-loading.md)). Loading
 checks that the artifact's compile profile matches the engine.
 
 ### Reproduce An Execution

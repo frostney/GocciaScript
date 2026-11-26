@@ -843,7 +843,7 @@ begin
   end;
   Result := ThrowError('RangeError', 'Maximum call stack size exceeded');
   { the stack the frames hold, beside the heap, past the memory limit: the limit is what the recursion reached (the
-    old engine charges its stacks to it, ADR 0130) }
+    old engine charged its stacks to it, ADR 0130) }
   StackBytes := Int64(StackTop) * SizeOf(TValue) + Int64(FrameTop) * SizeOf(TFrame);
   if (HeapCeiling > 0) and (StackBytes + HeapUsedBytes > HeapCeiling) then
     SetErrorHostSuggestion(Pending, SSuggestStackMemoryLimitExceeded);

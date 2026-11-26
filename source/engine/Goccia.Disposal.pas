@@ -1,7 +1,7 @@
 unit Goccia.Disposal;
 { Explicit resource management: SuppressedError, DisposableStack, AsyncDisposableStack, %AsyncIteratorPrototype%
   [@@asyncDispose] and the helpers the compiler calls for using / await using blocks, written in JS
-  (src/prelude/disposal.js -> Goccia.Disposal.inc, t/lang/gen_prelude_inc.py) and snapshotted. The helpers live on the
+  (source/engine/prelude/disposal.js, turned into Goccia.Disposal.inc by build.pas) and snapshotted. The helpers live on the
   global object under internal keys (Goccia.Core UsingKey): no script can name them. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}

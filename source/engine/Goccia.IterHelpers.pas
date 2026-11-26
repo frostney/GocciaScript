@@ -1,6 +1,6 @@
 unit Goccia.IterHelpers;
 { 27.1 Iterator: the Iterator constructor and statics, %Iterator.prototype% helpers and their prototypes, written in
-  JS (src/prelude/iterhelpers.js, turned into Goccia.IterHelpers.inc by t/lang/gen_prelude_inc.py) and compiled once
+  JS (source/engine/prelude/iterhelpers.js, turned into Goccia.IterHelpers.inc by build.pas) and compiled once
   into the prelude snapshot like Goccia.Builtins4's prelude. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}

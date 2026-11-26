@@ -31,7 +31,7 @@ type
   TGocciaSourceKind = (gskDetect, gskScript, gskModule);
   { a run ended by a spent limit (Goccia.VM LimitsArm) rather than by the script }
   TGocciaAbort = (gaNone, gaTimeout, gaInstructionLimit,
-    { a full collection left more live than the memory limit (MaxMemory); ErrorText says how much }
+    { eight memory refusals in a row (MaxMemory) freed nothing; ErrorText says how much }
     gaMemoryLimit,
     { the host ended the run, past every handler: AuditSink could not record a decision (ErrorText says why) }
     gaHostAbort);
@@ -76,8 +76,9 @@ type
     ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
-    { ResultForm: the entry's completion value as String(value) or JSON (undefined for a module), converted after
-      the event loop under the run's limits; a conversion that throws fails the run }
+    { ResultForm: the entry's completion value as String(value) or JSON (a module's too: the value of its last
+      expression statement), converted after the event loop under the run's limits; a conversion that throws fails
+      the run }
     HasResult: Boolean;
     ResultText: UnicodeString;
   end;
@@ -306,8 +307,8 @@ type
     property TimeoutMs: Int64 read FTimeoutMs write FTimeoutMs;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
-    { the heap limit in bytes (HeapCeiling, for every engine of the process); 0 for the default
-      (Goccia.HostAPI DefaultHeapCeiling) }
+    { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
+      own); 0 for the default (Goccia.HostAPI DefaultHeapCeiling) }
     property MaxMemory: Int64 read FMaxMemory write FMaxMemory;
   end;
 

@@ -10,17 +10,11 @@ uses
 type
   TTemporalTimeZoneDisambiguation = (ttzdCompatible, ttzdEarlier, ttzdLater, ttzdReject);
   TTemporalTimeZoneIdentifierArray = array of string;
-  { a local date-time the reject disambiguation cannot place, where no engine
-    has set TemporalDisambiguationError }
+  { a local date-time the reject disambiguation cannot place
+    (LocalDateTimeToEpochMillisecondsWithDisambiguation), for the engine that
+    called it to throw as a RangeError; the unit stays free of any engine's
+    values }
   ETemporalDisambiguationError = class(Exception);
-  TTemporalDisambiguationErrorProc = procedure(const AMessage: string);
-
-var
-  { Raises the RangeError of a local date-time the reject disambiguation
-    cannot place (LocalDateTimeToEpochMillisecondsWithDisambiguation): the
-    engine that calls it sets this (the old engine's Goccia.Values.ErrorHelper),
-    so the unit itself stays free of any engine's values. }
-  TemporalDisambiguationError: TTemporalDisambiguationErrorProc = nil;
 
 function GetSystemTimeZoneId: string;
 {$IFNDEF LAKON}
@@ -2101,8 +2095,6 @@ procedure ThrowDisambiguationRangeError;
 const
   MESSAGE = 'Temporal local date-time is ambiguous or does not exist in the time zone';
 begin
-  if Assigned(TemporalDisambiguationError) then
-    TemporalDisambiguationError(MESSAGE);
   raise ETemporalDisambiguationError.Create(MESSAGE);
 end;
 

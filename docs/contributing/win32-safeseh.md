@@ -67,7 +67,7 @@ SEH handler until the manifest classifies it. An ordinary routine gets a
 implementation, and its section:
 
 ```text
-source-nonseh ../../source/units/Goccia.VM.pas <sha256> .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
+source-nonseh ../../source/app/Goccia.CLI.SandboxHost.pas <sha256> .text.n_goccia.cli.sandboxhost$_$tgocciasandboxrun_$__$$_handlerootclamp$hz1z1piekcdc
 ```
 
 The digest covers the routine from its header through the semicolon after its

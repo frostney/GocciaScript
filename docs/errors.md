@@ -143,7 +143,7 @@ TypeError: Cannot read properties of undefined (reading 'x')
 
 A failed property read is located at the property whose read failed, where V8 reports it (see [Stack Traces](#stack-traces)).
 
-Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use`, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` is located at the call that needed the larger stack, as an ordinary stack overflow is.
+Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use`, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `--max-memory` refusal met at a call with at least 1,024 frames on the stack is reported as `RangeError: Maximum call stack size exceeded`, located at that call, as an ordinary stack overflow is.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
 

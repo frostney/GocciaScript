@@ -13,8 +13,7 @@ test passes (with the corrections in `scripts/test262-patches`, [test262](../tes
 under `tests/` passes in full on every platform. A failure in either fails the job.
 
 Largest remaining test262-adjacent gaps outside the pinned run: Intl (Temporal's non-ISO calendars and
-locale data), realms (`$262.createRealm`, ShadowRealm), import defer, Atomics on BigInt arrays, immutable
-ArrayBuffers. Performance is measured against QuickJS and Node with `scripts/engine/wallclock.sh` on JetStream and
+locale data), realms (`$262.createRealm`, ShadowRealm), import defer, immutable ArrayBuffers. Performance is measured against QuickJS and Node with `scripts/engine/wallclock.sh` on JetStream and
 the Web Tooling Benchmark.
 
 ## Layout
@@ -292,8 +291,8 @@ own with an engine in test mode (`TestMode`, `prelude/testing.js`), its suites r
 GocciaRunner for one file's engine (the console capture, settings, the import grant) is in
 `Goccia.CLI.FileEngine`.
 
-Snapshots format values in `prelude/testing.js` as GocciaScript's Vitest pretty-format port does
-(`Goccia.Builtins.Testing.SnapshotFormatting`), and match them through `Goccia.HostAPI`'s snapshot natives over the
+Snapshots format values in `prelude/testing.js` with GocciaScript's port of Vitest's pretty-format, and match them
+through `Goccia.HostAPI`'s snapshot natives over the
 engine-independent `Goccia.Builtins.Testing.Snapshots` state and the runner's `Goccia.TestRunner.SnapshotHost`
 (the `.snap` file, inline edits written back once every file has run, `-u`, CI detection). The file's `--timeout`
 covers its suites (`TGocciaEngine.RunTests`); `--test-timeout` runs each test body, and the work it waits for, inside
@@ -349,19 +348,18 @@ the old runner's options, file discovery (a `helpers/` folder is skipped), stdin
 console, text, CSV and JSON reports (`Goccia.Benchmark.Reporter`, shared with the old runner), exit codes and the
 profiles (`--profile`, `--profile-deterministic`). Each file runs on a thread of its own with an engine in benchmark
 mode (`BenchMode`): the file's limits stay armed while `TGocciaEngine.RunBenchmarks` measures what it registered.
-`goccia:microbench` (`bench`, `group`, `run`, `summary`, `boxplot`) is `prelude/microbench.js`, which measures as
-`Goccia.Builtins.Benchmark` does: the same warm-up, calibration, rounds, interquartile outlier filter and
-percentiles, the same `GOCCIA_BENCH_*` settings, a body's promise or thenable awaited, a generator function's code
-before its first `yield` as setup and after it as teardown, and the body's error kept when the teardown throws too.
-Its clock is a native in nanoseconds; the old runner turns its collector off while it measures, where the engine's nursery
-collects as the body allocates. A benchmark's error reads as an uncaught error does in GocciaRunner, with its
+`goccia:microbench` (`bench`, `group`, `run`, `summary`, `boxplot`) is `prelude/microbench.js`, which measures with
+a warm-up, calibration, rounds, an interquartile outlier filter and percentiles, the `GOCCIA_BENCH_*` settings, a
+body's promise or thenable awaited, a generator function's code before its first `yield` as setup and after it as
+teardown, and the body's error kept when the teardown throws too. Its clock is a native in nanoseconds, and the
+engine's nursery collects as the body allocates. A benchmark's error reads as an uncaught error does in GocciaRunner, with its
 location and suggestion. Not yet supported: `.gbc` benchmark files.
 
 ### Bytecode files
 
-The engine has its own `.gbc` format (`Goccia.Artifact`), read as untrusted input as the old engine's is
-([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). The header carries format version 200, so
-each engine refuses the other's files, the runtime tag `goccia-engine`, a fingerprint of the instruction set
+The engine has its own `.gbc` format (`Goccia.Artifact`), read as untrusted input
+([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). The header carries format version 200, which
+refuses the old engine's version-100 files, the runtime tag `goccia-engine`, a fingerprint of the instruction set
 (a build with other opcodes refuses the file), the source path and the compile profile (the old wire fields
 and the engine's unrestricted flag). The body holds the module record or a Script's imports, the source text once,
 and every function compiled eagerly. Constants carry explicit kinds, so a file cannot forge a pointer. The
@@ -424,10 +422,7 @@ the old loader's command line (compatibility flags, `--source-type`, `--source-n
 GocciaScript's default resolver resolves it and, once it finds its file, fails with `Error: Cannot load module: no
 module content provider is configured` (`code` `ERR_MODULE_LOADING_UNSUPPORTED`). Without `--max-stack` the frame
 bound is the engine's own, not the old loader's 10,000, since a bound keeps the JIT off. Against it, the Bare Loader sections
-of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass except
-two. The two memory-budget sections test the old collector's allocation gate: the engine refuses at the next safe point
-([ADR 0185](../adr/0185-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
-nothing.
+of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass.
 
 ### GocciaFuzzHarness
 

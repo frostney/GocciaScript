@@ -125,11 +125,11 @@ The value is converted after the event loop, under the run's limits; a conversio
 
 ### Upgrading from 0.14
 
-GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor into TGocciaEngine ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)). That engine, TGocciaRuntime and the runtime extension classes are now gone as well: code written for 0.14, or for the TGocciaEngine API of later releases, moves to `TGocciaEngine`.
+GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor into the old `TGocciaEngine` ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)). That engine, TGocciaRuntime and the runtime extension classes are now gone as well: code written for 0.14, or for the old `TGocciaEngine` API of later releases, moves to the `TGocciaEngine` of `Goccia.Embed`, whose API differs.
 
 | Before (no longer exists) | Now |
 |--------|-----|
-| TGocciaEngine.Create(FileName, Source), Execute, RunScript | `TGocciaEngine.Create`, then `Run(FileName, Source)` |
+| The old TGocciaEngine.Create(FileName, Source), Execute, RunScript | `TGocciaEngine.Create`, then `Run(FileName, Source)` |
 | TGocciaRuntime, ApplyLoaderRuntimeProfile, runtime extensions | `PrepareHost` installs the host surface; `Bare` for the core language only ([Runtime Extensions](#runtime-extensions)) |
 | Engine.SourceType (stDetect, stScript, stModule) | `SourceKind` (`gskDetect`, `gskScript`, `gskModule`) |
 | Compatibility, StrictTypes, WarningUnsupportedFeatures | Fields of `Profile` ([Preprocessors and Compatibility](#preprocessors-and-compatibility)) |

@@ -16,8 +16,8 @@ type
     Description: string;
   end;
 
-{ The engine-independent parts; Goccia.Sandbox.FileSystemErrorValues builds
-  the old engine's error object from them. }
+{ The engine-independent parts, from which Goccia.Sandbox (ThrowFsError)
+  builds the engine's error object. }
 function SandboxFileSystemErrorDefinition(const AException: ESandboxFsError):
   TSandboxFileSystemErrorDefinition;
 { "CODE: description, operation 'path'", and " -> 'destination'" when

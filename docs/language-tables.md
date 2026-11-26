@@ -29,7 +29,7 @@ profile exposes them, not whether the engine contains their semantics.
 | `arguments` | Yes | Disabled | `--compat-arguments-object`; mapped semantics also require non-strict Script source | ECMA-262 core |
 | non-strict Script semantics | Yes | Strict by default | `--compat-non-strict-mode`; modules remain strict | ECMA-262 core |
 | `with` | Yes | Disabled | `--compat-non-strict-mode` in Script source | ECMA-262 core |
-| `eval` | Yes | Not installed | Engine option `EnableEval(Engine)` only; no CLI flag or config key ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
+| `eval` | Yes | Not installed | None: every host `TGocciaEngine` installs removes it, with no CLI flag, config key or engine setting ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
 | `ShadowRealm` | Yes | Not installed | `--unsafe-shadowrealm` | TC39 Stage 2.7 |
 

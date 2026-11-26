@@ -1963,7 +1963,7 @@ begin
 end;
 
 { a new realm of a CLI host: the conformance host's extras left out, as host.js leaves them out of the first realm
-  (eval stays an engine option: GocciaScript's EnableEval, which no flag or config key sets) }
+  (eval stays off: no flag, config key or engine setting installs it) }
 procedure CLIRealmInit;
 begin
   DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('print'));

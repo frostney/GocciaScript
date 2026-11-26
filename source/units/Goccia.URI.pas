@@ -12,16 +12,10 @@ uses
   SysUtils;
 
 type
-  { a malformed URI or percent-encoding, where no engine has set URIErrorHook }
+  { a malformed URI or percent-encoding (ES2026 §19.2.6.5 Encode, §19.2.6.6
+    Decode), for the engine that called the encoders to throw as a URIError;
+    the unit stays free of any engine's values }
   EGocciaURIError = class(Exception);
-  TGocciaURIErrorProc = procedure(const AMessage, ASuggestion: string);
-
-var
-  { Raises the URIError of malformed input (ES2026 §19.2.6.5 Encode, §19.2.6.6
-    Decode): the engine that calls the encoders sets this (the old engine's
-    Goccia.Values.ErrorHelper), so the unit stays free of any engine's
-    values. }
-  URIErrorHook: TGocciaURIErrorProc = nil;
 
 const
   { RFC 8089 — the scheme of the URLs import.meta.url carries for host
@@ -68,8 +62,6 @@ uses
 
 procedure ThrowURIError(const AMessage, ASuggestion: string);
 begin
-  if Assigned(URIErrorHook) then
-    URIErrorHook(AMessage, ASuggestion);
   raise EGocciaURIError.Create(AMessage);
 end;
 

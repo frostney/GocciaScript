@@ -185,7 +185,7 @@ See [Errors](errors.md) for the messages and stack format.
 `Goccia.Artifact` writes and reads `.gbc` files:
 
 - Magic: `GBC\0`
-- Format version: `GOCCIA_GBC_VERSION` (200; the old engine's files were version 100, so each engine refuses the other's)
+- Format version: `GOCCIA_GBC_VERSION` (200; the old engine's files were version 100, and the engine refuses them)
 - Runtime tag: `goccia-engine`
 - Engine fingerprint: a hash of the opcode names and the intrinsic count (`EngineFingerprint`), so a build with another instruction set refuses the file
 - Little-endian; strings are UTF-16 code units after a u32 length

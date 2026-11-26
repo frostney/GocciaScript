@@ -660,7 +660,7 @@
   const returned = (r) => isObject(r) && r.type === 'return';
 
   // ---------------- snapshots ----------------
-  // Vitest's pretty-format as GocciaScript's snapshot formatter writes it (Goccia.Builtins.Testing.SnapshotFormatting),
+  // Vitest's pretty-format as GocciaScript's snapshot formatter writes it,
   // over the snapshot state of the host (Goccia.HostAPI's snapshot natives over Goccia.Builtins.Testing.Snapshots)
   const snapshotNatives = shared && shared.snapshot;
   const testTimeoutMs = shared && shared.deadline ? shared.deadline.testTimeoutMs : 0;

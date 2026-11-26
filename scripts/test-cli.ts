@@ -103,7 +103,8 @@ console.log("Module code releases what a top-level statement read; only an entry
     }
 
     // A script entry that imports its own file loads it as a separate module
-    // (docs/bytecode-vm.md), which keeps no completion value either: its
+    // (docs/engine/README.md, Script entries with imports), which keeps no
+    // completion value either: its
     // expression statement's buffer is free for the allocation after it.
     writeFileSync(
       join(tmp, "self.js"),
@@ -1868,7 +1869,7 @@ console.log("--max-memory (OOM triggers RangeError)...");
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError: ${out}`);
-  if (out.includes("memory budget")) throw new Error(`OOM should be refused by a charged allocation, not the growth gate: ${out}`);
+  if (out.includes("memory budget")) throw new Error(`OOM should be refused at the next safe point, not by a growth gate: ${out}`);
 }
 
 console.log("--max-memory (Blob bytes are charged and given back)...");
@@ -2232,7 +2233,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       // Without one, the sweep's verdict depended on where the ceiling
       // landed, not on whether it surfaced as a RangeError. A refused
       // allocation inside allSettled's iteration is a catchable RangeError
-      // (a charged allocation, docs/errors.md), so PerformPromiseAllSettled
+      // (a refusal at the next safe point, docs/errors.md), so PerformPromiseAllSettled
       // ends abruptly and allSettled rejects with it (ES2026 §27.2.4.2 step
       // 8.b, IfAbruptRejectPromise). The inputs past that point never get
       // allSettled's handlers, and the runner fails a run with its oldest

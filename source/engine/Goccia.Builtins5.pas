@@ -1,6 +1,6 @@
 unit Goccia.Builtins5;
 { Array.fromAsync, Object.groupBy / Map.groupBy, Map and WeakMap getOrInsert / getOrInsertComputed, written in JS
-  (src/prelude/builtins5.js, turned into Goccia.Builtins5.inc by t/lang/gen_prelude_inc.py) and compiled once into
+  (source/engine/prelude/builtins5.js, turned into Goccia.Builtins5.inc by build.pas) and compiled once into
   the prelude snapshot. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
