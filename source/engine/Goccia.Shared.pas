@@ -40,6 +40,9 @@ function GrowBlock(B: PSharedBlock; NewLen: Int64): Boolean;
 
 { This engine's SharedArrayBuffer objects: a block reference is released when its object is collected. }
 procedure RegisterSharedBuffer(O: PObj; B: PSharedBlock);
+{ the engine ends (EngineDone, before its heap goes): the references its objects still hold are released, and the
+  thread's async waiters and mailbox go }
+procedure SharedDone;
 
 type
   TAtomicOp = (aoAdd, aoAnd, aoExchange, aoOr, aoSub, aoXor);
@@ -180,6 +183,7 @@ begin
   Inc(SharedCount);
   GCFinalizeHook := @SharedFinalizeHook;
 end;
+
 
 { ---------------- atomics ---------------- }
 
@@ -458,12 +462,48 @@ begin
   LeaveCriticalSection(WaitLock);
 end;
 
+{ this thread's mailbox goes, with its async waiters still in the list (their promises are the ending engine's) }
+procedure DropMailbox;
+var P, Nx: PWaiter; M: PMailbox;
+begin
+  M := MyMailbox;
+  if M = nil then Exit;
+  EnterCriticalSection(WaitLock);
+  P := WaitHead;
+  while P <> nil do
+  begin
+    Nx := P^.Next;
+    if P^.Mailbox = M then
+    begin
+      Unlink(P);
+      Dispose(P);
+    end;
+    P := Nx;
+  end;
+  LeaveCriticalSection(WaitLock);
+  RTLEventDestroy(M^.Event);
+  M^.Done := nil;
+  Dispose(M);
+  MyMailbox := nil;
+end;
+
+procedure SharedDone;
+var I: Integer;
+begin
+  for I := 0 to SharedCount - 1 do ReleaseBlock(SharedBlocks[I]);
+  SharedCount := 0;
+  SharedObjs := nil;
+  SharedBlocks := nil;
+  DropMailbox;
+end;
+
 { the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
 procedure GocciaSharedThreadvarCleanup;
 begin
   SharedObjs := nil;
   SharedBlocks := nil;
+  DropMailbox;
 end;
 
 initialization

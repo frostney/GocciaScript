@@ -33,12 +33,10 @@ function EngineRunScript(const Source, FileName: UnicodeString; var Err: Unicode
 implementation
 
 uses
-  Goccia.Lazy, Goccia.Builtins, Goccia.Builtins2, Goccia.RegExpV, Goccia.Eval, Goccia.Builtins3, Goccia.Promise, Goccia.Builtins4, Goccia.Atomics, Goccia.ObjModel, Goccia.ArrayProto, Goccia.IterHelpers, Goccia.TypedArrays, Goccia.Disposal, Goccia.Modules, Goccia.Builtins5, Goccia.Temporal, Goccia.JSON, Goccia.Date, Goccia.Intl, Goccia.ShadowRealm, Goccia.Weak, Goccia.NativeLimits;
+  Goccia.Lazy, Goccia.Builtins, Goccia.Builtins2, Goccia.RegExpV, Goccia.Eval, Goccia.Builtins3, Goccia.Promise, Goccia.Builtins4, Goccia.Atomics, Goccia.ObjModel, Goccia.ArrayProto, Goccia.IterHelpers, Goccia.TypedArrays, Goccia.Disposal, Goccia.Modules, Goccia.Builtins5, Goccia.Temporal, Goccia.JSON, Goccia.Date, Goccia.Intl, Goccia.ShadowRealm, Goccia.Weak, Goccia.Shared;
 
 procedure EngineInit(NurseryBytes: SizeInt);
 begin
-  { the shared parsers' nesting guard refuses with a plain exception on this thread, which the engine throws }
-  NativeErrorsPlain := True;
   { JS arithmetic produces NaN and Infinity instead of trapping; the masks are per thread, and a new thread
     starts with the exceptions enabled }
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
@@ -84,6 +82,8 @@ begin
   WeakDone;
   ModulesDone;
   VMDone;
+  { a SharedArrayBuffer the heap still holds gives its block reference back (another engine may share it) }
+  SharedDone;
   HeapDone;
   FreeAllTemplates;
   FreeLazySources;

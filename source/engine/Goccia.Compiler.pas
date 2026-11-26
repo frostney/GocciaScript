@@ -746,6 +746,9 @@ type
     procedure BindPattern(P: TGocciaDestructuringPattern; Src: Integer; Declare: Boolean; IsConst: Boolean);
     procedure AssignToTarget(T: TGocciaExpression; Src: Integer);
     procedure DeclarePatternNames(P: TGocciaDestructuringPattern; IsConst: Boolean);
+  public
+    { frees the goal-4 name lists (what a compile error left of them) and AnnexBFuncs }
+    destructor Destroy; override;
   end;
 
 function NameHash(const N: UnicodeString): Cardinal; inline;
@@ -1193,6 +1196,14 @@ begin
 end;
 
 { the next CompileFunction's function is N (the parser's position of it); Self, for the call }
+destructor TCompiler.Destroy;
+begin
+  FreeAndNil(EvalEnvNames);
+  FreeAndNil(EvalSkipLocal);
+  FreeAndNil(AnnexBFuncs);
+  inherited Destroy;
+end;
+
 function TCompiler.ProfAt(N: TGocciaASTNode): TCompiler;
 begin
   Result := Self;
@@ -2546,6 +2557,20 @@ begin
       Prof.EnterTemplate(ProfTplName(T), T^.CodeLen, '', SourceName, Integer(PPos shr 32),
         Integer(PPos and $FFFFFFFF));
     FS := Outer;
+    { a compile error leaves the function's scopes and loops open (PopScope and EndLoop free each on the way out
+      otherwise) }
+    while F.ScopeCount > 0 do
+    begin
+      Dec(F.ScopeCount);
+      F.Scopes[F.ScopeCount].Free;
+    end;
+    while F.LoopCount > 0 do
+    begin
+      Dec(F.LoopCount);
+      FreeAndNil(F.Loops[F.LoopCount].Labels);
+    end;
+    FreeAndNil(F.PendingLabels);
+    FreeAndNil(F.ParamTDZ);
     F.Free;
     GlobalTop := SavedGlobalTop;
     InParamInit := SavedParamInit;

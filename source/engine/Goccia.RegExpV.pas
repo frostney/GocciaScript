@@ -163,6 +163,17 @@ type
 threadvar
   RegExpCtorV: TValue;
   Legacy: PLegacy;
+  { every realm's Legacy record (a realm's own is in its saved pointers while another runs): freed together when
+    the engine ends }
+  LegacyAll: array of PLegacy;
+
+procedure FreeAllLegacy;
+var I: Integer;
+begin
+  for I := 0 to High(LegacyAll) do Dispose(LegacyAll[I]);
+  LegacyAll := nil;
+  Legacy := nil;
+end;
 
 { a match that failed: the run's abort when a spent deadline interrupted it, else the matcher's limit as a
   SyntaxError }
@@ -1176,15 +1187,14 @@ end;
 procedure RegExpDone;
 begin
   FreeCompiledPatterns;
-  if Legacy <> nil then Dispose(Legacy);
-  Legacy := nil;
+  FreeAllLegacy;
   RegExpShape := nil;
   MatchShape := nil;
   IntactShape := nil;
 end;
 
 procedure InitRegExp;
-var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString; OldLegacy: PLegacy;
+var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
   procedure Getter(const Name: UnicodeString; Fn: TNativeFn);
   var F: TValue;
   begin
@@ -1203,8 +1213,7 @@ begin
     RegExpShape := nil;
     MatchShape := nil;
     IntactShape := nil;
-    OldLegacy := Legacy;
-    if OldLegacy <> nil then Dispose(OldLegacy);
+    FreeAllLegacy;
   end;
   RealmVals([@RegExpProto, @StrReplaceOrig, @StrSplitOrig, @StrReplaceAllOrig, @IntactOrig, @SpeciesOrig,
     @RegExpCtorV, @JSFns]);
@@ -1213,6 +1222,8 @@ begin
   AddRoot(@RegExpProto); AddRoot(@StrReplaceOrig); AddRoot(@StrSplitOrig); AddRoot(@StrReplaceAllOrig); AddRoot(@Scratch);
   AddRoot(@IntactOrig); AddRoot(@SpeciesOrig); AddRoot(@RegExpCtorV); AddRoot(@JSFns);
   New(Legacy);
+  SetLength(LegacyAll, Length(LegacyAll) + 1);
+  LegacyAll[High(LegacyAll)] := Legacy;
   AddRoot(@Legacy^.MatchStr); AddRoot(@Legacy^.InputStr);
   Legacy^.State := 0;
   Legacy^.MatchStr := VUndefined;
@@ -1350,6 +1361,7 @@ procedure GocciaRegExpVThreadvarCleanup;
 begin
   Compiled.Free;
   Compiled := nil;
+  FreeAllLegacy;
   IntactKeys := nil;
   IntactSlots := nil;
 end;
