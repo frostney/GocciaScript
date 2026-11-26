@@ -400,10 +400,8 @@ and access to GitHub, a C compiler and make:
 scripts/afl/build-afl.sh
 export PATH="$PWD/build/afl:$PATH"
 unset AFL_MAP_SIZE AFL_MAPSIZE
-mkdir -p build/compiled/targets/fuzzharness-afl
-AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
-  -FUbuild/compiled/targets/fuzzharness-afl \
-  -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+AFL_PATH= GOCCIA_VARIANT=Afl GOCCIA_FPC_FLAGS="-gl -Ct -Cr -Sa -B -Aas -FDscripts/afl" \
+  ./build.pas fuzzharness
 afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
 ```
 
@@ -446,12 +444,13 @@ a fresh output directory, stops it after the given seconds of fuzzing (1 to
 3600) and fails a run that ends any other way, unless it stopped on a crash
 it saved.
 
-This command line, like the scheduled workflow's, compiles with `config.cfg`
-alone. The applications build with the unit and include paths `build.pas`
-adds (`GocciaArgs`: `source/engine`, the generated prelude includes and their
-snapshot), which `config.cfg` does not name, so a direct `fpc` build of the
-harness or the test runner needs those paths too; extra options for a
-`build.pas` build of the engine go in `GOCCIA_FPC_FLAGS`.
+The build is the scheduled workflow's: `build.pas` builds the variant
+(`GOCCIA_VARIANT`) in a unit cache of its own, as `build/GocciaFuzzHarnessAfl`,
+with `GOCCIA_FPC_FLAGS` after its own options, so it keeps their `-O4`. The
+engine calls each procedural threadvar through a local copy: FPC 3.3.1's GNU
+assembler output writes a direct call of the variable otherwise, which ld
+refuses or which jumps into the thread's data, and the build's threadvar check
+(`scripts/engine/tlsscan.py`) names such a call, also when the link fails.
 
 ### Reproducing a finding
 

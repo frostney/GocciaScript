@@ -50,12 +50,12 @@ jobs:
   # (docs/contributing/tooling.md says why the tools must match). The
   # coverage probe below fails the job if they stop working together.
   #
-  # 90 minutes holds the longest dispatch (3600 s of fuzzing) through the
-  # setup, the calibration, scripts/afl/fuzz.sh's backstop 15 minutes past
+  # 110 minutes holds the longest dispatch (3600 s of fuzzing) through the
+  # setup, the calibration, scripts/afl/fuzz.sh's backstop 30 minutes past
   # the limit and the triage after it.
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -81,10 +81,12 @@ jobs:
         # of its own and writes build/GocciaFuzzHarnessAfl; GOCCIA_FPC_FLAGS
         # follow its own options. -B rebuilds every unit of this repository
         # through scripts/afl/as; FPC's own runtime library stays
-        # uninstrumented.
+        # uninstrumented. It keeps build.pas's -O4: at -O- the engine's
+        # harness runs about a third slower, and calibrating the seeds alone
+        # took 19 minutes.
         env:
           GOCCIA_VARIANT: Afl
-          GOCCIA_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+          GOCCIA_FPC_FLAGS: -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
         run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
@@ -187,7 +189,7 @@ jobs:
   fuzz-heap-snapshot:
     runs-on: ubuntu-latest
     # As in the script fuzz job.
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -217,10 +219,12 @@ jobs:
         # of its own and writes build/GocciaFuzzHarnessAfl; GOCCIA_FPC_FLAGS
         # follow its own options. -B rebuilds every unit of this repository
         # through scripts/afl/as; FPC's own runtime library stays
-        # uninstrumented.
+        # uninstrumented. It keeps build.pas's -O4: at -O- the engine's
+        # harness runs about a third slower, and calibrating the seeds alone
+        # took 19 minutes.
         env:
           GOCCIA_VARIANT: Afl
-          GOCCIA_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+          GOCCIA_FPC_FLAGS: -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
         run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
