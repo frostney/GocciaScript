@@ -2,13 +2,13 @@ program GocciaScriptLoaderBare;
 
 { GocciaScriptLoaderBare on G2: the core engine without a runtime, from a file
   or stdin. The old loader's command line (compatibility flags, source type
-  and name, --print, the limits, --profile) over a TG2Engine whose host is the
-  bare one (TG2Engine.Bare): print and Goccia but no console, timers, web APIs
+  and name, --print, the limits, --profile) over a TGocciaEngine whose host is the
+  bare one (TGocciaEngine.Bare): print and Goccia but no console, timers, web APIs
   or host modules, and no module content provider, so an import that finds its
   file fails with ERR_MODULE_LOADING_UNSUPPORTED as the old loader's does.
 
   The frame bound is G2's own unless --max-stack gives one: a bound keeps the
-  JIT off (G2.VM SetMaxFrames), and G2 refuses native recursion before the
+  JIT off (Goccia.VM SetMaxFrames), and G2 refuses native recursion before the
   native stack runs out whatever the bound. }
 
 {$I Goccia.inc}
@@ -24,7 +24,7 @@ uses
   CLI.Units,
   TextSemantics,
 
-  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.Options,
   Goccia.CLI.Stdin,
   Goccia.FileExtensions,
@@ -36,8 +36,8 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
 
-  G2.Core,
-  G2.Embed;
+  Goccia.Core,
+  Goccia.Embed;
 
 const
   BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
@@ -359,7 +359,7 @@ begin
   Result.ShadowRealm := AOptions.UnsafeShadowRealm;
 end;
 
-procedure ConfigureEngine(const AEngine: TG2Engine;
+procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
   AEngine.Bare := True;
@@ -367,11 +367,11 @@ begin
   AEngine.Profile := BareProfile(AOptions);
   case AOptions.SourceType of
     stScript:
-      AEngine.SourceKind := g2skScript;
+      AEngine.SourceKind := gskScript;
     stModule:
-      AEngine.SourceKind := g2skModule;
+      AEngine.SourceKind := gskModule;
   else
-    AEngine.SourceKind := g2skDetect;
+    AEngine.SourceKind := gskDetect;
   end;
   AEngine.JSModuleSources := AOptions.ExperimentalJSModuleSourceEnabled;
   AEngine.Deterministic := AOptions.Deterministic;
@@ -381,10 +381,10 @@ begin
   if AOptions.StackSizeSet then
     AEngine.MaxFrames := AOptions.StackSize;
   if AOptions.Print then
-    AEngine.ResultForm := g2rfString;
+    AEngine.ResultForm := grfString;
 end;
 
-procedure InitializeProfiler(const AEngine: TG2Engine;
+procedure InitializeProfiler(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
   if not AOptions.ProfileModePresent then
@@ -419,14 +419,14 @@ end;
 { a failed run on stderr: the error with its code frame, as GocciaRunner on G2
   words it; a spent limit as the old loader's "Error: ..." line }
 procedure ReportFailure(const ADisplayName: string;
-  const AResult: TG2RunResult; const ASource: TStringList;
-  const AEngine: TG2Engine; const AOptions: TBareOptions);
+  const AResult: TGocciaRunResult; const ASource: TStringList;
+  const AEngine: TGocciaEngine; const AOptions: TBareOptions);
 var
   Text: string;
 begin
   Text := FailureText(ADisplayName, AResult, ASource, AEngine, '', nil, True,
     True, IsColorTerminal, AOptions.TimeoutMs, AOptions.MaxInstructions);
-  if (AResult.Aborted <> g2aNone) and StartsStr(FATAL_PREFIX, Text) then
+  if (AResult.Aborted <> gaNone) and StartsStr(FATAL_PREFIX, Text) then
     Text := 'Error: ' + Copy(Text, Length(FATAL_PREFIX) + 1, MaxInt);
   WriteLn(ErrOutput, TrimRight(Text));
 end;
@@ -434,9 +434,9 @@ end;
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
-  Engine: TG2Engine;
+  Engine: TGocciaEngine;
   Resolver: TGocciaModuleResolver;
-  RunResult: TG2RunResult;
+  RunResult: TGocciaRunResult;
   Source: TStringList;
   Warnings: TBareWarnings;
 begin
@@ -455,7 +455,7 @@ begin
       specifier is refused), against the entry's directory }
     Resolver := TGocciaModuleResolver.Create(
       ExtractFilePath(ExpandFileName(DisplayName)));
-    Engine := TG2Engine.Create;
+    Engine := TGocciaEngine.Create;
     try
       ConfigureEngine(Engine, AOptions);
       Engine.Resolver := Resolver;
@@ -491,14 +491,14 @@ end;
 var
   Options: TBareOptions;
   SetupError: UnicodeString;
-  SnapshotEngine: TG2Engine;
+  SnapshotEngine: TGocciaEngine;
 begin
-  { the build's prelude snapshot stage (build.pas sets G2_SNAPSHOT_OUT): the
+  { the build's prelude snapshot stage (build.pas sets GOCCIA_SNAPSHOT_OUT): the
     bare host's preludes compiled once and written for the embedding build }
-  if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
     SetupError := '';
-    SnapshotEngine := TG2Engine.Create;
+    SnapshotEngine := TGocciaEngine.Create;
     SnapshotEngine.Bare := True;
     if not SnapshotEngine.PrepareHost(SetupError) then
     begin

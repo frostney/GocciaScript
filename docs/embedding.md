@@ -4,23 +4,23 @@
 
 ## Executive Summary
 
-- **Quick start** — `TG2Engine.Create` (unit `G2.Embed`) builds an engine on the calling thread; `Run(FileName, Source)` compiles and runs one entry as a Script or a Module, then its jobs and timers, and returns a `TG2RunResult` instead of raising
+- **Quick start** — `TGocciaEngine.Create` (unit `Goccia.Embed`) builds an engine on the calling thread; `Run(FileName, Source)` compiles and runs one entry as a Script or a Module, then its jobs and timers, and returns a `TGocciaRunResult` instead of raising
 - **Host surface** — The first run (or `PrepareHost`) installs the CLI hosts' globals and `goccia:` modules; `Bare` leaves only the core language, and settings such as `ExposeTimers`, `ConfigJson`, `Profile` and `Capabilities` choose what else a script sees
-- **Sandboxing** — An optional immutable [capability set](permissions.md) judges module reads, `fetch` and `FFI`; an `AuditSink` receives every decision; `TimeoutMs`, `MaxInstructions`, `MaxMemory` and `MaxFrames` bound a run; `TG2SandboxHost` runs scripts over an in-memory filesystem
+- **Sandboxing** — An optional immutable [capability set](permissions.md) judges module reads, `fetch` and `FFI`; an `AuditSink` receives every decision; `TimeoutMs`, `MaxInstructions`, `MaxMemory` and `MaxFrames` bound a run; `TGocciaSandboxHost` runs scripts over an in-memory filesystem
 - **Globals and modules** — Inject globals from JSON, data files or Pascal natives; resolve imports through a `TGocciaModuleResolver` with aliases and import maps; define virtual modules; receive parse warnings through `OnWarning` and `OnModuleWarning`
-- **One engine per thread** — Every piece of engine state is a threadvar (`G2.Engine`), so engines on different threads run side by side and share nothing
+- **One engine per thread** — Every piece of engine state is a threadvar (`Goccia.Engine`), so engines on different threads run side by side and share nothing
 
-Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). The engine is G2 ([G2 overview](g2/README.md), [design](g2/design.md)): `G2.Compiler` compiles the front end's syntax tree (`Goccia.Parser`, `Goccia.SourcePipeline`) to register bytecode, `G2.VM` runs it in an interpreter, and on Linux x86-64 a baseline JIT and an optimizing tier compile hot code. `TG2Engine` in `G2.Embed` is the API the applications in `source/app` build on, and the one this page describes.
+Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). The engine is G2 ([G2 overview](engine/README.md), [design](engine/design.md)): `Goccia.Compiler` compiles the front end's syntax tree (`Goccia.Parser`, `Goccia.SourcePipeline`) to register bytecode, `Goccia.VM` runs it in an interpreter, and on Linux x86-64 a baseline JIT and an optimizing tier compile hot code. `TGocciaEngine` in `Goccia.Embed` is the API the applications in `source/app` build on, and the one this page describes.
 
 ## Building an Embedding
 
-G2 needs FPC 3.3.1 from fpc-toolchain; `build.pas` refuses an older compiler. A program that embeds the engine compiles with the paths `build.pas` passes for its own G2 programs (`G2Args`):
+G2 needs FPC 3.3.1 from fpc-toolchain; `build.pas` refuses an older compiler. A program that embeds the engine compiles with the paths `build.pas` passes for its own G2 programs (`GocciaArgs`):
 
-- units from `source/g2`, `source/units`, `source/shared` and `source/generated` (and `source/app` for `Goccia.CLI.*` helpers such as `TG2SandboxHost`);
-- includes from the same directories, plus `build/g2/gen`, where `build.pas` writes each JS prelude of `source/g2/prelude` as a Pascal constant when it builds any G2 program, and a directory holding `G2.PreludeSnapshot.inc`;
+- units from `source/engine`, `source/units`, `source/shared` and `source/generated` (and `source/app` for `Goccia.CLI.*` helpers such as `TGocciaSandboxHost`);
+- includes from the same directories, plus `build/engine/gen`, where `build.pas` writes each JS prelude of `source/engine/prelude` as a Pascal constant when it builds any G2 program, and a directory holding `Goccia.PreludeSnapshot.inc`;
 - the compiled resources of `source/generated` (`*.res`) in the unit output directory.
 
-`G2.PreludeSnapshot.inc` holds the preludes compiled ahead of time (`G2.Snapshot`). `build.pas` makes it per program: it compiles the program, runs it once with `G2_SNAPSHOT_OUT` set, writes what the run recorded as the include and compiles again. A program compiled with an empty snapshot (`G2PreludeSnapshotSize = 0` and a one-byte `G2PreludeSnapshot`) also works and compiles its preludes each time an engine is created.
+`Goccia.PreludeSnapshot.inc` holds the preludes compiled ahead of time (`Goccia.Snapshot`). `build.pas` makes it per program: it compiles the program, runs it once with `GOCCIA_SNAPSHOT_OUT` set, writes what the run recorded as the include and compiles again. A program compiled with an empty snapshot (`GocciaPreludeSnapshotSize = 0` and a one-byte `GocciaPreludeSnapshot`) also works and compiles its preludes each time an engine is created.
 
 ## Quick Start
 
@@ -33,13 +33,13 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
 
-  G2.Embed;
+  Goccia.Embed;
 
 var
-  Engine: TG2Engine;
-  RunResult: TG2RunResult;
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
 begin
-  Engine := TG2Engine.Create;
+  Engine := TGocciaEngine.Create;
   try
     RunResult := Engine.Run('hello.js', 'console.log("hello from GocciaScript");');
     if not RunResult.Ok then
@@ -57,7 +57,7 @@ end.
 
 ## Engine API
 
-`TG2Engine` (`G2.Embed`) is a plain class. Its settings are properties read when the host is prepared or when a run starts:
+`TGocciaEngine` (`Goccia.Embed`) is a plain class. Its settings are properties read when the host is prepared or when a run starts:
 
 | Group | Members |
 |-------|---------|
@@ -76,7 +76,7 @@ The remaining members (`BeginGuestLoads`, `GuestScope`, `GuestReadAllowed`, `End
 
 ### Engine Constructor
 
-`TG2Engine.Create` takes no arguments. It builds the thread's heap, VM, intrinsics and realm (`G2.Engine` `EngineInit`) and sets the defaults: the recommended language profile, `ConfigJson` `'{}'`, `ExposeTimers` on, and every other setting off or zero. `Destroy` frees the thread's engine; values and closures from it are invalid afterwards.
+`TGocciaEngine.Create` takes no arguments. It builds the thread's heap, VM, intrinsics and realm (`Goccia.Engine` `EngineInit`) and sets the defaults: the recommended language profile, `ConfigJson` `'{}'`, `ExposeTimers` on, and every other setting off or zero. `Destroy` frees the thread's engine; values and closures from it are invalid afterwards.
 
 The host's globals and modules are installed once, by `PrepareHost(Err)` or by the first `Run`, `RunArtifact` or injection call; `CompileArtifact` needs no host. Settings that shape the host (`Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `Deterministic`, `Capabilities`, `Profile.ShadowRealm`) must be set before that. Settings of a run (`Profile`, `SourceKind`, `ResultForm`, the callbacks, `Resolver` and the limits) are read by each `Run`, so a long-lived engine may change them between runs.
 
@@ -86,19 +86,19 @@ The host's globals and modules are installed once, by `PrepareHost(Err)` or by t
 
 | `SourceKind` | Entry runs as |
 |--------------|---------------|
-| `g2skDetect` (default) | A Module when the file name ends in `.mjs` or the source has a top-level `import` or `export` declaration, and for ambiguous top-level `await` a Module first; otherwise a Script ([entry source type policy](language.md#modules)) |
-| `g2skScript` | A Script; GocciaScript's [Script imports](language.md#modules) are linked first and bound as its globals |
-| `g2skModule` | A Module |
+| `gskDetect` (default) | A Module when the file name ends in `.mjs` or the source has a top-level `import` or `export` declaration, and for ambiguous top-level `await` a Module first; otherwise a Script ([entry source type policy](language.md#modules)) |
+| `gskScript` | A Script; GocciaScript's [Script imports](language.md#modules) are linked first and bound as its globals |
+| `gskModule` | A Module |
 
-`TG2RunResult.IsModule` reports the goal the run settled on. After the entry, `Run` runs the jobs the script queued, then its timers in due order on the virtual timer clock, each followed by its jobs (`G2.HostAPI` `RunEventLoop`; [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md)), and waits for its `fetch` requests. An entry Module that is still waiting once nothing is left to settle it fails with `TypeError: await: Promise did not settle`.
+`TGocciaRunResult.IsModule` reports the goal the run settled on. After the entry, `Run` runs the jobs the script queued, then its timers in due order on the virtual timer clock, each followed by its jobs (`Goccia.HostAPI` `RunEventLoop`; [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md)), and waits for its `fetch` requests. An entry Module that is still waiting once nothing is left to settle it fails with `TypeError: await: Promise did not settle`.
 
 ### Long-Lived Engine
 
-Runs on one engine share its realm. A Script's top-level `let`, `const` and `class` declarations become global lexical bindings (ES2026 §16.1.7 GlobalDeclarationInstantiation), so a later Script sees them, and declaring one again is a `SyntaxError`. `GocciaREPL` runs every input this way with `SourceKind := g2skScript`:
+Runs on one engine share its realm. A Script's top-level `let`, `const` and `class` declarations become global lexical bindings (ES2026 §16.1.7 GlobalDeclarationInstantiation), so a later Script sees them, and declaring one again is a `SyntaxError`. `GocciaREPL` runs every input this way with `SourceKind := gskScript`:
 
 ```pascal
-Engine.SourceKind := g2skScript;
-Engine.ResultForm := g2rfString;
+Engine.SourceKind := gskScript;
+Engine.ResultForm := grfString;
 Show(Engine.Run('session', 'const x = add(40, retries - 1);'));  // undefined
 Show(Engine.Run('session', 'x + limits.max'));                   // 52
 ```
@@ -109,45 +109,45 @@ Show(Engine.Run('session', 'x + limits.max'));                   // 52
 
 Values live on the engine's thread and never leave it. A host reads the entry's completion value as text, by setting `ResultForm` before the run:
 
-| `ResultForm` | `TG2RunResult.ResultText` |
+| `ResultForm` | `TGocciaRunResult.ResultText` |
 |--------------|---------------------------|
-| `g2rfNone` (default) | Nothing; `HasResult` stays False |
-| `g2rfString` | `String(value)`, as `--print` shows it |
-| `g2rfJSON` | `JSON.stringify(value)` by the built-in `JSON.stringify` taken when the host was installed; `undefined` and what JSON leaves out read `null`, a function its quoted `String` form |
-| `g2rfREPL`, `g2rfREPLColor` | The REPL's display of the value, without or with ANSI colors |
-| `g2rfSandbox` | An encoding another engine decodes (`G2.Sandbox` `EncodeSandboxValue`), for a nested sandbox run |
+| `grfNone` (default) | Nothing; `HasResult` stays False |
+| `grfString` | `String(value)`, as `--print` shows it |
+| `grfJSON` | `JSON.stringify(value)` by the built-in `JSON.stringify` taken when the host was installed; `undefined` and what JSON leaves out read `null`, a function its quoted `String` form |
+| `grfREPL`, `grfREPLColor` | The REPL's display of the value, without or with ANSI colors |
+| `grfSandbox` | An encoding another engine decodes (`Goccia.Sandbox` `EncodeSandboxValue`), for a nested sandbox run |
 
 The value is converted after the event loop, under the run's limits; a conversion that throws fails the run. Data that must reach Pascal in another shape goes through a native function of the host's own ([below](#injecting-a-native-function)).
 
 ### Timing
 
-`TG2RunResult.CompileNanoseconds` is the time spent lexing, parsing and compiling the entry, and `ExecuteNanoseconds` the time spent running it with its event loop. `FormatDuration` (`TimingUtils`) prints either.
+`TGocciaRunResult.CompileNanoseconds` is the time spent lexing, parsing and compiling the entry, and `ExecuteNanoseconds` the time spent running it with its event loop. `FormatDuration` (`TimingUtils`) prints either.
 
 ### Upgrading from 0.14
 
-GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor into TGocciaEngine ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)). That engine, TGocciaRuntime and the runtime extension classes are now gone as well: code written for 0.14, or for the TGocciaEngine API of later releases, moves to `TG2Engine`.
+GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor into TGocciaEngine ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)). That engine, TGocciaRuntime and the runtime extension classes are now gone as well: code written for 0.14, or for the TGocciaEngine API of later releases, moves to `TGocciaEngine`.
 
 | Before (no longer exists) | Now |
 |--------|-----|
-| TGocciaEngine.Create(FileName, Source), Execute, RunScript | `TG2Engine.Create`, then `Run(FileName, Source)` |
+| TGocciaEngine.Create(FileName, Source), Execute, RunScript | `TGocciaEngine.Create`, then `Run(FileName, Source)` |
 | TGocciaRuntime, ApplyLoaderRuntimeProfile, runtime extensions | `PrepareHost` installs the host surface; `Bare` for the core language only ([Runtime Extensions](#runtime-extensions)) |
-| Engine.SourceType (stDetect, stScript, stModule) | `SourceKind` (`g2skDetect`, `g2skScript`, `g2skModule`) |
+| Engine.SourceType (stDetect, stScript, stModule) | `SourceKind` (`gskDetect`, `gskScript`, `gskModule`) |
 | Compatibility, StrictTypes, WarningUnsupportedFeatures | Fields of `Profile` ([Preprocessors and Compatibility](#preprocessors-and-compatibility)) |
 | GlobalBackedTopLevel | None: a Script's top-level declarations are always global bindings |
 | FunctionConstructor.Enabled, EnableShadowRealm | `Profile.FunctionCtor`, `Profile.ShadowRealm` |
 | EnableEval | None ([Changing the Defaults](#changing-the-defaults)) |
-| GlobalScope.DefineLexicalBinding, RegisterGlobal | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals`, or `G2.VM` `InjectGlobalBinding` |
+| GlobalScope.DefineLexicalBinding, RegisterGlobal | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals`, or `Goccia.VM` `InjectGlobalBinding` |
 | InjectModule, InjectModulesFromJSON | `DefineInlineVirtualModule`, `DefineManifestVirtualModules` |
 | AddAlias, LoadImportMap on the engine | The same calls on a `TGocciaModuleResolver` assigned to `Resolver` |
 | The console's OutputCallback | `OnConsole` |
 | StartExecutionTimeout, StartInstructionLimit, SetMaxStackDepth, TGarbageCollector.MaxBytes | `TimeoutMs`, `MaxInstructions`, `MaxFrames`, `MaxMemory` |
 | UnhandledRejections | `FailOnUnhandledRejection` |
-| Pascal exceptions from a run | Fields of `TG2RunResult` ([Error Handling](#error-handling)) |
+| Pascal exceptions from a run | Fields of `TGocciaRunResult` ([Error Handling](#error-handling)) |
 | CaptureAbortHandle, Engine.FetchTransport | None ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread), [Fetch Transport](#fetch-transport)) |
 
 ## Engine Lifecycle & Realm Isolation
 
-Each `TG2Engine` owns its thread's heap, atoms, shapes, stacks, intrinsics and job queue; `Destroy` frees all of them (`G2.Engine` `EngineDone`). The next engine on the thread starts from fresh intrinsics, so a script that changed `Array.prototype`, even with a non-configurable property, cannot affect it.
+Each `TGocciaEngine` owns its thread's heap, atoms, shapes, stacks, intrinsics and job queue; `Destroy` frees all of them (`Goccia.Engine` `EngineDone`). The next engine on the thread starts from fresh intrinsics, so a script that changed `Array.prototype`, even with a non-configurable property, cannot affect it.
 
 - **Test runners and conformance harnesses** create an engine per file. `GocciaTestRunner` does, on a thread per file.
 - **Hosts of untrusted scripts** create an engine per script, so each starts from a clean realm.
@@ -157,14 +157,14 @@ A `ShadowRealm` (with `Profile.ShadowRealm`) is a realm of its own inside the en
 
 ### Threading
 
-One engine exists per thread at a time; values never cross threads. Engines on different threads run in parallel: `GocciaRunner`, `GocciaTestRunner` and `GocciaBenchmarkRunner` run each file on a thread of its own with its own engine, and `TG2SandboxHost` runs each nested `runScript` on a new thread, passing the child's value back as text.
+One engine exists per thread at a time; values never cross threads. Engines on different threads run in parallel: `GocciaRunner`, `GocciaTestRunner` and `GocciaBenchmarkRunner` run each file on a thread of its own with its own engine, and `TGocciaSandboxHost` runs each nested `runScript` on a new thread, passing the child's value back as text.
 
-- The JIT compiles on one thread at a time: the thread that loaded `G2.VM`, until another thread calls `JitTakeThread` (`G2.VM`). The CLI hosts hand it to the first file thread that claims it; code on other threads runs in the interpreter.
-- The VM checks the native stack (`G2.Core` `NativeStackLow`) and throws `RangeError: Maximum call stack size exceeded` before it runs out, whatever the thread's stack size. The CLI hosts give a file thread a 64 MiB stack (`FILE_THREAD_STACK`), so native recursion reaches as deep as on the main thread.
+- The JIT compiles on one thread at a time: the thread that loaded `Goccia.VM`, until another thread calls `JitTakeThread` (`Goccia.VM`). The CLI hosts hand it to the first file thread that claims it; code on other threads runs in the interpreter.
+- The VM checks the native stack (`Goccia.Core` `NativeStackLow`) and throws `RangeError: Maximum call stack size exceeded` before it runs out, whatever the thread's stack size. The CLI hosts give a file thread a 64 MiB stack (`FILE_THREAD_STACK`), so native recursion reaches as deep as on the main thread.
 
 ## Preprocessors and Compatibility
 
-`Profile` is a `TLangProfile` (`G2.Core`). `RecommendedProfile` returns the recommended profile: `Restricted` set and every switch off. A host changes switches on a copy and assigns it before the run:
+`Profile` is a `TLangProfile` (`Goccia.Core`). `RecommendedProfile` returns the recommended profile: `Restricted` set and every switch off. A host changes switches on a copy and assigns it before the run:
 
 ```pascal
 Profile := RecommendedProfile;
@@ -184,7 +184,7 @@ Engine.Profile := Profile;
 | `FunctionCtor` | The `Function` constructor | `--unsafe-function-constructor` |
 | `ShadowRealm` | The `ShadowRealm` global (read when the host is installed) | `--unsafe-shadowrealm` |
 
-With `Restricted` False every compatibility switch reads as on (`G2.Core` `ProfileNonStrict` and the rest); the CLI hosts keep it set. `JSModuleSources` turns on GocciaScript's experimental JavaScript module source objects (`--experimental-js-module-source`). JSX, TypeScript-style type annotations and the rest of the front end's preprocessing apply as the [Language](language.md) page describes; G2 uses the shared front end (`Goccia.SourcePipeline`) with these options.
+With `Restricted` False every compatibility switch reads as on (`Goccia.Core` `ProfileNonStrict` and the rest); the CLI hosts keep it set. `JSModuleSources` turns on GocciaScript's experimental JavaScript module source objects (`--experimental-js-module-source`). JSX, TypeScript-style type annotations and the rest of the front end's preprocessing apply as the [Language](language.md) page describes; G2 uses the shared front end (`Goccia.SourcePipeline`) with these options.
 
 ## Changing the Defaults
 
@@ -196,11 +196,11 @@ An engine starts with the recommended language profile and without dynamic code 
 | `Profile.FunctionCtor` | The `Function` constructor, which throws while it is off | `--unsafe-function-constructor` | `function.constructor` |
 | `Profile.ShadowRealm` | Installs `globalThis.ShadowRealm` | `--unsafe-shadowrealm` | `shadow-realm.construct` |
 
-A `TG2Engine` host has no global `eval`: the host deletes it from every realm it creates (`G2.HostAPI` `CLIRealmInit`), and no setting installs it. The `Function` constructor and `ShadowRealm.prototype.evaluate` run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
+A `TGocciaEngine` host has no global `eval`: the host deletes it from every realm it creates (`Goccia.HostAPI` `CLIRealmInit`), and no setting installs it. The `Function` constructor and `ShadowRealm.prototype.evaluate` run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
 
 ## Runtime Extensions
 
-G2 has no runtime extension classes. Its host surface is a set of JS preludes (`source/g2/prelude`) that `PrepareHost` installs with the natives they need (`G2.HostAPI` `InstallHostGlobals`):
+G2 has no runtime extension classes. Its host surface is a set of JS preludes (`source/engine/prelude`) that `PrepareHost` installs with the natives they need (`Goccia.HostAPI` `InstallHostGlobals`):
 
 - **Globals**: `console`, `performance`, the timer functions, `queueMicrotask`, `URL` and `URLSearchParams`, `fetch` with `Headers` and `Response`, `AbortController`, `structuredClone`, `TextEncoder` and `TextDecoder`, `atob` and `btoa`, `DOMException`, `PermissionDenied`, and the `Goccia` object.
 - **Modules**: `goccia:csv`, `goccia:tsv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:yaml`, `goccia:semver`, `goccia:timers` and `node:async_hooks`; `goccia:ast` when `ConfigJson` sets `"experimental-ast": "true"`.
@@ -212,16 +212,16 @@ Settings choose the rest:
 | `Bare` | Only the core language with `print`, `Goccia`, `DOMException`, `atob`, `btoa` and `PermissionDenied`: no console, timers, web APIs or host modules, and no module content provider, so an import that finds its file fails with `ERR_MODULE_LOADING_UNSUPPORTED` (`GocciaScriptLoaderBare`) |
 | `ExposeTimers := False` | No timer globals and no `goccia:timers`; the timer queue still serves the host's own users, such as `AbortSignal.timeout` |
 | `ConfigJson` | The host config as a JSON object of strings (`goccia.json`'s keys), read by the preludes |
-| `TestMode` | The test framework's host: an uncaught error does not end the process; `InstallTestingAPI` (`G2.HostAPI`) then installs `describe`, `test`, `expect` and `goccia:test`, and `RunTests` runs the suites |
+| `TestMode` | The test framework's host: an uncaught error does not end the process; `InstallTestingAPI` (`Goccia.HostAPI`) then installs `describe`, `test`, `expect` and `goccia:test`, and `RunTests` runs the suites |
 | `BenchMode` | The benchmark runner's host: `InstallBenchmarkAPI` installs `goccia:microbench`, and the limits `Run` armed stay armed for `RunBenchmarks` |
 | `Capabilities` granting `ffi` | Installs the `FFI` global; `FFI.open` judges each library by the `ffi` scopes |
 
 ### Sandbox filesystem
 
-`TG2SandboxHost` (`Goccia.CLI.G2SandboxHost`) runs a program over an in-memory filesystem, as `GocciaRunner`'s sandbox mode does: each run gets a thread and an engine of its own, imports and data files come from the virtual filesystem, and scripts see the import-only `"fs"`, `"goccia"` and `goccia:search` [sandbox modules](built-ins.md#sandbox-modules). The embedder fills `Host.Context.Fs` (a `TSandboxVirtualFileSystem`) before the run.
+`TGocciaSandboxHost` (`Goccia.CLI.SandboxHost`) runs a program over an in-memory filesystem, as `GocciaRunner`'s sandbox mode does: each run gets a thread and an engine of its own, imports and data files come from the virtual filesystem, and scripts see the import-only `"fs"`, `"goccia"` and `goccia:search` [sandbox modules](built-ins.md#sandbox-modules). The embedder fills `Host.Context.Fs` (a `TSandboxVirtualFileSystem`) before the run.
 
 ```pascal
-Host := TG2SandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA, DEFAULT_SANDBOX_NODE_QUOTA);
+Host := TGocciaSandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA, DEFAULT_SANDBOX_NODE_QUOTA);
 try
   Host.TimeoutMilliseconds := 5000;
   Host.Context.Fs.MakeDirectory('/data', True);
@@ -242,13 +242,13 @@ finally
 end;
 ```
 
-`AddReadOnlyPath` makes a path and everything under it read-only, whether or not it exists yet: an `fs` call that would change something there fails with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors), [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)). Mark paths after filling them, because the marks refuse the embedder's writes too. `RootCapabilities` is the root run's capability set (`TGocciaCapabilities.None` by default); a nested `runScript` inherits its parent's set and at most the time its parent has left. The `FailureKind` of a `TGocciaSandboxRunResult` tells a script error from a resource ceiling or a timeout (`SandboxFailureKindName`). `OnConfigureEngine` sets up each run's `TG2Engine` (profile, settings, audit) before it runs.
+`AddReadOnlyPath` makes a path and everything under it read-only, whether or not it exists yet: an `fs` call that would change something there fails with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors), [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)). Mark paths after filling them, because the marks refuse the embedder's writes too. `RootCapabilities` is the root run's capability set (`TGocciaCapabilities.None` by default); a nested `runScript` inherits its parent's set and at most the time its parent has left. The `FailureKind` of a `TGocciaSandboxRunResult` tells a script error from a resource ceiling or a timeout (`SandboxFailureKindName`). `OnConfigureEngine` sets up each run's `TGocciaEngine` (profile, settings, audit) before it runs.
 
 The third constructor argument is an optional `TSandboxFsClock` that stamps every file of the host's filesystem and of every isolated nested run; `nil` reads the wall clock, and the host does not own it. `TGocciaSandboxFsHostClock.Create(TGocciaHostEnvironment.DeterministicClock)` stamps every file with the epoch, in step with an engine that uses the [deterministic profile](host-environment.md#deterministic-profile); `GocciaRunner --deterministic` does this in sandbox mode.
 
 ## Console Output Capture
 
-Without `OnConsole`, console lines go to standard output. `OnConsole` (a `TG2ConsoleEvent`, `G2.HostAPI` `TConsoleSink`) receives each line with the console method that wrote it instead. `Line` is the text the console would print, including the prefix the console gives some methods, such as `Warning:` for `console.warn`:
+Without `OnConsole`, console lines go to standard output. `OnConsole` (a `TGocciaConsoleEvent`, `Goccia.HostAPI` `TConsoleSink`) receives each line with the console method that wrote it instead. `Line` is the text the console would print, including the prefix the console gives some methods, such as `Warning:` for `console.warn`:
 
 ```pascal
 type
@@ -265,7 +265,7 @@ end;
 Engine.OnConsole := Host.Console;
 ```
 
-`GocciaRunner` captures the console this way for its JSON output (`Goccia.CLI.G2FileEngine` `TG2ConsoleCapture`), and `TG2SandboxHost` collects each run's lines in its result's `Output`.
+`GocciaRunner` captures the console this way for its JSON output (`Goccia.CLI.FileEngine` `TGocciaConsoleCapture`), and `TGocciaSandboxHost` collects each run's lines in its result's `Output`.
 
 ## Parse Warnings
 
@@ -309,15 +309,15 @@ if not Engine.PrepareHost(Err) or
 
 ### Injecting a Native Function
 
-`TG2Engine` has no method for Pascal functions. A host defines one with the `G2.VM` routines the host's own natives use (`G2.HostAPI`), after `PrepareHost`, on the engine's thread. A native is a `TNativeFn` (`G2.Core`): `Args[0]` is `this`, `Args[1..Argc]` the arguments; it writes its result and returns True, or returns False with an exception pending. The function value must stay rooted while anything allocates:
+`TGocciaEngine` has no method for Pascal functions. A host defines one with the `Goccia.VM` routines the host's own natives use (`Goccia.HostAPI`), after `PrepareHost`, on the engine's thread. A native is a `TNativeFn` (`Goccia.Core`): `Args[0]` is `this`, `Args[1..Argc]` the arguments; it writes its result and returns True, or returns False with an exception pending. The function value must stay rooted while anything allocates:
 
 ```pascal
 {$POINTERMATH ON}
 
 uses
-  G2.Core,
-  G2.Embed,
-  G2.VM;
+  Goccia.Core,
+  Goccia.Embed,
+  Goccia.VM;
 
 { add(a, b) }
 function NativeAdd(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -362,7 +362,7 @@ Aliases follow WHATWG import map matching: a key without a trailing `/` matches 
 
 ### Bare Specifiers and node_modules
 
-A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant` callback grants the walk; a resolver without one refuses it. The CLI hosts answer it from the `import` capability (`Goccia.CLI.G2FileEngine` `TG2ImportGrant`), which also grants and audits provider packages (`ProviderGrant`, `ProviderAudit`) and checks their files against their pins through `ModuleContentCheck` and `ProviderGraph`.
+A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant` callback grants the walk; a resolver without one refuses it. The CLI hosts answer it from the `import` capability (`Goccia.CLI.FileEngine` `TGocciaImportGrant`), which also grants and audits provider packages (`ProviderGrant`, `ProviderAudit`) and checks their files against their pins through `ModuleContentCheck` and `ProviderGraph`.
 
 ### Virtual Modules
 
@@ -377,11 +377,11 @@ A definition is `address=source` or `address=` followed by a JSON descriptor; re
 
 ### Custom Content Provider
 
-`TG2Engine` reads module files from the host filesystem through `Resolver`'s result, and has no content-provider property. `ModuleContentCheck` sees each module file's bytes before they are compiled and refuses a file by raising. For module text that is not on disk, use virtual modules; to serve a whole tree from memory, use the [sandbox filesystem](#sandbox-filesystem), which installs a thread file reader (`G2.Modules` `SetFileReadHook`) and a resolver over the same tree (`TGocciaSandboxModuleResolver`). With `Bare` set there is no content provider at all ([Errors](errors.md)).
+`TGocciaEngine` reads module files from the host filesystem through `Resolver`'s result, and has no content-provider property. `ModuleContentCheck` sees each module file's bytes before they are compiled and refuses a file by raising. For module text that is not on disk, use virtual modules; to serve a whole tree from memory, use the [sandbox filesystem](#sandbox-filesystem), which installs a thread file reader (`Goccia.Modules` `SetFileReadHook`) and a resolver over the same tree (`TGocciaSandboxModuleResolver`). With `Bare` set there is no content provider at all ([Errors](errors.md)).
 
 ### Bytecode Files
 
-`CompileArtifact(FileName, Source, Bytes, R)` compiles a source as `Run` would and writes it as a G2 bytecode file (`G2.Artifact`) without running it; `RunArtifact(FileName, Bytes)` runs such a file as the entry after checking its recorded profile against the engine's settings. `GocciaBundler` and `GocciaRunner` use them; see [Precompiled bytecode modules](bytecode-loading.md).
+`CompileArtifact(FileName, Source, Bytes, R)` compiles a source as `Run` would and writes it as a G2 bytecode file (`Goccia.Artifact`) without running it; `RunArtifact(FileName, Bytes)` runs such a file as the entry after checking its recorded profile against the engine's settings. `GocciaBundler` and `GocciaRunner` use them; see [Precompiled bytecode modules](bytecode-loading.md).
 
 ## Capabilities and Audit
 
@@ -407,17 +407,17 @@ Engine.AuditSink := Log.Record_;
 {"schemaVersion":1,"kind":"net.fetch","decision":"deny","subject":"example.com","reason":"the net capability does not allow this host","source":{"file":"/app/caps.js","line":3,"column":13}}
 ```
 
-`Audit(Kind, Allow, Subject, Reason)` reports a decision of the host's own the same way. A sink that raises ends the run past every handler, with `Aborted = g2aHostAbort`.
+`Audit(Kind, Allow, Subject, Reason)` reports a decision of the host's own the same way. A sink that raises ends the run past every handler, with `Aborted = gaHostAbort`.
 
 ## Error Handling
 
-`Run` reports how a run ended in its `TG2RunResult`; a script error, a syntax error or a spent limit never raises a Pascal exception. See [Errors](errors.md) for the error types and their display, and [JSON Output](json-output.md) for the CLI's report.
+`Run` reports how a run ended in its `TGocciaRunResult`; a script error, a syntax error or a spent limit never raises a Pascal exception. See [Errors](errors.md) for the error types and their display, and [JSON Output](json-output.md) for the CLI's report.
 
 | Field | Meaning |
 |-------|---------|
 | `Ok` | The run completed |
 | `Compiled` | The entry compiled; False for a syntax error |
-| `Aborted` | `g2aNone`, or the limit or host abort that ended the run ([Execution Limits](#execution-limits)) |
+| `Aborted` | `gaNone`, or the limit or host abort that ended the run ([Execution Limits](#execution-limits)) |
 | `ErrorMessage` | The uncaught value as text (`TypeError: bad input`), or the limit's message |
 | `ErrorIsError` | The thrown value had a string `name` or `message`, or the source did not compile |
 | `ErrorName`, `ErrorText` | Its name and message |
@@ -429,7 +429,7 @@ Engine.AuditSink := Log.Record_;
 if not R.Ok then
   if not R.Compiled then
     WriteLn('syntax error at ', R.ErrorLine, ':', R.ErrorColumn, ': ', UTF8Encode(R.ErrorText))
-  else if R.Aborted <> g2aNone then
+  else if R.Aborted <> gaNone then
     WriteLn('stopped: ', UTF8Encode(R.ErrorMessage))
   else if R.ErrorIsError then
     WriteLn(UTF8Encode(R.ErrorName), ': ', UTF8Encode(R.ErrorText), ' (', UTF8Encode(R.ErrorFile), ':',
@@ -438,9 +438,9 @@ if not R.Ok then
     WriteLn('uncaught: ', UTF8Encode(R.ErrorMessage));
 ```
 
-`FailureText` (`Goccia.CLI.G2FileEngine`) formats a failed run as `GocciaRunner` prints it, with a code frame.
+`FailureText` (`Goccia.CLI.FileEngine`) formats a failed run as `GocciaRunner` prints it, with a code frame.
 
-**Unhandled rejections.** A promise left rejected with no handler (ES2026 §27.2.1.9 HostPromiseRejectionTracker) fails the run only when `FailOnUnhandledRejection` is set; its reason is then the uncaught error. It is off by default, so an embedder that wants the CLI behaviour ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)) sets it, as `GocciaRunner`, `GocciaREPL` and `TG2SandboxHost` do. What a run left rejected is cleared with it, so the next run on the engine is not blamed.
+**Unhandled rejections.** A promise left rejected with no handler (ES2026 §27.2.1.9 HostPromiseRejectionTracker) fails the run only when `FailOnUnhandledRejection` is set; its reason is then the uncaught error. It is off by default, so an embedder that wants the CLI behaviour ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)) sets it, as `GocciaRunner`, `GocciaREPL` and `TGocciaSandboxHost` do. What a run left rejected is cleared with it, so the next run on the engine is not blamed.
 
 **Host exceptions.** Pascal exceptions can still reach the host from host-level failures, such as a constructor that cannot build the engine (see [Building an Embedding](#building-an-embedding)).
 
@@ -457,31 +457,31 @@ Engine.MaxFrames := 5000;
 
 ### Timeout
 
-`TimeoutMs` arms a timer thread that interrupts the engine thread at the deadline (`G2.VM` `LimitsArm`). The run ends past every handler with `Aborted = g2aTimeout` and `Execution timed out after Nms`. The deadline covers the entry, its event loop and, in test and benchmark mode, the suites.
+`TimeoutMs` arms a timer thread that interrupts the engine thread at the deadline (`Goccia.VM` `LimitsArm`). The run ends past every handler with `Aborted = gaTimeout` and `Execution timed out after Nms`. The deadline covers the entry, its event loop and, in test and benchmark mode, the suites.
 
 ### Instruction Limit
 
-`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = g2aInstructionLimit` and `Execution exceeded instruction limit of N`.
+`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
 
 ### Memory Limit
 
-`MaxMemory` sets the thread's heap ceiling (`G2.Core` `HeapCeiling`, per thread). Without it the ceiling is half the physical memory, at most 8 GB, or 700 MB on a 32-bit build (`DefaultHeapCeiling`). A full collection that leaves the heap over the ceiling refuses at the next back edge or call with a catchable `RangeError` (`Allocation failed: GC heap size exceeds the configured memory limit`), so a script can drop what it holds and go on. When refusals keep coming without the script freeing memory, the run ends with `Aborted = g2aMemoryLimit` and `ErrorText` says how much was live ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). `Memory` returns a `TG2MemoryStats`: live, peak and allocated bytes, the limit, and the number of collections.
+`MaxMemory` sets the thread's heap ceiling (`Goccia.Core` `HeapCeiling`, per thread). Without it the ceiling is half the physical memory, at most 8 GB, or 700 MB on a 32-bit build (`DefaultHeapCeiling`). A full collection that leaves the heap over the ceiling refuses at the next back edge or call with a catchable `RangeError` (`Allocation failed: GC heap size exceeds the configured memory limit`), so a script can drop what it holds and go on. When refusals keep coming without the script freeing memory, the run ends with `Aborted = gaMemoryLimit` and `ErrorText` says how much was live ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). `Memory` returns a `TGocciaMemoryStats`: live, peak and allocated bytes, the limit, and the number of collections.
 
 ### Aborting a Run from Another Thread
 
-`TG2Engine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled does not poll a deadline, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
+`TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled does not poll a deadline, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
 
 ### Call Stack Depth Limit
 
-`MaxFrames` bounds the nested calls of a run (`G2.VM` `SetMaxFrames`); past it a call throws `RangeError: Maximum call stack size exceeded`. With 0 the bound is the VM's frame stack, about 200,000 frames (`FRAME_MAX`). Calls in tail position (ES2026 §15.10.3 PrepareForTailCall) reuse their frame once the stack is past a depth floor, so tail recursion runs in bounded space and ends only at another limit ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md)). Independently of `MaxFrames`, native recursion (Proxy traps, bound function chains, re-entries from built-ins) throws the same `RangeError` once the thread's native stack is nearly used up ([Threading](#threading), [ADR 0182](adr/0182-linux-thread-stack-bounds-come-from-pthread-getattr-np.md)).
+`MaxFrames` bounds the nested calls of a run (`Goccia.VM` `SetMaxFrames`); past it a call throws `RangeError: Maximum call stack size exceeded`. With 0 the bound is the VM's frame stack, about 200,000 frames (`FRAME_MAX`). Calls in tail position (ES2026 §15.10.3 PrepareForTailCall) reuse their frame once the stack is past a depth floor, so tail recursion runs in bounded space and ends only at another limit ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md)). Independently of `MaxFrames`, native recursion (Proxy traps, bound function chains, re-entries from built-ins) throws the same `RangeError` once the thread's native stack is nearly used up ([Threading](#threading), [ADR 0182](adr/0182-linux-thread-stack-bounds-come-from-pthread-getattr-np.md)).
 
 ## Fetch Transport
 
-`TG2Engine` has no fetch transport. `fetch` (`G2.Fetch`) performs each request on a worker thread with the shared network client (`HTTPClient`), at most 16 of a thread's requests in flight, and checks the `net` capability on every hop before the name is looked up and again against the resolved address. A host that must keep scripts off the network leaves `net` ungranted; `fetch` then rejects with `PermissionDenied`. See [Fetch](built-ins-fetch.md).
+`TGocciaEngine` has no fetch transport. `fetch` (`Goccia.Fetch`) performs each request on a worker thread with the shared network client (`HTTPClient`), at most 16 of a thread's requests in flight, and checks the `net` capability on every hop before the name is looked up and again against the resolved address. A host that must keep scripts off the network leaves `net` ungranted; `fetch` then rejects with `PermissionDenied`. See [Fetch](built-ins-fetch.md).
 
 ## FPU Exception Mask
 
-`TG2Engine.Create` masks every FPU exception on the calling thread (`G2.Engine` `EngineInit`), so arithmetic yields `NaN`, `Infinity` and `-0` as IEEE 754 requires instead of raising. The mask is per thread and is not restored when the engine is freed; a host that relies on FPU exceptions on that thread sets its own mask again.
+`TGocciaEngine.Create` masks every FPU exception on the calling thread (`Goccia.Engine` `EngineInit`), so arithmetic yields `NaN`, `Infinity` and `-0` as IEEE 754 requires instead of raising. The mask is per thread and is not restored when the engine is freed; a host that relies on FPU exceptions on that thread sets its own mask again.
 
 ## Event Loop
 
@@ -489,23 +489,23 @@ Promise jobs, timers and `fetch` completions are run by `Run` itself; a host dra
 
 ## Garbage Collector
 
-Each engine has a generational heap (`G2.Core`): a nursery of 8 MiB by default (`EngineNurseryBytes`), collected by `CollectMinor`, and an old generation collected by `CollectMajor`. Collection is automatic. Pascal code that holds a `TValue` across anything that allocates roots it with `PushRoot` and reads it back with `RootAt`, since a collection may move or free an unrooted value; `PopRoots` releases it. `AddRoot` roots a variable for the life of the engine.
+Each engine has a generational heap (`Goccia.Core`): a nursery of 8 MiB by default (`EngineNurseryBytes`), collected by `CollectMinor`, and an old generation collected by `CollectMajor`. Collection is automatic. Pascal code that holds a `TValue` across anything that allocates roots it with `PushRoot` and reads it back with `RootAt`, since a collection may move or free an unrooted value; `PopRoots` releases it. `AddRoot` roots a variable for the life of the engine.
 
 ## Existing Embeddings
 
-Every application in `source/app` embeds the engine through `TG2Engine`, except `GocciaTest262Runner`, which runs each test in a forked process on G2's conformance host (`G2.Test262`):
+Every application in `source/app` embeds the engine through `TGocciaEngine`, except `GocciaTest262Runner`, which runs each test in a forked process on G2's conformance host (`Goccia.Test262`):
 
 | Program | File | How it embeds |
 |---------|------|---------------|
-| `GocciaRunner` | `source/app/GocciaRunner.dpr` | Each entry file on a thread with its own engine: settings, capabilities, audit, globals, virtual modules, `ResultForm` for `--print` and JSON, `RunArtifact` for `.gbc` entries; sandbox mode through `TG2SandboxHost` |
+| `GocciaRunner` | `source/app/GocciaRunner.dpr` | Each entry file on a thread with its own engine: settings, capabilities, audit, globals, virtual modules, `ResultForm` for `--print` and JSON, `RunArtifact` for `.gbc` entries; sandbox mode through `TGocciaSandboxHost` |
 | `GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | The smallest host: `Bare`, a profile from compatibility flags, the limits, `OnWarning` |
-| `GocciaREPL` | `source/app/GocciaREPL.dpr` | One engine for the session on its own thread, each input a Script run, `ResultForm := g2rfREPL` |
+| `GocciaREPL` | `source/app/GocciaREPL.dpr` | One engine for the session on its own thread, each input a Script run, `ResultForm := grfREPL` |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | `TestMode`, `InstallTestingAPI`, `RunTests`, heap snapshot checks |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | `BenchMode`, `InstallBenchmarkAPI`, `RunBenchmarks` |
 | `GocciaBundler` | `source/app/GocciaBundler.dpr` | `CompileArtifact` on a thread per file, nothing run |
 | `GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Two fresh engines per input, one under every limit and one with the JIT |
 
-`Goccia.CLI.G2FileEngine` holds what the file-running hosts share (settings, globals, virtual modules, console capture, the import grant, failure text), and `source/g2/g2.dpr` is G2's own development and conformance CLI.
+`Goccia.CLI.FileEngine` holds what the file-running hosts share (settings, globals, virtual modules, console capture, the import grant, failure text), and `source/engine/goccia.dpr` is G2's own development and conformance CLI.
 
 ## Application Base Class
 
@@ -520,7 +520,7 @@ type
 
 procedure TMyApp.Execute;
 begin
-  // create a TG2Engine and run scripts here
+  // create a TGocciaEngine and run scripts here
 end;
 
 begin
@@ -533,10 +533,10 @@ For CLI tools, `TGocciaCLIApplication` (`Goccia.CLI.Application`) adds argument 
 ## Minimal Embedding Checklist
 
 1. Compile with FPC 3.3.1 and the unit and include paths of [Building an Embedding](#building-an-embedding)
-2. `uses G2.Embed;` (add `G2.Core` for `TLangProfile`, `Goccia.Capabilities` for capability sets)
-3. Create a `TG2Engine` on the thread that will run it, one per thread at a time
+2. `uses Goccia.Embed;` (add `Goccia.Core` for `TLangProfile`, `Goccia.Capabilities` for capability sets)
+3. Create a `TGocciaEngine` on the thread that will run it, one per thread at a time
 4. Set the host surface (`Bare`, `ExposeTimers`, `ConfigJson`, `Capabilities`) before `PrepareHost` or the first run
 5. Set the run's settings: `Profile`, `SourceKind`, `ResultForm`, `OnConsole`, `Resolver`, the limits
 6. Inject globals and virtual modules, then `Run(FileName, Source)` with the source text
-7. Read `TG2RunResult`: `Ok`, `Aborted`, the error fields, `ResultText`
+7. Read `TGocciaRunResult`: `Ok`, `Aborted`, the error fields, `ResultText`
 8. Free the engine on the same thread; free the resolver after it

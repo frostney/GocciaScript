@@ -20,8 +20,8 @@ An implementation of the ECMAScript Temporal API providing modern date/time hand
 
 The Temporal objects, their abstract operations, option handling, ISO 8601 /
 RFC 9557 parsing and time-zone resolution are written in JavaScript in
-`source/g2/prelude/temporal.js`, compiled into the engine's prelude snapshot.
-`G2.Temporal` gives the prelude what JavaScript cannot reach: the clock, the
+`source/engine/prelude/temporal.js`, compiled into the engine's prelude snapshot.
+`Goccia.Temporal` gives the prelude what JavaScript cannot reach: the clock, the
 TZif files of the time zone database, and the system time zone. The non-ISO
 calendars' arithmetic goes through `Goccia.Temporal.Calendar`, over ICU.
 

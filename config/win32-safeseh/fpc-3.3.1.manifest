@@ -232,7 +232,7 @@ source-nonseh ../../source/shared/FPCSafeSEH.Test.pas e42b5c416b983b801feb894270
 source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 881d370ff5f118c767c24891b1088a757e6200de05ad1745b42101e884011916 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
 source-nonseh ../../source/shared/PESafeSEH.Test.pas cb3cfa2d8461eaa717413a629706af3b37fbc90644decda2e6de80a866b23052 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
 source-nonseh ../../source/shared/PESafeSEH.Test.pas 88727df35e64d65145eedfb433cb363fe02b29e5570f57b0b0b845748a1d3dc8 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
-source-nonseh ../../source/app/Goccia.CLI.G2SandboxHost.pas da1d0b899dd44a34249e584f8efff82b525bf5bfe9cb862f59d865736ab16d8d .text.n_goccia.cli.g2sandboxhost$_$tg2sandboxrun_$__$$_handlerootclamp$hz1z1piekcdc
+source-nonseh ../../source/app/Goccia.CLI.SandboxHost.pas bc6044adceae7a2ee7acc1051d3a7efc10ec169185cf60da6a648ea5ec141c79 .text.n_goccia.cli.sandboxhost$_$tgocciasandboxrun_$__$$_handlerootclamp$hz1z1piekcdc
 source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas cbf92d05e38f075923e8831477570a73bc61728acb9f497766242f9926d1e3d6 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$hz1z1piekcdc
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandler$formal
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal

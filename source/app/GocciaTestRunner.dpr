@@ -2,9 +2,9 @@ program GocciaTestRunner;
 
 { GocciaTestRunner on the G2 engine, while the apps move from the old engine
   to G2: the same command line, configs, trust and capability policy (the base
-  class), each test file run by a TG2Engine in test mode (G2.Embed TestMode,
+  class), each test file run by a TGocciaEngine in test mode (Goccia.Embed TestMode,
   the testing API of prelude/testing.js) on a thread of its own, its suites
-  reported by G2.HostAPI RunTestSuites. `./build.pas testrunner` builds it
+  reported by Goccia.HostAPI RunTestSuites. `./build.pas testrunner` builds it
   as build/GocciaTestRunner.
 
   Not yet on G2: snapshots, heap snapshots, coverage, --globals and --global,
@@ -29,7 +29,7 @@ uses
   Goccia.Capabilities,
   Goccia.CLI.Application,
   Goccia.CLI.FileSettings,
-  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.JSON.Reporter,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
@@ -47,10 +47,10 @@ uses
   Goccia.TextFiles,
   Goccia.Builtins.Testing.Snapshots,
 
-  G2.Core,
-  G2.Embed,
-  G2.HostAPI,
-  G2.VM,
+  Goccia.Core,
+  Goccia.Embed,
+  Goccia.HostAPI,
+  Goccia.VM,
   Goccia.ThreadCleanupRegistry;
 
 const
@@ -63,7 +63,7 @@ const
 
 type
   { one file's results, plain data so they cross from its thread }
-  TG2TestFileResult = record
+  TGocciaTestFileResult = record
     FileName: string;
     Ran: Boolean;
     Passed, Failed, Skipped, SuiteErrors, TotalTests, TotalRunTests, Assertions: Integer;
@@ -83,18 +83,18 @@ type
     HeapFailures: array of string;
   end;
 
-  { what a file's engine is set up from (TG2TestRunnerApp.SetUpTestEngine) }
-  TG2FileContext = record
+  { what a file's engine is set up from (TGocciaTestRunnerApp.SetUpTestEngine) }
+  TGocciaFileContext = record
     FileName, FileConfigPath: string;
     FileConfig: TConfigEntryArray;
     Verdict: TGocciaConfigTrustVerdict;
     Capabilities: TGocciaCapabilities;
-    Grant: TG2ImportGrant;
+    Grant: TGocciaImportGrant;
     Resolver: TGocciaModuleResolver;
-    Capture: TG2ConsoleCapture;
+    Capture: TGocciaConsoleCapture;
   end;
 
-  TG2TestRunnerApp = class(TGocciaCLIApplication)
+  TGocciaTestRunnerApp = class(TGocciaCLIApplication)
   private
     FNoProgress: TFlagOption;
     FNoResults: TFlagOption;
@@ -109,7 +109,7 @@ type
     FInlineGlobals: TRepeatableOption;
     FHeapSnapshots: TFlagOption;
     FNoVitestCompat: TFlagOption;
-    FResults: array of TG2TestFileResult;
+    FResults: array of TGocciaTestFileResult;
     FJobCount: Integer;
     { more than one file runs at once: their console output is not printed, as the old runner's workers }
     FParallel: Boolean;
@@ -129,9 +129,9 @@ type
     function IsCompactJsonOutput: Boolean;
     procedure RunTestFile(AIndex: Integer; ASource: TStringList);
     { APrintWarnings: the file's own engine, whose parse warnings print (a heap check's engine loads again) }
-    procedure SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext; APrintWarnings: Boolean);
-    function VerifyHeapRoot(const C: TG2FileContext; const ARoot: TG2HeapRoot; const ASource: UnicodeString;
-      out ADetail: UnicodeString): TG2HeapVerdict;
+    procedure SetUpTestEngine(AEngine: TGocciaEngine; const C: TGocciaFileContext; APrintWarnings: Boolean);
+    function VerifyHeapRoot(const C: TGocciaFileContext; const ARoot: TGocciaHeapRoot; const ASource: UnicodeString;
+      out ADetail: UnicodeString): TGocciaHeapVerdict;
     procedure RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
     procedure PrintResults(const ATiming: TCLIJSONTiming; const AMemory: TCLIJSONMemoryStats);
     procedure WriteResultsJSON(const AFileName: string; ACompact: Boolean; const ATiming: TCLIJSONTiming;
@@ -148,9 +148,9 @@ type
   end;
 
   { one test file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh engine }
-  TG2TestThread = class(TThread)
+  TGocciaTestThread = class(TThread)
   private
-    FApp: TG2TestRunnerApp;
+    FApp: TGocciaTestRunnerApp;
     FIndex: Integer;
     FSource: TStringList;
     FOwnsSource: Boolean;
@@ -160,7 +160,7 @@ type
     procedure Execute; override;
   end;
 
-procedure TG2TestThread.Execute;
+procedure TGocciaTestThread.Execute;
 var
   OwnsJit: Boolean;
 begin
@@ -192,13 +192,13 @@ end;
 
 { ---- options ---- }
 
-function TG2TestRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+function TGocciaTestRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
   Result := ALL_CAPABILITIES;
 end;
 
 { GocciaTestRunner.dpr TTestRunnerApp.Configure }
-procedure TG2TestRunnerApp.Configure;
+procedure TGocciaTestRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddCoverageOptions;
@@ -231,7 +231,7 @@ begin
 end;
 
 { several inputs each take their own config: a discovered root config does not apply to all of them }
-function TG2TestRunnerApp.ShouldApplyRootConfig(const APaths: TStringList; const AConfigPath: string;
+function TGocciaTestRunnerApp.ShouldApplyRootConfig(const APaths: TStringList; const AConfigPath: string;
   const AExplicitConfig: Boolean): Boolean;
 begin
   Result := inherited ShouldApplyRootConfig(APaths, AConfigPath, AExplicitConfig);
@@ -240,30 +240,30 @@ begin
 end;
 
 { a coverage format or output asks for coverage }
-procedure TG2TestRunnerApp.Validate;
+procedure TGocciaTestRunnerApp.Validate;
 begin
   inherited Validate;
   if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
     CoverageOptions.Enabled.Apply('');
 end;
 
-function TG2TestRunnerApp.IsJsonOutput: Boolean;
+function TGocciaTestRunnerApp.IsJsonOutput: Boolean;
 begin
   Result := Assigned(FOutputFile) and FOutputFile.Present and
     ((FOutputFile.Value = 'json') or (FOutputFile.Value = 'compact-json'));
 end;
 
-function TG2TestRunnerApp.IsCompactJsonOutput: Boolean;
+function TGocciaTestRunnerApp.IsCompactJsonOutput: Boolean;
 begin
   Result := Assigned(FOutputFile) and FOutputFile.Present and (FOutputFile.Value = 'compact-json');
 end;
 
-function TG2TestRunnerApp.UsageLine: string;
+function TGocciaTestRunnerApp.UsageLine: string;
 begin
   Result := '<filename.js|directory> [options]';
 end;
 
-function TG2TestRunnerApp.StdinUsage: TGocciaStdinUsage;
+function TGocciaTestRunnerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefault;
 end;
@@ -293,7 +293,7 @@ begin
 end;
 
 { -u writes every snapshot; in CI none is written, so a missing one fails; otherwise new ones are written }
-function TG2TestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+function TGocciaTestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
 begin
   if FUpdateSnapshots.Present or FUpdateSnapshotsAlias.Present then
     Result := sumAll
@@ -305,7 +305,7 @@ end;
 
 { GocciaTestRunner.dpr RecordSnapshotFinalizationFailure: the inline write-back's failure fails the file its message
   names (the longest match, paths compared with forward slashes), and is the envelope's error }
-procedure TG2TestRunnerApp.RecordSnapshotFinalizationFailure(const AMessage: string);
+procedure TGocciaTestRunnerApp.RecordSnapshotFinalizationFailure(const AMessage: string);
 var
   I, FileIndex: Integer;
   Message_: string;
@@ -343,7 +343,7 @@ end;
 
 { RunTestSuites' report (prelude/testing.js report): an object of numbers and a failedTests list of
   name-and-error records, read into AResult; False when it is not one }
-function ReadSuiteReport(const AJson: string; var AResult: TG2TestFileResult): Boolean;
+function ReadSuiteReport(const AJson: string; var AResult: TGocciaTestFileResult): Boolean;
 var
   P: Integer;
 
@@ -534,12 +534,12 @@ end;
 
 { a file's engine before its code runs: its settings, globals and testing API. A heap snapshot's restoring
   engine is set up the same way }
-procedure TG2TestRunnerApp.SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext;
+procedure TGocciaTestRunnerApp.SetUpTestEngine(AEngine: TGocciaEngine; const C: TGocciaFileContext;
   APrintWarnings: Boolean);
 var
   Err: UnicodeString;
   SetupError: string;
-  HostError: TG2RunResult;
+  HostError: TGocciaRunResult;
 begin
   AEngine.Capabilities := C.Capabilities;
   AEngine.ProjectRoot := DiscoverProjectRoot(C.FileName);
@@ -609,11 +609,11 @@ begin
 end;
 
 { --heap-snapshots: one object the file's engine wrote, restored in a fresh engine set up as the file's was }
-function TG2TestRunnerApp.VerifyHeapRoot(const C: TG2FileContext; const ARoot: TG2HeapRoot;
-  const ASource: UnicodeString; out ADetail: UnicodeString): TG2HeapVerdict;
-var Dest: TG2Engine;
+function TGocciaTestRunnerApp.VerifyHeapRoot(const C: TGocciaFileContext; const ARoot: TGocciaHeapRoot;
+  const ASource: UnicodeString; out ADetail: UnicodeString): TGocciaHeapVerdict;
+var Dest: TGocciaEngine;
 begin
-  Dest := TG2Engine.Create;
+  Dest := TGocciaEngine.Create;
   try
     { the same testing API as the file's engine, its observe native included }
     Dest.HeapSnapshots := True;
@@ -626,30 +626,30 @@ begin
   end;
 end;
 
-procedure TG2TestRunnerApp.RunTestFile(AIndex: Integer; ASource: TStringList);
+procedure TGocciaTestRunnerApp.RunTestFile(AIndex: Integer; ASource: TStringList);
 var
   FileName, FileConfigPath, AliasBaseDirectory: string;
   FileConfig: TConfigEntryArray;
   Verdict: TGocciaConfigTrustVerdict;
   Capabilities: TGocciaCapabilities;
-  Grant: TG2ImportGrant;
+  Grant: TGocciaImportGrant;
   Resolver: TGocciaModuleResolver;
-  Engine: TG2Engine;
-  Capture: TG2ConsoleCapture;
-  RunResult: TG2RunResult;
+  Engine: TGocciaEngine;
+  Capture: TGocciaConsoleCapture;
+  RunResult: TGocciaRunResult;
   Err, Json, SrcText: UnicodeString;
-  Res: TG2TestFileResult;
+  Res: TGocciaTestFileResult;
   Start, SuitesStart: Int64;
-  Aborted: TG2Abort;
+  Aborted: TGocciaAbort;
   Late, SetupError: string;
-  MemoryStart: TG2MemoryStats;
+  MemoryStart: TGocciaMemoryStats;
   HeapStart: THeapStatus;
-  HostError: TG2RunResult;
-  HeapRoots: TArray<TG2HeapRoot>;
+  HostError: TGocciaRunResult;
+  HeapRoots: TArray<TGocciaHeapRoot>;
 
   { the file's engine before its code runs: its settings, globals and testing API. A heap snapshot's restoring
     engine is set up the same way }
-  function Context: TG2FileContext;
+  function Context: TGocciaFileContext;
   begin
     Result.FileName := FileName;
     Result.FileConfigPath := FileConfigPath;
@@ -661,14 +661,14 @@ var
     Result.Capture := Capture;
   end;
 
-  procedure SetUpEngine(AEngine: TG2Engine);
+  procedure SetUpEngine(AEngine: TGocciaEngine);
   begin
     SetUpTestEngine(AEngine, Context, True);
   end;
 
   { --heap-snapshots: each object the source engine wrote, restored in a fresh engine of its own }
   procedure VerifyHeapRoots;
-  var I: Integer; Ctx: TG2FileContext; Verdict_: TG2HeapVerdict;
+  var I: Integer; Ctx: TGocciaFileContext; Verdict_: TGocciaHeapVerdict;
     Detail: UnicodeString;
   begin
     Ctx := Context;
@@ -687,13 +687,13 @@ var
       except
         on E: Exception do
         begin
-          Verdict_ := g2hvFailed;
+          Verdict_ := ghvFailed;
           Detail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
         end;
       end;
       case Verdict_ of
-        g2hvPassed: Inc(Res.HeapPassed);
-        g2hvRefused:
+        ghvPassed: Inc(Res.HeapPassed);
+        ghvRefused:
           begin
             Inc(Res.HeapRefused);
             SetLength(Res.HeapRefusals, Length(Res.HeapRefusals) + 1);
@@ -712,7 +712,7 @@ begin
   Res := FResults[AIndex];
   Res.Ran := True;
   Start := GetNanoseconds;
-  Capture := TG2ConsoleCapture.Create;
+  Capture := TGocciaConsoleCapture.Create;
   Capture.FileName := FileName;
   Grant := nil;
   Resolver := nil;
@@ -724,7 +724,7 @@ begin
       SetLength(FileConfig, 0);
     Verdict := FileConfigVerdict(FileConfigPath, FileName);
     Capabilities := ResolveEngineCapabilities(FileConfigPath, FileName);
-    Grant := TG2ImportGrant.Create(Capabilities);
+    Grant := TGocciaImportGrant.Create(Capabilities);
     Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(FileName)));
     Grant.Resolver := Resolver;
     Resolver.SetExtensions(ModuleImportExtensions);
@@ -751,7 +751,7 @@ begin
       end;
     end;
     HeapStart := GetHeapStatus;
-    Engine := TG2Engine.Create;
+    Engine := TGocciaEngine.Create;
     try
       MemoryStart := Engine.Memory;
       Engine.HeapSnapshots := FHeapSnapshots.Present;
@@ -766,7 +766,7 @@ begin
       begin
         Err := RunResult.ErrorMessage;
         { a file that threw is reported as GocciaRunner reports it: the error, its suggestion and a code frame }
-        if not IsJsonOutput and (RunResult.Aborted = g2aNone) then
+        if not IsJsonOutput and (RunResult.Aborted = gaNone) then
         begin
           WriteLn(ErrOutput, FailureText(FileName, RunResult, ASource, Engine, '', nil, True, True, False,
             Engine.TimeoutMs, EngineOptions.MaxInstructions.ValueOr(0)));
@@ -776,13 +776,13 @@ begin
       Json := '';
       SuitesStart := GetNanoseconds;
       { the file's limits (its --timeout, 30 s by default) cover its suites too }
-      if RunResult.Aborted = g2aTimeout then
+      if RunResult.Aborted = gaTimeout then
         Err := Format('file timed out after %dms', [Engine.TimeoutMs]);
       if Err = '' then
       begin
         if not Engine.RunTests(Json, Err, Aborted) and (Err = '') then
           Err := 'the test suites did not finish';
-        if Aborted = g2aTimeout then
+        if Aborted = gaTimeout then
           Err := Format('file timed out after %dms', [Engine.TimeoutMs]);
       end
       else
@@ -874,10 +874,10 @@ end;
 
 { each file on a thread of its own, at most the job count at once (GetJobCount: --jobs, else the processors, at
   most one per file); results in file order. --exit-on-first-failure stops starting files after a failing one. }
-procedure TG2TestRunnerApp.RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
+procedure TGocciaTestRunnerApp.RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
 var
   I, Next, Oldest, Started, Running: Integer;
-  Workers: array of TG2TestThread;
+  Workers: array of TGocciaTestThread;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
   Stop: Boolean;
@@ -897,7 +897,7 @@ begin
   SetLength(FResults, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
   begin
-    FResults[I] := Default(TG2TestFileResult);
+    FResults[I] := Default(TGocciaTestFileResult);
     FResults[I].FileName := AFiles[I];
   end;
   SetLength(Workers, AFiles.Count);
@@ -923,7 +923,7 @@ begin
       { a sequential run prints each file's progress line before it runs, so its console output follows it }
       if not FParallel then
         Progress(Next);
-      Workers[Next] := TG2TestThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next] := TGocciaTestThread.Create(True, FILE_THREAD_STACK);
       Workers[Next].FApp := Self;
       Workers[Next].FIndex := Next;
       if (Next = 0) and Assigned(AStdinSource) then
@@ -964,7 +964,7 @@ begin
   SetLength(FResults, Started);
 end;
 
-procedure TG2TestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TGocciaTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files, RawFiles, Discovered, StdinNames, Expanded: TStringList;
   StdinSource: TStringList;
@@ -1105,7 +1105,7 @@ end;
 
 { --heap-snapshots on stderr, as GocciaTestRunner reports it: each failed round trip, the counts, then each
   refusal reason with how often it came, in sorted order }
-procedure TG2TestRunnerApp.PrintHeapSnapshotReport;
+procedure TGocciaTestRunnerApp.PrintHeapSnapshotReport;
 var
   I, J, Observations, Objects, Passed, Refused, Failed: Integer;
   Reasons: TStringList;
@@ -1148,7 +1148,7 @@ end;
 
 { GocciaTestRunner.dpr ExecuteWithPaths' coverage: the summary, and one file's detail (a multifile section's or
   stdin's from the source registry), on stdout unless it carries a JSON envelope; the lcov or JSON file }
-procedure TG2TestRunnerApp.ReportCoverage(const AFiles: TStringList);
+procedure TGocciaTestRunnerApp.ReportCoverage(const AFiles: TStringList);
 var
   Source: TStringList;
 begin
@@ -1176,7 +1176,7 @@ begin
     WriteCoverageJSON(FCoverageMain, CoverageOptions.OutputPath.Value);
 end;
 
-function JoinFailedTests(const AResults: array of TG2TestFileResult): string;
+function JoinFailedTests(const AResults: array of TGocciaTestFileResult): string;
 var
   I, J: Integer;
 begin
@@ -1191,7 +1191,7 @@ begin
 end;
 
 { GocciaTestRunner.dpr PrintTestResults }
-procedure TG2TestRunnerApp.PrintResults(const ATiming: TCLIJSONTiming; const AMemory: TCLIJSONMemoryStats);
+procedure TGocciaTestRunnerApp.PrintResults(const ATiming: TCLIJSONTiming; const AMemory: TCLIJSONMemoryStats);
 var
   I, Passed, Failed, Skipped, SuiteErrors, RunTests, Assertions: Integer;
   Duration, PerTest: Int64;
@@ -1266,7 +1266,7 @@ begin
 end;
 
 { GocciaTestRunner.dpr WriteResultsJSON and WriteFileResults }
-procedure TG2TestRunnerApp.WriteResultsJSON(const AFileName: string; ACompact: Boolean;
+procedure TGocciaTestRunnerApp.WriteResultsJSON(const AFileName: string; ACompact: Boolean;
   const ATiming: TCLIJSONTiming; const AMemory: TCLIJSONMemoryStats);
 var
   Lines: TStringList;
@@ -1400,7 +1400,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TG2TestRunnerApp, 'GocciaTestRunner');
+  RunResult := TGocciaApplication.RunApplication(TGocciaTestRunnerApp, 'GocciaTestRunner');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

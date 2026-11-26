@@ -1,0 +1,284 @@
+(function (G, isRetComp, markIntrinsic) {
+  "use strict";
+  // Explicit resource management: SuppressedError, DisposableStack, AsyncDisposableStack, and the helpers the
+  // compiler calls for using / await using blocks (AddDisposableResource, DisposeResources). A dispose
+  // capability is an array of [value, method, async] triples.
+  var apply = Reflect.apply, defineProperty = Object.defineProperty, getProto = Object.getPrototypeOf;
+  var setProto = Object.setPrototypeOf;
+  var SymDispose = Symbol.dispose, SymAsyncDispose = Symbol.asyncDispose, SymToStringTag = Symbol.toStringTag;
+  var TypeErr = TypeError, RefErr = ReferenceError, Err = Error, Str = String;
+  var PromiseCtor = Promise, PromiseResolve = Promise.resolve.bind(Promise);
+
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
+  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+
+  // SuppressedError ( error, suppressed, message )
+  var SEP;
+  function SuppressedError(error, suppressed, message) {
+    var e = new Err();
+    var p = new.target === undefined ? SEP : new.target.prototype;
+    setProto(e, isObject(p) ? p : markIntrinsic(SEP, new.target));
+    if (message !== undefined) def(e, "message", `${message}`);   // ToString: a Symbol is a TypeError
+    def(e, "error", error);
+    def(e, "suppressed", suppressed);
+    return e;
+  }
+  SEP = Object.create(Err.prototype);
+  defineProperty(SuppressedError, "prototype", { value: SEP, writable: false, enumerable: false, configurable: false });
+  def(SEP, "constructor", SuppressedError);
+  def(SEP, "name", "SuppressedError");
+  def(SEP, "message", "");
+  setProto(SuppressedError, Err);
+  def(G, "SuppressedError", SuppressedError);
+  markIntrinsic(SuppressedError);
+  function suppressed(error, previous) {
+    var e = new Err();
+    setProto(e, SEP);
+    def(e, "error", error);
+    def(e, "suppressed", previous);
+    return e;
+  }
+
+  // GetDisposeMethod
+  function disposeMethod(v, async) {
+    var m;
+    if (async) {
+      m = v[SymAsyncDispose];
+      if (m === undefined || m === null) {
+        m = v[SymDispose];
+        if (m === undefined || m === null) return undefined;
+        if (!isCallable(m)) throw new TypeErr("[Symbol.dispose] is not a function");
+        var sync = m;
+        // the closure of GetDisposeMethod: the sync method's result is not awaited, and its throw is a rejection
+        return function () {
+          var obj = this;
+          return new PromiseCtor(function (resolve, reject) {
+            try { apply(sync, obj, []); } catch (e) { reject(e); return; }
+            resolve(undefined);
+          });
+        };
+      }
+    } else {
+      m = v[SymDispose];
+      if (m === undefined || m === null) return undefined;
+    }
+    if (!isCallable(m)) throw new TypeErr("the dispose method is not a function");
+    return m;
+  }
+  // AddDisposableResource(capability, V, hint)
+  function add(cap, v, async) {
+    if (v === null || v === undefined) {
+      if (async) { var n = cap.length; cap[n] = undefined; cap[n + 1] = undefined; cap[n + 2] = true; }
+      return;
+    }
+    if (!isObject(v)) throw new TypeErr("a using declaration's value must be an object, null or undefined");
+    var m = disposeMethod(v, async);
+    if (m === undefined) throw new TypeErr(async ? "the value has no [Symbol.asyncDispose] or [Symbol.dispose] method" : "the value has no [Symbol.dispose] method");
+    var k = cap.length;
+    cap[k] = v; cap[k + 1] = m; cap[k + 2] = async;
+  }
+  function addMethod(cap, v, m, async) { var k = cap.length; cap[k] = v; cap[k + 1] = m; cap[k + 2] = async; }
+
+  // DisposeResources for a block without await using: exc / hasExc the block's completion (a return completion
+  // in flight through the block is rethrown as it is)
+  function dispose(cap, exc, hasExc) {
+    var retComp = hasExc && isRetComp(exc), errored = hasExc && !retComp, err = exc;
+    for (var i = cap.length - 3; i >= 0; i -= 3) {
+      var m = cap[i + 1];
+      if (m === undefined) continue;
+      try { apply(m, cap[i], []); } catch (e) { if (errored) err = suppressed(e, err); else { errored = true; err = e; } }
+    }
+    cap.length = 0;
+    if (errored) throw err;
+    if (retComp) throw exc;
+  }
+  // DisposeResources with awaits (ES2027 draft 7.5.4), as steps the caller drives: an await using block's own
+  // async function awaits each value, so every Await of the algorithm is one of that function's (Goccia.Compiler
+  // EmitUsingDispose). asyncStart makes the state; asyncStep runs the algorithm up to its next Await and returns
+  // true with the value to await in s.v, or false when it is done; a rejection of that await goes to asyncFail;
+  // asyncEnd then completes as the algorithm returns.
+  function asyncStart(cap, exc, hasExc) {
+    var retComp = hasExc && isRetComp(exc);
+    return { cap: cap, i: cap.length - 3, exc: exc, retComp: retComp, errored: hasExc && !retComp, err: exc,
+      needsAwait: false, hasAwaited: false, last: false, v: undefined };
+  }
+  function asyncFail(s, e) {
+    if (s.errored) s.err = suppressed(e, s.err); else { s.errored = true; s.err = e; }
+  }
+  function asyncStep(s) {
+    var cap = s.cap;
+    while (s.i >= 0) {
+      var v = cap[s.i], m = cap[s.i + 1], async = cap[s.i + 2];
+      if (!async && s.needsAwait && !s.hasAwaited) {
+        s.needsAwait = false;
+        s.v = undefined;
+        return true;
+      }
+      s.i -= 3;
+      if (m !== undefined) {
+        var r;
+        try { r = apply(m, v, []); } catch (e) { asyncFail(s, e); continue; }
+        if (async) {
+          s.hasAwaited = true;
+          s.v = r;
+          return true;
+        }
+      } else s.needsAwait = true;
+    }
+    if (!s.last) {
+      s.last = true;
+      if (s.needsAwait && !s.hasAwaited) {
+        s.v = undefined;
+        return true;
+      }
+    }
+    return false;
+  }
+  function asyncEnd(s) {
+    s.cap.length = 0;
+    s.v = undefined;
+    if (s.errored) throw s.err;
+    if (s.retComp) throw s.exc;
+  }
+  async function disposeAsync(cap, exc, hasExc) {
+    var s = asyncStart(cap, exc, hasExc);
+    while (asyncStep(s)) {
+      try { await s.v; } catch (e) { asyncFail(s, e); }
+    }
+    asyncEnd(s);
+  }
+
+  class Stamp { constructor(o) { return o; } }
+
+  // 27.3 DisposableStack
+  class DisposableStack {
+    #state = "pending"; #cap = [];
+    constructor() {}
+    static #check(s, name) {
+      if (!isObject(s) || !(#state in s)) throw new TypeErr("DisposableStack.prototype." + name + " called on an incompatible receiver");
+    }
+    get disposed() { DisposableStack.#check(this, "disposed"); return this.#state === "disposed"; }
+    dispose() {
+      DisposableStack.#check(this, "dispose");
+      if (this.#state === "disposed") return undefined;
+      this.#state = "disposed";
+      dispose(this.#cap, undefined, false);
+      return undefined;
+    }
+    use(value) {
+      DisposableStack.#check(this, "use");
+      if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
+      add(this.#cap, value, false);
+      return value;
+    }
+    adopt(value, onDispose) {
+      DisposableStack.#check(this, "adopt");
+      if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
+      if (!isCallable(onDispose)) throw new TypeErr("onDispose is not a function");
+      addMethod(this.#cap, undefined, function () { return onDispose(value); }, false);
+      return value;
+    }
+    defer(onDispose) {
+      DisposableStack.#check(this, "defer");
+      if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
+      if (!isCallable(onDispose)) throw new TypeErr("onDispose is not a function");
+      addMethod(this.#cap, undefined, onDispose, false);
+      return undefined;
+    }
+    move() {
+      DisposableStack.#check(this, "move");
+      if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
+      var n = new DisposableStack();
+      n.#cap = this.#cap;
+      this.#cap = [];
+      this.#state = "disposed";
+      return n;
+    }
+  }
+
+  // 27.4 AsyncDisposableStack
+  class AsyncDisposableStack {
+    #state = "pending"; #cap = [];
+    constructor() {}
+    static #check(s, name) {
+      if (!isObject(s) || !(#state in s)) throw new TypeErr("AsyncDisposableStack.prototype." + name + " called on an incompatible receiver");
+    }
+    static #has(s) { return isObject(s) && #state in s; }
+    get disposed() { AsyncDisposableStack.#check(this, "disposed"); return this.#state === "disposed"; }
+    disposeAsync() {
+      if (!AsyncDisposableStack.#has(this)) {
+        var err = new TypeErr("AsyncDisposableStack.prototype.disposeAsync called on an incompatible receiver");
+        return new PromiseCtor(function (resolve, reject) { reject(err); });
+      }
+      if (this.#state === "disposed") return PromiseResolve(undefined);
+      this.#state = "disposed";
+      return disposeAsync(this.#cap, undefined, false);
+    }
+    use(value) {
+      AsyncDisposableStack.#check(this, "use");
+      if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
+      add(this.#cap, value, true);
+      return value;
+    }
+    adopt(value, onDisposeAsync) {
+      AsyncDisposableStack.#check(this, "adopt");
+      if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
+      if (!isCallable(onDisposeAsync)) throw new TypeErr("onDisposeAsync is not a function");
+      addMethod(this.#cap, undefined, function () { return onDisposeAsync(value); }, true);
+      return value;
+    }
+    defer(onDisposeAsync) {
+      AsyncDisposableStack.#check(this, "defer");
+      if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
+      if (!isCallable(onDisposeAsync)) throw new TypeErr("onDisposeAsync is not a function");
+      addMethod(this.#cap, undefined, onDisposeAsync, true);
+      return undefined;
+    }
+    move() {
+      AsyncDisposableStack.#check(this, "move");
+      if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
+      var n = new AsyncDisposableStack();
+      n.#cap = this.#cap;
+      this.#cap = [];
+      this.#state = "disposed";
+      return n;
+    }
+  }
+
+  var DP = DisposableStack.prototype, AP = AsyncDisposableStack.prototype;
+  def(DP, SymDispose, DP.dispose);
+  defineProperty(DP, SymToStringTag, { value: "DisposableStack", writable: false, enumerable: false, configurable: true });
+  def(AP, SymAsyncDispose, AP.disposeAsync);
+  defineProperty(AP, SymToStringTag, { value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
+  def(G, "DisposableStack", DisposableStack);
+  markIntrinsic(DisposableStack);
+  def(G, "AsyncDisposableStack", AsyncDisposableStack);
+  markIntrinsic(AsyncDisposableStack);
+
+  // %AsyncIteratorPrototype% [ @@asyncDispose ] (27.1.4.1)
+  var AIP = getProto(getProto(async function* () {}.prototype));
+  var asyncIterDispose = {
+    [SymAsyncDispose]() {
+      var O = this;
+      return new Promise(function (resolve, reject) {
+        var ret;
+        try { ret = O.return; } catch (e) { reject(e); return; }
+        if (ret === undefined || ret === null) { resolve(undefined); return; }
+        if (!isCallable(ret)) { reject(new TypeErr("return is not a function")); return; }
+        var r;
+        try { r = apply(ret, O, []); } catch (e) { reject(e); return; }   // Call(return, O): no arguments
+        PromiseResolve(r).then(function () { resolve(undefined); }, reject);
+      });
+    }
+  }[SymAsyncDispose];
+  def(AIP, SymAsyncDispose, asyncIterDispose);
+
+  return { add: add, dispose: dispose,
+    disposeAsync: { start: asyncStart, step: asyncStep, fail: asyncFail, end: asyncEnd } };
+})

@@ -2,9 +2,9 @@ program GocciaBenchmarkRunner;
 
 { GocciaBenchmarkRunner on the G2 engine, while the apps move from the old
   engine to G2: the same command line, configs, trust and capability policy
-  (the base class), each benchmark file run by a TG2Engine in benchmark mode
-  (G2.Embed BenchMode, goccia:microbench from prelude/microbench.js) on a
-  thread of its own, its benchmarks measured by G2.HostAPI
+  (the base class), each benchmark file run by a TGocciaEngine in benchmark mode
+  (Goccia.Embed BenchMode, goccia:microbench from prelude/microbench.js) on a
+  thread of its own, its benchmarks measured by Goccia.HostAPI
   RunBenchmarkSuites and reported by Goccia.Benchmark.Reporter.
   `./build.pas benchmarkrunner` builds it as build/GocciaBenchmarkRunner.
 
@@ -28,7 +28,7 @@ uses
   Goccia.Capabilities,
   Goccia.CLI.Application,
   Goccia.CLI.FileSettings,
-  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.JSON.Reporter,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
@@ -44,9 +44,9 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
 
-  G2.Embed,
-  G2.HostAPI,
-  G2.VM,
+  Goccia.Embed,
+  Goccia.HostAPI,
+  Goccia.VM,
   Goccia.ThreadCleanupRegistry;
 
 type
@@ -56,13 +56,13 @@ type
   end;
 
   { one file's results, plain data so they cross from its thread }
-  TG2BenchFileResult = record
+  TGocciaBenchFileResult = record
     Result: TBenchmarkFileResult;
     { its engine's and the memory manager's counters over the file }
     Memory: TCLIJSONMemoryStats;
   end;
 
-  TG2BenchmarkRunnerApp = class(TGocciaCLIApplication)
+  TGocciaBenchmarkRunnerApp = class(TGocciaCLIApplication)
   private
     FNoProgress: TFlagOption;
     FProfileDeterministic: TFlagOption;
@@ -76,7 +76,7 @@ type
     FParallel: Boolean;
     { the input is stdin: GocciaBenchmarkRunner prints no file progress lines for it }
     FFromStdin: Boolean;
-    FResults: array of TG2BenchFileResult;
+    FResults: array of TGocciaBenchFileResult;
     { --profile: the main thread's profilers, which each file's thread records into (profiled files run one at a
       time) }
     FProfiler: TGocciaProfiler;
@@ -98,9 +98,9 @@ type
 
   { one benchmark file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh
     engine }
-  TG2BenchThread = class(TThread)
+  TGocciaBenchThread = class(TThread)
   private
-    FApp: TG2BenchmarkRunnerApp;
+    FApp: TGocciaBenchmarkRunnerApp;
     FIndex: Integer;
     FSource: TStringList;
     FOwnsSource: Boolean;
@@ -125,7 +125,7 @@ begin
   end;
 end;
 
-{ G2.HostAPI BenchProgress: the benchmark about to be measured, as GocciaBenchmarkRunner prints it }
+{ Goccia.HostAPI BenchProgress: the benchmark about to be measured, as GocciaBenchmarkRunner prints it }
 procedure BenchmarkProgress(const ASuite, AName: UnicodeString; AIndex, ATotal: Integer);
 begin
   if ASuite <> '' then
@@ -151,7 +151,7 @@ begin
   Result := Pos('/helpers/', StringReplace(AFileName, PathDelim, '/', [rfReplaceAll])) > 0;
 end;
 
-procedure TG2BenchThread.Execute;
+procedure TGocciaBenchThread.Execute;
 var
   OwnsJit: Boolean;
 begin
@@ -183,13 +183,13 @@ end;
 
 { ---- options ---- }
 
-function TG2BenchmarkRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+function TGocciaBenchmarkRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
   Result := ALL_CAPABILITIES;
 end;
 
 { GocciaBenchmarkRunner.dpr TBenchmarkRunnerApp.Configure }
-procedure TG2BenchmarkRunnerApp.Configure;
+procedure TGocciaBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddProfilerOptions;
@@ -204,7 +204,7 @@ begin
 end;
 
 { --profile-format implies --profile=functions, --profile-deterministic --profile=all }
-procedure TG2BenchmarkRunnerApp.Validate;
+procedure TGocciaBenchmarkRunnerApp.Validate;
 begin
   inherited Validate;
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
@@ -217,47 +217,47 @@ begin
     raise TParseError.Create('--profile-format=flamegraph requires --profile-output=<path>.');
 end;
 
-function TG2BenchmarkRunnerApp.UsageLine: string;
+function TGocciaBenchmarkRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
 end;
 
-function TG2BenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
+function TGocciaBenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefault;
 end;
 
-function TG2BenchmarkRunnerApp.ProfilingEnabled: Boolean;
+function TGocciaBenchmarkRunnerApp.ProfilingEnabled: Boolean;
 begin
   Result := ProfilerOptions.Mode.Present;
 end;
 
 { ---- one file ---- }
 
-procedure TG2BenchmarkRunnerApp.RunBenchmarkFile(AIndex: Integer; ASource: TStringList);
+procedure TGocciaBenchmarkRunnerApp.RunBenchmarkFile(AIndex: Integer; ASource: TStringList);
 var
   FileName, FileConfigPath, AliasBaseDirectory, SetupError: string;
   FileConfig: TConfigEntryArray;
   Verdict: TGocciaConfigTrustVerdict;
   Capabilities: TGocciaCapabilities;
-  Grant: TG2ImportGrant;
+  Grant: TGocciaImportGrant;
   Resolver: TGocciaModuleResolver;
-  Engine: TG2Engine;
-  Capture: TG2ConsoleCapture;
-  RunResult, HostError, Failure: TG2RunResult;
+  Engine: TGocciaEngine;
+  Capture: TGocciaConsoleCapture;
+  RunResult, HostError, Failure: TGocciaRunResult;
   Err: UnicodeString;
-  Entries: TG2BenchEntries;
+  Entries: TGocciaBenchEntries;
   Total, I: Integer;
   Duration, ExecStart, BenchStart: Int64;
-  Aborted: TG2Abort;
+  Aborted: TGocciaAbort;
   Res: TBenchmarkFileResult;
-  MemoryStart: TG2MemoryStats;
+  MemoryStart: TGocciaMemoryStats;
   HeapStart: THeapStatus;
   Deterministic: Boolean;
 
   { a failure's report: on stderr as GocciaRunner prints it (a run one file at a time), and as the file's one entry,
     code frame included (GocciaBenchmarkRunner's FormatThrowDetail) }
-  procedure Fail(const AResult: TG2RunResult);
+  procedure Fail(const AResult: TGocciaRunResult);
   begin
     if not FParallel then
       WriteLn(ErrOutput, FailureText(FileName, AResult, ASource, Engine, '', nil, True, True, IsColorTerminal,
@@ -271,13 +271,13 @@ begin
   Res := Default(TBenchmarkFileResult);
   Res.FileName := FileName;
   Deterministic := FProfileDeterministic.Present;
-  Capture := TG2ConsoleCapture.Create;
+  Capture := TGocciaConsoleCapture.Create;
   Capture.FileName := FileName;
   Grant := nil;
   Resolver := nil;
   Engine := nil;
   HeapStart := GetHeapStatus;
-  MemoryStart := Default(TG2MemoryStats);
+  MemoryStart := Default(TGocciaMemoryStats);
   try
     FileConfigPath := DiscoverFileConfigPath(FileName);
     if FileConfigPath <> '' then
@@ -286,7 +286,7 @@ begin
       SetLength(FileConfig, 0);
     Verdict := FileConfigVerdict(FileConfigPath, FileName);
     Capabilities := ResolveEngineCapabilities(FileConfigPath, FileName);
-    Grant := TG2ImportGrant.Create(Capabilities);
+    Grant := TGocciaImportGrant.Create(Capabilities);
     Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(FileName)));
     Grant.Resolver := Resolver;
     Resolver.SetExtensions(ModuleImportExtensions);
@@ -300,7 +300,7 @@ begin
       AliasBaseDirectory := ExtractFilePath(RootConfigPath);
     ConfigureModuleResolver(Resolver, FileName, EngineOptions.ImportMap.ValueOr(''),
       EngineOptions.Aliases.Values, AliasBaseDirectory);
-    Engine := TG2Engine.Create;
+    Engine := TGocciaEngine.Create;
     try
       MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
@@ -388,7 +388,7 @@ begin
             begin
               { what it threw, as GocciaBenchmarkRunner's BenchmarkExceptionMessage gives it: the error, where it
                 was made and the suggestion, without a code frame }
-              Failure := Default(TG2RunResult);
+              Failure := Default(TGocciaRunResult);
               Failure.ErrorMessage := Entries[I].Error;
               Failure.ErrorIsError := Entries[I].ErrorIsError;
               Failure.ErrorName := Entries[I].ErrorName;
@@ -424,7 +424,7 @@ begin
         else
         begin
           { a limit spent, or the run itself failed: the file's one error, as a failed file run reports it }
-          Failure := Default(TG2RunResult);
+          Failure := Default(TGocciaRunResult);
           Failure.Aborted := Aborted;
           if Err = '' then
             Err := 'the benchmarks did not finish';
@@ -467,10 +467,10 @@ end;
 { ---- files ---- }
 
 { each file on a thread of its own, at most the job count at once; results in file order }
-procedure TG2BenchmarkRunnerApp.RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
+procedure TGocciaBenchmarkRunnerApp.RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
 var
   I, Next, Oldest, Started, Running: Integer;
-  Workers: array of TG2BenchThread;
+  Workers: array of TGocciaBenchThread;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
 
@@ -484,7 +484,7 @@ begin
   SetLength(FResults, AFiles.Count);
   for I := 0 to AFiles.Count - 1 do
   begin
-    FResults[I] := Default(TG2BenchFileResult);
+    FResults[I] := Default(TGocciaBenchFileResult);
     FResults[I].Result.FileName := AFiles[I];
   end;
   SetLength(Workers, AFiles.Count);
@@ -505,7 +505,7 @@ begin
       { a sequential run prints each file's progress line before it runs, so its benchmarks' lines follow it }
       if not FParallel then
         Progress(Next);
-      Workers[Next] := TG2BenchThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next] := TGocciaBenchThread.Create(True, FILE_THREAD_STACK);
       Workers[Next].FApp := Self;
       Workers[Next].FIndex := Next;
       if (Next = 0) and Assigned(AStdinSource) then
@@ -542,7 +542,7 @@ begin
     WriteProgressLine('');
 end;
 
-procedure TG2BenchmarkRunnerApp.RunAndReport(const AFiles: TStringList; const AStdinSource: TStringList;
+procedure TGocciaBenchmarkRunnerApp.RunAndReport(const AFiles: TStringList; const AStdinSource: TStringList;
   const AReports: array of TReportSpec);
 var
   Reporter: TBenchmarkReporter;
@@ -594,7 +594,7 @@ begin
   end;
 end;
 
-procedure TG2BenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TGocciaBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Reports: array of TReportSpec;
   ReportCount, I, P: Integer;
@@ -729,7 +729,7 @@ begin
 end;
 
 { the profile reports, as GocciaBenchmarkRunner prints and writes them }
-procedure TG2BenchmarkRunnerApp.AfterExecute;
+procedure TGocciaBenchmarkRunnerApp.AfterExecute;
 var
   Mode: Goccia.CLI.Options.TGocciaProfileMode;
   Opcodes, Functions, Compile: Boolean;
@@ -768,7 +768,7 @@ var
 begin
   InitCriticalSection(ProgressLock);
   try
-    RunResult := TGocciaApplication.RunApplication(TG2BenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+    RunResult := TGocciaApplication.RunApplication(TGocciaBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
   finally
     DoneCriticalSection(ProgressLock);
   end;

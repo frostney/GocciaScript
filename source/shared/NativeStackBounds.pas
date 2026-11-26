@@ -22,7 +22,7 @@ function NativeStackPosition: NativeUInt;
 // the thread's stack cannot be found. Found once per thread.
 function NativeStackLimit: NativeUInt;
 // Sets the calling thread's NativeStackLimit, for an engine that keeps its own
-// floors on the stack (G2.Core's StackGuardInit): the checks of the shared
+// floors on the stack (Goccia.Core's StackGuardInit): the checks of the shared
 // parser and pattern compiler (Goccia.NestingLimit) then refuse where that
 // engine could no longer run what they produce.
 procedure SetNativeStackLimit(const ALimit: NativeUInt);

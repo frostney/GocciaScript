@@ -2,8 +2,8 @@ program GocciaBundler;
 { GocciaBundler on the G2 engine, while the apps move from the old engine to
   G2: the same command line, configs, output plan and collision checks (the
   base class and GocciaBundler.dpr's planning), each file compiled by a
-  TG2Engine on a thread of its own (G2.Embed CompileArtifact) into a G2
-  bytecode file (G2.Artifact), which GocciaRunner on G2 runs as an entry or
+  TGocciaEngine on a thread of its own (Goccia.Embed CompileArtifact) into a G2
+  bytecode file (Goccia.Artifact), which GocciaRunner on G2 runs as an entry or
   imports with --prefer-bytecode. `./build.pas bundler` builds it as
   build/GocciaBundler. }
 
@@ -24,7 +24,7 @@ uses
   Goccia.Capabilities,
   Goccia.CLI.Application,
   Goccia.CLI.FileSettings,
-  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.SourceMaps,
@@ -34,7 +34,7 @@ uses
   Goccia.ScriptLoader.Input,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
-  G2.Embed,
+  Goccia.Embed,
 
   FileUtils,
   Goccia.ThreadCleanupRegistry;
@@ -49,7 +49,7 @@ type
 
   { a file that did not compile: Message the report as GocciaRunner prints it, Detail the error alone (a
     parallel run's "Error in" line) }
-  EG2BundleFailure = class(Exception)
+  EGocciaBundleFailure = class(Exception)
   public
     Detail: string;
   end;
@@ -100,7 +100,7 @@ begin
       begin
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
-        if E is EG2BundleFailure then FErrorDetail := EG2BundleFailure(E).Detail
+        if E is EGocciaBundleFailure then FErrorDetail := EGocciaBundleFailure(E).Detail
         else FErrorDetail := E.Message;
       end;
     end;
@@ -150,7 +150,7 @@ end;
 { a file that did not compile prints its report, as GocciaBundler prints a compile error }
 procedure TBundlerApp.HandleError(const AException: Exception);
 begin
-  if AException is EG2BundleFailure then
+  if AException is EGocciaBundleFailure then
     WriteLn(AException.Message)
   else
     inherited HandleError(AException);
@@ -188,14 +188,14 @@ end;
 { runs on the file's own thread: a fresh engine under the file's settings compiles it }
 procedure TBundlerApp.EmitBytecode(const ASource: TStringList; const AOutput: TBundlerOutput; AQuiet: Boolean);
 var
-  Engine: TG2Engine;
+  Engine: TGocciaEngine;
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
   NoUnsafe: TGocciaUnsafeRequests;
   Bytes: TBytes;
-  R: TG2RunResult;
+  R: TGocciaRunResult;
   StartTime, EndTime: Int64;
-  Failure: EG2BundleFailure;
+  Failure: EGocciaBundleFailure;
   Stream: TFileStream;
   SnapshotErr: UnicodeString;
 begin
@@ -212,17 +212,17 @@ begin
     any grant it requests reported as ignored. }
   FilePermissionRequest(FileConfigPath, AOutput.InputFile);
   NoUnsafe := [];
-  Engine := TG2Engine.Create;
+  Engine := TGocciaEngine.Create;
   try
-    { build.pas snapshots the compiled preludes from a run of an empty file with G2_SNAPSHOT_OUT set: the host's
+    { build.pas snapshots the compiled preludes from a run of an empty file with GOCCIA_SNAPSHOT_OUT set: the host's
       are compiled too, so the snapshot holds what the other G2 apps' have }
-    if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+    if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
       Engine.PrepareHost(SnapshotErr);
     ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig, AOutput.InputFile, NoUnsafe));
-    R := Default(TG2RunResult);
+    R := Default(TGocciaRunResult);
     if not Engine.CompileArtifact(AOutput.InputFile, UnicodeString(StringListToSourceText(ASource)), Bytes, R) then
     begin
-      Failure := EG2BundleFailure.Create(FailureText(AOutput.InputFile, R, ASource, Engine, '', nil, True, True,
+      Failure := EGocciaBundleFailure.Create(FailureText(AOutput.InputFile, R, ASource, Engine, '', nil, True, True,
         IsColorTerminal, 0, 0));
       Failure.Detail := UTF8Encode(R.ErrorText);
       raise Failure;
@@ -407,7 +407,7 @@ var
   Parallel: Boolean;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
-  Failure: EG2BundleFailure;
+  Failure: EGocciaBundleFailure;
 begin
   Parallel := AJobCount > 1;
   SetLength(Workers, Length(FPlan));
@@ -460,9 +460,9 @@ begin
   end;
   if ErrorClass <> nil then
   begin
-    if ErrorClass = EG2BundleFailure then
+    if ErrorClass = EGocciaBundleFailure then
     begin
-      Failure := EG2BundleFailure.Create(ErrorMessage);
+      Failure := EGocciaBundleFailure.Create(ErrorMessage);
       raise Failure;
     end;
     raise ErrorClass.Create(ErrorMessage);

@@ -1,7 +1,7 @@
 name: GC stress
 
 # Runs GocciaScript's tests, the GC regression scripts and the GC-sensitive part
-# of test262 under GC stress (scripts/g2/gc-stress-ci.py): a 16 KB nursery and
+# of test262 under GC stress (scripts/engine/gc-stress-ci.py): a 16 KB nursery and
 # --gc-verify, so the collector runs every few kilobytes and checks the heap
 # after each collection. A value that only a Pascal local holds across an
 # allocation is then moved or freed at once, so a missing root fails here
@@ -37,7 +37,7 @@ env:
 jobs:
   gc-stress:
     runs-on: ubuntu-latest
-    # tests/ run twice through g2 --test, the stressed run with the heap verified
+    # tests/ run twice through goccia --test, the stressed run with the heap verified
     # at every collection: hours on four cores
     timeout-minutes: 350
     permissions:
@@ -83,7 +83,7 @@ jobs:
         run: bash scripts/apply-test262-patches.sh test262-suite
 
       - name: Build the engine and the test262 runner
-        run: ./build.pas --prod g2 test262runner
+        run: ./build.pas --prod engine test262runner
 
       - name: Run plainly and under stress, and compare
         id: stress
@@ -93,7 +93,7 @@ jobs:
         # upload steps still run, and the last step fails.
         run: |
           set +e
-          python3 scripts/g2/gc-stress-ci.py \
+          python3 scripts/engine/gc-stress-ci.py \
             --suite-dir=test262-suite \
             --out-dir=build/gc-stress-report \
             --jobs=4

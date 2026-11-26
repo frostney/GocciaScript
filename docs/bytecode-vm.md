@@ -4,62 +4,62 @@
 
 ## Executive Summary
 
-- **One engine, G2** — every application in `source/app` compiles JavaScript to G2's register bytecode (`G2.Compiler`, `G2.Bytecode`) and runs it on G2's VM (`G2.VM`); hosts drive it through `TG2Engine` (`G2.Embed`)
+- **One engine, G2** — every application in `source/app` compiles JavaScript to G2's register bytecode (`Goccia.Compiler`, `Goccia.Instructions`) and runs it on G2's VM (`Goccia.VM`); hosts drive it through `TGocciaEngine` (`Goccia.Embed`)
 - **Register bytecode** — 64-bit instructions (8-bit opcode, 16-bit A and B, 24-bit C), one value stack per thread, a frame's registers holding `this`, parameters, locals and temporaries; captured variables are Lua-style upvalues
-- **Three ways to run a function** — the interpreter (`Execute`, with `FastLoop` for the hot instructions), the baseline JIT (`G2.Jit.inc`) and the optimizing tier (`G2.Opt.inc`); the two compiled tiers exist only on Linux x86-64
+- **Three ways to run a function** — the interpreter (`Execute`, with `FastLoop` for the hot instructions), the baseline JIT (`Goccia.Jit.inc`) and the optimizing tier (`Goccia.Opt.inc`); the two compiled tiers exist only on Linux x86-64
 - **Call bounds** — at most 200,000 nested calls below the entry's frame unless `--max-stack` sets fewer; native re-entry is bounded by the thread's native stack; proper tail calls reuse a frame past a depth floor ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md))
-- **Binary format** — `.gbc` files (`G2.Artifact`) with `GBC\0` magic, format version 200, an instruction-set fingerprint and a verifier (`G2.ArtifactVerify.inc`); see [Precompiled bytecode modules](bytecode-loading.md)
+- **Binary format** — `.gbc` files (`Goccia.Artifact`) with `GBC\0` magic, format version 200, an instruction-set fingerprint and a verifier (`Goccia.ArtifactVerify.inc`); see [Precompiled bytecode modules](bytecode-loading.md)
 
 ## Overview
 
-G2 keeps GocciaScript's front end (`Goccia.Lexer`, `Goccia.Parser`, the `Goccia.AST.*` units, `Goccia.SourcePipeline`) and replaces everything after the AST: compiler, bytecode, VM, object model, garbage collector and built-ins, all under `source/g2`. [docs/g2/README.md](g2/README.md) and [docs/g2/design.md](g2/design.md) describe the engine as a whole; this page covers the path from AST to executed instruction.
+G2 keeps GocciaScript's front end (`Goccia.Lexer`, `Goccia.Parser`, the `Goccia.AST.*` units, `Goccia.SourcePipeline`) and replaces everything after the AST: compiler, bytecode, VM, object model, garbage collector and built-ins, all under `source/engine`. [docs/engine/README.md](engine/README.md) and [docs/engine/design.md](engine/design.md) describe the engine as a whole; this page covers the path from AST to executed instruction.
 
-`G2.Compiler` walks the AST once per function and produces a `TFuncTemplate` (`G2.Bytecode`) for each: code, constants, inline caches, upvalue descriptors, nested templates and per-instruction line and column tables. A closure is a function object pointing at its template and its upvalue array. Templates live as long as the engine that made them (`RegisterTemplate`, `FreeAllTemplates`).
+`Goccia.Compiler` walks the AST once per function and produces a `TFuncTemplate` (`Goccia.Instructions`) for each: code, constants, inline caches, upvalue descriptors, nested templates and per-instruction line and column tables. A closure is a function object pointing at its template and its upvalue array. Templates live as long as the engine that made them (`RegisterTemplate`, `FreeAllTemplates`).
 
-Compilation is lazy by default (`G2.Lazy`, `G2_LAZY=0` turns it off). `G2.PreParse` checks a Script or Module's whole syntax and early errors and records, per function, its source range and the free names it uses. The parser then skips the bodies of eligible functions and the compiler makes a stub template for each; its first call compiles it (`LazyCompileHook`). The JavaScript preludes in `source/g2/prelude` are compiled at build time and embedded as a snapshot (`G2.Snapshot`); their nested bodies are read on first call too.
+Compilation is lazy by default (`Goccia.Lazy`, `GOCCIA_LAZY=0` turns it off). `Goccia.PreParse` checks a Script or Module's whole syntax and early errors and records, per function, its source range and the free names it uses. The parser then skips the bodies of eligible functions and the compiler makes a stub template for each; its first call compiles it (`LazyCompileHook`). The JavaScript preludes in `source/engine/prelude` are compiled at build time and embedded as a snapshot (`Goccia.Snapshot`); their nested bodies are read on first call too.
 
-A Script's top level runs its global declarations through one `opDeclGlobals` instruction (ES2026 §16.1.7 GlobalDeclarationInstantiation). A module compiles to a generator over a table of binding cells (`opMakeModCell`, `opModGet`), linked and evaluated by `G2.Modules`. A direct `eval` in function code compiles its source as an arrow inside a stand-in for the caller, reaching the caller's bindings as upvalues; indirect `eval` and the `Function` constructor compile through `G2.Eval`.
+A Script's top level runs its global declarations through one `opDeclGlobals` instruction (ES2026 §16.1.7 GlobalDeclarationInstantiation). A module compiles to a generator over a table of binding cells (`opMakeModCell`, `opModGet`), linked and evaluated by `Goccia.Modules`. A direct `eval` in function code compiles its source as an arrow inside a stand-in for the caller, reaching the caller's bindings as upvalues; indirect `eval` and the `Function` constructor compile through `Goccia.Eval`.
 
 ## Pipeline
 
 ```text
-Source -> JSX transform (optional) -> Goccia lexer/parser -> AST -> G2.Compiler -> TFuncTemplate -> G2.VM -> TValue
+Source -> JSX transform (optional) -> Goccia lexer/parser -> AST -> Goccia.Compiler -> TFuncTemplate -> Goccia.VM -> TValue
 ```
 
-Bytecode files use the `.gbc` extension (`G2.Artifact`).
+Bytecode files use the `.gbc` extension (`Goccia.Artifact`).
 
 ## Main Units
 
 | Area | Units |
 |------|-------|
-| Instruction set, templates, inline cache records | `G2.Bytecode` |
-| AST to bytecode | `G2.Compiler` |
-| Pre-parse and lazy compilation | `G2.PreParse`, `G2.Scan`, `G2.Lazy` |
-| Run-time parsing (entry, `eval`, `Function`) | `G2.Eval` |
-| Interpreter (`Execute`, `FastLoop`), frames, calls, limits | `G2.VM` |
-| Baseline JIT | `G2.Jit.inc` (included in `G2.VM`) |
-| Optimizing tier | `G2.Opt.inc` (included in `G2.Jit.inc`) |
-| Values, cells, shapes, GC, language profile | `G2.Core` |
-| Module records, linking, `.gbc` imports | `G2.Modules` |
-| Bytecode files and their verifier | `G2.Artifact`, `G2.ArtifactVerify.inc` |
-| Prelude snapshot | `G2.Snapshot` |
-| Runtime profile (`--profile`) | `G2.Profile` |
-| Embedding API | `G2.Embed` (`TG2Engine`) |
+| Instruction set, templates, inline cache records | `Goccia.Instructions` |
+| AST to bytecode | `Goccia.Compiler` |
+| Pre-parse and lazy compilation | `Goccia.PreParse`, `Goccia.Scan`, `Goccia.Lazy` |
+| Run-time parsing (entry, `eval`, `Function`) | `Goccia.Eval` |
+| Interpreter (`Execute`, `FastLoop`), frames, calls, limits | `Goccia.VM` |
+| Baseline JIT | `Goccia.Jit.inc` (included in `Goccia.VM`) |
+| Optimizing tier | `Goccia.Opt.inc` (included in `Goccia.Jit.inc`) |
+| Values, cells, shapes, GC, language profile | `Goccia.Core` |
+| Module records, linking, `.gbc` imports | `Goccia.Modules` |
+| Bytecode files and their verifier | `Goccia.Artifact`, `Goccia.ArtifactVerify.inc` |
+| Prelude snapshot | `Goccia.Snapshot` |
+| Runtime profile (`--profile`) | `Goccia.Profile` |
+| Embedding API | `Goccia.Embed` (`TGocciaEngine`) |
 
 ## Core Design
 
-- **Values.** `TValue` is a NaN-boxed `QWord`: doubles as themselves, int32, the special constants (`undefined`, `null`, `false`, `true`, the hole) and heap cell pointers under tags. Numbers never allocate ([design.md](g2/design.md#values)).
+- **Values.** `TValue` is a NaN-boxed `QWord`: doubles as themselves, int32, the special constants (`undefined`, `null`, `false`, `true`, the hole) and heap cell pointers under tags. Numbers never allocate ([design.md](engine/design.md#values)).
 - **One value stack per thread.** `VStack` holds `STACK_MAX` (4 Mi) values, reserved as zeroed pages. A frame's registers are a window of it: `R0` is `this`, then the parameters, locals and temporaries. `TFrame` records the closure, template, base, PC, return slot, argument count and kind. A G2 engine's state is its thread's: `VStack`, `Frames` and the handler stack are threadvars.
 - **Calls.** `opCall A, B, C` calls `R[A]` with `this` in `R[A+1]` and `B` arguments from `R[A+2]`; bit 0 of C (instruction bit 40) means `this` is `undefined` and bit 1 (bit 41) marks a tail call. A call between bytecode functions pushes a `TFrame` and continues in the same `Execute` activation, so JavaScript recursion does not recurse on the native stack. A native that calls back into JavaScript (`CallValue`, `Construct`, `GeneratorResume`) nests `Execute(StopFrame, Res)` on the native stack.
 - **Upvalues.** A captured local stays in its register while its frame lives; an open upvalue points at its stack index. `CloseUpvals` copies it into its cell when the scope or frame ends (`opClose`, a return, an unwinding throw).
 - **Exceptions.** `opTry` pushes a `THandler` (frame, handler PC, exception register, kind: catch or finally); `opEndTry` pops it. A throw sets `Pending` and jumps to the unwind code in `Execute`, which drops frames down to the handler's. The dispatch loop has no Pascal `try`.
 - **Generators and async functions.** `opGenStart`, `opYield`, `opAwait`, `opYieldStar` and `opYieldStarAsync` suspend a frame by saving its registers; the compiler records how many are live at each suspension so that only those are kept.
-- **Garbage collection.** The VM shares `G2.Core`'s heap with the built-ins. The value stack up to `StackTop` is a root, and the nursery collector moves young cells, so code re-reads a cell pointer from a root after anything that can allocate. See [Garbage Collector](garbage-collector.md) and [design.md](g2/design.md#heap-and-gc).
+- **Garbage collection.** The VM shares `Goccia.Core`'s heap with the built-ins. The value stack up to `StackTop` is a root, and the nursery collector moves young cells, so code re-reads a cell pointer from a root after anything that can allocate. See [Garbage Collector](garbage-collector.md) and [design.md](engine/design.md#heap-and-gc).
 - **Strict types.** With strict-types on (`ProfileStrictTypes`), the compiler emits `opCheckType` before a store into an annotated binding or one whose initializer has an evident type, and for an annotated parameter. Return-type annotations are not checked. See [Type Annotations](type-annotations.md).
 
 ## Instruction Format
 
-`G2.Bytecode` encodes each instruction as a `QWord`:
+`Goccia.Instructions` encodes each instruction as a `QWord`:
 
 | Bits | Field | Read with |
 |------|-------|-----------|
@@ -90,7 +90,7 @@ The hot set is a table, not a range: `InitFastOps` marks the 79 opcodes `FastLoo
 
 ### Execute
 
-`Execute(StopFrame, Res)` in `G2.VM` is the full interpreter: one `case` over every opcode, run from `Frames[FrameTop - 1]` until the frame `StopFrame` returns. It reloads its dispatch state at `LReload` after a call or return switches frames and unwinds at `LThrow`. Execute owns everything the faster paths hand back: allocation-heavy instructions, anything that can throw, realm switches, coverage (`CovStep`), the runtime profile and instruction counting.
+`Execute(StopFrame, Res)` in `Goccia.VM` is the full interpreter: one `case` over every opcode, run from `Frames[FrameTop - 1]` until the frame `StopFrame` returns. It reloads its dispatch state at `LReload` after a call or return switches frames and unwinds at `LThrow`. Execute owns everything the faster paths hand back: allocation-heavy instructions, anything that can throw, realm switches, coverage (`CovStep`), the runtime profile and instruction counting.
 
 ### FastLoop
 
@@ -100,7 +100,7 @@ The hot set is a table, not a range: `InitFastOps` marks the 79 opcodes `FastLoo
 
 ### Baseline JIT
 
-On Linux x86-64 (`G2JIT` in `G2.Checks.inc`), `FastLoop` enters a template's machine code through `XJitRun`. A template is compiled after `JIT_HOT` (20) entries (`G2_JIT_HOT` overrides; `G2_JIT=0` turns the JIT off) by `JitCompile`, which emits straight-line code for each instruction's fast path. The frame stays the interpreter's: registers live in the value stack and no machine register holds a value across instructions, so the code can stop before any instruction. A failed guard jumps to that instruction's exit, which returns its PC to `FastLoop` or `Execute`.
+On Linux x86-64 (`GOCCIA_JIT` in `Goccia.Checks.inc`), `FastLoop` enters a template's machine code through `XJitRun`. A template is compiled after `JIT_HOT` (20) entries (`GOCCIA_JIT_HOT` overrides; `GOCCIA_JIT=0` turns the JIT off) by `JitCompile`, which emits straight-line code for each instruction's fast path. The frame stays the interpreter's: registers live in the value stack and no machine register holds a value across instructions, so the code can stop before any instruction. A failed guard jumps to that instruction's exit, which returns its PC to `FastLoop` or `Execute`.
 
 Compiled code calls a compiled callee through a shared call stub (`JitBuildCallStub`, `XJitCall`), one native activation per call. `JitTooDeep` bounds that nesting by the native stack (`JIT_STACK_MARGIN` above the thread's limit, or `JIT_MAX_DEPTH` activations where the bounds are unknown); past it the interpreter runs the frames. Async functions are not compiled; a generator's body runs compiled between its suspensions. Code is written to bump-allocated executable chunks through `JitPublish`, which serializes every core before the code runs ([ADR 0186](adr/0186-g2-serializes-every-core-before-new-jit-code-runs.md)). Only the thread that holds the JIT (`JitTakeThread`) compiles; the applications give it to one file thread at a time.
 
@@ -108,25 +108,25 @@ Nothing is compiled while a timeout, an instruction budget, a `--max-stack` boun
 
 ### Optimizing Tier
 
-`G2.Opt.inc` compiles a region of a baseline-compiled template (everything reachable from its entry or from a loop header) to typed SSA: numbers and booleans become values in general-purpose and XMM registers, typed by a fixpoint seeded with the frame's values at compile time; tagged values stay in their stack registers. A template's counter runs down at its entry and back edges, and a region is optimized after `OPT_HOT` (1,000) of them (`OptMaybe`, `OptCompile`). Small callees are inlined (at most `OPT_INLINE_MAX` instructions each, four levels deep). An inlined call pushes no `TFrame`; while an embedded instruction of an inlined callee runs, the frame record's inline descriptor names the inlined calls (`InlinedFrameCount`), which `Function.prototype.caller` reads.
+`Goccia.Opt.inc` compiles a region of a baseline-compiled template (everything reachable from its entry or from a loop header) to typed SSA: numbers and booleans become values in general-purpose and XMM registers, typed by a fixpoint seeded with the frame's values at compile time; tagged values stay in their stack registers. A template's counter runs down at its entry and back edges, and a region is optimized after `OPT_HOT` (1,000) of them (`OptMaybe`, `OptCompile`). Small callees are inlined (at most `OPT_INLINE_MAX` instructions each, four levels deep). An inlined call pushes no `TFrame`; while an embedded instruction of an inlined callee runs, the frame record's inline descriptor names the inlined calls (`InlinedFrameCount`), which `Function.prototype.caller` reads.
 
-An instruction the tier does not take ends its block with a side exit: live numbers are boxed back into the stack and the baseline code continues there. A failed guard deoptimizes the same way and records feedback per instruction (`OptFb`), so the next compilation speculates less; after `OPT_MAX_DEOPTS` the regions are dropped, and after repeated recompiles the template stays baseline. Among other conditions, templates with a `try`, an `arguments` object, a rest parameter, a top level, async code, or kind-trusting instructions from a bytecode file are not eligible. `G2_OPT=0` turns the tier off and `G2_OPTLOG=1` logs each region.
+An instruction the tier does not take ends its block with a side exit: live numbers are boxed back into the stack and the baseline code continues there. A failed guard deoptimizes the same way and records feedback per instruction (`OptFb`), so the next compilation speculates less; after `OPT_MAX_DEOPTS` the regions are dropped, and after repeated recompiles the template stays baseline. Among other conditions, templates with a `try`, an `arguments` object, a rest parameter, a top level, async code, or kind-trusting instructions from a bytecode file are not eligible. `GOCCIA_OPT=0` turns the tier off and `GOCCIA_OPTLOG=1` logs each region.
 
 ## Frames and Call Bounds
 
-`FRAME_MAX` (200,003) is the frame record count a thread holds: 200,000 nested calls below the entry's frame plus three a run keeps. `SetMaxFrames(N)` lowers the bound to `N` nested calls; 0 or anything larger keeps 200,000. Hosts set it through `TG2Engine.MaxFrames`, which GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner and GocciaScriptLoaderBare fill from `--max-stack=N`. Without the option the bound is 200,000. A test function's frames count from its own frame (`CallRebased`).
+`FRAME_MAX` (200,003) is the frame record count a thread holds: 200,000 nested calls below the entry's frame plus three a run keeps. `SetMaxFrames(N)` lowers the bound to `N` nested calls; 0 or anything larger keeps 200,000. Hosts set it through `TGocciaEngine.MaxFrames`, which GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner and GocciaScriptLoaderBare fill from `--max-stack=N`. Without the option the bound is 200,000. A test function's frames count from its own frame (`CallRebased`).
 
 Every frame push checks `FramesFull`; past the bound the call throws `RangeError: Maximum call stack size exceeded` (`XFrameOverflow`). When the frames' stack memory plus the live heap is past the memory limit, the error carries the stack-memory suggestion. A memory refusal delivered at a call with at least 1,024 frames on the stack is reported as the same stack overflow ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). A spent timeout drops the frame bound to 0, so the next call aborts without an extra check per call.
 
-Native re-entry has its own bound. `G2.Core` keeps `NATIVE_STACK_MARGIN` (512 KB) above the thread's stack limit; the native entries into the interpreter refuse with the same `RangeError` once the stack pointer is below that floor (`ReentryTooDeep`), and a frame push from native code has a backstop 256 KB below it. A getter, a `toString`, a sort comparator or a generator's `next()` called from a built-in therefore fails cleanly whatever the frame bound. A spread call whose arguments would pass the end of the value stack throws the same error.
+Native re-entry has its own bound. `Goccia.Core` keeps `NATIVE_STACK_MARGIN` (512 KB) above the thread's stack limit; the native entries into the interpreter refuse with the same `RangeError` once the stack pointer is below that floor (`ReentryTooDeep`), and a frame push from native code has a backstop 256 KB below it. A getter, a `toString`, a sort comparator or a generator's `next()` called from a built-in therefore fails cleanly whatever the frame bound. A spread call whose arguments would pass the end of the value stack throws the same error.
 
-See [Execution limits](g2/README.md#execution-limits) for timeouts, instruction budgets and the memory limit.
+See [Execution limits](engine/README.md#execution-limits) for timeouts, instruction budgets and the memory limit.
 
 ## Proper Tail Calls
 
-`G2.Compiler` sets bit 41 of an `opCall` or `opCallV` in tail position (ES2026 §15.10.1 IsInTailPosition, §15.10.2 HasCallInTailPosition): the value of a `return` or a concise arrow body, through `?:`, `&&`, `||`, `??` and a comma expression's last operand, in strict code that is not a generator or async function, with no try block, `using` declaration or `for-of` loop still to act after the call (`TailEligible`, `CollectTailCalls`). A catch block without a finally, and a finally block, are tail positions.
+`Goccia.Compiler` sets bit 41 of an `opCall` or `opCallV` in tail position (ES2026 §15.10.1 IsInTailPosition, §15.10.2 HasCallInTailPosition): the value of a `return` or a concise arrow body, through `?:`, `&&`, `||`, `??` and a comma expression's last operand, in strict code that is not a generator or async function, with no try block, `using` declaration or `for-of` loop still to act after the call (`TailEligible`, `CollectTailCalls`). A catch block without a finally, and a finally block, are tail positions.
 
-The VM acts on the bit only once the frames are deep: past 1,024 (`TAIL_FLOOR`), or half a smaller `--max-stack` bound. There `Execute` replaces the calling frame with the callee's (`XTailCall`: the frame's upvalues closed, its handlers dropped, its `this` and arguments moved to its base, its return slot and kind kept), which is what PrepareForTailCall (§15.10.3) allows. `FastLoop` hands such a call to `Execute`, and the baseline JIT exits to the interpreter at it. Below the floor a tail call is an ordinary call in every tier, so stack traces keep their frames and compiled code its native calls and inlining. A construction's frame, a callee that is not a bytecode function, a generator or async callee, and another realm's function keep their frames (`XTailCallOk`). A chain of tail calls therefore holds at most about 1,024 frames however long it runs ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md), [G2 README](g2/README.md#proper-tail-calls)).
+The VM acts on the bit only once the frames are deep: past 1,024 (`TAIL_FLOOR`), or half a smaller `--max-stack` bound. There `Execute` replaces the calling frame with the callee's (`XTailCall`: the frame's upvalues closed, its handlers dropped, its `this` and arguments moved to its base, its return slot and kind kept), which is what PrepareForTailCall (§15.10.3) allows. `FastLoop` hands such a call to `Execute`, and the baseline JIT exits to the interpreter at it. Below the floor a tail call is an ordinary call in every tier, so stack traces keep their frames and compiled code its native calls and inlining. A construction's frame, a callee that is not a bytecode function, a generator or async callee, and another realm's function keep their frames (`XTailCallOk`). A chain of tail calls therefore holds at most about 1,024 frames however long it runs ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md), [G2 README](engine/README.md#proper-tail-calls)).
 
 ## Performance Direction
 
@@ -138,9 +138,9 @@ G2's speed comes from the representation and from moving work out of the general
 - `NoCaptures` and `NoHandlers`, computed by `FinishTemplate`, let a return skip closing upvalues and popping handlers
 - inline caches on every property, global and method access (below), and constructor caches on the template (`CtorFnShape`, `CtorProtoSlot`, `FIShape`) so `new F()` finds the prototype and field initializer without lookups
 - lazy compilation and the prelude snapshot, which keep start-up cost proportional to the code that runs
-- native fast paths for prelude-backed APIs (RegExp, `String.prototype.replace`/`split`/`match`) while the objects involved are unmodified ([design.md](g2/design.md#built-ins))
+- native fast paths for prelude-backed APIs (RegExp, `String.prototype.replace`/`split`/`match`) while the objects involved are unmodified ([design.md](engine/design.md#built-ins))
 
-Measured comparisons with QuickJS are in [docs/g2/README.md](g2/README.md#status) and [Benchmarks](benchmarks.md).
+Measured comparisons with QuickJS are in [docs/engine/README.md](engine/README.md#status) and [Benchmarks](benchmarks.md).
 
 ### Dispatch layout
 
@@ -152,18 +152,18 @@ FPC spills whole live ranges, the variable with the most interferences first. In
 
 ### Inline Caches
 
-Each `TPropIC` (`G2.Bytecode`) belongs to one instruction:
+Each `TPropIC` (`Goccia.Instructions`) belongs to one instruction:
 
 - **Property gets** check the receiver's shape against `Poly0` inline. A second shape allocates `More`, for up to four entries in all. An entry records the receiver's shape and object kind, the prototype depth of the holder (up to `IC_MAX_DEPTH`, 8), each prototype's expected shape, and for dictionary-mode prototypes their version. An accessor entry (`Acc`) lets `FastLoop` call a bytecode getter inline.
 - **Megamorphic sites**, whose four entries are full, look the receiver shape and key up in a shared 4,096-entry table before walking the chain.
 - **Stores** record the receiver shape and slot, or for an adding store the transition's target (`NewShape`). A prototype change clears every cached add transition (`ForgetAddTransitions`).
 - **Globals** cache the global object's shape and slot; a global lexical binding is cached by its index.
 
-Shapes are outside the collected heap. A major collection retires the shapes of prototypes nothing reaches, and `ForgetRetiredShapes` (with the JIT's and the megamorphic table's counterparts) resets every cache that names one before a retired record can be reused ([design.md](g2/design.md#heap-and-gc)).
+Shapes are outside the collected heap. A major collection retires the shapes of prototypes nothing reaches, and `ForgetRetiredShapes` (with the JIT's and the megamorphic table's counterparts) resets every cache that names one before a retired record can be reused ([design.md](engine/design.md#heap-and-gc)).
 
 ## Profiling
 
-`--profile` reports through GocciaScript's profilers (`Goccia.Profiler`, `Goccia.Profiler.Report`), fed by `G2.Profile`; see [Profiling](profiling.md). Under the runtime profile every instruction runs through `Execute`'s counted path (no `FastLoop`, no compiled code), so the step hook sees each opcode, each consecutive pair, and whether a binary arithmetic or comparison instruction had two Number operands. Opcodes carry G2's names (`G2OpcodeName`). Functions are timed from frame pushes; the preludes are not profiled and their cost is their caller's. Because profiling changes the tier code runs in, compare timings only between runs with the same profile flags.
+`--profile` reports through GocciaScript's profilers (`Goccia.Profiler`, `Goccia.Profiler.Report`), fed by `Goccia.Profile`; see [Profiling](profiling.md). Under the runtime profile every instruction runs through `Execute`'s counted path (no `FastLoop`, no compiled code), so the step hook sees each opcode, each consecutive pair, and whether a binary arithmetic or comparison instruction had two Number operands. Opcodes carry G2's names (`GocciaOpcodeName`). Functions are timed from frame pushes; the preludes are not profiled and their cost is their caller's. Because profiling changes the tier code runs in, compare timings only between runs with the same profile flags.
 
 ## Runtime Error Diagnostics
 
@@ -172,33 +172,33 @@ A runtime fault names what the author wrote:
 - **Call sites.** Each template's `CallSites` table maps a call or construct instruction to the callee's source text. When the callee is not callable or not a constructor, `XThrowNotFunction` and `XThrowNotCtor` use it, so `obj.missingMethod()` reports `obj.missingMethod is not a function` with a suggestion. The table is written to `.gbc` files, so loaded code reports the same message.
 - **Binding names.** A temporal-dead-zone check (`opCheckHole`) names its binding from a constant, as does a const assignment (`Assignment to constant variable 'x'`). A module binding read too early is named through `ModSlotNameHook`.
 - **Positions.** Every instruction has a line and column (`Lines`, `Cols`), also written to `.gbc` files.
-- **Provenance.** `AttachStack` gives an engine-made error its `stack` when the language profile wants stack traces (`ProfileStackTraces`; the conformance host records only where the error was made). `ErrorStackProvenance` returns the stack as the engine wrote it, whatever the script did to the property since, and `TG2Engine` locates an uncaught error only from that, never from a thrown value's own `stack` string. The CLI renders a code frame only for the entry or a file the run loaded as a module (`TG2Engine.ModuleLoaded`), never for a path a thrown value names or a module the host evaluated first.
+- **Provenance.** `AttachStack` gives an engine-made error its `stack` when the language profile wants stack traces (`ProfileStackTraces`; the conformance host records only where the error was made). `ErrorStackProvenance` returns the stack as the engine wrote it, whatever the script did to the property since, and `TGocciaEngine` locates an uncaught error only from that, never from a thrown value's own `stack` string. The CLI renders a code frame only for the entry or a file the run loaded as a module (`TGocciaEngine.ModuleLoaded`), never for a path a thrown value names or a module the host evaluated first.
 
 See [Errors](errors.md) for the messages and stack format.
 
 ## Instruction Limit
 
-`LimitsArm(TimeoutMs, MaxInstructions)` arms a run's limits. With an instruction budget, `Execute` decrements `InstrLeft` for every instruction and skips `FastLoop`, and built-ins whose loops run as long as the script says poll the same counter (`PollInterrupt`), so the count is exact and the same on every run. A spent budget aborts with `Execution exceeded instruction limit of N`; no `catch` or `finally` runs. The JIT stays off under a budget. See [Execution limits](g2/README.md#execution-limits).
+`LimitsArm(TimeoutMs, MaxInstructions)` arms a run's limits. With an instruction budget, `Execute` decrements `InstrLeft` for every instruction and skips `FastLoop`, and built-ins whose loops run as long as the script says poll the same counter (`PollInterrupt`), so the count is exact and the same on every run. A spent budget aborts with `Execution exceeded instruction limit of N`; no `catch` or `finally` runs. The JIT stays off under a budget. See [Execution limits](engine/README.md#execution-limits).
 
 ## Binary Format
 
-`G2.Artifact` writes and reads `.gbc` files:
+`Goccia.Artifact` writes and reads `.gbc` files:
 
 - Magic: `GBC\0`
-- Format version: `G2_GBC_VERSION` (200; the old engine's files were version 100, so each engine refuses the other's)
-- Runtime tag: `goccia-g2`
+- Format version: `GOCCIA_GBC_VERSION` (200; the old engine's files were version 100, so each engine refuses the other's)
+- Runtime tag: `goccia-engine`
 - Engine fingerprint: a hash of the opcode names and the intrinsic count (`EngineFingerprint`), so a build with another instruction set refuses the file
 - Little-endian; strings are UTF-16 code units after a u32 length
 
 The header continues with the source path and the compile profile (`TGocciaCompileProfile`'s fields, then G2's unrestricted flag) and the kind (Script or Module). The body holds the source texts the templates' `Function.prototype.toString` ranges point into, the module record (`TModuleInfo`) or a Script's import text, and the top-level template with every nested function compiled eagerly. Constants carry explicit kinds (double, int32, special, string, BigInt decimal text), never raw value bits that could forge a pointer or a hole. Inline caches are stored as their keys. Code for a file names no global lexical binding by its index in the compiling engine's table (`SetArtifactCompile`); such bindings are found by name at run time.
 
-Binary loading is a validation boundary. The reader bounds every length and count against what is left, limits files to 64 MiB (`G2_GBC_MAX_FILE_BYTES`) and nesting to 256 functions (`G2_GBC_MAX_DEPTH`), rejects unknown opcodes, flags and constant kinds, and rejects trailing bytes. The verifier (`VerifyTemplateShape`, `VerifyCode`) then checks every operand of every instruction against the template's registers, constants, caches, upvalues and children; jump targets; a terminator at the end; the same exception handler depth on every path to an instruction; the global-declaration and generator prologues; and direct-eval caller descriptions. It refuses instructions the compiler never emits and rewrites every suspension to keep all its registers. What the code cannot show (a register holding the array, object, closure, private name or module cell table an instruction trusts it to hold) is checked at run time for templates read from a file (`TFuncTemplate.Loaded`, `Trusting`): `Execute` checks it, `FastLoop` and the baseline JIT hand those instructions to `Execute`, and the optimizing tier leaves such templates alone. Class field definitions (`opDefField`) are checked in every tier.
+Binary loading is a validation boundary. The reader bounds every length and count against what is left, limits files to 64 MiB (`GOCCIA_GBC_MAX_FILE_BYTES`) and nesting to 256 functions (`GOCCIA_GBC_MAX_DEPTH`), rejects unknown opcodes, flags and constant kinds, and rejects trailing bytes. The verifier (`VerifyTemplateShape`, `VerifyCode`) then checks every operand of every instruction against the template's registers, constants, caches, upvalues and children; jump targets; a terminator at the end; the same exception handler depth on every path to an instruction; the global-declaration and generator prologues; and direct-eval caller descriptions. It refuses instructions the compiler never emits and rewrites every suspension to keep all its registers. What the code cannot show (a register holding the array, object, closure, private name or module cell table an instruction trusts it to hold) is checked at run time for templates read from a file (`TFuncTemplate.Loaded`, `Trusting`): `Execute` checks it, `FastLoop` and the baseline JIT hand those instructions to `Execute`, and the optimizing tier leaves such templates alone. Class field definitions (`opDefField`) are checked in every tier.
 
-`G2_ARTIFACT_ROUNDTRIP=1` writes, reads and verifies every compiled Script and module before it runs; `G2_ARTIFACT_SCRAMBLE=<seed>` corrupts register operands after reading to test the run-time checks. [docs/g2/README.md § Bytecode files](g2/README.md#bytecode-files) lists the test scripts.
+`GOCCIA_ARTIFACT_ROUNDTRIP=1` writes, reads and verifies every compiled Script and module before it runs; `GOCCIA_ARTIFACT_SCRAMBLE=<seed>` corrupts register operands after reading to test the run-time checks. [docs/engine/README.md § Bytecode files](engine/README.md#bytecode-files) lists the test scripts.
 
 ## Design Rationale
 
-G2 was built to answer whether an FPC engine designed for speed can match QuickJS while passing test262 ([G2 README](g2/README.md)). The VM is specific to GocciaScript: its instructions encode JavaScript semantics directly, and it shares one object model and heap with the built-ins.
+G2 was built to answer whether an FPC engine designed for speed can match QuickJS while passing test262 ([G2 README](engine/README.md)). The VM is specific to GocciaScript: its instructions encode JavaScript semantics directly, and it shares one object model and heap with the built-ins.
 
 ### Why Register-Based?
 
@@ -219,12 +219,12 @@ The compiler lowers syntax to existing instructions where a dedicated opcode wou
 - `?.`, `??` and `??=` compile to `opJNullish` and `opJNotNullish` jumps
 - `&&`, `||` and `!` in a condition become chains of jumps on each operand (`BranchTrue`, `BranchFalse`), except under coverage, which keeps each operator's branch records
 - `for-of` uses `opGetIter`, `opIterNext` and `opIterClose`; `for-in` uses `opForIn`, whose key iterator steps without a call
-- `using` and `await using` call the disposal helpers (`G2.Disposal`) held under internal keys on the global object
-- decorators, enums and pattern matching call helpers of the `builtins5` prelude through `opIntrinsic` (`INTRINSIC_*` in `G2.VM`)
+- `using` and `await using` call the disposal helpers (`Goccia.Disposal`) held under internal keys on the global object
+- decorators, enums and pattern matching call helpers of the `builtins5` prelude through `opIntrinsic` (`INTRINSIC_*` in `Goccia.VM`)
 
 ### Compatibility Scope Helpers
 
-The language profile (`TLangProfile` in `G2.Core`) decides which sloppy-mode forms compile. An unrestricted profile, used by the conformance host and the preludes, has them all; a restricted one has only those its compatibility flags name ([Language](language.md)).
+The language profile (`TLangProfile` in `Goccia.Core`) decides which sloppy-mode forms compile. An unrestricted profile, used by the conformance host and the preludes, has them all; a restricted one has only those its compatibility flags name ([Language](language.md)).
 
 - **Non-strict code** (`--compat-non-strict-mode`). Without it every Script and function is strict. With it, a non-strict function's `undefined` or `null` `this` becomes the global object at call time (ES2026 §10.2.1.2 OrdinaryCallBindThis). Assignment to an unresolvable name goes through `opSetGlobal`, which creates a global property in sloppy code and throws a `ReferenceError` in strict code; `delete` of a global name is `opDelGlobal`.
 - **`with`** (§14.11). The object is converted once (`opWithObj`) into a hidden local; each identifier the body may resolve through it is tested with `opWithHas` (honouring `@@unscopables`) before `opWithGet` or `opWithSet`, falling back to the ordinary binding.
@@ -233,7 +233,7 @@ The language profile (`TLangProfile` in `G2.Core`) decides which sloppy-mode for
 
 ### Compiler Optimizer
 
-`G2.Compiler` does no constant folding and no separate optimization pass. Its choices are local to the expression being compiled:
+`Goccia.Compiler` does no constant folding and no separate optimization pass. Its choices are local to the expression being compiled:
 
 - `x + k` and `x - k` with a small integer literal become `opAddI` or `opSubI` (`x - 0` stays a subtraction, to keep `-0 - 0` as `-0`); bitwise and shift operators with an int32 literal take the immediate forms
 - a relational or strict-equality test in a condition becomes one compare-and-jump instruction
@@ -251,14 +251,14 @@ The compiler does not infer types to select instructions: arithmetic always comp
 Add an opcode only when an operation is common and its semantics are settled; prefer lowering syntax to existing instructions, or a flag in an operand when it is a mode of an existing instruction. A new opcode needs:
 
 - its `Execute` case, and a `FastLoop` case only if it is hot
-- a decision in `G2.ArtifactVerify.inc`: operand checks, or refusal in files; if it trusts a register's kind, membership in `KIND_TRUSTING_OPS` and a run-time check for loaded templates
+- a decision in `Goccia.ArtifactVerify.inc`: operand checks, or refusal in files; if it trusts a register's kind, membership in `KIND_TRUSTING_OPS` and a run-time check for loaded templates
 - the baseline JIT's handling in `JitInstr0`, or nothing (the code then exits to the interpreter at it), and the optimizing tier's in `OInstr`, or a side exit
 - regenerated bytecode: the new enum changes `EngineFingerprint`, so existing `.gbc` files are refused; the prelude snapshot is checked only against the prelude sources, so build through `build.pas`, which compiles the preludes again and embeds the new snapshot
 
 ## Related documents
 
-- [G2 README](g2/README.md) — status, build, limits, applications on G2, gates
-- [G2 design](g2/design.md) — values, heap, objects, execution and compilation in brief
+- [G2 README](engine/README.md) — status, build, limits, applications on G2, gates
+- [G2 design](engine/design.md) — values, heap, objects, execution and compilation in brief
 - [Precompiled bytecode modules](bytecode-loading.md) — `.gbc` files from the bundler and runner
 - [Architecture](architecture.md) — source pipeline and engine layers
 - [Garbage Collector](garbage-collector.md) — the heap the VM shares
@@ -267,9 +267,9 @@ Add an opcode only when an operation is common and its semantics are settled; pr
 
 ## Contributor Notes
 
-- A `TValue` held in a Pascal local is stale after any allocation: root it (`PushRoot`, `RootAt`) or re-read it from a rooted place. `scripts/g2/gcstress.sh` finds the misses.
+- A `TValue` held in a Pascal local is stale after any allocation: root it (`PushRoot`, `RootAt`) or re-read it from a rooted place. `scripts/engine/gcstress.sh` finds the misses.
 - `Execute` uses `goto` for its reload and unwind paths and has no Pascal `try`; keep JavaScript exceptions on the handler stack and `Pending`, never Pascal exceptions, inside the dispatch loop.
 - A throw that a native entry cannot catch leaves through `Execute(StopFrame, ...)` returning `False` with `Pending` set; natives return `False` the same way.
-- Keep the operand meanings in `G2.ArtifactVerify.inc` in step with `Execute`: the compiled tiers check nothing themselves, so the verifier and `Execute`'s run-time checks are the bound for code read from a file.
+- Keep the operand meanings in `Goccia.ArtifactVerify.inc` in step with `Execute`: the compiled tiers check nothing themselves, so the verifier and `Execute`'s run-time checks are the bound for code read from a file.
 - G2's Pascal is outside `./format.pas`; follow the surrounding style.
-- Run the G2 gate for VM changes ([G2 README § Gate](g2/README.md#gate)), with GC stress for anything near allocation or rooting, and the artifact round-trip and tamper tests for instruction or verifier changes.
+- Run the G2 gate for VM changes ([G2 README § Gate](engine/README.md#gate)), with GC stress for anything near allocation or rooting, and the artifact round-trip and tamper tests for instruction or verifier changes.

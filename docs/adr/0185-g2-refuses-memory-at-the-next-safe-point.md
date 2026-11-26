@@ -1,7 +1,7 @@
 # 0185 - On G2 the memory limit refuses with a catchable RangeError at the next back edge or call
 
 **Date:** 2026-11-21
-**Area:** `gc`, `g2`, `sandbox`
+**Area:** `gc`, `engine`, `sandbox`
 **Related:** [ADR 0130](0130-vm-stacks-are-charged-to-the-memory-budget.md), [ADR 0132](0132-call-stack-records-and-stack-copies-are-charged.md), [ADR 0110](0110-growth-gate-collects-before-refusing.md)
 
 ## Context

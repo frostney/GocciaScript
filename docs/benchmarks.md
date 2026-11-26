@@ -222,7 +222,7 @@ The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`), skipping anything under a `helpers/` directory.
-3. For each file, creates a fresh `TG2Engine` (`G2.Embed`) on a thread of its own, with the loader's host (no timer globals) and the benchmark API (`InstallBenchmarkAPI`, which `G2.HostAPI` implements with the `goccia:microbench` prelude, `source/g2/prelude/microbench.js`).
+3. For each file, creates a fresh `TGocciaEngine` (`Goccia.Embed`) on a thread of its own, with the loader's host (no timer globals) and the benchmark API (`InstallBenchmarkAPI`, which `Goccia.HostAPI` implements with the `goccia:microbench` prelude, `source/engine/prelude/microbench.js`).
 4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
 5. Measures compile time (lexing and parsing included) and execution time (the script and its benchmarks) with nanosecond precision via `TimingUtils.GetNanoseconds`. Lexing and parsing are not timed on their own, so the report's lex and parse fields are 0.
 6. `group()` calls execute immediately, registering nested `bench()` entries.

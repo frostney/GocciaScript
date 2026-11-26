@@ -70,7 +70,7 @@ GocciaScript provides a Node.js or Web API capability when it fits the vision
 and cannot be shimmed in userland, and leaves what userland or npm can shim to
 userland; see [Node compatibility](#node-compatibility-to-a-degree). What it
 provides is a small runtime around the language, which a host can leave out
-altogether with a bare engine (`TG2Engine.Bare`), not a Node.js or browser
+altogether with a bare engine (`TGocciaEngine.Bare`), not a Node.js or browser
 environment.
 
 ## Embed it
@@ -348,10 +348,10 @@ embedded data otherwise.
 
 Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`)
 3.3.1 from [fpc-toolchain](https://github.com/frostney/fpc-toolchain), build
-`3.3.1-b5` or later: the engine ([docs/g2](docs/g2/README.md)) relies on its
+`3.3.1-b5` or later: the engine ([docs/engine](docs/engine/README.md)) relies on its
 native thread-local variables and code generator fixes, and `build.pas` stops
 with a message on an older compiler. The FPC 3.2.2 that package managers
-install builds only the code outside `source/g2`.
+install builds only the code outside `source/engine`.
 
 A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in
 SSE2, so it runs only on a Pentium 4, Athlon 64 or later CPU
@@ -542,7 +542,7 @@ Embedding is covered under [Embed it](#embed-it) and in
 
 ## Architecture
 
-GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, G2's compiler (`G2.Compiler`) turns it into register bytecode, and G2's VM (`G2.VM`) runs it:
+GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, G2's compiler (`Goccia.Compiler`) turns it into register bytecode, and G2's VM (`Goccia.VM`) runs it:
 
 ```mermaid
 flowchart LR
@@ -550,7 +550,7 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["G2 VM"] --> Result["Result"]
 ```
 
-Every value is one NaN-boxed 64-bit `TValue`: numbers never allocate, and strings, objects and the other heap things are cells in a generational heap with a moving nursery and a mark-and-sweep old space (`G2.Core`). Objects keep their properties in shapes shared through a transition tree, which inline caches key on. The VM interprets the bytecode (`Execute`, with `FastLoop` for the hot instructions); on Linux x86-64 a baseline JIT and an optimizing tier compile hot functions. Hosts drive the engine through `TG2Engine` (`G2.Embed`), one engine per thread. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
+Every value is one NaN-boxed 64-bit `TValue`: numbers never allocate, and strings, objects and the other heap things are cells in a generational heap with a moving nursery and a mark-and-sweep old space (`Goccia.Core`). Objects keep their properties in shapes shared through a transition tree, which inline caches key on. The VM interprets the bytecode (`Execute`, with `FastLoop` for the hot instructions); on Linux x86-64 a baseline JIT and an optimizing tier compile hot functions. Hosts drive the engine through `TGocciaEngine` (`Goccia.Embed`), one engine per thread. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
 
 See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 

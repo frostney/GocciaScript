@@ -8,7 +8,7 @@
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
 - **Conformance evidence** — Generated test262 reports measure progress toward the [conformance target](../VISION.md#conformance); canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
-- **Host exposure** — every realm has `eval`, but the host that the CLIs and `TG2Engine` install removes the global; only the `GocciaTest262Runner` conformance host keeps it, and it also exposes `evalScript` and `createRealm`
+- **Host exposure** — every realm has `eval`, but the host that the CLIs and `TGocciaEngine` install removes the global; only the `GocciaTest262Runner` conformance host keeps it, and it also exposes `evalScript` and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
@@ -433,7 +433,7 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled for every source the recommended profile's front end parses (`HostPipelineOptions` in `G2.Eval` sets `ppJSX`); `TG2Engine` has no switch to turn it off. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled for every source the recommended profile's front end parses (`HostPipelineOptions` in `Goccia.Eval` sets `ppJSX`); `TGocciaEngine` has no switch to turn it off. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
 
 **Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts` or `.mts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
 
@@ -696,7 +696,7 @@ GocciaScript provides two function definition styles that cover most use cases w
 When enabled (CLI: `--compat-function`, engine API: the `FuncDecl` switch of `Engine.Profile`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
 
 - **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.4 (InstantiateOrdinaryFunctionObject) / §10.2.11 (FunctionDeclarationInstantiation) semantics.
-- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. `G2.Compiler` decides this (`AnnexBWalkList`). Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
+- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. `Goccia.Compiler` decides this (`AnnexBWalkList`). Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
 - **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.5 (InstantiateOrdinaryFunctionExpression) semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
@@ -737,7 +737,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 **Implemented; off by default.** `GocciaRunner` (host and sandbox mode), `GocciaREPL`, `GocciaTestRunner`, and `GocciaScriptLoaderBare` do not expose `eval`, and no CLI flag or config key turns it on.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The engine implements direct and indirect eval in every realm (`G2.Eval`), and the host that `TG2Engine` installs removes `globalThis.eval` (`source/g2/prelude/host.js`), so an embedder has no option to keep it. Only `GocciaTest262Runner`'s conformance host (`G2.Test262`) leaves it in place, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The engine implements direct and indirect eval in every realm (`Goccia.Eval`), and the host that `TGocciaEngine` installs removes `globalThis.eval` (`source/engine/prelude/host.js`), so an embedder has no option to keep it. Only `GocciaTest262Runner`'s conformance host (`Goccia.Test262`) leaves it in place, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
 
 ### `arguments` Object
 
@@ -768,7 +768,7 @@ ASI also interacts with the type syntax; see [Type Annotations](type-annotations
 
 ```pascal
 // Enable ASI via the engine API
-Engine := TG2Engine.Create;
+Engine := TGocciaEngine.Create;
 try
   Profile := RecommendedProfile;
   Profile.Asi := True;
@@ -796,7 +796,7 @@ When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--w
 - `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.3](https://tc39.es/ecma262/#sec-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
 - `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
 - All header parts are optional (`for(;;){…break}`, `for(;c;){…}`, `for(i;;u)`); comma expressions and destructuring are supported in init/update; `break`/`continue`/`return` unwind as in `for...of`.
-- `G2.Compiler` keeps the loop's `let` bindings in registers and, only when a closure captures them, closes them into fresh cells before each update (`opClose`), so a loop without closures pays nothing for per-iteration bindings.
+- `Goccia.Compiler` keeps the loop's `let` bindings in registers and, only when a closure captures them, closes them into fresh cells before each update (`opClose`), so a loop without closures pays nothing for per-iteration bindings.
 
 The flag exists to run code that depends on JavaScript loop semantics, such as test262 cases or compatibility harnesses. It does not change the default GocciaScript iteration guidance, which remains `for...of`, `for await...of`, or array methods:
 
@@ -931,7 +931,7 @@ Source parsed, or a pattern compiled, where the native stack is already deep, su
 
 ### Function Size
 
-**Each function's registers are limited to 16 bits.** An instruction is 64 bits: an 8-bit opcode, two 16-bit operands and a 24-bit one (`G2.Bytecode`). Registers are 16-bit operands, so one function, the top level of a script or module included, may use at most 65,535 registers and local bindings; a call passes at most 65,535 arguments and a tagged template at most 65,534 substitutions. A function past one of them is a `SyntaxError` (`Too many local bindings in one function: more than 65535`, `Too many arguments in one call: more than 65535`, and so on). Constants and nested functions have no such limit: an object literal with 70,000 distinct property names compiles. A jump's offset is the signed 24-bit operand, so a branch can span up to 8,388,607 instructions. Nothing else about a literal is limited: an object or array literal, an untagged template and an array binding pattern can be as long as memory and the limits above allow.
+**Each function's registers are limited to 16 bits.** An instruction is 64 bits: an 8-bit opcode, two 16-bit operands and a 24-bit one (`Goccia.Instructions`). Registers are 16-bit operands, so one function, the top level of a script or module included, may use at most 65,535 registers and local bindings; a call passes at most 65,535 arguments and a tagged template at most 65,534 substitutions. A function past one of them is a `SyntaxError` (`Too many local bindings in one function: more than 65535`, `Too many arguments in one call: more than 65535`, and so on). Constants and nested functions have no such limit: an object literal with 70,000 distinct property names compiles. A jump's offset is the signed 24-bit operand, so a branch can span up to 8,388,607 instructions. Nothing else about a literal is limited: an object or array literal, an untagged template and an array binding pattern can be as long as memory and the limits above allow.
 
 ## Strictness Guarantees
 

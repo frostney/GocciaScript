@@ -174,7 +174,7 @@ any `.goccia` directory of the project is outside the exemption, and its
 files load without a read grant only as a resolved provider package. The
 project is the directory of the
 nearest `goccia.json`, `goccia.json5`, or `goccia.toml` above the entry file,
-or the entry file's own directory when there is none (the `ProjectRoot` property of `TG2Engine`).
+or the entry file's own directory when there is none (the `ProjectRoot` property of `TGocciaEngine`).
 
 Everything else needs a `read` grant covering the canonical path:
 
@@ -193,7 +193,7 @@ denial.
 
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
-Modules a host loads itself (`--globals`, `--modules`, `TG2Engine.InjectModuleGlobals`
+Modules a host loads itself (`--globals`, `--modules`, `TGocciaEngine.InjectModuleGlobals`
 and the imports they make while the host loads them) are host requests and never
 checked. That exemption ends when the host's load returns: a function such a
 module exports runs later as guest code, so an `import()` it makes then is a
@@ -244,7 +244,7 @@ The message is `<capability>: <scope>`, where the scope is what the guest asked
 for: the specifier as written, the host (plus a non-default port), or the
 library path as passed to `FFI.open`. It never contains an expanded host path
 ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)). The host-side
-report — the CLI's `Suggestion:` line, or `TG2RunResult.ErrorSuggestion` for an
+report — the CLI's `Suggestion:` line, or `TGocciaRunResult.ErrorSuggestion` for an
 embedder — names the canonical path and how to grant it: `--allow-read=<dir>`
 or `"allow-read"` in a `permissions` block for a read the capability does not
 cover (with a note that a computed `import()` is outside the module graph),
@@ -292,9 +292,9 @@ roots, each built from the command line and its configuration.
 ```pascal
 uses
   Goccia.Capabilities,
-  G2.Embed;
+  Goccia.Embed;
 
-Engine := TG2Engine.Create;
+Engine := TGocciaEngine.Create;
 Engine.Capabilities := TGocciaCapabilities.None
   .Allow(gcRead, '/srv/app/data')
   .Deny(gcRead, '/srv/app/data/secrets')
@@ -311,13 +311,13 @@ RunResult := Engine.Run('/srv/app/main.js', Source);
 | `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesNodeModules`, `.AllowsProviderPackage`, `.ProviderPackageDenyScope` | Queries |
 | `.ExplainNetHostDenial` | The host-side reason a net host is refused, for audit |
 | `.ToJSON` | The layers, as `capabilities.effective` reports them |
-| `TG2Engine.Capabilities` | The run's set; set it before the host is prepared. With it, module reads are judged by its `read` scopes and the module-graph exemption, `fetch` by its `net` scopes, and the `FFI` global is installed when it grants `ffi`. Without it, module reads are not judged, every `fetch` is refused and there is no `FFI` |
+| `TGocciaEngine.Capabilities` | The run's set; set it before the host is prepared. With it, module reads are judged by its `read` scopes and the module-graph exemption, `fetch` by its `net` scopes, and the `FFI` global is installed when it grants `ffi`. Without it, module reads are not judged, every `fetch` is refused and there is no `FFI` |
 | `Engine.ProjectRoot` | The exemption's project directory; override before running |
 | `Engine.FetchMaxResponseBytes` | Response-body ceiling for `fetch` (0 = default, 8 MiB) |
 | `Engine.AuditSink` | Receives each capability decision of the run ([Capability Audit](capability-audit.md)) |
 
 The `import` capability's `node_modules` scope is answered by the run's resolver
-(`TG2Engine.Resolver`), which the CLI tools build with the set; see
+(`TGocciaEngine.Resolver`), which the CLI tools build with the set; see
 [Embedding — Bare Specifiers and node_modules](embedding.md#bare-specifiers-and-node_modules).
 
 Every builder deep-copies the rules, so a value handed to an engine is never

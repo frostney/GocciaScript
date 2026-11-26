@@ -30,8 +30,8 @@ replacement is recorded in
 - Stock tc39/test262 harness files are loaded from the pinned test262
   checkout's `harness/` directory. The runner bundles one file, `$262.js`,
   the host-provided hook object: G2's version is
-  `source/g2/prelude/test262host.js`, compiled into the binary.
-- `G2.Test262` installs the host hooks only in engines owned by the
+  `source/engine/prelude/test262host.js`, compiled into the binary.
+- `Goccia.Test262` installs the host hooks only in engines owned by the
   Test262 runner.
 - Every test runs on the same engine options; test feature metadata does
   not change them.
@@ -152,7 +152,7 @@ GocciaTest262Runner
   → on POSIX, fork one short-lived child per run without starting a new binary;
     without fork (Windows), run each on a thread of its own
   → for each run in its owning worker:
-      → create one G2 engine (InitTest262Engine in G2.Test262): heap and realm
+      → create one G2 engine (InitTest262Engine in Goccia.Test262): heap and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
       → install the Test262-only host, evaluate each harness file as its
         own Script, then evaluate the test file (prefixed with "use strict";
@@ -239,7 +239,7 @@ describes ("Test262-Defined Bindings", the `async` flag, `includes`):
 4. the test file itself: a Script, or a Module for a `module` test.
 
 Each harness file is its own global Script, compiled and run in the
-realm by `RunTest262Case` (`G2.Test262`), as `$262.evalScript` runs its
+realm by `RunTest262Case` (`Goccia.Test262`), as `$262.evalScript` runs its
 source. Its own directive prologue alone decides its
 strictness, so harness files are non-strict, in a strict run and before a
 module test too. Their top-level declarations are global bindings that the
@@ -309,7 +309,7 @@ is the same grading the test262 interpretation rules and other runners apply.
 | Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |
 | A harness Script fails to parse or throws             | `harness include <name> failed`           | wrapper infra      |
 
-`ClassifyResult` receives the structured engine outcome (`TG2T262Outcome`)
+`ClassifyResult` receives the structured engine outcome (`TGocciaT262Outcome`)
 and the captured output. On POSIX, a native signal terminates only the current
 worker process. The runner records a wrapper-infrastructure result for that
 test and continues the shard; a worker it killed at the timeout is recorded as
@@ -341,7 +341,7 @@ Bodies see only the identifiers stock test262 expects:
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
-- `G2Host`, a non-enumerable global installed only by `G2.Test262`
+- `GocciaHost`, a non-enumerable global installed only by `Goccia.Test262`
   (`InstallHostHooks`): the host hooks `$262.js` delegates to. `$262.js`
   throws when it is missing, which rejects accidental use outside the
   conformance host.
@@ -359,7 +359,7 @@ Bodies do NOT see:
   `afterEach`, `afterAll`, `onTestFinished`, `runTests`, `mock`,
   `spyOn` — none of these exist in the Test262 runner's engines.
 - `fetch`, `URL`, the `Goccia` namespace and the rest of the CLI host
-  (`G2.HostAPI`) — the Test262 engine does not install it.
+  (`Goccia.HostAPI`) — the Test262 engine does not install it.
 - Optional `$262` hooks outside the bundled implementation. Tests that
   depend on unavailable host hooks fail honestly.
 
@@ -376,18 +376,18 @@ If a stock helper fails, fix the language/runtime behavior or classify the
 test as a genuine conformance failure. `$262.js` may grow only by adding
 test262 host hooks or harness-local `$262` behavior.
 
-`$262.evalScript()` and `$262.createRealm()` delegate to `G2Host`
-(`G2.Test262`). `evalScript` parses and executes its source as script code
+`$262.evalScript()` and `$262.createRealm()` delegate to `GocciaHost`
+(`Goccia.Test262`). `evalScript` parses and executes its source as script code
 in the current realm and returns its completion value. `createRealm` creates
 a new realm in the same engine, installs the host hooks and `$262.js` in it,
 and returns that realm's `$262`.
 
 `eval` is part of G2's core realm. The CLI hosts remove it from the global
-object (`G2.HostAPI`); the Test262 engine installs no CLI host and keeps it.
+object (`Goccia.HostAPI`); the Test262 engine installs no CLI host and keeps it.
 A direct `eval` call sees the caller's realm and lexical bindings, while a
 shadowed or indirect call is an indirect eval.
 
-`$262.agent` is host-gated in the same way (`G2.Agent`). Agent `start` runs
+`$262.agent` is host-gated in the same way (`Goccia.Agent`). Agent `start` runs
 the supplied source in an engine of its own on a thread of its own, with
 `$262.agent` installed; `broadcast`/`receiveBroadcast` share the provided value with
 agent threads, and `report`/`getReport` provide the report queue used by
@@ -451,7 +451,7 @@ while the harness Scripts stay non-strict.
 
 The runner does not map `features` frontmatter to engine options: every test
 runs on the same engine. G2's experimental JavaScript `ModuleSource` objects
-(`TG2Engine.JSModuleSources`, the ESM Phase Imports proposal) stay off in the
+(`TGocciaEngine.JSModuleSources`, the ESM Phase Imports proposal) stay off in the
 test262 engine, so `source-phase-imports-module-source` tests run without them
 and fail where they need them. This is not an eligibility filter: every
 discovered test still runs.
@@ -493,7 +493,7 @@ per-test heap ceilings (`--max-memory`, a size such as `512MiB`, default
 2 GiB) bound ordinary hangs and memory growth. The runner accepts no capability flags: it
 rejects `--allow-*` and accepts `--deny-*` as a no-op (see
 [Permissions](permissions.md#what-each-binary-honors)). The test engines do
-not apply the CLI hosts' read policy (`SetReadPolicy` in `G2.HostAPI`), so
+not apply the CLI hosts' read policy (`SetReadPolicy` in `Goccia.HostAPI`), so
 test262 fixtures' computed `import()` specifiers load from the checkout.
 
 ## Known engine crashes

@@ -61,7 +61,7 @@ These rules **must** be followed when modifying the codebase:
 
 ### 1. One Engine per Thread
 
-The engine's state (heap, atoms, shapes, stacks, built-ins, the job queue) lives in thread variables (`G2.Engine`): a thread that creates an engine (`TG2Engine`) has one of its own and shares nothing with any other, so a value never crosses threads. Code outside `source/g2` keeps its state in explicit parameters and objects rather than in global mutable state. See [Architecture](docs/architecture.md) and [G2 design](docs/g2/design.md).
+The engine's state (heap, atoms, shapes, stacks, built-ins, the job queue) lives in thread variables (`Goccia.Engine`): a thread that creates an engine (`TGocciaEngine`) has one of its own and shares nothing with any other, so a value never crosses threads. Code outside `source/engine` keeps its state in explicit parameters and objects rather than in global mutable state. See [Architecture](docs/architecture.md) and [G2 design](docs/engine/design.md).
 
 ### 2. Root Values Across Allocations
 
@@ -79,7 +79,7 @@ Other := StrFromUnicode('text');
 UseValue(Value);
 ```
 
-`scripts/g2/gcstress.sh` finds the misses ([Tooling — GC stress](docs/contributing/tooling.md#gc-stress)), and the engine's [working rules](docs/g2/README.md#working-rules) list the rest.
+`scripts/engine/gcstress.sh` finds the misses ([Tooling — GC stress](docs/contributing/tooling.md#gc-stress)), and the engine's [working rules](docs/engine/README.md#working-rules) list the rest.
 
 ### 3. Testing Requirements
 

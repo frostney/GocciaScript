@@ -3,7 +3,7 @@ program GocciaTest262Runner;
 {$I Goccia.inc}
 
 { GocciaTest262Runner on G2: the old runner's command line, discovery, sharding, grading contract 4 and JSON
-  report, with each run in a forked process on G2's test262 host (G2.Test262). Linux on x86-64 only, as G2. }
+  report, with each run in a forked process on G2's test262 host (Goccia.Test262). Linux on x86-64 only, as G2. }
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
@@ -30,12 +30,12 @@ uses
   Goccia.SourcePipeline,
   Goccia.TextFiles,
 
-  G2.Core,
-  G2.VM,
-  G2.Embed,
-  G2.Engine,
-  G2.Profile,
-  G2.Test262,
+  Goccia.Core,
+  Goccia.VM,
+  Goccia.Embed,
+  Goccia.Engine,
+  Goccia.Profile,
+  Goccia.Test262,
   Goccia.ThreadCleanupRegistry;
 
 const
@@ -957,7 +957,7 @@ begin
   Result := True;
 end;
 
-{ $262.js is G2's host object, compiled into the test262 host (G2.Test262 takes it by name); the rest are the
+{ $262.js is G2's host object, compiled into the test262 host (Goccia.Test262 takes it by name); the rest are the
   suite's }
 function TTest262App.HarnessFilePath(const AName: string): string;
 begin
@@ -1054,12 +1054,12 @@ begin
   Result := Result + '.profile.json';
 end;
 
-{ Grades a run's outcome under contract 4, as scripts/g2/run262.py does for the G2 gate. A parse, early or
+{ Grades a run's outcome under contract 4, as scripts/engine/run262.py does for the G2 gate. A parse, early or
   resolution negative passes only when the test is rejected before evaluation (outcome parse) with the expected
   constructor; a runtime negative only when evaluation throws (outcome throw) the expected constructor. A harness
   file that failed is WRAPPER_INFRA (the test never ran). }
 procedure ClassifyResult(const AKind: TTest262TestKind;
-  const AExpectedErrorType: string; const AOutcome: TG2T262Outcome;
+  const AExpectedErrorType: string; const AOutcome: TGocciaT262Outcome;
   const AOutput: string; out AStatus: TTest262Outcome;
   out AMessage, AResultDiagnostic: string);
 var
@@ -1164,7 +1164,7 @@ var
   I: Integer;
   Kind: TTest262TestKind;
   Metadata: TTest262Metadata;
-  Outcome: TG2T262Outcome;
+  Outcome: TGocciaT262Outcome;
   ProfilePath: string;
   SourceText: string;
   StartNanoseconds: Int64;
@@ -1278,7 +1278,7 @@ begin
 end;
 
 var
-  { held by a run of a test that starts agents: their reports share one process-wide queue (G2.Agent) }
+  { held by a run of a test that starts agents: their reports share one process-wide queue (Goccia.Agent) }
   AgentRunLock: TRTLCriticalSection;
 
 procedure TTest262Worker.Execute;
@@ -1862,7 +1862,7 @@ function TTest262App.RunHostEval: Integer;
 var
   Source, Line: string;
   ProbePath, HostPath: string;
-  Outcome: TG2T262Outcome;
+  Outcome: TGocciaT262Outcome;
 begin
   Result := 0;
   Source := '';
@@ -1937,14 +1937,14 @@ end;
 
 var
   App: TTest262App;
-  SnapshotEngine: TG2Engine;
+  SnapshotEngine: TGocciaEngine;
   SnapshotErr: UnicodeString;
 begin
-  { build.pas snapshots the compiled preludes from a run with G2_SNAPSHOT_OUT set: a host's, as the other G2 apps
+  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other G2 apps
     take them }
-  if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
-    SnapshotEngine := TG2Engine.Create;
+    SnapshotEngine := TGocciaEngine.Create;
     SnapshotErr := '';
     if not SnapshotEngine.PrepareHost(SnapshotErr) then
     begin

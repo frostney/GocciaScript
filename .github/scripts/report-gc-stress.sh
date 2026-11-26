@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Opens or updates the one tracking issue for tests that fail only under GC
-# stress, from the report scripts/g2/gc-stress-ci.py wrote.
+# stress, from the report scripts/engine/gc-stress-ci.py wrote.
 #
 # Usage: report-gc-stress.sh <report.md>
 #

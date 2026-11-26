@@ -77,14 +77,14 @@ jobs:
         run: ./build.pas fuzzharness
 
       - name: Build the AFL-instrumented harness
-        # build.pas builds the engine's variant (G2_VARIANT) in a unit cache
-        # of its own and writes build/GocciaFuzzHarnessAfl; G2_FPC_FLAGS
+        # build.pas builds the engine's variant (GOCCIA_VARIANT) in a unit cache
+        # of its own and writes build/GocciaFuzzHarnessAfl; GOCCIA_FPC_FLAGS
         # follow its own options. -B rebuilds every unit of this repository
         # through scripts/afl/as; FPC's own runtime library stays
         # uninstrumented.
         env:
-          G2_VARIANT: Afl
-          G2_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+          GOCCIA_VARIANT: Afl
+          GOCCIA_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
         run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
@@ -213,14 +213,14 @@ jobs:
         run: ./build.pas fuzzharness
 
       - name: Build the AFL-instrumented harness
-        # build.pas builds the engine's variant (G2_VARIANT) in a unit cache
-        # of its own and writes build/GocciaFuzzHarnessAfl; G2_FPC_FLAGS
+        # build.pas builds the engine's variant (GOCCIA_VARIANT) in a unit cache
+        # of its own and writes build/GocciaFuzzHarnessAfl; GOCCIA_FPC_FLAGS
         # follow its own options. -B rebuilds every unit of this repository
         # through scripts/afl/as; FPC's own runtime library stays
         # uninstrumented.
         env:
-          G2_VARIANT: Afl
-          G2_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+          GOCCIA_VARIANT: Afl
+          GOCCIA_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
         run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
@@ -250,8 +250,8 @@ jobs:
       - name: Build the harness with heaptrc
         # build/GocciaFuzzHarnessHeaptrc, a variant in its own unit cache
         env:
-          G2_VARIANT: Heaptrc
-          G2_FPC_FLAGS: -gh -gl
+          GOCCIA_VARIANT: Heaptrc
+          GOCCIA_FPC_FLAGS: -gh -gl
         run: ./build.pas fuzzharness
 
       - name: Write the seed snapshots
@@ -384,12 +384,12 @@ jobs:
       - name: Build test runner with heaptrc
         # -gh links the heaptrc unit; the trailing summary goes to stderr on
         # exit and names every unfreed block with its allocation site.
-        # build.pas builds the heaptrc variant (G2_VARIANT) in a unit cache of
+        # build.pas builds the heaptrc variant (GOCCIA_VARIANT) in a unit cache of
         # its own, as build/GocciaTestRunnerHeaptrc. The engine's own heap is
         # outside FPC's memory manager, so heaptrc covers the Pascal side.
         run: |
           ./build.pas testrunner
-          G2_VARIANT=Heaptrc G2_FPC_FLAGS="-gh -gl" ./build.pas testrunner
+          GOCCIA_VARIANT=Heaptrc GOCCIA_FPC_FLAGS="-gh -gl" ./build.pas testrunner
 
       - name: Run suite under heaptrc
         id: heaptrc
@@ -461,9 +461,9 @@ jobs:
             # path would not run the suite.
             [ -s "build/memcheck-shard-$shard.txt" ] || continue
             mapfile -t files < "build/memcheck-shard-$shard.txt"
-            # G2_JIT=0: memcheck checks the interpreter; it would have to
+            # GOCCIA_JIT=0: memcheck checks the interpreter; it would have to
             # retranslate every page the JIT writes.
-            G2_JIT=0 valgrind \
+            GOCCIA_JIT=0 valgrind \
               --tool=memcheck \
               --error-exitcode=42 \
               --suppressions=scripts/valgrind/fpc-rtl.supp \

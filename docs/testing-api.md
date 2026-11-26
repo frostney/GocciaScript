@@ -52,7 +52,7 @@ The module exports everything the globals do — `describe`, `test`, `it`, `expe
 
 #### Availability per binary
 
-The testing API is installed by `InstallTestingAPI` (`G2.HostAPI`), which runs the `goccia:test` prelude (`source/g2/prelude/testing.js`). In `GocciaTestRunner` it defines the globals and registers the `goccia:test` module. Every other host that installs the runtime registers `goccia:test` module-only: the first import that resolves installs the API without any testing global, so a script that never imports it pays nothing.
+The testing API is installed by `InstallTestingAPI` (`Goccia.HostAPI`), which runs the `goccia:test` prelude (`source/engine/prelude/testing.js`). In `GocciaTestRunner` it defines the globals and registers the `goccia:test` module. Every other host that installs the runtime registers `goccia:test` module-only: the first import that resolves installs the API without any testing global, so a script that never imports it pays nothing.
 
 | Binary | `goccia:test` | Testing globals |
 |---|---|---|
@@ -62,11 +62,11 @@ The testing API is installed by `InstallTestingAPI` (`G2.HostAPI`), which runs t
 | `GocciaBenchmarkRunner` | Yes | No |
 | `GocciaScriptLoaderBare` | No — attaches no runtime | No |
 
-The [timer surface](#fake-timers) — `goccia:timers` and the `setTimeout` family — is installed with the host unless the host turns it off (`TG2Engine.ExposeTimers`). `GocciaRunner`, its sandbox mode, `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off; `GocciaTestRunner` and `GocciaREPL` keep it. The timers are deterministic and carry no ambient authority either way.
+The [timer surface](#fake-timers) — `goccia:timers` and the `setTimeout` family — is installed with the host unless the host turns it off (`TGocciaEngine.ExposeTimers`). `GocciaRunner`, its sandbox mode, `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off; `GocciaTestRunner` and `GocciaREPL` keep it. The timers are deterministic and carry no ambient authority either way.
 
-An embedder sets `TG2Engine.TestMode` for the test framework's host behaviour (no process exit on an uncaught error, the `vitest` shim below) and calls `InstallTestingAPI` after `TG2Engine.PrepareHost` to get the API.
+An embedder sets `TGocciaEngine.TestMode` for the test framework's host behaviour (no process exit on an uncaught error, the `vitest` shim below) and calls `InstallTestingAPI` after `TGocciaEngine.PrepareHost` to get the API.
 
-The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) and, outside the runner, the `=== Test Results ===` block straight to standard output, not through the console builtin. It is on when the host sets the `TestReporterOn` thread variable in `G2.HostAPI`: `GocciaTestRunner` sets it except in its `--output=json` and `--output=compact-json` modes, and `GocciaRunner` except in those modes and `--silent`, so the reporter never precedes a JSON envelope. Its sandbox mode leaves it off, as the sandbox's console is captured. Muting loses no information: the run's report, or the `runTests()` result, still carries the counts and failure messages.
+The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) and, outside the runner, the `=== Test Results ===` block straight to standard output, not through the console builtin. It is on when the host sets the `TestReporterOn` thread variable in `Goccia.HostAPI`: `GocciaTestRunner` sets it except in its `--output=json` and `--output=compact-json` modes, and `GocciaRunner` except in those modes and `--silent`, so the reporter never precedes a JSON envelope. Its sandbox mode leaves it off, as the sandbox's console is captured. Muting loses no information: the run's report, or the `runTests()` result, still carries the counts and failure messages.
 
 #### Running an imported suite outside the runner
 
@@ -419,7 +419,7 @@ test("async error handling", () => {
 });
 ```
 
-Both patterns work because the test framework awaits a returned Promise, and the host's event loop (`RunEventLoop` in `G2.HostAPI`) runs the microtasks and settles fetch-backed Promises by pumping fetch completions while the framework waits. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
+Both patterns work because the test framework awaits a returned Promise, and the host's event loop (`RunEventLoop` in `Goccia.HostAPI`) runs the microtasks and settles fetch-backed Promises by pumping fetch completions while the framework waits. Place assertions inside `.then()` or `.catch()` handlers when using the Promise-return pattern.
 
 A Promise a timer will settle also works, and settles instantly: the [virtual timer queue](#fake-timers) is run to the next due timer wherever the engine would otherwise be waiting, so `await new Promise((r) => setTimeout(r, 5000))` returns without 5000 milliseconds passing. Under `vi.useFakeTimers()` it does not — the suite owns the clock there, and the test advances it explicitly.
 
@@ -533,7 +533,7 @@ Running `tests/` under Vitest needs a local Vitest install and a config that poi
 
 A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
 
-The shim is a runner default only: the host prelude (`source/g2/prelude/host.js`) registers the `vitest` module only for an engine in test mode (`TG2Engine.TestMode`), which `GocciaTestRunner` sets and the other binaries do not, so in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere. The shim's source is in `source/units/Goccia.VitestShim.inc`; it statically imports `goccia:test` and `goccia:timers`, so an embedder that sets `TestMode` also calls `InstallTestingAPI` and keeps `TG2Engine.ExposeTimers` on, or every `vitest` import fails to resolve.
+The shim is a runner default only: the host prelude (`source/engine/prelude/host.js`) registers the `vitest` module only for an engine in test mode (`TGocciaEngine.TestMode`), which `GocciaTestRunner` sets and the other binaries do not, so in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere. The shim's source is in `source/units/Goccia.VitestShim.inc`; it statically imports `goccia:test` and `goccia:timers`, so an embedder that sets `TestMode` also calls `InstallTestingAPI` and keeps `TGocciaEngine.ExposeTimers` on, or every `vitest` import fails to resolve.
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 
@@ -686,7 +686,7 @@ Four more rules make real mode predictable:
 - **Timers a test body schedules run at the end of that test**, not at some later idle point. A `setTimeout` written inside a `test()` fires once the body has returned, before the next test starts.
 - **Whatever is left over is dropped when the test ends.** An uncleared interval, or a chain longer than the drain reached, cannot fire inside the next test. Fake-timer state is untouched by this — that queue belongs to the suite.
 - **A timer callback that throws fails the test that scheduled it**, and nothing else: it is reported as `uncaught exception in a timer callback`. It is not delivered to whatever frame happened to be awaiting, so a `try`/`catch` around an unrelated `await` will not see it and that `await` still resolves normally. This is Node's shape — an uncaught top-level error — rather than an exception at the wait.
-- **Real outstanding work outranks virtual time.** While a `fetch` or an `Atomics.waitAsync` is still in flight, no timer runs: the event loop (`RunEventLoop` in `G2.HostAPI`) settles the waits that fall due and waits for the fetches before it fires the next timer. Without that rule `Promise.race([fetch(url), timeoutAfter(ms)])` resolved to the timeout every time, whatever `ms` was, because the virtual clock costs nothing to advance.
+- **Real outstanding work outranks virtual time.** While a `fetch` or an `Atomics.waitAsync` is still in flight, no timer runs: the event loop (`RunEventLoop` in `Goccia.HostAPI`) settles the waits that fall due and waits for the fetches before it fires the next timer. Without that rule `Promise.race([fetch(url), timeoutAfter(ms)])` resolved to the timeout every time, whatever `ms` was, because the virtual clock costs nothing to advance.
 
 `performance.now()` is worth one note of its own: while timers are faked it measures elapsed virtual time from the install, so it is not on the same timeline as `performance.timeOrigin` (which keeps reporting the real process origin). Leaving fake timers puts it back on the real timeline.
 

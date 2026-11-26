@@ -10,7 +10,7 @@ program GocciaFuzzHarness;
                 frame limit, memory ceiling). Armed limits keep the JIT
                 off, so this run fuzzes the interpreter and the limits.
     [jit]       with no engine limits, so the baseline JIT and the
-                optimizing tier compile what gets hot (G2_JIT_HOT lowers
+                optimizing tier compile what gets hot (GOCCIA_JIT_HOT lowers
                 the threshold). The memory ceiling still holds; a watchdog
                 thread ends the process with exit 0 at the deadline, since
                 JIT code does not poll the engine's timeout.
@@ -21,7 +21,7 @@ program GocciaFuzzHarness;
   corruption abort) reaches the fuzzer as a nonzero exit or a crash.
 
   A module import never reaches the host's files: the run's resolver refuses
-  every specifier before it probes a path, the run's file reader (G2.Modules
+  every specifier before it probes a path, the run's file reader (Goccia.Modules
   SetFileReadHook) refuses every path as well, and a run that asked for
   either reports module-denied. Without capabilities G2 also refuses fetch()
   and leaves FFI out.
@@ -52,7 +52,7 @@ program GocciaFuzzHarness;
   graph to capture(i, v), which writes it; in a restore run restored()
   reads the input, and the program then uses what restored, calling its
   functions. G2's writer has no codec for a generator's frame, a Map's
-  table or a buffer's bytes (G2.HeapSnapshot), so the seeds hold data
+  table or a buffer's bytes (Goccia.HeapSnapshot), so the seeds hold data
   graphs, closures, bound functions, errors and wrapper objects. Linux on
   x86-64 only, as G2. }
 
@@ -69,11 +69,11 @@ uses
   Goccia.Fuzz.Generator,
   Goccia.ModuleResolver,
 
-  G2.Core,
-  G2.Embed,
-  G2.HeapSnapshot,
-  G2.Modules,
-  G2.VM;
+  Goccia.Core,
+  Goccia.Embed,
+  Goccia.HeapSnapshot,
+  Goccia.Modules,
+  Goccia.VM;
 
 const
   FUZZ_PROGRAM_NAME = 'GocciaFuzzHarness';
@@ -375,9 +375,9 @@ begin
   Result.ForIn := True;
 end;
 
-function NewFuzzEngine(ABounded: Boolean): TG2Engine;
+function NewFuzzEngine(ABounded: Boolean): TGocciaEngine;
 begin
-  Result := TG2Engine.Create;
+  Result := TGocciaEngine.Create;
   Result.Profile := FuzzProfile;
   Result.OnConsole := GConsole.Discard;
   Result.Resolver := GResolver;
@@ -392,7 +392,7 @@ end;
 
 { A run's result as an outcome. A denied import wins: the input reached for
   the host's files, whatever it then did with the refusal. }
-function Classify(const AResult: TG2RunResult;
+function Classify(const AResult: TGocciaRunResult;
   out ADetail: string): TFuzzOutcome;
 begin
   ADetail := UTF8Encode(AResult.ErrorMessage);
@@ -411,10 +411,10 @@ begin
     Exit(foUnexpected);
   end;
   case AResult.Aborted of
-    g2aTimeout:          Exit(foTimeout);
-    g2aInstructionLimit: Exit(foInstructionLimit);
-    g2aMemoryLimit:      Exit(foMemoryLimit);
-    g2aHostAbort:        Exit(foHostAbort);
+    gaTimeout:          Exit(foTimeout);
+    gaInstructionLimit: Exit(foInstructionLimit);
+    gaMemoryLimit:      Exit(foMemoryLimit);
+    gaHostAbort:        Exit(foHostAbort);
   end;
   if AResult.Ok then
     Result := foCompleted
@@ -428,9 +428,9 @@ function RunOnce(const ASource: UnicodeString; const AFileName: string;
   ABounded: Boolean; const AExecutor: string;
   out ADetail: string): TFuzzOutcome;
 var
-  Engine: TG2Engine;
+  Engine: TGocciaEngine;
   Watchdog: TFuzzWatchdog;
-  RunResult: TG2RunResult;
+  RunResult: TGocciaRunResult;
 begin
   GDeniedPath := '';
   Watchdog := nil;
@@ -646,8 +646,8 @@ end;
   built-ins and code are the ones the restore run names. }
 function RunSnapshotProgram(AMode: Integer; out ADetail: string): TFuzzOutcome;
 var
-  Engine: TG2Engine;
-  RunResult: TG2RunResult;
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
   Err: UnicodeString;
 begin
   GSnapshotMode := AMode;
@@ -1082,11 +1082,11 @@ end;
 
 begin
   { build.pas snapshots the compiled preludes from a run with
-    G2_SNAPSHOT_OUT set: a host's, as the other G2 apps take them }
-  if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+    GOCCIA_SNAPSHOT_OUT set: a host's, as the other G2 apps take them }
+  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
     GSetupError := '';
-    if not TG2Engine.Create.PrepareHost(GSetupError) then
+    if not TGocciaEngine.Create.PrepareHost(GSetupError) then
     begin
       WriteLn(ErrOutput, 'Error: ', UTF8Encode(GSetupError));
       Halt(1);

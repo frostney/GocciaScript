@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Language-level profiling** — Runs every instruction through the interpreter's counted loop (`G2.Profile`), providing data external profilers cannot see; the fast loop and compiled code stay off while it runs, so the times are interpreter times
+- **Language-level profiling** — Runs every instruction through the interpreter's counted loop (`Goccia.Profile`), providing data external profilers cannot see; the fast loop and compiled code stay off while it runs, so the times are interpreter times
 - **Four modes** — `--profile=opcodes` (histogram + pair frequency + scalar hit rate), `--profile=functions` (per-function timing + allocations), `--profile=all` (both), and `--profile=compile` (lex, parse and compile time and the compiler's work per source function, before execution)
 - **Export formats** — JSON (`--profile-output=path.json`) and collapsed flame graph (`--profile-format=flamegraph`)
 - **Disabled-path cost** — With profiling off, the fast loop and the JIT run as usual; what remains is a flag test at each frame push and at each object made. Measure enabled-mode overhead on the workload being profiled.
@@ -15,7 +15,7 @@
 
 The `--profile` option on GocciaRunner and GocciaBenchmarkRunner enables language-level profiling of the engine. It records inside the interpreter, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and which functions make objects.
 
-The engine normally runs hot instructions in its fast loop (`FastLoop` in `G2.VM`) and, on Linux x86-64, in compiled code. Under `--profile=opcodes`, `functions` or `all`, every instruction runs through `Execute`'s counted loop instead, which calls the profiler's step hook, and every frame push calls its push hook (`G2.Profile`). Coverage and an instruction limit select the counted loop the same way. A profile therefore describes the interpreter: compare its times with each other, not with an unprofiled run, which compiles what gets hot.
+The engine normally runs hot instructions in its fast loop (`FastLoop` in `Goccia.VM`) and, on Linux x86-64, in compiled code. Under `--profile=opcodes`, `functions` or `all`, every instruction runs through `Execute`'s counted loop instead, which calls the profiler's step hook, and every frame push calls its push hook (`Goccia.Profile`). Coverage and an instruction limit select the counted loop the same way. A profile therefore describes the interpreter: compare its times with each other, not with an unprofiled run, which compiles what gets hot.
 
 ## CLI Usage
 
@@ -75,7 +75,7 @@ behavior described below.
 
 ### Opcode Histogram (`--profile=opcodes`)
 
-Counts how many times each bytecode opcode executes, under G2's own opcode names (`TOp` in `G2.Bytecode` without its `op` prefix). Sorted by frequency descending. The examples in this section come from this script:
+Counts how many times each bytecode opcode executes, under G2's own opcode names (`TOp` in `Goccia.Instructions` without its `op` prefix). Sorted by frequency descending. The examples in this section come from this script:
 
 ```js
 const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2);
@@ -128,13 +128,13 @@ Scalar Fast-Path:
 
 ### Shape Saturation (`--profile=opcodes`)
 
-The report keeps a section for object layouts that could not be fully interned in a shape system, headed `Shape Saturation (degraded property-read caching):` and printed only when one of its counts is non-zero. G2 records no such event: an object past 64 properties gets a private dictionary shape instead ([G2 design — Objects](g2/design.md#objects)). The section is not printed, and the JSON export's `shapeSaturation` counts are 0.
+The report keeps a section for object layouts that could not be fully interned in a shape system, headed `Shape Saturation (degraded property-read caching):` and printed only when one of its counts is non-zero. G2 records no such event: an object past 64 properties gets a private dictionary shape instead ([G2 design — Objects](engine/design.md#objects)). The section is not printed, and the JSON export's `shapeSaturation` counts are 0.
 
 ### Function Profile (`--profile=functions`)
 
-Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive — time in the function and its callees), call count, and allocation count (the objects made during that function's execution, counted by `NewObject` in `G2.Core`; strings and other cells are not counted).
+Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive — time in the function and its callees), call count, and allocation count (the objects made during that function's execution, counted by `NewObject` in `Goccia.Core`; strings and other cells are not counted).
 
-Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every function frame, including each resumption of a generator or async function after a `yield` or `await`; a call that only creates a generator is not one, and its first resumption is its first call. A module top level counts once per evaluation, even when top-level `await` suspends and resumes it. Its timing includes each active segment; promise jobs that run while it is suspended are outside its total. A frame ends when a later push reuses its slot or an instruction runs in a frame below it, so a throw that unwinds several frames ends them all. A tail call that replaces its caller's frame (past 1,024 frames, see [G2 — Proper tail calls](g2/README.md#proper-tail-calls)) ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
+Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every function frame, including each resumption of a generator or async function after a `yield` or `await`; a call that only creates a generator is not one, and its first resumption is its first call. A module top level counts once per evaluation, even when top-level `await` suspends and resumes it. Its timing includes each active segment; promise jobs that run while it is suspended are outside its total. A frame ends when a later push reuses its slot or an instruction runs in a frame below it, so a throw that unwinds several frames ends them all. A tail call that replaces its caller's frame (past 1,024 frames, see [G2 — Proper tail calls](engine/README.md#proper-tail-calls)) ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
 
 Function timing excludes the measured time spent registering templates and
 maintaining the profiling stack, including flame-path interning. Returns update
@@ -178,7 +178,7 @@ One record per source function, keyed by its file and the line and column of its
 
 - **Lex, Parse, Compile** — self time: the lexer's scan time, the rest of the parse, and the compile, minus the time spent in nested functions.
 - **Tokens, Nodes, Instrs** — the tokens the lexer scanned while the function was open, the expressions and statements compiled, and the instructions of its finished bytecode: the size the counters are compared with. Tokens a lookahead scans before the function opens (an arrow function's parameters, read while the parser decides it is one) count for the enclosing function, with their lex time.
-- **Counters** — the compiler's (`G2.Compiler`) and the parser's expensive operations, counted while the function was being parsed or compiled:
+- **Counters** — the compiler's (`Goccia.Compiler`) and the parser's expensive operations, counted while the function was being parsed or compiled:
 
 | Counter | JSON key | Counts |
 |---|---|---|
@@ -197,7 +197,7 @@ One record per source function, keyed by its file and the line and column of its
 | Direct-eval record probes | `directEvalRecordProbes` | Each entry of a direct eval's scope description |
 | Type-argument probe tokens | `typeArgumentProbeTokens` | Tokens the parser visits in constructor lookahead and failed-probe indexing |
 
-The binding-name and type-argument counters are the parser's (`Goccia.Parser`); the rest are `G2.Compiler`'s.
+The binding-name and type-argument counters are the parser's (`Goccia.Parser`); the rest are `Goccia.Compiler`'s.
 
 Match-pattern nodes are not compiled expression/statement nodes. Compare parser binding work against pattern bindings or tokens; the compiled-node denominator can be very small for a large pattern.
 
@@ -332,11 +332,11 @@ Look at `sample`'s "Sort by top of stack" section. Typical categories:
 
 | `sample` function | Category |
 |-------------------|----------|
-| `FastLoop` | The hot instructions and plain bytecode calls (`G2.VM`) |
-| `Execute` | Every other instruction, and every instruction under a profile, coverage or an instruction limit (`G2.VM`) |
-| `CollectMinor`, `CollectMajor` | Minor (copying) and major (mark and sweep) collections (`G2.Core`) |
-| `NewObject` | Object allocation (`G2.Core`) |
-| `fpc_pushexceptaddr`, `fpc_popaddrstack` | An exception frame in a routine with managed locals; see G2's [working rules](g2/README.md#working-rules) |
+| `FastLoop` | The hot instructions and plain bytecode calls (`Goccia.VM`) |
+| `Execute` | Every other instruction, and every instruction under a profile, coverage or an instruction limit (`Goccia.VM`) |
+| `CollectMinor`, `CollectMajor` | Minor (copying) and major (mark and sweep) collections (`Goccia.Core`) |
+| `NewObject` | Object allocation (`Goccia.Core`) |
+| `fpc_pushexceptaddr`, `fpc_popaddrstack` | An exception frame in a routine with managed locals; see G2's [working rules](engine/README.md#working-rules) |
 | `SysGetMem`, `SysFreeMem` | FPC's heap: Pascal strings and dynamic arrays, not engine cells |
 
 The profiler's allocation count per function tells you *which JS function* makes the objects behind the collections `sample` reports. The opcode histogram tells you *which operations* run inside the time `sample` attributes to `Execute` and `FastLoop`.
@@ -345,13 +345,13 @@ The profiler's allocation count per function tells you *which JS function* makes
 
 | Unit | Role |
 |------|------|
-| `G2.Profile` | Feeds the profiler from G2's interpreter: the push hook times frames and charges objects made, the step hook counts opcodes, pairs and the scalar fast path, and `G2OpcodeName` names G2's opcodes |
+| `Goccia.Profile` | Feeds the profiler from G2's interpreter: the push hook times frames and charges objects made, the step hook counts opcodes, pairs and the scalar fast path, and `GocciaOpcodeName` names G2's opcodes |
 | `Goccia.Profiler.pas` | Per-thread tracker: opcode counts, pair matrix, scalar hit/miss, function profiles with timing stack |
 | `Goccia.Profiler.Report.pas` | Console output, JSON export, and collapsed stack export |
-| `Goccia.Profiler.Compile.pas` | The compile profile: per-function records, counters, nodes by kind, and its console output and JSON section; `G2.Compiler`, `G2.Eval` and `Goccia.Parser` feed it |
+| `Goccia.Profiler.Compile.pas` | The compile profile: per-function records, counters, nodes by kind, and its console output and JSON section; `Goccia.Compiler`, `Goccia.Eval` and `Goccia.Parser` feed it |
 
-The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread; a runner that runs each file on a thread of its own makes that thread record into the main thread's profiler with `Adopt`, and runs profiled files one at a time. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack and a clock adjusted for registration and frame bookkeeping, with parent-linked interned flame paths, and counts each function's frames on that stack so that only its outermost frame adds to its total time. `G2.Profile` keeps a shadow stack of the frames it has seen; allocation tracking counts the objects `NewObject` makes while `CountObjects` is set (`ObjectsMade` in `G2.Core`) and charges the difference to the innermost profiled function at each frame push and end.
+The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread; a runner that runs each file on a thread of its own makes that thread record into the main thread's profiler with `Adopt`, and runs profiled files one at a time. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack and a clock adjusted for registration and frame bookkeeping, with parent-linked interned flame paths, and counts each function's frames on that stack so that only its outermost frame adds to its total time. `Goccia.Profile` keeps a shadow stack of the frames it has seen; allocation tracking counts the objects `NewObject` makes while `CountObjects` is set (`ObjectsMade` in `Goccia.Core`) and charges the difference to the innermost profiled function at each frame push and end.
 
-When profiling is disabled, the remaining cost is small but not zero: each frame push tests `ProfilingAny` (`G2.VM`), each object made tests `CountObjects` (`G2.Core`), and the counted loop is not entered for profiling. Both flags stay set in a process once any thread has profiled.
+When profiling is disabled, the remaining cost is small but not zero: each frame push tests `ProfilingAny` (`Goccia.VM`), each object made tests `CountObjects` (`Goccia.Core`), and the counted loop is not entered for profiling. Both flags stay set in a process once any thread has profiled.
 
-When the compile profile is off, each counting site is a nil test. The parser reads the profiler's per-thread instance once, when a parser is created, and `G2.Compiler` once per compile, keeping it in a field (`Prof`) the function scopes share, so a counting site does no thread-variable lookup. A source the profile excludes (the host's preludes) gets a nil field as well.
+When the compile profile is off, each counting site is a nil test. The parser reads the profiler's per-thread instance once, when a parser is created, and `Goccia.Compiler` once per compile, keeping it in a field (`Prof`) the function scopes share, so a counting site does no thread-variable lookup. A source the profile excludes (the host's preludes) gets a nil field as well.

@@ -76,7 +76,7 @@ denied and reported once for the path normalization request, while the
 resulting in-jail path remains clamped and the filesystem operation continues.
 Ordinary sandbox reads and writes do not generate events.
 
-`capabilities.effective` is the first event of a run's log. `TG2Engine` does
+`capabilities.effective` is the first event of a run's log. `TGocciaEngine` does
 not emit it: the host does, before the entry runs, as GocciaRunner does in host and
 sandbox mode, and an embedder that installs `AuditSink` sends its own. Child contexts that
 inherit the set — ShadowRealm realms and sandbox `runScript` children — do not

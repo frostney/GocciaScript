@@ -1,7 +1,7 @@
 # 0187 - G2 reuses a frame for a tail call only past a depth floor
 
 **Date:** 2026-11-24
-**Area:** `g2`, `compiler`, `jit`
+**Area:** `engine`, `compiler`, `jit`
 **Related:** [ADR 0160](0160-concise-arrow-bodies-make-proper-tail-calls.md)
 
 ## Context

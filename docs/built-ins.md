@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-- **Core vs runtime registration** — every realm gets the core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.) from `InitIntrinsics` in `G2.Engine`; the CLI host (`InstallHostGlobals` in `G2.HostAPI`) adds the runtime globals (Console, Performance, TextEncoder/TextDecoder, Blob, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) and the import-only `goccia:` runtime modules
+- **Core vs runtime registration** — every realm gets the core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.) from `InitIntrinsics` in `Goccia.Engine`; the CLI host (`InstallHostGlobals` in `Goccia.HostAPI`) adds the runtime globals (Console, Performance, TextEncoder/TextDecoder, Blob, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) and the import-only `goccia:` runtime modules
 - **Runtime opt-ins** — Testing, benchmarking, timers, sandbox modules and FFI are installed only by the hosts that ask for them
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
@@ -15,48 +15,48 @@
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
 
-GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented in the engine's Pascal units (`source/g2`) and in JavaScript preludes (`source/g2/prelude`) that the build compiles into the engine's prelude snapshot. Runtime globals and runtime modules are installed by the host, so each binary gets only the runtime surface it needs. Test assertions, benchmarks, timers, sandbox modules and FFI are runtime-level opt-ins.
+GocciaScript provides a set of built-in global objects that mirror JavaScript's standard library. Core language built-ins are implemented in the engine's Pascal units (`source/engine`) and in JavaScript preludes (`source/engine/prelude`) that the build compiles into the engine's prelude snapshot. Runtime globals and runtime modules are installed by the host, so each binary gets only the runtime surface it needs. Test assertions, benchmarks, timers, sandbox modules and FFI are runtime-level opt-ins.
 
 ## Registration System
 
-Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered: `InitIntrinsics` in `G2.Engine` runs each built-in unit's initialization (`InitBuiltins`, `InitPromise`, `InitTypedArrays`, `InitTemporal`, `InitIntl`, ...) for every realm the engine creates.
+Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered: `InitIntrinsics` in `Goccia.Engine` runs each built-in unit's initialization (`InitBuiltins`, `InitPromise`, `InitTypedArrays`, `InitTemporal`, `InitIntl`, ...) for every realm the engine creates.
 
-Runtime globals (Console, Performance, TextEncoder/TextDecoder, Blob, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) are installed by the CLI host: `TG2Engine.InstallHost` calls `InstallHostGlobals` in `G2.HostAPI`, which runs the host preludes in `source/g2/prelude` (`console.js`, `url.js`, `web.js`, `events.js`, `fetch.js`, ...) on the realm. The same host installs the named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner` and `GocciaBenchmarkRunner` all install it. `GocciaTestRunner` additionally calls `InstallTestingAPI`, which defines the global `describe`/`test`/`expect` and the `goccia:test` module, so it is the only binary with either; `GocciaBenchmarkRunner` calls `InstallBenchmarkAPI`, which registers `goccia:microbench`. See [Test Framework API](testing-api.md#availability-per-binary) for the per-binary table. `GocciaScriptLoaderBare` runs the bare host (`TG2Engine.Bare`): `print(...args)` and `Goccia`, without the console, web APIs, timers or `goccia:` modules. The dedicated `GocciaTest262Runner` installs its own conformance host instead (`G2.Test262`).
+Runtime globals (Console, Performance, TextEncoder/TextDecoder, Blob, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) are installed by the CLI host: `TGocciaEngine.InstallHost` calls `InstallHostGlobals` in `Goccia.HostAPI`, which runs the host preludes in `source/engine/prelude` (`console.js`, `url.js`, `web.js`, `events.js`, `fetch.js`, ...) on the realm. The same host installs the named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner` and `GocciaBenchmarkRunner` all install it. `GocciaTestRunner` additionally calls `InstallTestingAPI`, which defines the global `describe`/`test`/`expect` and the `goccia:test` module, so it is the only binary with either; `GocciaBenchmarkRunner` calls `InstallBenchmarkAPI`, which registers `goccia:microbench`. See [Test Framework API](testing-api.md#availability-per-binary) for the per-binary table. `GocciaScriptLoaderBare` runs the bare host (`TGocciaEngine.Bare`): `print(...args)` and `Goccia`, without the console, web APIs, timers or `goccia:` modules. The dedicated `GocciaTest262Runner` installs its own conformance host instead (`Goccia.Test262`).
 
-The timers (`source/g2/prelude/timers.js`) register the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. `TG2Engine.ExposeTimers` decides whether a script sees them; it is on by default. `GocciaRunner` (and its sandbox mode's nested runs), `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off, so of the CLI tools `GocciaTestRunner` and `GocciaREPL` have the timer globals: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. Without them the queue still serves the host's own users, such as `AbortSignal.timeout`. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
+The timers (`source/engine/prelude/timers.js`) register the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. `TGocciaEngine.ExposeTimers` decides whether a script sees them; it is on by default. `GocciaRunner` (and its sandbox mode's nested runs), `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off, so of the CLI tools `GocciaTestRunner` and `GocciaREPL` have the timer globals: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. Without them the queue still serves the host's own users, such as `AbortSignal.timeout`. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
 
-In sandbox mode, the host also runs `source/g2/prelude/sandbox.js` over the natives in `G2.Sandbox`. It registers sandbox capabilities as import-only runtime modules named `"fs"`, `"goccia"` and `"goccia:search"`; it does not create global `fs`, `$`, or `runScript` bindings.
+In sandbox mode, the host also runs `source/engine/prelude/sandbox.js` over the natives in `Goccia.Sandbox`. It registers sandbox capabilities as import-only runtime modules named `"fs"`, `"goccia"` and `"goccia:search"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
-FFI is not part of the default runtime. It needs the engine's `ffi` capability: `TG2Engine.InstallHost` installs the `FFI` global (`InstallFFI` in `G2.FFI`) when the engine's `Capabilities` grant it, which CLI tools do for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block once the config is trusted, or accepted for one run with `-P` ([Config trust](permissions.md#config-trust)). See [Permissions](permissions.md).
+FFI is not part of the default runtime. It needs the engine's `ffi` capability: `TGocciaEngine.InstallHost` installs the `FFI` global (`InstallFFI` in `Goccia.FFI`) when the engine's `Capabilities` grant it, which CLI tools do for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block once the config is trusted, or accepted for one run with `-P` ([Config trust](permissions.md#config-trust)). See [Permissions](permissions.md).
 
-`ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is exposed only on demand. Every realm builds `ShadowRealm` (`G2.ShadowRealm`), and the CLI host removes `globalThis.ShadowRealm` unless `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation and `ShadowRealm.prototype.importValue` imports modules into the child realm; `importValue` counts as a computed import, so it needs a `read` grant even for files inside the project ([Permissions](permissions.md#the-module-graph-exemption)). See [ADR 0073](adr/0073-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
+`ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is exposed only on demand. Every realm builds `ShadowRealm` (`Goccia.ShadowRealm`), and the CLI host removes `globalThis.ShadowRealm` unless `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation and `ShadowRealm.prototype.importValue` imports modules into the child realm; `importValue` counts as a computed import, so it needs a `read` grant even for files inside the project ([Permissions](permissions.md#the-module-graph-exemption)). See [ADR 0073](adr/0073-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
 
-The CLI host removes the global `eval` (`G2.Builtins4`) in every case, together with `escape` and `unescape`; only the conformance runner's own host leaves them in place.
+The CLI host removes the global `eval` (`Goccia.Builtins4`) in every case, together with `escape` and `unescape`; only the conformance runner's own host leaves them in place.
 
 ### Where the built-ins live
 
 | Built-ins | Implementation |
 |-----------|----------------|
-| Object, Function, Array constructor, String, Number, Boolean, Symbol, Map, Set, error constructors, Math, JSON object, `globalThis`, `parseInt` and the other global functions | `G2.Builtins` |
-| Number formatting, Math extras, `Math.pow` (`Goccia.NumberExponentiation`), URI functions, `eval` | `G2.Builtins4` |
-| BigInt, generators, `__proto__` | `G2.Builtins2` |
-| `Symbol.for`, WeakMap, WeakSet, property descriptors, Proxy, Reflect | `G2.Builtins3`, with the object model in `G2.ObjModel` and weak entries in `G2.Weak` |
-| `Array.prototype` and the Array statics | `G2.ArrayProto` |
-| RegExp | `G2.RegExpV` over `G2.Regex`, patterns compiled by `Goccia.RegExp.Compiler`; the spec layer in `source/g2/prelude/regexp.js` |
-| Promise and the microtask queue | `G2.Promise` |
-| JSON | `G2.JSON` |
-| Date | `G2.Date` |
-| ArrayBuffer, TypedArrays, DataView | `G2.TypedArrays`, `G2.Typed` |
-| SharedArrayBuffer, Atomics | `G2.Atomics`, `G2.Shared` |
-| ShadowRealm | `G2.ShadowRealm` |
-| Iterator helpers | `source/g2/prelude/iterhelpers.js` |
-| Set methods, WeakRef, FinalizationRegistry, `Array.fromAsync`, groupBy, getOrInsert, Uint8Array base64/hex, legacy accessors | `source/g2/prelude/builtins5.js` |
-| DisposableStack, AsyncDisposableStack, SuppressedError | `source/g2/prelude/disposal.js` |
-| Temporal | `source/g2/prelude/temporal.js`, `G2.Temporal` |
-| Intl | `source/g2/prelude/intl.js`, `G2.Intl` |
-| Runtime globals and `goccia:` modules | the host preludes in `source/g2/prelude` (`console.js`, `web.js`, `url.js`, `events.js`, `fetch.js`, `json5.js`, `jsonl.js`, `delimited.js`, `datatree.js`, `semver.js`, `timers.js`, `asynchooks.js`, `sandbox.js`, `host.js`), installed by `G2.HostAPI` |
-| Test and benchmark APIs | `source/g2/prelude/testing.js`, `source/g2/prelude/microbench.js` |
-| FFI | `G2.FFI` |
+| Object, Function, Array constructor, String, Number, Boolean, Symbol, Map, Set, error constructors, Math, JSON object, `globalThis`, `parseInt` and the other global functions | `Goccia.Builtins` |
+| Number formatting, Math extras, `Math.pow` (`Goccia.NumberExponentiation`), URI functions, `eval` | `Goccia.Builtins4` |
+| BigInt, generators, `__proto__` | `Goccia.Builtins2` |
+| `Symbol.for`, WeakMap, WeakSet, property descriptors, Proxy, Reflect | `Goccia.Builtins3`, with the object model in `Goccia.ObjModel` and weak entries in `Goccia.Weak` |
+| `Array.prototype` and the Array statics | `Goccia.ArrayProto` |
+| RegExp | `Goccia.RegExpV` over `Goccia.Regex`, patterns compiled by `Goccia.RegExp.Compiler`; the spec layer in `source/engine/prelude/regexp.js` |
+| Promise and the microtask queue | `Goccia.Promise` |
+| JSON | `Goccia.JSON` |
+| Date | `Goccia.Date` |
+| ArrayBuffer, TypedArrays, DataView | `Goccia.TypedArrays`, `Goccia.Typed` |
+| SharedArrayBuffer, Atomics | `Goccia.Atomics`, `Goccia.Shared` |
+| ShadowRealm | `Goccia.ShadowRealm` |
+| Iterator helpers | `source/engine/prelude/iterhelpers.js` |
+| Set methods, WeakRef, FinalizationRegistry, `Array.fromAsync`, groupBy, getOrInsert, Uint8Array base64/hex, legacy accessors | `source/engine/prelude/builtins5.js` |
+| DisposableStack, AsyncDisposableStack, SuppressedError | `source/engine/prelude/disposal.js` |
+| Temporal | `source/engine/prelude/temporal.js`, `Goccia.Temporal` |
+| Intl | `source/engine/prelude/intl.js`, `Goccia.Intl` |
+| Runtime globals and `goccia:` modules | the host preludes in `source/engine/prelude` (`console.js`, `web.js`, `url.js`, `events.js`, `fetch.js`, `json5.js`, `jsonl.js`, `delimited.js`, `datatree.js`, `semver.js`, `timers.js`, `asynchooks.js`, `sandbox.js`, `host.js`), installed by `Goccia.HostAPI` |
+| Test and benchmark APIs | `source/engine/prelude/testing.js`, `source/engine/prelude/microbench.js` |
+| FFI | `Goccia.FFI` |
 
 ## Adding a New Built-in
 
@@ -91,13 +91,13 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 
 **Value formatting:** Arguments are rendered the way Node's `util.inspect` renders them. Strings print as they are at the top level and quoted inside containers. A function prints as `[Function: name]`, or `[Function (anonymous)]` when its name is empty, with `AsyncFunction`, `GeneratorFunction` or `AsyncGeneratorFunction` in place of `Function` for those kinds. A class prints as `[class K]` or `[class K extends B]`. An `Error` prints its `stack`, or `[name: message]` when the stack lists no frames; `[cause]` and an `AggregateError`'s `[errors]` follow it. A function, class or error then lists its own enumerable properties in braces: `[Function: f] { a: 1 }`. A container or error holding a multi-line entry, such as another error's stack, puts each entry on its own line, indented by two spaces. Inside `console.group`, every line of a multi-line value is indented. Depth beyond five levels reads `[Object]`, `[Array]`, `[Set]` or `[Map]`. Test-assertion messages keep the plain object rendering.
 
-**Output capture:** An embedder captures console lines through `TG2Engine.OnConsole` (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
+**Output capture:** An embedder captures console lines through `TGocciaEngine.OnConsole` (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
 
 Separately, the CLI hosts take `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.
 
 #### Console streams
 
-When the console writes to the process itself, as `GocciaRunner` does outside sandbox mode, `warn`, `error`, `assert` and `trace` write to standard error, as in Node, and every other method that prints a line writes to standard output. Each line is flushed as it is logged, so a process reading a piped stdout or stderr gets it while the script runs, and with both streams on one pipe the lines keep their order. A line whose write fails with an error (a closed or read-only descriptor, a full disk, a pipe whose reader has gone) is dropped and the script goes on; a signal the write raises other than SIGPIPE, such as SIGXFSZ past a file-size limit, keeps its default action. Where a host captures console output instead (`TG2Engine.OnConsole`, sandbox mode, `--output=json`), it receives every line with its method name and decides where it goes; sandbox mode prints the captured lines to stdout after the run.
+When the console writes to the process itself, as `GocciaRunner` does outside sandbox mode, `warn`, `error`, `assert` and `trace` write to standard error, as in Node, and every other method that prints a line writes to standard output. Each line is flushed as it is logged, so a process reading a piped stdout or stderr gets it while the script runs, and with both streams on one pipe the lines keep their order. A line whose write fails with an error (a closed or read-only descriptor, a full disk, a pipe whose reader has gone) is dropped and the script goes on; a signal the write raises other than SIGPIPE, such as SIGXFSZ past a file-size limit, keeps its default action. Where a host captures console output instead (`TGocciaEngine.OnConsole`, sandbox mode, `--output=json`), it receives every line with its method name and decides where it goes; sandbox mode prints the captured lines to stdout after the run.
 
 ### Math
 
@@ -105,7 +105,7 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — all standard constants and methods are available.
 
-**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` through one function, `G2.Core`'s `NumberExponentiate`. The cases ECMAScript fixes come first: a NaN exponent, and a base of magnitude 1 with an infinite exponent, give `NaN`. For a positive finite base, `x ** 0.5` is `Math.sqrt(x)`, correctly rounded on every target. `x ** -1` is the correctly rounded `1 / x` on every target (`Goccia.NumberExponentiation`), which a `pow` within one ULP misses for about one base in a thousand; for a base of magnitude 2^1022 or more, whose reciprocal is subnormal or the smallest normal, it is rounded in integer arithmetic. Every other exponent goes to the C library's `pow` (glibc, or the Universal CRT on Windows), except on macOS, whose libm rounds a subnormal result differently: there it is `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl), within 0.54 ULP of the exact value. FPC's i386 builds compute doubles in SSE2, so a product or quotient rounds once there too ([ADR 0191](adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)).
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` through one function, `Goccia.Core`'s `NumberExponentiate`. The cases ECMAScript fixes come first: a NaN exponent, and a base of magnitude 1 with an infinite exponent, give `NaN`. For a positive finite base, `x ** 0.5` is `Math.sqrt(x)`, correctly rounded on every target. `x ** -1` is the correctly rounded `1 / x` on every target (`Goccia.NumberExponentiation`), which a `pow` within one ULP misses for about one base in a thousand; for a base of magnitude 2^1022 or more, whose reciprocal is subnormal or the smallest normal, it is rounded in integer arithmetic. Every other exponent goes to the C library's `pow` (glibc, or the Universal CRT on Windows), except on macOS, whose libm rounds a subnormal result differently: there it is `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl), within 0.54 ULP of the exact value. FPC's i386 builds compute doubles in SSE2, so a product or quotient rounds once there too ([ADR 0191](adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)).
 
 **Extras:**
 
@@ -140,7 +140,7 @@ Implements the [ECMAScript Array](https://developer.mozilla.org/en-US/docs/Web/J
 | `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` | Returns a Promise that resolves to an Array. Tries `[Symbol.asyncIterator]` first, falls back to `[Symbol.iterator]`, then array-like. Each value is awaited (Promise-aware via synchronous microtask drain). |
 | `Array.of(...items)` | Create array from arguments |
 
-**Prototype methods** (`G2.ArrayProto`):
+**Prototype methods** (`Goccia.ArrayProto`):
 
 | Method | Description |
 |--------|-------------|
@@ -282,7 +282,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 
 ### Global Constants, Functions, and Error Constructors
 
-These core constants, functions, and error constructors are always registered (not flag-gated), mostly by `G2.Builtins` and `G2.Builtins4`. The host can add more globals or namespace properties.
+These core constants, functions, and error constructors are always registered (not flag-gated), mostly by `Goccia.Builtins` and `Goccia.Builtins4`. The host can add more globals or namespace properties.
 
 **Constants:** `undefined`, `NaN`, `Infinity`, `globalThis`
 
@@ -311,20 +311,20 @@ Current default shims:
 
 | Shim name | Installed surface | Implementation |
 |-----------|-------------------|------------------------|
-| `btoa` | `globalThis.btoa` | `source/g2/prelude/web.js`, over `Uint8Array.prototype.toBase64` |
-| `atob` | `globalThis.atob` | `source/g2/prelude/web.js`, over `Uint8Array.fromBase64` |
-| `parseInt` | `globalThis.parseInt` | `G2.Builtins`; the same function as `Number.parseInt` |
-| `parseFloat` | `globalThis.parseFloat` | `G2.Builtins`; the same function as `Number.parseFloat` |
-| `isNaN` | `globalThis.isNaN` | `G2.Builtins`: `Number.isNaN(Number(value))` |
-| `isFinite` | `globalThis.isFinite` | `G2.Builtins`: `Number.isFinite(Number(value))` |
-| `Date` | `globalThis.Date` | `G2.Date`, ES2026 §21.4 |
-| `numberArrayToLocaleString` | `Number.prototype.toLocaleString`, `Array.prototype.toLocaleString` | `Intl.NumberFormat` (`source/g2/prelude/intl.js`); `Array.prototype.toLocaleString` calls each element's `toLocaleString` |
-| `hasOwnProperty` | `Object.prototype.hasOwnProperty` | `G2.ObjModel`, as `Object.hasOwn` |
-| `__proto__` | `Object.prototype.__proto__` | `G2.Builtins2`, ES2026 §B.2.2.1 |
-| `defineGetter` | `Object.prototype.__defineGetter__` | `source/g2/prelude/builtins5.js`, an `Object.defineProperty` accessor descriptor |
-| `defineSetter` | `Object.prototype.__defineSetter__` | `source/g2/prelude/builtins5.js`, an `Object.defineProperty` accessor descriptor |
-| `lookupGetter` | `Object.prototype.__lookupGetter__` | `source/g2/prelude/builtins5.js`, a prototype-chain descriptor lookup |
-| `lookupSetter` | `Object.prototype.__lookupSetter__` | `source/g2/prelude/builtins5.js`, a prototype-chain descriptor lookup |
+| `btoa` | `globalThis.btoa` | `source/engine/prelude/web.js`, over `Uint8Array.prototype.toBase64` |
+| `atob` | `globalThis.atob` | `source/engine/prelude/web.js`, over `Uint8Array.fromBase64` |
+| `parseInt` | `globalThis.parseInt` | `Goccia.Builtins`; the same function as `Number.parseInt` |
+| `parseFloat` | `globalThis.parseFloat` | `Goccia.Builtins`; the same function as `Number.parseFloat` |
+| `isNaN` | `globalThis.isNaN` | `Goccia.Builtins`: `Number.isNaN(Number(value))` |
+| `isFinite` | `globalThis.isFinite` | `Goccia.Builtins`: `Number.isFinite(Number(value))` |
+| `Date` | `globalThis.Date` | `Goccia.Date`, ES2026 §21.4 |
+| `numberArrayToLocaleString` | `Number.prototype.toLocaleString`, `Array.prototype.toLocaleString` | `Intl.NumberFormat` (`source/engine/prelude/intl.js`); `Array.prototype.toLocaleString` calls each element's `toLocaleString` |
+| `hasOwnProperty` | `Object.prototype.hasOwnProperty` | `Goccia.ObjModel`, as `Object.hasOwn` |
+| `__proto__` | `Object.prototype.__proto__` | `Goccia.Builtins2`, ES2026 §B.2.2.1 |
+| `defineGetter` | `Object.prototype.__defineGetter__` | `source/engine/prelude/builtins5.js`, an `Object.defineProperty` accessor descriptor |
+| `defineSetter` | `Object.prototype.__defineSetter__` | `source/engine/prelude/builtins5.js`, an `Object.defineProperty` accessor descriptor |
+| `lookupGetter` | `Object.prototype.__lookupGetter__` | `source/engine/prelude/builtins5.js`, a prototype-chain descriptor lookup |
+| `lookupSetter` | `Object.prototype.__lookupSetter__` | `source/engine/prelude/builtins5.js`, a prototype-chain descriptor lookup |
 
 **`Goccia.build`**
 
@@ -339,7 +339,7 @@ Current default shims:
 
 **`goccia:semver` module**
 
-The SemVer 2.0.0 API is provided by the CLI host as the named-export-only module `goccia:semver` (`source/g2/prelude/semver.js` over `Goccia.Semver`). It is not part of the bare host, not a property of `Goccia`, and not installed as a global. Use either named imports or a namespace import:
+The SemVer 2.0.0 API is provided by the CLI host as the named-export-only module `goccia:semver` (`source/engine/prelude/semver.js` over `Goccia.Semver`). It is not part of the bare host, not a property of `Goccia`, and not installed as a global. Use either named imports or a namespace import:
 
 ```javascript
 import { valid, SemVer } from "goccia:semver";
@@ -401,7 +401,7 @@ Properties are enumerated the way `StructuredSerialize` does, with [`EnumerableO
 
 `atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
 
-`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling functions (ES2026 §19.2.6) and are implemented in `G2.Builtins4`. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` leaves escapes of reserved characters exactly as written, hex-digit case included (`%2f` stays `%2f`).
+`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling functions (ES2026 §19.2.6) and are implemented in `Goccia.Builtins4`. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` leaves escapes of reserved characters exactly as written, hex-digit case included (`%2f` stays `%2f`).
 
 **Error constructors:** `Error`, `EvalError`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, `DOMException`
 
@@ -715,7 +715,7 @@ Core High Resolution Time API:
 | `performance.toJSON()` | Returns `{ timeOrigin }` |
 | `performance[Symbol.toStringTag]` | `"Performance"` |
 
-`performance.now()` uses `TimingUtils.GetNanoseconds`, so wall-clock changes do not affect it. `performance.timeOrigin` is captured once from `TimingUtils.GetEpochNanoseconds` when the engine starts (`TimeOriginInit` in `G2.Core`), and again when the host installs a clock of its own, as under `--deterministic`.
+`performance.now()` uses `TimingUtils.GetNanoseconds`, so wall-clock changes do not affect it. `performance.timeOrigin` is captured once from `TimingUtils.GetEpochNanoseconds` when the engine starts (`TimeOriginInit` in `Goccia.Core`), and again when the host installs a clock of its own, as under `--deterministic`.
 
 `Performance` is not constructible: `Performance()` throws `TypeError` (`"Illegal constructor"`) and `new Performance()` throws `TypeError` (`"Performance is not a constructor"`); the web platform uses `"Illegal constructor"` for both ([#1277](https://github.com/frostney/GocciaScript/issues/1277)).
 
@@ -886,7 +886,7 @@ aggregate type, callback, lifetime, and safety reference.
 
 ### Test Assertions
 
-Only available in `GocciaTestRunner`, which installs the testing API with `InstallTestingAPI` (`G2.HostAPI`).
+Only available in `GocciaTestRunner`, which installs the testing API with `InstallTestingAPI` (`Goccia.HostAPI`).
 
 **Test structure:**
 
@@ -940,7 +940,7 @@ All matchers support `.not` negation: `expect(value).not.toBe(wrong)`.
 
 ### Benchmark
 
-Only available in `GocciaBenchmarkRunner`, which installs the benchmark API with `InstallBenchmarkAPI` (`G2.HostAPI`). The benchmark API is import-only from `"goccia:microbench"`; it does not install ambient `suite`, `bench`, or `runBenchmarks` globals. See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
+Only available in `GocciaBenchmarkRunner`, which installs the benchmark API with `InstallBenchmarkAPI` (`Goccia.HostAPI`). The benchmark API is import-only from `"goccia:microbench"`; it does not install ambient `suite`, `bench`, or `runBenchmarks` globals. See [benchmarks.md](benchmarks.md) for usage, output formats, and CI integration.
 
 **Benchmark structure:**
 
@@ -1023,7 +1023,7 @@ The focused WHATWG `fetch`, `Headers`, `Response`, `AbortController`, `AbortSign
 
 ### Async context (`node:async_hooks`)
 
-`AsyncLocalStorage` and `AsyncResource` are provided by the CLI host as the import-only module `node:async_hooks` (`source/g2/prelude/asynchooks.js`), at Node's own address and with Node's named plus default exports. The engine propagates the async context, so a store survives `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the full surface and [ADR 0112](adr/0112-native-async-local-storage.md) for the mechanism and the scope cuts.
+`AsyncLocalStorage` and `AsyncResource` are provided by the CLI host as the import-only module `node:async_hooks` (`source/engine/prelude/asynchooks.js`), at Node's own address and with Node's named plus default exports. The engine propagates the async context, so a store survives `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the full surface and [ADR 0112](adr/0112-native-async-local-storage.md) for the mechanism and the scope cuts.
 
 ### DisposableStack / AsyncDisposableStack
 

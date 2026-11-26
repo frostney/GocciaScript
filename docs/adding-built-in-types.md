@@ -4,34 +4,34 @@
 
 ## Executive Summary
 
-- **Two ways to write it** — Native Pascal in a `source/g2` unit, or JavaScript in a prelude under `source/g2/prelude`. Use a prelude when the spec's steps matter more than speed; keep hot paths native.
-- **Registration** — A language built-in is created by an Init procedure that `InitIntrinsics` (`G2.Engine`) calls for every realm. A host API (console, URL, `goccia:` modules) is a host prelude that `InstallHostGlobals` (`G2.HostAPI`) runs.
-- **A new prelude file** — Add a row to `G2_PRELUDES` in `build.pas`, include the generated `.inc` in the unit that installs it, and compile it with `CompilePrelude` or `CallPrelude`.
+- **Two ways to write it** — Native Pascal in a `source/engine` unit, or JavaScript in a prelude under `source/engine/prelude`. Use a prelude when the spec's steps matter more than speed; keep hot paths native.
+- **Registration** — A language built-in is created by an Init procedure that `InitIntrinsics` (`Goccia.Engine`) calls for every realm. A host API (console, URL, `goccia:` modules) is a host prelude that `InstallHostGlobals` (`Goccia.HostAPI`) runs.
+- **A new prelude file** — Add a row to `GOCCIA_PRELUDES` in `build.pas`, include the generated `.inc` in the unit that installs it, and compile it with `CompilePrelude` or `CallPrelude`.
 - **Tests** — JavaScript tests under `tests/built-ins/<Type>/`, run with `GocciaTestRunner`; a GC stress run for native code that allocates; test262 for spec built-ins.
 - **Checklist included** — Complete checklist at the end of the document for verification
 
-This guide walks through adding a built-in type such as `Map`, `Date` or `WeakRef` to G2, the engine under `source/g2`. Read [Value System](value-system.md) first: it describes `TValue`, objects, shapes and the rooting rules the code below follows.
+This guide walks through adding a built-in type such as `Map`, `Date` or `WeakRef` to G2, the engine under `source/engine`. Read [Value System](value-system.md) first: it describes `TValue`, objects, shapes and the rooting rules the code below follows.
 
 ## Overview
 
 ### Native or prelude
 
-| | Native (`G2.<Unit>`) | Prelude (`source/g2/prelude/*.js`) |
+| | Native (`G2.<Unit>`) | Prelude (`source/engine/prelude/*.js`) |
 |---|---|---|
-| Written in | Pascal against `G2.Core` and `G2.VM` | JavaScript, by the spec's steps |
+| Written in | Pascal against `Goccia.Core` and `Goccia.VM` | JavaScript, by the spec's steps |
 | Internal slots | the object's `OKind`, `Aux1`, `Aux2`, `Pad` | private fields of a class (`#slot`) |
 | Brand check | `OKind` test | `#slot in o` |
 | Speed | as fast as the engine | as fast as compiled JavaScript |
-| Examples | `G2.Date`, `G2.Promise`, `G2.TypedArrays`, `G2.JSON` | `builtins5.js` (WeakMap, WeakRef, FinalizationRegistry), `temporal.js`, `intl.js`, `iterhelpers.js` |
+| Examples | `Goccia.Date`, `Goccia.Promise`, `Goccia.TypedArrays`, `Goccia.JSON` | `builtins5.js` (WeakMap, WeakRef, FinalizationRegistry), `temporal.js`, `intl.js`, `iterhelpers.js` |
 
-The two mix: a prelude can receive natives for what JavaScript cannot do (`G2.Weak`'s ephemeron tables for WeakMap, `G2.Temporal`'s time zone reader, `G2.Intl`'s `intlOp`), and a native fast path can stand in for a prelude while the objects involved are unmodified (RegExp, `String.prototype.replace`; see [G2 design § Built-ins](g2/design.md#built-ins)).
+The two mix: a prelude can receive natives for what JavaScript cannot do (`Goccia.Weak`'s ephemeron tables for WeakMap, `Goccia.Temporal`'s time zone reader, `Goccia.Intl`'s `intlOp`), and a native fast path can stand in for a prelude while the objects involved are unmodified (RegExp, `String.prototype.replace`; see [G2 design § Built-ins](engine/design.md#built-ins)).
 
 ### Engine built-in or host API
 
 | What | Installed by | Where it is visible |
 |------|--------------|---------------------|
-| ECMA-262 / ECMA-402 built-ins and the proposals GocciaScript supports | an Init procedure listed in `InitIntrinsics` (`G2.Engine`) | every realm, every host, including the test262 host |
-| Runtime APIs of the CLI hosts (console, URL, fetch, events, timers, `goccia:*` modules) | a host prelude called from `InstallHostGlobals` (`G2.HostAPI`) | the CLI applications' first realm |
+| ECMA-262 / ECMA-402 built-ins and the proposals GocciaScript supports | an Init procedure listed in `InitIntrinsics` (`Goccia.Engine`) | every realm, every host, including the test262 host |
+| Runtime APIs of the CLI hosts (console, URL, fetch, events, timers, `goccia:*` modules) | a host prelude called from `InstallHostGlobals` (`Goccia.HostAPI`) | the CLI applications' first realm |
 | Test and benchmark APIs | `testing.js` and `microbench.js` through `InstallTestingAPI` and `InstallBenchmarkAPI` | GocciaTestRunner, GocciaBenchmarkRunner |
 
 `InstallHostGlobals` has a `Bare` mode (GocciaScriptLoaderBare) that installs only the modules, web and host preludes; a runtime API stays out of it.
@@ -40,10 +40,10 @@ The two mix: a prelude can receive natives for what JavaScript cannot do (`G2.We
 
 | Step | File(s) | Purpose |
 |------|---------|---------|
-| 1 | `source/g2/G2.<Unit>.pas` or `source/g2/prelude/<name>.js` | The type |
-| 2 | `source/g2/G2.Engine.pas` or `source/g2/G2.HostAPI.pas` | Registration |
-| 3 | `build.pas` (`G2_PRELUDES`) | A new prelude file only |
-| 4 | `source/g2/prelude/web.js`, `source/g2/G2.HeapSnapshot.pas` | structuredClone and heap snapshots, if they apply |
+| 1 | `source/engine/G2.<Unit>.pas` or `source/engine/prelude/<name>.js` | The type |
+| 2 | `source/engine/Goccia.Engine.pas` or `source/engine/Goccia.HostAPI.pas` | Registration |
+| 3 | `build.pas` (`GOCCIA_PRELUDES`) | A new prelude file only |
+| 4 | `source/engine/prelude/web.js`, `source/engine/Goccia.HeapSnapshot.pas` | structuredClone and heap snapshots, if they apply |
 | 5 | `tests/built-ins/<Type>/` | JavaScript tests |
 | 6 | `benchmarks/<type>.js` | Benchmarks |
 | 7 | `docs/built-ins.md`, `README.md`, other `docs/*` as needed | Documentation |
@@ -52,19 +52,19 @@ The two mix: a prelude can receive natives for what JavaScript cannot do (`G2.We
 
 ### Pick an object kind
 
-An instance of a native type is a `TObj` whose `OKind` names its kind. `G2.Core` declares the core kinds (`okPlain` to `okModuleNS`); units that own a built-in declare theirs next to it (`okTypedArray` in `G2.Typed`, `okPromise` in `G2.Promise`, `okDate` in `G2.Date`, `okRawJSON` in `G2.JSON`, ...). Search for the existing values before taking one (`grep -rn "ok[A-Z][A-Za-z]* *= *[0-9]" source/g2`), and declare the same constant in every unit that tests for it.
+An instance of a native type is a `TObj` whose `OKind` names its kind. `Goccia.Core` declares the core kinds (`okPlain` to `okModuleNS`); units that own a built-in declare theirs next to it (`okTypedArray` in `Goccia.Typed`, `okPromise` in `Goccia.Promise`, `okDate` in `Goccia.Date`, `okRawJSON` in `Goccia.JSON`, ...). Search for the existing values before taking one (`grep -rn "ok[A-Z][A-Za-z]* *= *[0-9]" source/engine`), and declare the same constant in every unit that tests for it.
 
-Keep the instance's state in the fields the collector traces: `Aux1` and `Aux2` (a number, a string, a value array, another object). `Pad` holds 32 untraced bits. `Native` is an untraced pointer, for memory outside the heap; such memory is released from a collector hook (`GCFinalizeHook`, as `G2.Shared` releases SharedArrayBuffer blocks). Bit 8 of `OFlags` means "not extensible" for every object; check the other bits' uses before taking one for your kind.
+Keep the instance's state in the fields the collector traces: `Aux1` and `Aux2` (a number, a string, a value array, another object). `Pad` holds 32 untraced bits. `Native` is an untraced pointer, for memory outside the heap; such memory is released from a collector hook (`GCFinalizeHook`, as `Goccia.Shared` releases SharedArrayBuffer blocks). Bit 8 of `OFlags` means "not extensible" for every object; check the other bits' uses before taking one for your kind.
 
 ### Write the natives
 
 A native has the `TNativeFn` signature. `Args[0]` is `this`, `Args[1..Argc]` the arguments. It writes the result to `Res` and returns `True`, or returns `False` with the exception in `Pending` (`ThrowTypeError`, `ThrowError`). Under `new`, `CurNewTarget` holds new.target.
 
 ```pascal
-unit G2.Foo;
+unit Goccia.Foo;
 { Foo objects: a counter in Aux1. }
 {$mode delphiunicode}{$H+}
-{$I G2.Checks.inc}
+{$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 
@@ -75,7 +75,7 @@ procedure InitFoo;
 implementation
 
 uses
-  SysUtils, G2.Core, G2.VM;
+  SysUtils, Goccia.Core, Goccia.VM;
 
 const
   okFoo = 99;   { an object kind no other unit uses }
@@ -193,7 +193,7 @@ def(G, "WeakMap", WeakMap);
 
 ### A new prelude file
 
-1. Create `source/g2/prelude/<name>.js` holding one parenthesized function expression. The file compiles as an expression; its value is the function the installer calls:
+1. Create `source/engine/prelude/<name>.js` holding one parenthesized function expression. The file compiles as an expression; its value is the function the installer calls:
 
    ```javascript
    // Foo for G2: what it implements and which natives it is called with.
@@ -203,18 +203,18 @@ def(G, "WeakMap", WeakMap);
    })
    ```
 
-2. Add a row to `G2_PRELUDES` in `build.pas` and raise the array's upper bound by one: the file name, the include it becomes and the constant it defines.
+2. Add a row to `GOCCIA_PRELUDES` in `build.pas` and raise the array's upper bound by one: the file name, the include it becomes and the constant it defines.
 
    ```pascal
-   ('foo.js', 'G2.FooPrelude.inc', 'FooSrc'),
+   ('foo.js', 'Goccia.FooPrelude.inc', 'FooSrc'),
    ```
 
-   `GenerateG2Preludes` writes `build/g2/gen/G2.FooPrelude.inc` on every G2 build, with the source as the constant `FooSrc`.
+   `GenerateEnginePreludes` writes `build/engine/gen/Goccia.FooPrelude.inc` on every G2 build, with the source as the constant `FooSrc`.
 
-3. Include it in the implementation section of the unit that installs it: `{$I G2.FooPrelude.inc}`.
+3. Include it in the implementation section of the unit that installs it: `{$I Goccia.FooPrelude.inc}`.
 
 4. Install it.
-   - **Engine prelude.** In an Init procedure listed in `InitIntrinsics`: `CompilePrelude` (`G2.Snapshot`) compiles the source, `MakeScriptClosure` and `CallValue` evaluate it to the function, and a second `CallValue` calls it with its arguments. Raise an `Exception` on failure: a prelude that does not run is an engine bug. `InitBuiltins5` (`G2.Builtins5`) is the full example; the short form:
+   - **Engine prelude.** In an Init procedure listed in `InitIntrinsics`: `CompilePrelude` (`Goccia.Snapshot`) compiles the source, `MakeScriptClosure` and `CallValue` evaluate it to the function, and a second `CallValue` calls it with its arguments. Raise an `Exception` on failure: a prelude that does not run is an engine bug. `InitBuiltins5` (`Goccia.Builtins5`) is the full example; the short form:
 
      ```pascal
      procedure InitFoo;
@@ -236,24 +236,24 @@ def(G, "WeakMap", WeakMap);
 
    - **Host prelude.** Add a `CallPrelude('<goccia:foo>', FooSrc, Base, 3, R, Err)` to the chain in `InstallHostGlobals`, at the point in the install order where what it uses exists. Host preludes take `(G, n, shared)`: the global object, the host's natives (`HostNatives`, where a new native is one more `DefineNative` line) and the preludes' shared internals. A global it installs is added to `shared.runtimeGlobals`, which the `runtimeGlobals` list on the `Goccia` global reports; a module is registered as `shared.hostModules['goccia:foo'] = () => exports`.
 
-5. Build. The build compiles each program once, runs it to snapshot the preludes it compiles (`G2.Snapshot`, `SnapshotG2Preludes` in `build.pas`) and compiles it again with their bytecode embedded, so start-up does not parse them. `CompilePrelude` takes a snapshot entry only while the prelude's source still matches it, and otherwise parses the source.
+5. Build. The build compiles each program once, runs it to snapshot the preludes it compiles (`Goccia.Snapshot`, `SnapshotEnginePreludes` in `build.pas`) and compiles it again with their bytecode embedded, so start-up does not parse them. `CompilePrelude` takes a snapshot entry only while the prelude's source still matches it, and otherwise parses the source.
 
 ## Step 2: Registration
 
-### Engine built-ins: `G2.Engine`
+### Engine built-ins: `Goccia.Engine`
 
-Add the unit to `G2.Engine`'s implementation `uses` clause and call its Init procedure from `InitIntrinsics`. The order matters: an Init procedure can read only the intrinsics made before it (`InitBuiltins` makes `Object`, `Function`, `Array` and the well-known symbols first; the preludes in `InitBuiltins5` and later capture what exists when they run). `InitIntrinsics` is also the realm initializer (`RealmInitProc`), so the same call covers ShadowRealm and `$262.createRealm`.
+Add the unit to `Goccia.Engine`'s implementation `uses` clause and call its Init procedure from `InitIntrinsics`. The order matters: an Init procedure can read only the intrinsics made before it (`InitBuiltins` makes `Object`, `Function`, `Array` and the well-known symbols first; the preludes in `InitBuiltins5` and later capture what exists when they run). `InitIntrinsics` is also the realm initializer (`RealmInitProc`), so the same call covers ShadowRealm and `$262.createRealm`.
 
-On Linux x86-64, `G2_REALMCHECK=<size of the TLS segment>` makes `CreateRealm` report the thread-local bytes a new realm's Init procedures changed that switching back did not restore: realm state that no `RealmVals` call registered.
+On Linux x86-64, `GOCCIA_REALMCHECK=<size of the TLS segment>` makes `CreateRealm` report the thread-local bytes a new realm's Init procedures changed that switching back did not restore: realm state that no `RealmVals` call registered.
 
-### Host APIs: `G2.HostAPI`
+### Host APIs: `Goccia.HostAPI`
 
 A host prelude is registered in `InstallHostGlobals` as above. A new realm of a CLI host gets the intrinsics, then `CLIRealmInit`; host preludes run only in the host's own realm.
 
 ## Step 3: structuredClone and Heap Snapshots
 
 - **structuredClone** is `web.js`'s. It refuses an object of a native kind it does not know (`plainCloneable` accepts only `okPlain`, `okArray` and `okArgumentsOrd`) and an instance of any prelude class, with a `DataCloneError`. A cloneable type needs a branch in `structuredClone`'s `clone` function, brand-checked through an intrinsic captured at the top of the section, before the plain-object case.
-- **Heap snapshots** (`G2.HeapSnapshot`) refuse every object kind without a codec, which `GocciaTestRunner --heap-snapshots` reports as refused, not failed. Add the kind to `KindName` so the refusal names it.
+- **Heap snapshots** (`Goccia.HeapSnapshot`) refuse every object kind without a codec, which `GocciaTestRunner --heap-snapshots` reports as refused, not failed. Add the kind to `KindName` so the refusal names it.
 
 ## Step 4: Tests
 
@@ -302,7 +302,7 @@ Run them:
 ./build.pas testrunner && ./build/GocciaTestRunner -P tests/built-ins/YourType
 ```
 
-- **GC stress** — For native code that allocates, run the tests with a 16 KB nursery and heap verification after every collection: `./build.pas g2 && python3 scripts/g2/gcstress-tests.py build/g2/g2 8 tests/built-ins/YourType`. A file reported `BAD` reads a value an allocation moved or misses a root.
+- **GC stress** — For native code that allocates, run the tests with a 16 KB nursery and heap verification after every collection: `./build.pas engine && python3 scripts/engine/gcstress-tests.py build/engine/goccia 8 tests/built-ins/YourType`. A file reported `BAD` reads a value an allocation moved or misses a root.
 - **test262** — For an ECMA-262 or ECMA-402 built-in, run its test262 directory ([test262](test262.md)). CI expects both the suite and test262 to pass in full: any failure fails the job.
 
 ## Step 5: Benchmarks
@@ -367,11 +367,11 @@ Use this checklist when adding a new built-in type:
 - [ ] Native: state in `Aux1` / `Aux2` (traced) or `Pad`; nothing collectible in `Native`
 - [ ] Native: every method brand-checks `this`; values rooted across allocation and calls; write barrier on direct pointer stores
 - [ ] Native: Init procedure with `AddRoot` and `RealmVals` for each threadvar it fills
-- [ ] Native: Init procedure called from `InitIntrinsics` in `G2.Engine`, after what it reads
+- [ ] Native: Init procedure called from `InitIntrinsics` in `Goccia.Engine`, after what it reads
 - [ ] Prelude: internal slots as private fields, `markIntrinsic` on the class, intrinsics captured, ASCII only
-- [ ] New prelude file: `G2_PRELUDES` row and bound in `build.pas`, `{$I}` of the generated include, installed by an Init procedure or `InstallHostGlobals`
+- [ ] New prelude file: `GOCCIA_PRELUDES` row and bound in `build.pas`, `{$I}` of the generated include, installed by an Init procedure or `InstallHostGlobals`
 - [ ] `Symbol.toStringTag` on the prototype
-- [ ] structuredClone branch in `web.js` (if cloneable); `KindName` entry in `G2.HeapSnapshot` (native kinds)
+- [ ] structuredClone branch in `web.js` (if cloneable); `KindName` entry in `Goccia.HeapSnapshot` (native kinds)
 - [ ] JavaScript tests in `tests/built-ins/YourType/`
 - [ ] GC stress run over the new tests (native code that allocates)
 - [ ] test262 for the feature (spec built-ins)
@@ -384,7 +384,7 @@ Use this checklist when adding a new built-in type:
 1. **A stale `TValue` after an allocation** — A pointer read into a local before `NewObject`, `GetV` or `CallValue` may point at the cell's old place. Root it or re-read it. The GC stress run finds these.
 2. **Heap values in untraced fields** — `Native` and `Pad` are not traced: a value kept there is freed or moved under it.
 3. **A missing write barrier** — Storing a young object into an old object's `Aux1` without `WriteBarrier` hides it from the next minor collection, which then moves it and leaves `Aux1` pointing at its old place.
-4. **Unregistered realm state** — A threadvar the Init procedure fills but does not pass to `RealmVals` is not saved and restored by `SwitchRealm`, so every realm sees the value the newest realm's Init procedure left there. `G2_REALMCHECK` finds these.
+4. **Unregistered realm state** — A threadvar the Init procedure fills but does not pass to `RealmVals` is not saved and restored by `SwitchRealm`, so every realm sees the value the newest realm's Init procedure left there. `GOCCIA_REALMCHECK` finds these.
 5. **Calling through replaceable globals in a prelude** — `Array.prototype.push` or `Object.defineProperty` read at call time observe a script's changes. Capture them when the prelude runs.
 6. **Forgetting `markIntrinsic`** — Without it, `Reflect.construct(PreludeClass, [], newTargetWithoutPrototype)` gets `Object.prototype` instead of the class's prototype.
 7. **Exceptions for JavaScript errors** — A native signals a throw by returning `False` with `Pending` set, never by raising a Pascal exception.

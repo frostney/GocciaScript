@@ -6,9 +6,9 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — the engine builds with FPC 3.3.1 while the code outside `source/g2` also builds on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
+- **Platform pitfalls** — the engine builds with FPC 3.3.1 while the code outside `source/engine` also builds on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
-- **GC stress** — G2's binaries take `--gc-stress` and `--gc-verify` at run time and `G2_NURSERY_KB` shrinks the nursery; `scripts/g2/gcstress.sh` runs the stress sweep
+- **GC stress** — G2's binaries take `--gc-stress` and `--gc-verify` at run time and `GOCCIA_NURSERY_KB` shrinks the nursery; `scripts/engine/gcstress.sh` runs the stress sweep
 
 ## Auto-Formatting
 
@@ -96,7 +96,7 @@ for explicit targets, test selection, parallelism and scoped cleaning.
 
 ### FPC 3.2.2 and 3.2.4
 
-CI builds with FPC 3.3.1 from fpc-toolchain (`3.3.1+9`), which the engine in `source/g2` needs (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)). The source outside `source/g2` must keep building on FPC 3.2.2 and 3.2.4 as well. Three RTL interfaces differ between those two, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+CI builds with FPC 3.3.1 from fpc-toolchain (`3.3.1+9`), which the engine in `source/engine` needs (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)). The source outside `source/engine` must keep building on FPC 3.2.2 and 3.2.4 as well. Three RTL interfaces differ between those two, and `Shared.inc` defines a symbol for each on 3.2.2 only:
 
 - `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
 - `GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY` — a `Generics.Collections` list's virtual `Notify` takes its value as `constref` on 3.2.2 and `const` on 3.2.4 (and Delphi); an override declares it the same way (`TUnicodeStringList`).
@@ -335,8 +335,8 @@ Read from stdin with `-`. `--verbose` prints each run's classification;
 without it the harness is silent and communicates only through its exit code,
 which is what `afl-fuzz` needs. `--grammar` reads the input's bytes as the
 choices of a program generator (`Goccia.Fuzz.Generator`) and compares the two
-runs' output; see [G2 — GocciaFuzzHarness](../g2/README.md#gocciafuzzharness) for that mode and
-`scripts/g2/grammar-fuzz.py`.
+runs' output; see [G2 — GocciaFuzzHarness](../engine/README.md#gocciafuzzharness) for that mode and
+`scripts/engine/grammar-fuzz.py`.
 
 ### Seed corpus
 
@@ -412,10 +412,10 @@ it saved.
 
 This command line, like the scheduled workflow's, compiles with `config.cfg`
 alone. The G2 applications build with the unit and include paths `build.pas`
-adds (`G2Args`: `source/g2`, the generated prelude includes and their
+adds (`GocciaArgs`: `source/engine`, the generated prelude includes and their
 snapshot), which `config.cfg` does not name, so a direct `fpc` build of the
 harness or the test runner needs those paths too; extra options for a
-`build.pas` build of the engine go in `G2_FPC_FLAGS`.
+`build.pas` build of the engine go in `GOCCIA_FPC_FLAGS`.
 
 ### Reproducing a finding
 
@@ -446,7 +446,7 @@ That must print a backtrace and exit `1`.
 ### Modules are denied, deliberately
 
 The harness installs a module resolver that refuses every specifier before it
-probes a path, and a file-read hook (`SetFileReadHook` in `G2.Modules`) that
+probes a path, and a file-read hook (`SetFileReadHook` in `Goccia.Modules`) that
 refuses every read. A fuzz input must not be able to reach the host
 filesystem — without this, `import "/etc/passwd"` would be a file read driven
 by attacker-shaped input. An input that imports is therefore classified
@@ -470,7 +470,7 @@ The eight seeds hold primitives, sparse arrays, shared and cyclic graphs,
 symbols and built-ins, descriptors and integrity levels, closures with
 accessors and bound functions, and errors with wrapper objects. G2's writer
 has no codec for a generator's frame, a Map's table or a buffer's bytes
-(`G2.HeapSnapshot`), so no seed holds one. A snapshot names the code its
+(`Goccia.HeapSnapshot`), so no seed holds one. A snapshot names the code its
 closures were compiled from, so the seeds and the restore run one program:
 after restoring an input it walks up to 4,096 distinct objects, at most 12
 deep, reading descriptors and prototypes and calling each function in one of
@@ -527,7 +527,7 @@ per character or per digit is slow under it; see
 
 Both run on Linux only, and neither runs per-PR. Findings upload as artifacts
 with a 30-day retention. Neither looks inside G2's own heap: G2 allocates its
-cells in its nursery and old-space pages (`G2.Core`), so a read of a moved or
+cells in its nursery and old-space pages (`Goccia.Core`), so a read of a moved or
 freed cell reads memory those pages still own, and a missing root is a
 [GC stress](#gc-stress) finding instead.
 
@@ -541,30 +541,30 @@ build: its binaries make the window certain at run time.
 
 | Switch | Effect |
 |---|---|
-| `--gc-stress` (`g2` command line) | Every allocation runs a minor collection, and every eighth minor collection a major one (`GCStress` in `G2.Core`). The JIT's and the optimizing tier's inline allocations take the helper path, which allocates through the collector. |
-| `--gc-verify` (`g2` command line) | After each collection, `VerifyHeap` checks that no live old cell points into the nursery or at a freed cell, and the VM checks that a nursery pointer it is about to use (a closure's upvalues, a captured register) still leads to the start of a live cell (`NurseryCellOK`). A minor collection fills the emptied nursery with `$DB`, so a pointer a collection did not update meets a header no cell has. A failure prints the cell and field and exits 9. |
-| `G2_NURSERY_KB=<n>` (environment) | Sizes the nursery in KB, so collections run every few kilobytes. `g2` reads it for its own engine and, with `--test`, for a test file's engine (`EngineNurseryBytes` in `G2.Engine`); the test262 host reads it with `G2_GC_VERIFY` (`G2.Test262`). |
-| `G2_ROOTCHECK=1` (environment, `g2`) | Each native call must leave the temporary root stack as it found it; an imbalance prints the native and exits 9. |
-| `G2_HOST=1` (environment, `g2`) | Installs the hidden `G2Host` object, whose `gc()` collects at once. |
+| `--gc-stress` (`goccia` command line) | Every allocation runs a minor collection, and every eighth minor collection a major one (`GCStress` in `Goccia.Core`). The JIT's and the optimizing tier's inline allocations take the helper path, which allocates through the collector. |
+| `--gc-verify` (`goccia` command line) | After each collection, `VerifyHeap` checks that no live old cell points into the nursery or at a freed cell, and the VM checks that a nursery pointer it is about to use (a closure's upvalues, a captured register) still leads to the start of a live cell (`NurseryCellOK`). A minor collection fills the emptied nursery with `$DB`, so a pointer a collection did not update meets a header no cell has. A failure prints the cell and field and exits 9. |
+| `GOCCIA_NURSERY_KB=<n>` (environment) | Sizes the nursery in KB, so collections run every few kilobytes. `goccia` reads it for its own engine and, with `--test`, for a test file's engine (`EngineNurseryBytes` in `Goccia.Engine`); the test262 host reads it with `GOCCIA_GC_VERIFY` (`Goccia.Test262`). |
+| `GOCCIA_ROOTCHECK=1` (environment, `goccia`) | Each native call must leave the temporary root stack as it found it; an imbalance prints the native and exits 9. |
+| `GOCCIA_HOST=1` (environment, `goccia`) | Installs the hidden `GocciaHost` object, whose `gc()` collects at once. |
 
 ```bash
-./build.pas g2
-G2_NURSERY_KB=16 build/g2/g2 --gc-verify script.js
-G2_NURSERY_KB=16 build/g2/g2 --test --gc-verify tests/built-ins/Promise/prototype/then.js
+./build.pas engine
+GOCCIA_NURSERY_KB=16 build/engine/goccia --gc-verify script.js
+GOCCIA_NURSERY_KB=16 build/engine/goccia --test --gc-verify tests/built-ins/Promise/prototype/then.js
 ```
 
-`scripts/g2/gcstress.sh` runs the whole sweep and writes
-`build/g2/gcstress.txt`:
+`scripts/engine/gcstress.sh` runs the whole sweep and writes
+`build/engine/gcstress.txt`:
 
-- every Web Tooling digest bundle and JetStream bundle (`G2_WT_DIR`,
-  `G2_JS_DIR`; the AWFY bundles in `G2_AWFY_DIR` too, when given, without
+- every Web Tooling digest bundle and JetStream bundle (`GOCCIA_WT_DIR`,
+  `GOCCIA_JS_DIR`; the AWFY bundles in `GOCCIA_AWFY_DIR` too, when given, without
   `--gc-verify`) with a 256 KB nursery (the script's argument changes it) and
-  `--gc-verify`, each digest compared with `scripts/g2/digests.txt`;
-- each regression script in `scripts/g2/regress` with 16, 64 and 128 KB
-  nurseries, `--gc-verify` and `G2_HOST=1`; a first line `// g2-flags: ...`
+  `--gc-verify`, each digest compared with `scripts/engine/digests.txt`;
+- each regression script in `scripts/engine/regress` with 16, 64 and 128 KB
+  nurseries, `--gc-verify` and `GOCCIA_HOST=1`; a first line `// goccia-flags: ...`
   adds options such as `--gc-stress`, and each script prints `ok` last;
-- every test file under `tests/` through `scripts/g2/gcstress-tests.py`, which
-  runs it with `g2 --test` twice, as is and with a 16 KB nursery and
+- every test file under `tests/` through `scripts/engine/gcstress-tests.py`, which
+  runs it with `goccia --test` twice, as is and with a 16 KB nursery and
   `--gc-verify`, and reports a file whose totals differ or whose stressed run
   crashes.
 
@@ -572,7 +572,7 @@ It prints the number of `OK` lines and every `BAD` and `TIMEOUT` line. A
 `TIMEOUT` is not a failure: verifying a large heap at every collection is slow,
 and the deep-chain tests under `tests/built-ins/Goccia/gc` take longest. Run it
 for any change near allocation or rooting, as part of the
-[G2 gate](../g2/README.md#gate); CI does not run it.
+[G2 gate](../engine/README.md#gate); CI does not run it.
 
 Each collection under stress costs time proportional to the live heap, so a
 test that builds N objects costs time proportional to N times the heap. A test
@@ -593,10 +593,10 @@ test.runIf(deepNestRuns)("a read through 100,000 nested Proxies throws RangeErro
 `./build.pas --gc-stress` built the previous engine's stress variant and now
 stops with an error that names these run-time switches. The scheduled
 [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
-`scripts/g2/gc-stress-ci.py`: `tests/` through `gcstress-tests.py`, the
+`scripts/engine/gc-stress-ci.py`: `tests/` through `gcstress-tests.py`, the
 regression scripts at 16, 64 and 128 KB nurseries, and the GC-sensitive
 test262 directories through `GocciaTest262Runner` plainly and with
-`G2_NURSERY_KB=16 G2_GC_VERIFY=1`. A test that passes plainly and fails under
+`GOCCIA_NURSERY_KB=16 GOCCIA_GC_VERIFY=1`. A test that passes plainly and fails under
 stress is a finding.
 
 ## Depth and Fuzz Probe
@@ -623,7 +623,7 @@ bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17
 ```
 
 G2's production and development builds differ only in debug information
-(`G2Args` in `build.pas` gives both `-dPRODUCTION`), and the engine's units
+(`GocciaArgs` in `build.pas` gives both `-dPRODUCTION`), and the engine's units
 compile without FPC's stack checking in both. The engine guards the native
 stack itself: a call that native code makes once that stack runs low
 (`NativeStackLow`) is refused with `RangeError: Maximum call stack size

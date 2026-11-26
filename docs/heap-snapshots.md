@@ -4,8 +4,8 @@
 
 ## Executive Summary
 
-- **A small writer and reader** — `G2.HeapSnapshot` writes what one root value reaches (`SnapshotWrite`) and restores it in a fresh engine set up the same way (`SnapshotRestore`)
-- **Where it is used** — GocciaTestRunner's `--heap-snapshots` round-trips every object `expect()` is given ([below](#round-tripping-the-javascript-suite)), and GocciaFuzzHarness fuzzes the reader with real snapshots. `TG2Engine` exposes only that round trip; G2 has no embedder session or pause checkpoint
+- **A small writer and reader** — `Goccia.HeapSnapshot` writes what one root value reaches (`SnapshotWrite`) and restores it in a fresh engine set up the same way (`SnapshotRestore`)
+- **Where it is used** — GocciaTestRunner's `--heap-snapshots` round-trips every object `expect()` is given ([below](#round-tripping-the-javascript-suite)), and GocciaFuzzHarness fuzzes the reader with real snapshots. `TGocciaEngine` exposes only that round trip; G2 has no embedder session or pause checkpoint
 - **Refusal is normal** — A value whose state lives outside the cells the writer copies (a Map's table, a buffer's bytes, a promise's reactions, a generator's frame, a Proxy, a Date, a RegExp) refuses the snapshot with a reason
 - **Built-ins are named, not written** — What `globalThis` reaches before the run's code is named by its path; a built-in is written as that name and a fingerprint of its state, and a restore refuses a built-in the run changed
 - **Functions are named by their code's place** — A closure is written with its bindings, and its code as a path in the entry's or a module's function tree; the restoring engine compiles that code without running it
@@ -51,7 +51,7 @@ Three calls, all on the engine's thread:
 3. `SnapshotWrite(Root, Data, Refusal)` at idle. It returns `False` with the reason in `Refusal` when it cannot write.
    It allocates nothing on the heap.
 
-`TG2Engine` makes these calls when its `HeapSnapshots` property is set before `Run`: it names the built-ins before the
+`TGocciaEngine` makes these calls when its `HeapSnapshots` property is set before `Run`: it names the built-ins before the
 entry compiles, notes the entry once compiled, and `HeapSnapshotObserved` writes every object `expect()` was given.
 
 ### The format
@@ -123,7 +123,7 @@ accept one from a script or a user.
 ## Testing
 
 GocciaScript's own suite exercises the round trip ([below](#round-tripping-the-javascript-suite)): PR CI and the G2
-workflow (`.github/workflows/g2.yml`) run `tests/` with `--heap-snapshots`, and the G2 workflow fails when any
+workflow (`.github/workflows/engine.yml`) run `tests/` with `--heap-snapshots`, and the G2 workflow fails when any
 round trip fails.
 
 GocciaFuzzHarness restores one input as a snapshot with `--heap-snapshot <file>` and writes its own seed snapshots
@@ -137,11 +137,11 @@ the reader with AFL++ from them ([Tooling — Fuzzing](contributing/tooling.md#f
 
 `./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress` keeps each distinct object passed to
 `expect()` (the `observe` native in the testing API, `SnapshotObserve`), rooted until the file finishes; a primitive
-is not observed. Once the file's tests have run without an error, `TG2Engine.HeapSnapshotObserved` writes each object
+is not observed. Once the file's tests have run without an error, `TGocciaEngine.HeapSnapshotObserved` writes each object
 at idle and describes it (`SnapshotDescribe`). Objects are therefore checked in their **final file state**, not their
 state at the assertion: writing inside `expect()` would write a running frame.
 
-After the file's engine is freed, each written object is restored by `TG2Engine.HeapSnapshotVerify` in a fresh
+After the file's engine is freed, each written object is restored by `TGocciaEngine.HeapSnapshotVerify` in a fresh
 engine of its own, set up as the file's was (globals, testing API, settings). It passes when writing the restored
 object again gives the same bytes and its description matches the original's. The description lists each object's
 kind, extensibility, prototype, code position or primitive, and its own keys in order with their descriptors,

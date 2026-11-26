@@ -1,17 +1,17 @@
 program GocciaRunner;
 
 { GocciaRunner: the command line, configs, trust and capability policy (the
-  base class), each entry file run by a TG2Engine (G2.Embed).
+  base class), each entry file run by a TGocciaEngine (Goccia.Embed).
   `./build.pas runner` builds it as build/GocciaRunner.
 
   Sandbox mode runs each program on a G2 engine over the virtual filesystem
-  (Goccia.CLI.G2SandboxHost).
+  (Goccia.CLI.SandboxHost).
 
   Install mode (--add, --remove, --install, --update) is the old runner's
   (Goccia.Packages.Install); provider imports resolve through the shared
   resolver, granted, audited and checked against their pins here.
 
-  Bytecode files are G2's own (G2.Artifact, from GocciaBundler on G2). }
+  Bytecode files are G2's own (Goccia.Artifact, from GocciaBundler on G2). }
 
 {$I Goccia.inc}
 
@@ -34,8 +34,8 @@ uses
   Goccia.CLI.Application,
   Goccia.CLI.JSON.Reporter,
   Goccia.CLI.FileSettings,
-  Goccia.CLI.G2FileEngine,
-  Goccia.CLI.G2SandboxHost,
+  Goccia.CLI.FileEngine,
+  Goccia.CLI.SandboxHost,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.SandboxMode,
@@ -66,12 +66,12 @@ uses
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
 
-  G2.Artifact,
-  G2.Core,
-  G2.Embed,
-  G2.HostAPI,
-  G2.Sandbox,
-  G2.VM,
+  Goccia.Artifact,
+  Goccia.Core,
+  Goccia.Embed,
+  Goccia.HostAPI,
+  Goccia.Sandbox,
+  Goccia.VM,
   Goccia.ThreadCleanupRegistry;
 
 const
@@ -83,7 +83,7 @@ type
   EGocciaInstallModeFailure = class(Exception);
 
   { one file's part of a JSON report }
-  TG2FileReport = record
+  TGocciaFileReport = record
     FileName: string;
     Ok: Boolean;
     OutputText, StdoutText, StderrText: string;
@@ -94,9 +94,9 @@ type
     Memory: TCLIJSONMemoryStats;
   end;
 
-  TG2RunnerApp = class(TGocciaCLIApplication)
+  TGocciaRunnerApp = class(TGocciaCLIApplication)
   private
-    FReports: array of TG2FileReport;
+    FReports: array of TGocciaFileReport;
     { a directory's files run at once without a JSON report (GocciaRunner's RunScriptsParallel): each prints its
       console output and its failure, not its banner or value }
     FQuietWorkers: Boolean;
@@ -131,17 +131,17 @@ type
       section; FSandboxRequestedByArguments: the raw arguments switch it on, known before any option is parsed }
     FSandboxActive: Boolean;
     FSandboxRequestedByArguments: Boolean;
-    FSandboxHost: TG2SandboxHost;
+    FSandboxHost: TGocciaSandboxHost;
     { --profile: the main thread's profilers, which each file's thread records into (profiled files run one at a
       time, as GocciaRunner runs them on its one reporting thread) }
     FProfiler: TGocciaProfiler;
     FCompileProfiler: TGocciaCompileProfiler;
     function JobCount(const AFileCount: Integer): Integer;
     function SandboxDeterministic: Boolean;
-    procedure ConfigureSandboxEngine(const ARun: TG2SandboxRun);
-    function FormatSandboxFailure(const ARun: TG2SandboxRun; const AResult: TG2RunResult): string;
-    function ResolveSandboxEntry(const AHost: TG2SandboxHost; const ARequest: TGocciaSandboxModeRequest): string;
-    procedure WriteSandboxDiff(const AHost: TG2SandboxHost; const ARequest: TGocciaSandboxModeRequest);
+    procedure ConfigureSandboxEngine(const ARun: TGocciaSandboxRun);
+    function FormatSandboxFailure(const ARun: TGocciaSandboxRun; const AResult: TGocciaRunResult): string;
+    function ResolveSandboxEntry(const AHost: TGocciaSandboxHost; const ARequest: TGocciaSandboxModeRequest): string;
+    procedure WriteSandboxDiff(const AHost: TGocciaSandboxHost; const ARequest: TGocciaSandboxModeRequest);
     procedure VerifyRootConfig;
     function ConfigRequestsSandbox: Boolean;
     procedure ApplyConfigSandboxLimits;
@@ -150,9 +150,9 @@ type
     procedure RunSandbox(const ARequest: TGocciaSandboxModeRequest);
     function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
     function HostOnlyCommandLineOptions(const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
-    function DefineCommandLineVirtualModules(const AEngine: TG2Engine; out AError: string): Boolean;
-    function FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
-      AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+    function DefineCommandLineVirtualModules(const AEngine: TGocciaEngine; out AError: string): Boolean;
+    function FailureText(const AFileName: string; const AResult: TGocciaRunResult; const ASource: TStringList;
+      AEngine: TGocciaEngine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
       AFrames, ASuggestions, AColor: Boolean): string;
     procedure RunSource(const AFileName: string; const ASource: TStringList; AReportIndex: Integer = -1);
     procedure RunFilesParallel(const AFiles: TStringList);
@@ -162,11 +162,11 @@ type
       AStart: Int64);
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
     procedure RunFile(const AFileName: string);
-    function InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
-    function DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
+    function InjectGlobals(const AEngine: TGocciaEngine; out AError: string): Boolean;
+    function DefineVirtualModules(const AEngine: TGocciaEngine; const AFileConfigPath: string;
       out AError: string): Boolean;
     procedure ReportFailure(const AFileName: string;
-      const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
+      const AResult: TGocciaRunResult; const ASource: TStringList; AEngine: TGocciaEngine; const AWithheld: string);
     function HostEnvironmentPath(const AFileConfig: TConfigEntryArray; ADeterministic: Boolean): string;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -199,11 +199,11 @@ type
   end;
 
 type
-  { One entry file on a thread of its own: a G2 engine's state is its thread's (G2.Engine), so each file gets a
+  { One entry file on a thread of its own: a G2 engine's state is its thread's (Goccia.Engine), so each file gets a
     fresh engine there and nothing of the previous one survives. The thread compiles with the JIT. }
-  TG2FileThread = class(TThread)
+  TGocciaFileThread = class(TThread)
   private
-    FApp: TG2RunnerApp;
+    FApp: TGocciaRunnerApp;
     FFileName: string;
     FSource: TStringList;
     FOwnsSource: Boolean;
@@ -216,7 +216,7 @@ type
     procedure Execute; override;
   end;
 
-procedure TG2FileThread.Execute;
+procedure TGocciaFileThread.Execute;
 var
   OwnsJit: Boolean;
   Start: Int64;
@@ -291,7 +291,7 @@ begin
   Result := False;
 end;
 
-procedure TG2RunnerApp.Configure;
+procedure TGocciaRunnerApp.Configure;
 begin
   FSandboxRequestedByArguments := ArgumentsRequestSandbox;
   AddEngineOptions;
@@ -351,7 +351,7 @@ end;
 
 { Host mode grants everything the command line and trusted config ask for. Sandbox mode loads no host files and has
   no node_modules lookup, so net is the only capability it grants (ADR 0122). }
-function TG2RunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+function TGocciaRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
   if FSandboxActive then
     Result := [gcNet]
@@ -359,12 +359,12 @@ begin
     Result := ALL_CAPABILITIES;
 end;
 
-function TG2RunnerApp.HonorsSandboxSection: Boolean;
+function TGocciaRunnerApp.HonorsSandboxSection: Boolean;
 begin
   Result := True;
 end;
 
-function TG2RunnerApp.CapabilityPolicyName: string;
+function TGocciaRunnerApp.CapabilityPolicyName: string;
 begin
   if FSandboxActive then
     Result := Name + ' sandbox mode'
@@ -374,17 +374,17 @@ end;
 
 { --entry names the program, and the sandbox options switch to a mode that never reads stdin, so neither leaves the
   run without input. Checked before config is applied, so Present means the command line. }
-function TG2RunnerApp.HasNonPathInput: Boolean;
+function TGocciaRunnerApp.HasNonPathInput: Boolean;
 begin
   Result := (SandboxOptions.CommandLineActivation <> '') or SandboxOptions.Entry.Present or InstallModeActive;
 end;
 
-function TG2RunnerApp.InstallModeActive: Boolean;
+function TGocciaRunnerApp.InstallModeActive: Boolean;
 begin
   Result := FAddPackages.Present or FRemovePackages.Present or FInstallPackages.Present or FUpdatePackages.Present;
 end;
 
-function TG2RunnerApp.ExclusiveModeName: string;
+function TGocciaRunnerApp.ExclusiveModeName: string;
 begin
   if FAddPackages.Present then
     Result := '--add'
@@ -400,7 +400,7 @@ end;
 
 { Install mode runs on its own, like the trust modes: no input files, no sandbox, and one of --add/--remove,
   --install, or --update. Its modifiers belong to one mode each. }
-procedure TG2RunnerApp.ValidateInstallMode(const APaths: TStringList);
+procedure TGocciaRunnerApp.ValidateInstallMode(const APaths: TStringList);
 var
   Modes: Integer;
 begin
@@ -427,12 +427,12 @@ begin
       [ExclusiveModeName]);
 end;
 
-procedure TG2RunnerApp.WriteInstallLine(const ALine: string);
+procedure TGocciaRunnerApp.WriteInstallLine(const ALine: string);
 begin
   WriteLn(ALine);
 end;
 
-procedure TG2RunnerApp.AuditProviderFetch(const AAllowed: Boolean; const ASubject, AReason: string);
+procedure TGocciaRunnerApp.AuditProviderFetch(const AAllowed: Boolean; const ASubject, AReason: string);
 begin
   if AAllowed then
     EmitApplicationAudit(gckImportProvider, gcdAllow, ASubject, AReason)
@@ -440,7 +440,7 @@ begin
     EmitApplicationAudit(gckImportProvider, gcdDeny, ASubject, AReason);
 end;
 
-procedure TG2RunnerApp.AuditProviderInstall(const AAllowed: Boolean; const ASubject, AReason: string);
+procedure TGocciaRunnerApp.AuditProviderInstall(const AAllowed: Boolean; const ASubject, AReason: string);
 begin
   if AAllowed then
     EmitApplicationAudit(gckImportProviderInstall, gcdAllow, ASubject, AReason)
@@ -452,7 +452,7 @@ end;
   from the working directory (created by --add when there is none). A root config in another format keeps the
   import map from being edited too. The capability set is the command line's plus the trusted requests of the
   config governing the import map, as for a run. }
-procedure TG2RunnerApp.RunInstallMode;
+procedure TGocciaRunnerApp.RunInstallMode;
 var
   Capabilities: TGocciaCapabilities;
   Editable: Boolean;
@@ -546,14 +546,14 @@ begin
   end;
 end;
 
-function TG2RunnerApp.ExtraHelpText: string;
+function TGocciaRunnerApp.ExtraHelpText: string;
 begin
   Result := SandboxModeHelpNote;
 end;
 
 { The --allow-* flags of capabilities sandbox mode cannot grant. They are command-line-only, so Present means the
   command line. }
-function TG2RunnerApp.HostCapabilityAllowFlags: TGocciaCapabilityScopes;
+function TGocciaRunnerApp.HostCapabilityAllowFlags: TGocciaCapabilityScopes;
 var
   Capability: TGocciaCapability;
 begin
@@ -569,7 +569,7 @@ end;
 { The host-mode options given on the command line. The same keys from a config are ignored in sandbox mode, so one
   project config serves both modes. ABeforeConfig: no config has been applied yet, so Present means the command
   line. }
-function TG2RunnerApp.HostOnlyCommandLineOptions(const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
+function TGocciaRunnerApp.HostOnlyCommandLineOptions(const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
 
   procedure Check(const AOption: TOptionBase);
   begin
@@ -599,7 +599,7 @@ end;
 
 { Sandbox mode switched on from the command line is known before any config is read, so the trust gate and the
   capability checks see the right set, and a host-filesystem grant gets an error that says why. }
-procedure TG2RunnerApp.ValidateCommandLine(const APaths: TStringList);
+procedure TGocciaRunnerApp.ValidateCommandLine(const APaths: TStringList);
 begin
   inherited ValidateCommandLine(APaths);
   ValidateInstallMode(APaths);
@@ -611,7 +611,7 @@ begin
   FSandboxActive := True;
 end;
 
-function TG2RunnerApp.ConfigSandboxReason(const AVerdict: TGocciaConfigTrustVerdict): string;
+function TGocciaRunnerApp.ConfigSandboxReason(const AVerdict: TGocciaConfigTrustVerdict): string;
 begin
   Result := Format('the "%s" section of %s', [SANDBOX_CONFIG_KEY, AVerdict.Request.Sandbox.SourcePath]);
 end;
@@ -619,7 +619,7 @@ end;
 { A root-config sandbox section switches sandbox mode on too; decided here so a host-mode option gets the
   sandbox-mode error rather than a host-mode check's. Its trust is checked in ExecuteWithPaths, once the audit log
   is open. --ignore-config-permissions ignores the section. }
-procedure TG2RunnerApp.Validate;
+procedure TGocciaRunnerApp.Validate;
 var
   Verdict: TGocciaConfigTrustVerdict;
 begin
@@ -650,7 +650,7 @@ begin
 end;
 
 { one reporting thread accumulates every profiled file, as in GocciaRunner }
-function TG2RunnerApp.JobCount(const AFileCount: Integer): Integer;
+function TGocciaRunnerApp.JobCount(const AFileCount: Integer): Integer;
 begin
   if ProfilerOptions.Mode.Present then
     Result := 1
@@ -660,7 +660,7 @@ end;
 
 { In sandbox mode stdout carries only the guest's output and the diff; the guest's own failures are reported by
   RunSandbox, so what reaches here is the host's (a copy that failed, an invalid value) and goes to stderr. }
-procedure TG2RunnerApp.HandleError(const AException: Exception);
+procedure TGocciaRunnerApp.HandleError(const AException: Exception);
 begin
   if AException is EGocciaInstallModeFailure then
   begin
@@ -676,12 +676,12 @@ begin
     inherited HandleError(AException);
 end;
 
-function TG2RunnerApp.StdinUsage: TGocciaStdinUsage;
+function TGocciaRunnerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefaultWithREPL;
 end;
 
-function TG2RunnerApp.UsageLine: string;
+function TGocciaRunnerApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]' + sLineBreak +
     '       ' + Name + ' <file> [--copy <host>[=<sandbox>]]... [options]';
@@ -691,45 +691,45 @@ end;
 
 
 { A config's `output` is ignored in sandbox mode, whose stdout carries the guest's output and the diff. }
-function TG2RunnerApp.IsJsonOutput: Boolean;
+function TGocciaRunnerApp.IsJsonOutput: Boolean;
 begin
   Result := (not FSandboxActive) and FOutputPath.Present and
     ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
 end;
 
-function TG2RunnerApp.IsCompactJsonOutput: Boolean;
+function TGocciaRunnerApp.IsCompactJsonOutput: Boolean;
 begin
   Result := (not FSandboxActive) and FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
 { The run's error as the JSON report's error object, as GocciaRunner's ExceptionToCLIJSONErrorInfo makes it }
 function ErrorInfoOf(const AFileName: string;
-  const AResult: TG2RunResult; const AEngineOptions: TGocciaEngineOptions): TCLIJSONErrorInfo;
+  const AResult: TGocciaRunResult; const AEngineOptions: TGocciaEngineOptions): TCLIJSONErrorInfo;
 begin
   Result := DefaultCLIJSONErrorInfo;
   Result.FileName := AFileName;
   case AResult.Aborted of
-    g2aTimeout:
+    gaTimeout:
       begin
         Result.ErrorType := 'TimeoutError';
         Result.Message := Format('file timed out after %dms', [AEngineOptions.Timeout.Value]);
         Exit;
       end;
-    g2aInstructionLimit:
+    gaInstructionLimit:
       begin
         Result.ErrorType := 'InstructionLimitError';
         Result.Message := Format('Execution exceeded instruction limit of %d',
           [AEngineOptions.MaxInstructions.Value]);
         Exit;
       end;
-    g2aMemoryLimit:
+    gaMemoryLimit:
       begin
         { GocciaRunner's name for the refusal no script can catch (TGocciaMemoryLimitError) }
         Result.ErrorType := 'MemoryLimitError';
         Result.Message := UTF8Encode(AResult.ErrorText);
         Exit;
       end;
-    g2aHostAbort:
+    gaHostAbort:
       begin
         { the only host abort: the audit log could not be written (GocciaRunner's delivery error) }
         Result.ErrorType := 'EGocciaCapabilityAuditDeliveryError';
@@ -765,7 +765,7 @@ end;
 
 { one engine's memory.gc, from its heap when made (AStart) and after its run (AEnd), with its thread's memory
   manager over the same span (memory.heap); G2 does not count objects, so their counts stay 0 }
-function AggregateMemoryStats(const AReports: array of TG2FileReport; AParallel: Boolean;
+function AggregateMemoryStats(const AReports: array of TGocciaFileReport; AParallel: Boolean;
   const AHeapStart, AHeapEnd: THeapStatus; AWorkers: Integer): TCLIJSONMemoryStats;
 var
   Stats: array of TCLIJSONMemoryStats;
@@ -774,13 +774,13 @@ begin
   SetLength(Stats, Length(AReports));
   for I := 0 to High(AReports) do
     Stats[I] := AReports[I].Memory;
-  Result := Goccia.CLI.G2FileEngine.AggregateMemoryStats(Stats, AParallel, AHeapStart, AHeapEnd, AWorkers);
+  Result := Goccia.CLI.FileEngine.AggregateMemoryStats(Stats, AParallel, AHeapStart, AHeapEnd, AWorkers);
 end;
 
 { the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON. As
   GocciaRunner's: one file reports its memory at the top level; files at once report each file's and their sum,
   files one after another (one worker) only the sum }
-procedure TG2RunnerApp.PrintJsonReport;
+procedure TGocciaRunnerApp.PrintJsonReport;
 var
   I: Integer;
   Ok: Boolean;
@@ -845,41 +845,41 @@ begin
     IsCompactJsonOutput));
 end;
 
-function TG2RunnerApp.InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
+function TGocciaRunnerApp.InjectGlobals(const AEngine: TGocciaEngine; out AError: string): Boolean;
 begin
-  Result := Goccia.CLI.G2FileEngine.InjectGlobals(AEngine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles,
+  Result := Goccia.CLI.FileEngine.InjectGlobals(AEngine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles,
     FInlineGlobals, AError);
 end;
 
-function TG2RunnerApp.DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
+function TGocciaRunnerApp.DefineVirtualModules(const AEngine: TGocciaEngine; const AFileConfigPath: string;
   out AError: string): Boolean;
 begin
-  Result := Goccia.CLI.G2FileEngine.DefineVirtualModules(AEngine, RootConfigPath, AFileConfigPath, EngineOptions,
+  Result := Goccia.CLI.FileEngine.DefineVirtualModules(AEngine, RootConfigPath, AFileConfigPath, EngineOptions,
     AError);
 end;
 
-function TG2RunnerApp.DefineCommandLineVirtualModules(const AEngine: TG2Engine; out AError: string): Boolean;
+function TGocciaRunnerApp.DefineCommandLineVirtualModules(const AEngine: TGocciaEngine; out AError: string): Boolean;
 begin
-  Result := Goccia.CLI.G2FileEngine.DefineCommandLineVirtualModules(AEngine, EngineOptions, AError);
+  Result := Goccia.CLI.FileEngine.DefineCommandLineVirtualModules(AEngine, EngineOptions, AError);
 end;
 
-function TG2RunnerApp.FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
-  AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+function TGocciaRunnerApp.FailureText(const AFileName: string; const AResult: TGocciaRunResult; const ASource: TStringList;
+  AEngine: TGocciaEngine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
   AFrames, ASuggestions, AColor: Boolean): string;
 begin
-  Result := Goccia.CLI.G2FileEngine.FailureText(AFileName, AResult, ASource, AEngine, AWithheld, AFrameSource, AFrames,
+  Result := Goccia.CLI.FileEngine.FailureText(AFileName, AResult, ASource, AEngine, AWithheld, AFrameSource, AFrames,
     ASuggestions, AColor, EngineOptions.Timeout.ValueOr(0), EngineOptions.MaxInstructions.ValueOr(0));
 end;
 
-procedure TG2RunnerApp.ReportFailure(const AFileName: string;
-  const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
+procedure TGocciaRunnerApp.ReportFailure(const AFileName: string;
+  const AResult: TGocciaRunResult; const ASource: TStringList; AEngine: TGocciaEngine; const AWithheld: string);
 begin
   WriteLn(FailureText(AFileName, AResult, ASource, AEngine, AWithheld, nil, True, True, IsColorTerminal));
 end;
 
 { --host-environment's module, else a config's "host-environment" (against that config's directory): the path,
   or '' for none. The command line's names a file from the working directory. }
-{ a bytecode file's bytes, at most the format's limit (G2.Artifact checks them) }
+{ a bytecode file's bytes, at most the format's limit (Goccia.Artifact checks them) }
 function ReadBytecodeFile(const AFileName: string): RawByteString;
 var
   Stream: TFileStream;
@@ -887,8 +887,8 @@ begin
   Result := '';
   Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
   try
-    if Stream.Size > G2_GBC_MAX_FILE_BYTES then
-      raise Exception.CreateFmt('Bytecode file %s exceeds the %d byte limit', [AFileName, G2_GBC_MAX_FILE_BYTES]);
+    if Stream.Size > GOCCIA_GBC_MAX_FILE_BYTES then
+      raise Exception.CreateFmt('Bytecode file %s exceeds the %d byte limit', [AFileName, GOCCIA_GBC_MAX_FILE_BYTES]);
     SetLength(Result, Stream.Size);
     if Stream.Size > 0 then
       Stream.ReadBuffer(Result[1], Stream.Size);
@@ -899,7 +899,7 @@ end;
 
 { --source-map: the JSX transform's map of the file (GocciaRunner's WriteSourceMapIfEnabled), beside it as
   <file>.map or at the path given; nothing for a file the transform leaves alone }
-procedure TG2RunnerApp.WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
+procedure TGocciaRunnerApp.WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
 var
   Transformed: TGocciaJSXTransformResult;
   MapPath, Text: string;
@@ -922,7 +922,7 @@ begin
   end;
 end;
 
-function TG2RunnerApp.HostEnvironmentPath(const AFileConfig: TConfigEntryArray;
+function TGocciaRunnerApp.HostEnvironmentPath(const AFileConfig: TConfigEntryArray;
   ADeterministic: Boolean): string;
 var
   Entry: TConfigEntry;
@@ -961,30 +961,30 @@ begin
     raise EFOpenError.Create('Module not found: "' + Written + '"');
 end;
 
-procedure TG2RunnerApp.RunSource(const AFileName: string;
+procedure TGocciaRunnerApp.RunSource(const AFileName: string;
   const ASource: TStringList; AReportIndex: Integer);
 var
   FileConfigPath: string;
   FileConfig: TConfigEntryArray;
   Verdict: TGocciaConfigTrustVerdict;
-  Engine: TG2Engine;
-  RunResult: TG2RunResult;
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
   Start: Int64;
-  Capture: TG2ConsoleCapture;
-  Report: TG2FileReport;
+  Capture: TGocciaConsoleCapture;
+  Report: TGocciaFileReport;
   Resolver: TGocciaModuleResolver;
-  Grant: TG2ImportGrant;
+  Grant: TGocciaImportGrant;
   AliasBaseDirectory: string;
   GlobalsError: string;
   HeapStart: THeapStatus;
-  MemoryStart: TG2MemoryStats;
+  MemoryStart: TGocciaMemoryStats;
   Capabilities: TGocciaCapabilities;
   Effective: TGocciaCapabilityAuditEvent;
-  HostError: TG2RunResult;
+  HostError: TGocciaRunResult;
 begin
   Start := GetNanoseconds;
   { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
-  Capture := TG2ConsoleCapture.Create;
+  Capture := TGocciaConsoleCapture.Create;
   Capture.FileName := AFileName;
   try
     FileConfigPath := DiscoverFileConfigPath(AFileName);
@@ -995,7 +995,7 @@ begin
     Verdict := FileConfigVerdict(FileConfigPath, AFileName);
     { the file's import resolution, as GocciaRunner's CreateEngine configures it }
     Capabilities := ResolveEngineCapabilities(FileConfigPath, AFileName);
-    Grant := TG2ImportGrant.Create(Capabilities);
+    Grant := TGocciaImportGrant.Create(Capabilities);
     Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
     Grant.Resolver := Resolver;
     Resolver.SetExtensions(ModuleImportExtensions);
@@ -1025,7 +1025,7 @@ begin
         LeaveCriticalSection(FCoverageLock);
       end;
     end;
-    Engine := TG2Engine.Create;
+    Engine := TGocciaEngine.Create;
     try
       MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
@@ -1054,9 +1054,9 @@ begin
       if LogFileOpen then
         Capture.LogLine := HandleConsoleLog;
       if IsJsonOutput then
-        Engine.ResultForm := g2rfJSON
+        Engine.ResultForm := grfJSON
       else if FPrint.Present and not FQuietWorkers then
-        Engine.ResultForm := g2rfString;
+        Engine.ResultForm := grfString;
       if Capture.Capturing or Capture.Silent or LogFileOpen then
         Engine.OnConsole := Capture.Emit;
       Engine.FailOnUnhandledRejection := True;
@@ -1114,7 +1114,7 @@ begin
       if EngineOptions.MaxInstructions.Present then
         Engine.MaxInstructions := EngineOptions.MaxInstructions.Value;
       { G2's own frame bound unless one is given: a bound keeps compiled code
-        out (G2.VM SetMaxFrames) }
+        out (Goccia.VM SetMaxFrames) }
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       { a refused or unreadable global fails the file before it runs, as the old engine's RuntimeError }
@@ -1154,7 +1154,7 @@ begin
         RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
       if IsJsonOutput then
       begin
-        Report := Default(TG2FileReport);
+        Report := Default(TGocciaFileReport);
         Report.FileName := AFileName;
         Report.Ok := RunResult.Ok;
         Report.OutputText := Capture.OutputText;
@@ -1229,14 +1229,14 @@ begin
   end;
 end;
 
-procedure TG2RunnerApp.RunOnWorker(const AFileName: string;
+procedure TGocciaRunnerApp.RunOnWorker(const AFileName: string;
   const ASource: TStringList);
 var
-  Worker: TG2FileThread;
+  Worker: TGocciaFileThread;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
 begin
-  Worker := TG2FileThread.Create(True, FILE_THREAD_STACK);
+  Worker := TGocciaFileThread.Create(True, FILE_THREAD_STACK);
   try
     Worker.FApp := Self;
     Worker.FFileName := AFileName;
@@ -1254,7 +1254,7 @@ begin
     raise ErrorClass.Create(ErrorMessage);
 end;
 
-function TG2RunnerApp.LoadEntrySource(const AFileName: string): TStringList;
+function TGocciaRunnerApp.LoadEntrySource(const AFileName: string): TStringList;
 begin
   if SameText(ExtractFileExt(AFileName), EXT_GBC) then
   begin
@@ -1266,7 +1266,7 @@ begin
     Result := SourceRegistry.Load(AFileName);
 end;
 
-procedure TG2RunnerApp.RunFile(const AFileName: string);
+procedure TGocciaRunnerApp.RunFile(const AFileName: string);
 var
   Source: TStringList;
 begin
@@ -1280,10 +1280,10 @@ end;
 
 { a JSON report's files run at once, as GocciaRunner's RunJSONFiles does (GetJobCount: --jobs, else the processors,
   at most one per file): each on a thread of its own, at most that many running, their reports in file order }
-procedure TG2RunnerApp.RunFilesParallel(const AFiles: TStringList);
+procedure TGocciaRunnerApp.RunFilesParallel(const AFiles: TStringList);
 var
   I, Next, Oldest, Started: Integer;
-  Workers: array of TG2FileThread;
+  Workers: array of TGocciaFileThread;
   Running: Integer;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
@@ -1306,7 +1306,7 @@ begin
         Dec(Running);
         Inc(Oldest);
       end;
-      Workers[Next] := TG2FileThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next] := TGocciaFileThread.Create(True, FILE_THREAD_STACK);
       Workers[Next].FApp := Self;
       Workers[Next].FFileName := AFiles[Next];
       Workers[Next].FReportIndex := Next;
@@ -1333,12 +1333,12 @@ begin
     raise ErrorClass.Create(ErrorMessage);
 end;
 
-procedure TG2RunnerApp.ReportLoadFailure(AReportIndex: Integer; const AFileName: string;
+procedure TGocciaRunnerApp.ReportLoadFailure(AReportIndex: Integer; const AFileName: string;
   const E: Exception; AStart: Int64);
 var
-  Report: TG2FileReport;
+  Report: TGocciaFileReport;
 begin
-  Report := Default(TG2FileReport);
+  Report := Default(TGocciaFileReport);
   Report.FileName := AFileName;
   Report.Ok := False;
   Report.ErrorInfo := DefaultCLIJSONErrorInfo;
@@ -1361,7 +1361,7 @@ end;
 { a list of files or --multifile sections in text output, as GocciaRunner's RunScripts runs a directory: at once
   when more than one worker is allowed (RunScriptsParallel), else one after another with a blank line between
   them (RunScriptsSequentially) }
-procedure TG2RunnerApp.RunFileList(const AFiles: TStringList);
+procedure TGocciaRunnerApp.RunFileList(const AFiles: TStringList);
 var
   J: Integer;
 begin
@@ -1387,7 +1387,7 @@ begin
     end;
 end;
 
-procedure TG2RunnerApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TGocciaRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I: Integer;
   Source, Files, Found, Names, Single: TStringList;
@@ -1577,7 +1577,7 @@ end;
 { ---- sandbox mode ---- }
 
 { --deterministic in sandbox mode: only the root config, already merged into the options, governs a sandbox run }
-function TG2RunnerApp.SandboxDeterministic: Boolean;
+function TGocciaRunnerApp.SandboxDeterministic: Boolean;
 var
   EmptyConfig: TConfigEntryArray;
 begin
@@ -1589,7 +1589,7 @@ end;
   config's settings (a per-file config walk from a sandbox path would climb the host filesystem), the audit log
   (the root's effective capabilities, a child's decisions to the same sink), the command line's virtual modules
   (a config's read host files and are not applied), and the console }
-procedure TG2RunnerApp.ConfigureSandboxEngine(const ARun: TG2SandboxRun);
+procedure TGocciaRunnerApp.ConfigureSandboxEngine(const ARun: TGocciaSandboxRun);
 var
   EmptyConfig: TConfigEntryArray;
   Verdict: TGocciaConfigTrustVerdict;
@@ -1641,7 +1641,7 @@ end;
 
 { a sandbox run's script error: the root's with the code frame its own modules give, read from the virtual
   filesystem; a child's (which its caller reads) with the location only and none of the host's suggestions }
-function TG2RunnerApp.FormatSandboxFailure(const ARun: TG2SandboxRun; const AResult: TG2RunResult): string;
+function TGocciaRunnerApp.FormatSandboxFailure(const ARun: TGocciaSandboxRun; const AResult: TGocciaRunResult): string;
 begin
   Result := FailureText(ARun.EntryPath, AResult, ARun.Source, ARun.Engine, '', ARun.Context.Fs,
     ARun.Parent = nil, ARun.Parent = nil, False);
@@ -1649,7 +1649,7 @@ end;
 
 { The sandbox path to run. A host entry inside a copied input runs from there; any other host entry is copied,
   without write-back, to /<basename>. }
-function TG2RunnerApp.ResolveSandboxEntry(const AHost: TG2SandboxHost;
+function TGocciaRunnerApp.ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
   const ARequest: TGocciaSandboxModeRequest): string;
 var
   Target: string;
@@ -1668,7 +1668,7 @@ begin
   Result := AHost.CopyIn(ARequest.EntryHost, Target, False);
 end;
 
-procedure TG2RunnerApp.WriteSandboxDiff(const AHost: TG2SandboxHost;
+procedure TGocciaRunnerApp.WriteSandboxDiff(const AHost: TGocciaSandboxHost;
   const ARequest: TGocciaSandboxModeRequest);
 var
   DiffText, Problem: string;
@@ -1696,7 +1696,7 @@ begin
     WriteCommandLineOutputFile(ARequest.DiffFile, Bytes);
 end;
 
-procedure TG2RunnerApp.VerifyRootConfig;
+procedure TGocciaRunnerApp.VerifyRootConfig;
 var
   ConfigPaths: TStringList;
 begin
@@ -1713,7 +1713,7 @@ end;
   invalid value on the command line, or in that config), so it reports on stderr. The config may not be applied
   yet, so it is found here as Execute would find it: --config, else from the first existing path argument, else the
   working directory. }
-function TG2RunnerApp.ConfigRequestsSandbox: Boolean;
+function TGocciaRunnerApp.ConfigRequestsSandbox: Boolean;
 var
   Arguments: TCommandLineArguments;
   ConfigPath, StartDirectory, Candidate: string;
@@ -1783,7 +1783,7 @@ end;
 
 { --max-fs-bytes and --max-fs-nodes are ConfigIgnored, so host mode never reads (or validates) them from a config;
   sandbox mode takes them from the root config here, unless the command line set them. }
-procedure TG2RunnerApp.ApplyConfigSandboxLimits;
+procedure TGocciaRunnerApp.ApplyConfigSandboxLimits;
 var
   Entries: TConfigEntryArray;
   Entry: TConfigEntry;
@@ -1813,7 +1813,7 @@ end;
 
 { The root config's keys that read host files, which sandbox mode does not apply: one warning each, in the style
   of an unsupported capability. }
-procedure TG2RunnerApp.WarnIgnoredConfigHostKeys;
+procedure TGocciaRunnerApp.WarnIgnoredConfigHostKeys;
 const
   HOST_FILE_KEYS: array[0..4] of string = ('modules', 'module', 'globals', 'global', 'host-environment');
   IMPORTS_CONFIG_PREFIX = 'imports.';
@@ -1851,9 +1851,9 @@ begin
     end;
 end;
 
-procedure TG2RunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
+procedure TGocciaRunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
 var
-  Host: TG2SandboxHost;
+  Host: TGocciaSandboxHost;
   FsClock: TSandboxFsClock;
   RunResult: TGocciaSandboxRunResult;
   Report: TStringList;
@@ -1878,7 +1878,7 @@ begin
     FsClock := nil;
   Host := nil;
   try
-    Host := TG2SandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes, FsClock);
+    Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes, FsClock);
     FSandboxHost := Host;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
@@ -1941,7 +1941,7 @@ begin
   end;
 end;
 
-procedure TG2RunnerApp.AfterExecute;
+procedure TGocciaRunnerApp.AfterExecute;
 var
   Mode: Goccia.CLI.Options.TGocciaProfileMode;
   Opcodes, Functions, Compile: Boolean;
@@ -1998,7 +1998,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TG2RunnerApp, 'GocciaRunner');
+  RunResult := TGocciaApplication.RunApplication(TGocciaRunnerApp, 'GocciaRunner');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

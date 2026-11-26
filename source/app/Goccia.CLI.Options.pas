@@ -24,7 +24,7 @@ const
   EXECUTION_MODE_REMOVED_CONFIG_HINT =
     'bytecode is the only execution mode, so drop the key';
   { --max-stack's default as the help states it: the engine's own bound on
-    nested calls (FRAME_MAX in G2.VM), which 0 also selects }
+    nested calls (FRAME_MAX in Goccia.VM), which 0 also selects }
   DEFAULT_MAX_STACK_DEPTH = 200000;
 
 type

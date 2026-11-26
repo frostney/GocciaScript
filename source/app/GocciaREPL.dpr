@@ -20,7 +20,7 @@ uses
   Goccia.Capabilities,
   Goccia.CLI.Application,
   Goccia.CLI.FileSettings,
-  Goccia.CLI.G2FileEngine,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
@@ -32,8 +32,8 @@ uses
   Goccia.Terminal.Colors,
   Goccia.Version,
 
-  G2.Embed,
-  G2.VM,
+  Goccia.Embed,
+  Goccia.VM,
   Goccia.ThreadCleanupRegistry;
 
 const
@@ -41,10 +41,10 @@ const
   REPL_FILE_NAME = 'REPL';
 
 type
-  TG2REPLApp = class(TGocciaCLIApplication)
+  TGocciaREPLApp = class(TGocciaCLIApplication)
   private
     FTiming: TFlagOption;
-    { the build's prelude snapshot run (G2_SNAPSHOT_OUT): this file run once, no prompt }
+    { the build's prelude snapshot run (GOCCIA_SNAPSHOT_OUT): this file run once, no prompt }
     FSnapshotFile: string;
     { the session, run by the REPL thread }
     procedure RunSession;
@@ -56,16 +56,16 @@ type
   end;
 
   { the session on a thread of its own, with the stack a file thread has }
-  TG2REPLThread = class(TThread)
+  TGocciaREPLThread = class(TThread)
   private
-    FApp: TG2REPLApp;
+    FApp: TGocciaREPLApp;
     FErrorClass: ExceptClass;
     FErrorMessage: string;
   protected
     procedure Execute; override;
   end;
 
-procedure TG2REPLThread.Execute;
+procedure TGocciaREPLThread.Execute;
 begin
   try
     try
@@ -84,30 +84,30 @@ begin
   end;
 end;
 
-procedure TG2REPLApp.Configure;
+procedure TGocciaREPLApp.Configure;
 begin
   AddEngineOptions;
   FTiming := AddFlag('timing', 'Show per-line timing');
 end;
 
-function TG2REPLApp.UsageLine: string;
+function TGocciaREPLApp.UsageLine: string;
 begin
   Result := '[options]';
 end;
 
-function TG2REPLApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+function TGocciaREPLApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
   Result := ALL_CAPABILITIES;
 end;
 
-procedure TG2REPLApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TGocciaREPLApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  Worker: TG2REPLThread;
+  Worker: TGocciaREPLThread;
   ErrorClass: ExceptClass;
   ErrorMessage: string;
 begin
-  { build.pas compiles the preludes into the binary from a run of an empty file with G2_SNAPSHOT_OUT set }
-  if (APaths.Count = 1) and (GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '') then
+  { build.pas compiles the preludes into the binary from a run of an empty file with GOCCIA_SNAPSHOT_OUT set }
+  if (APaths.Count = 1) and (GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '') then
     FSnapshotFile := APaths[0]
   else if APaths.Count > 0 then
   begin
@@ -122,7 +122,7 @@ begin
     WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)');
   { each thread buffers its own output: the banner goes out before the session thread writes }
   Flush(Output);
-  Worker := TG2REPLThread.Create(True, FILE_THREAD_STACK);
+  Worker := TGocciaREPLThread.Create(True, FILE_THREAD_STACK);
   try
     Worker.FApp := Self;
     Worker.Start;
@@ -136,19 +136,19 @@ begin
     raise ErrorClass.Create(ErrorMessage);
 end;
 
-procedure TG2REPLApp.RunSession;
+procedure TGocciaREPLApp.RunSession;
 var
   FileConfigPath, AliasBaseDirectory, Line, SetupError: string;
   FileConfig: TConfigEntryArray;
   Verdict: TGocciaConfigTrustVerdict;
   Capabilities: TGocciaCapabilities;
-  Grant: TG2ImportGrant;
+  Grant: TGocciaImportGrant;
   Resolver: TGocciaModuleResolver;
-  Engine: TG2Engine;
+  Engine: TGocciaEngine;
   Editor: TLineEditor;
   Source: TStringList;
   ReadResult: TLineReadResult;
-  RunResult: TG2RunResult;
+  RunResult: TGocciaRunResult;
   Start: Int64;
   Settings: TGocciaFileSettings;
 begin
@@ -159,7 +159,7 @@ begin
     SetLength(FileConfig, 0);
   Verdict := FileConfigVerdict(FileConfigPath, REPL_FILE_NAME);
   Capabilities := ResolveEngineCapabilities(FileConfigPath, REPL_FILE_NAME);
-  Grant := TG2ImportGrant.Create(Capabilities);
+  Grant := TGocciaImportGrant.Create(Capabilities);
   Resolver := TGocciaModuleResolver.Create(IncludeTrailingPathDelimiter(GetCurrentDir));
   Grant.Resolver := Resolver;
   Resolver.SetExtensions(ModuleImportExtensions);
@@ -175,7 +175,7 @@ begin
     EngineOptions.Aliases.Values, AliasBaseDirectory);
   Source := TStringList.Create;
   Editor := TLineEditor.Create;
-  Engine := TG2Engine.Create;
+  Engine := TGocciaEngine.Create;
   try
     Engine.Capabilities := Capabilities;
     Engine.ProjectRoot := GetCurrentDir;
@@ -192,8 +192,8 @@ begin
     ApplySettings(Engine, Settings);
     { an input is not an entry file, so its goal is not detected from its source (ADR 0140): without an explicit
       --source-type the REPL runs Script }
-    if Engine.SourceKind = g2skDetect then
-      Engine.SourceKind := g2skScript;
+    if Engine.SourceKind = gskDetect then
+      Engine.SourceKind := gskScript;
     if EngineOptions.Timeout.Present then
       Engine.TimeoutMs := EngineOptions.Timeout.Value;
     if EngineOptions.MaxInstructions.Present then
@@ -204,9 +204,9 @@ begin
     { an input that leaves a rejection nothing handles reports it as its error, and the session goes on }
     Engine.FailOnUnhandledRejection := True;
     if IsColorTerminal then
-      Engine.ResultForm := g2rfREPLColor
+      Engine.ResultForm := grfREPLColor
     else
-      Engine.ResultForm := g2rfREPL;
+      Engine.ResultForm := grfREPL;
     { the configs' and the command line's virtual modules, as GocciaREPL's CreateEngine applies them }
     if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) then
     begin
@@ -260,7 +260,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TG2REPLApp, 'GocciaREPL');
+  RunResult := TGocciaApplication.RunApplication(TGocciaREPLApp, 'GocciaREPL');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.

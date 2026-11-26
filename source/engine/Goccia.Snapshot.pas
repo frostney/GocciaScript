@@ -1,0 +1,362 @@
+unit Goccia.Snapshot;
+{ Compiled JS preludes embedded in the binary.
+
+  Parsing and compiling the builtins written in JS (Goccia.Builtins4, Goccia.Promise)
+  was half of starting an empty script. The build compiles them once with the
+  freshly built engine (GOCCIA_SNAPSHOT_OUT), writes the templates to
+  Goccia.PreludeSnapshot.inc and rebuilds; at startup CompilePrelude loads a
+  template from there instead of parsing.
+
+  A snapshot entry is used only if the prelude's source still hashes to the
+  value stored with it; otherwise the prelude is parsed as before. The format
+  holds what a template's code depends on: constants are numbers and the
+  like (stored as their bits) or strings (stored as text and interned again),
+  and IC keys are atoms. Anything else makes the writer give up on that
+  prelude, which is then parsed at startup.
+
+  A template is its header (what making a closure of it reads: name, register
+  layout, flags, upvalues) and its body (code, constants, ICs, nested
+  templates), the body's length first. A nested function's body is read on its
+  first call (a lazy template, Goccia.Eval's LazyCompile calls
+  MaterializeSnapshotTemplate): most of the preludes' functions (Temporal,
+  Intl) are never called. }
+{$mode delphiunicode}{$H+}
+{$I Goccia.Checks.inc}
+{$MINFPCONSTPREC 64}
+{$POINTERMATH ON}
+
+interface
+
+uses
+  SysUtils, Classes, Goccia.Core, Goccia.Instructions;
+
+function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
+{ reads the body of T, a template whose body the snapshot reader skipped (T^.Lazy a PLazyStub with Src nil) }
+function MaterializeSnapshotTemplate(T: PFuncTemplate): Boolean;
+
+implementation
+
+uses
+  BigInteger, Goccia.BigIntV, Goccia.Eval, Goccia.Lazy;
+
+{$I Goccia.PreludeSnapshot.inc}
+
+const
+  SNAP_MAGIC = $32533247;   { 'GocciaS2' }
+
+{ identifies the prelude source a snapshot entry was made from: its length and about 4096 of its characters,
+  evenly spaced (the build makes the snapshot from the same sources; startup hashes every prelude) }
+function SourceHash(const S: UnicodeString): QWord;
+var I, Stride: Integer;
+begin
+  {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+  Result := 1469598103934665603 xor QWord(Length(S));
+  Stride := Length(S) div 4096 + 1;
+  I := 1;
+  while I <= Length(S) do
+  begin
+    Result := (Result xor Ord(S[I])) * 1099511628211;
+    Inc(I, Stride);
+  end;
+  {$POP}
+end;
+
+{ ---------------- writing ---------------- }
+
+type
+  ESnapshotUnsupported = class(Exception);
+
+procedure WriteI32(S: TStream; V: Integer); begin S.WriteBuffer(V, 4); end;
+procedure WriteU64(S: TStream; V: QWord); begin S.WriteBuffer(V, 8); end;
+procedure WriteU8(S: TStream; V: Byte); begin S.WriteBuffer(V, 1); end;
+
+procedure WriteText(S: TStream; const U: UnicodeString);
+begin
+  WriteI32(S, Length(U));
+  if Length(U) > 0 then S.WriteBuffer(U[1], Length(U) * 2);
+end;
+
+procedure WriteStr(S: TStream; P: PStr);
+begin
+  if P = nil then WriteI32(S, -1) else WriteText(S, StrToUnicode(P));
+end;
+
+procedure WriteTemplate(S: TStream; T: PFuncTemplate); forward;
+
+procedure WriteBody(S: TStream; T: PFuncTemplate);
+var I: Integer; V: TValue;
+begin
+  WriteI32(S, T^.CodeLen); WriteI32(S, T^.EntryPC);
+  for I := 0 to T^.CodeLen - 1 do WriteU64(S, T^.Code[I]);
+  WriteI32(S, Length(T^.Lines));
+  for I := 0 to High(T^.Lines) do WriteI32(S, T^.Lines[I]);
+  WriteI32(S, Length(T^.Consts));
+  for I := 0 to High(T^.Consts) do
+  begin
+    V := T^.Consts[I];
+    if not IsPtr(V) then begin WriteU8(S, 0); WriteU64(S, V); end
+    else if IsString(V) then begin WriteU8(S, 1); WriteStr(S, PStr(PtrOf(V))); end
+    else if IsBigInt(V) then begin WriteU8(S, 2); WriteText(S, BigToString(V)); end
+    else raise ESnapshotUnsupported.Create('constant of a kind the snapshot cannot hold');
+  end;
+  WriteI32(S, Length(T^.ICs));
+  for I := 0 to High(T^.ICs) do
+  begin
+    { a fresh IC holds its key and Slot -1 only }
+    if (T^.ICs[I].Shape <> nil) or (T^.ICs[I].NewShape <> nil) or (T^.ICs[I].PolyCount <> 0) or (T^.ICs[I].Depth <> 0) then
+      raise ESnapshotUnsupported.Create('IC filled at compile time');
+    WriteStr(S, T^.ICs[I].Key);
+    WriteI32(S, T^.ICs[I].Slot);
+  end;
+  WriteI32(S, Length(T^.Children));
+  for I := 0 to High(T^.Children) do WriteTemplate(S, T^.Children[I]);
+  WriteU8(S, Ord(T^.FieldInit <> nil));
+  if T^.FieldInit <> nil then WriteTemplate(S, T^.FieldInit);
+  WriteText(S, T^.SourceName);
+  WriteText(S, T^.SourceRange.Get);
+end;
+
+procedure WriteTemplate(S: TStream; T: PFuncTemplate);
+var I: Integer; Flags: Byte; Body: TMemoryStream;
+begin
+  WriteStr(S, T^.Name);
+  WriteI32(S, T^.NumParams); WriteI32(S, T^.MaxRegs);
+  WriteI32(S, T^.RestReg); WriteI32(S, T^.ArgsReg); WriteI32(S, T^.HomeReg); WriteI32(S, T^.NewTargetReg);
+  WriteI32(S, T^.ExpectedProps); WriteI32(S, T^.Length); WriteI32(S, T^.AsyncReg);
+  Flags := Ord(T^.IsArrow) or Ord(T^.IsClassCtor) shl 1 or Ord(T^.IsDerived) shl 2 or Ord(T^.IsMethod) shl 3 or
+    Ord(T^.IsGenerator) shl 4 or Ord(T^.IsAsync) shl 5 or Ord(T^.IsStrict) shl 6 or Ord(T^.SimpleParams) shl 7;
+  WriteU8(S, Flags);
+  WriteI32(S, Length(T^.Upvals));
+  for I := 0 to High(T^.Upvals) do begin WriteU8(S, Ord(T^.Upvals[I].FromParentLocal)); WriteI32(S, T^.Upvals[I].Index); end;
+  Body := TMemoryStream.Create;
+  try
+    WriteBody(Body, T);
+    WriteI32(S, Body.Size);
+    S.CopyFrom(Body, 0);
+  finally
+    Body.Free;
+  end;
+end;
+
+var SnapshotStarted: Boolean = False;
+
+{ GOCCIA_SNAPSHOT_OUT names the file the entries are appended to (build.pas turns it into the include) }
+procedure AppendEntry(const Name, Source: UnicodeString; T: PFuncTemplate);
+var Path: string; F: TFileStream; M: TMemoryStream;
+begin
+  Path := GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT');
+  if Path = '' then Exit;
+  M := TMemoryStream.Create;
+  try
+    try
+      WriteTemplate(M, T);
+    except
+      on E: ESnapshotUnsupported do
+      begin
+        WriteLn(ErrOutput, 'snapshot: ', Name, ' left out: ', E.Message);
+        Exit;
+      end;
+    end;
+    { the first entry of a run starts the file afresh }
+    if SnapshotStarted then F := TFileStream.Create(Path, fmOpenReadWrite) else
+    begin
+      SnapshotStarted := True;
+      F := TFileStream.Create(Path, fmCreate);
+      WriteI32(F, SNAP_MAGIC);
+    end;
+    try
+      F.Seek(0, soEnd);
+      WriteText(F, Name);
+      WriteU64(F, SourceHash(Source));
+      WriteI32(F, M.Size);
+      F.CopyFrom(M, 0);
+    finally
+      F.Free;
+    end;
+  finally
+    M.Free;
+  end;
+end;
+
+{ ---------------- reading ---------------- }
+
+var
+  { GOCCIA_SNAPSHOT_EAGER set: every body is read at startup (1), or not (0); -1 not read yet }
+  SnapshotEager: Integer = -1;
+
+function GetSnapshotEager: Integer;
+begin
+  if SnapshotEager < 0 then
+    if GetEnvironmentVariable('GOCCIA_SNAPSHOT_EAGER') <> '' then SnapshotEager := 1 else SnapshotEager := 0;
+  Result := SnapshotEager;
+end;
+
+type
+  TReader = record
+    P, Limit: PByte;
+    function I32: Integer;
+    function U64: QWord;
+    function U8: Byte;
+    function Text: UnicodeString;
+    function Str: PStr;
+  end;
+
+function TReader.I32: Integer; begin Move(P^, Result, 4); Inc(P, 4); end;
+function TReader.U64: QWord; begin Move(P^, Result, 8); Inc(P, 8); end;
+function TReader.U8: Byte; begin Result := P^; Inc(P); end;
+
+function TReader.Text: UnicodeString;
+var N: Integer;
+begin
+  N := I32;
+  if N <= 0 then Exit('');
+  SetLength(Result, N);
+  Move(P^, Result[1], N * 2);
+  Inc(P, N * 2);
+end;
+
+function TReader.Str: PStr;
+var N: Integer;
+begin
+  N := I32;
+  if N < 0 then Exit(nil);
+  Result := AtomOfChars(PWideChar(P), N);
+  Inc(P, N * 2);
+end;
+
+function ReadTemplate(var R: TReader; Lazy: Boolean): PFuncTemplate; forward;
+
+procedure ReadBody(var R: TReader; T: PFuncTemplate);
+var I, N: Integer;
+begin
+  T^.CodeLen := R.I32; T^.EntryPC := R.I32;
+  SetLength(T^.Code, T^.CodeLen);
+  if T^.CodeLen > 0 then Move(R.P^, T^.Code[0], T^.CodeLen * 8);
+  Inc(R.P, T^.CodeLen * 8);
+  SetLength(T^.Lines, R.I32);
+  if Length(T^.Lines) > 0 then Move(R.P^, T^.Lines[0], Length(T^.Lines) * 4);
+  Inc(R.P, Length(T^.Lines) * 4);
+  SetLength(T^.Consts, R.I32);
+  for I := 0 to High(T^.Consts) do
+    case R.U8 of
+      0: T^.Consts[I] := R.U64;
+      1: T^.Consts[I] := MkPtr(R.Str);
+    else T^.Consts[I] := BigToValue(TBigInteger.FromDecimalString(string(StrToUnicode(R.Str))), True);   { a BigInt literal }
+    end;
+  N := R.I32;
+  SetLength(T^.ICs, N);
+  for I := 0 to N - 1 do
+  begin
+    FillChar(T^.ICs[I], SizeOf(TPropIC), 0);
+    T^.ICs[I].Key := R.Str;
+    T^.ICs[I].Slot := R.I32;
+  end;
+  SetLength(T^.Children, R.I32);
+  for I := 0 to High(T^.Children) do T^.Children[I] := ReadTemplate(R, True);
+  { a class's field initializer runs from its constructor's construction: read now }
+  if R.U8 <> 0 then T^.FieldInit := ReadTemplate(R, False) else T^.FieldInit := nil;
+  T^.SourceName := R.Text;
+  T^.SourceRange.SetText(R.Text);
+  FinishTemplate(T);
+end;
+
+{ Lazy: a function whose body is read on its first call (not a class constructor: its construction reads more of
+  the template than a call's frame does) }
+function ReadTemplate(var R: TReader; Lazy: Boolean): PFuncTemplate;
+var T: PFuncTemplate; I, BodyLen: Integer; Flags: Byte; St: PLazyStub;
+begin
+  New(T);
+  { every field starts zeroed (New leaves the unmanaged ones as garbage: the runtime caches, such as new's, must
+    start empty) }
+  FillChar(T^, SizeOf(TFuncTemplate), 0);
+  RegisterTemplate(T);
+  T^.Name := R.Str;
+  T^.NumParams := R.I32; T^.MaxRegs := R.I32;
+  T^.RestReg := R.I32; T^.ArgsReg := R.I32; T^.HomeReg := R.I32; T^.NewTargetReg := R.I32;
+  T^.ExpectedProps := R.I32; T^.Length := R.I32; T^.AsyncReg := R.I32;
+  T^.GdiKind := 0; T^.GdiLexBase := 0;   { prelude templates are never Script tops }
+  Flags := R.U8;
+  T^.IsArrow := Flags and 1 <> 0; T^.IsClassCtor := Flags and 2 <> 0; T^.IsDerived := Flags and 4 <> 0;
+  T^.IsMethod := Flags and 8 <> 0; T^.IsGenerator := Flags and 16 <> 0; T^.IsAsync := Flags and 32 <> 0;
+  T^.IsStrict := Flags and 64 <> 0; T^.SimpleParams := Flags and 128 <> 0;
+  SetLength(T^.Upvals, R.I32);
+  for I := 0 to High(T^.Upvals) do begin T^.Upvals[I].FromParentLocal := R.U8 <> 0; T^.Upvals[I].Index := R.I32; end;
+  BodyLen := R.I32;
+  if Lazy and not T^.IsClassCtor and (GetSnapshotEager = 0) then
+  begin
+    New(St);
+    St^.Src := nil;
+    St^.SnapPos := R.P;
+    T^.Lazy := St;
+    T^.FastCall := False;
+    Inc(R.P, BodyLen);
+  end
+  else ReadBody(R, T);
+  Result := T;
+end;
+
+function MaterializeSnapshotTemplate(T: PFuncTemplate): Boolean;
+var R: TReader; St: PLazyStub;
+begin
+  St := PLazyStub(T^.Lazy);
+  R.P := St^.SnapPos;
+  R.Limit := PByte(@GocciaPreludeSnapshot[0]) + GocciaPreludeSnapshotSize;
+  T^.Lazy := nil;
+  Dispose(St);
+  ReadBody(R, T);
+  Result := True;
+end;
+
+function FromSnapshot(const Name, Source: UnicodeString; var T: PFuncTemplate): Boolean;
+var R: TReader; EntryName: UnicodeString; Hash: QWord; Len: Integer;
+begin
+  Result := False;
+  if (GocciaPreludeSnapshotSize < 4) or (GetEnvironmentVariable('GOCCIA_NO_SNAPSHOT') <> '') then Exit;
+  R.P := @GocciaPreludeSnapshot[0];
+  R.Limit := R.P + GocciaPreludeSnapshotSize;
+  if R.I32 <> SNAP_MAGIC then Exit;
+  while R.P < R.Limit do
+  begin
+    EntryName := R.Text;
+    Hash := R.U64;
+    Len := R.I32;
+    if EntryName = Name then
+    begin
+      if Hash <> SourceHash(Source) then Exit;   { the prelude changed since the snapshot: parse it }
+      T := ReadTemplate(R, False);
+      Exit(True);
+    end;
+    Inc(R.P, Len);
+  end;
+end;
+
+{ a prelude's functions are built-in functions: Function.prototype.toString gives them NativeFunction syntax (20.2.3.5
+  step 3), so their source is not kept }
+procedure DropSource(T: PFuncTemplate);
+var I: Integer;
+begin
+  T^.SourceRange.SetText('');
+  for I := 0 to High(T^.Children) do DropSource(T^.Children[I]);
+end;
+
+{ a prelude is the engine's own code: it compiles under the unrestricted profile, whatever profile an earlier run
+  on this thread left active (a second engine on a thread compiles its preludes after the first engine's runs) }
+function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
+var Saved: TLangProfile;
+begin
+  if FromSnapshot(Name, Source, T) then Exit(True);
+  Saved := ActiveProfile;
+  SetActiveProfile(Default(TLangProfile));
+  try
+    Result := ParseAndCompile(Source, Name, True, T, Err);
+  finally
+    SetActiveProfile(Saved);
+  end;
+  if Result then
+  begin
+    DropSource(T);
+    AppendEntry(Name, Source, T);
+  end;
+end;
+
+end.

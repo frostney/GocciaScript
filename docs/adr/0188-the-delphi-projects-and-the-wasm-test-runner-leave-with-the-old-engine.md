@@ -1,7 +1,7 @@
 # 0188 - The Delphi projects and the Wasm test runner leave with the old engine
 
 **Date:** 2026-11-24
-**Area:** `build`, `apps`, `g2`
+**Area:** `build`, `apps`, `engine`
 **Related:** [ADR 0006](0006-delphi-mode-performance-parity.md)
 
 ## Context

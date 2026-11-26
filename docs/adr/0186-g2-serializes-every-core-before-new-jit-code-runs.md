@@ -1,7 +1,7 @@
 # 0186 - G2 serializes every core before code its JIT wrote runs
 
 **Date:** 2026-11-22
-**Area:** `g2`, `jit`
+**Area:** `engine`, `jit`
 **Related:** [ADR 0176](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)
 
 ## Context

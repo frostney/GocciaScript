@@ -305,10 +305,10 @@ host path may reach script-visible error text; the package-relative spelling
 names the file without disclosing where the package lives. Host reporters still
 print the absolute path on the trailing `Resolved to:` line, because the engine
 keeps the candidate path when it turns the failure into a script error
-(`TG2RunResult.ErrorResolvedPath`). The typed `EModuleIsCommonJS` exception is
+(`TGocciaRunResult.ErrorResolvedPath`). The typed `EModuleIsCommonJS` exception is
 only visible to a host calling `TModuleResolver.Resolve` directly: the engine
 turns every resolution failure into a plain `Error` carrying its message, so a
-host going through `TG2Engine` distinguishes this case by its message, not by
+host going through `TGocciaEngine` distinguishes this case by its message, not by
 its class.
 
 The error is a module-resolution failure, so it is catchable from script
@@ -350,7 +350,7 @@ value's `stack` string:
 
 - **Provenance, not `stack`.** When the engine creates an error it keeps the
   stack it made the error with in an internal slot the script cannot see or
-  change (`ErrorStackProvenance` in `G2.VM`), and `TG2Engine.Run` reports that
+  change (`ErrorStackProvenance` in `Goccia.VM`), and `TGocciaEngine.Run` reports that
   stack's first frame as the error's file, line and column. A guest can
   overwrite an error's `.stack` property, or `throw` a plain object with a
   fabricated `stack` — that string is never parsed to pick a file or read one,
@@ -359,14 +359,14 @@ value's `stack` string:
   message still shows).
 
 - **A guest never reads host source.** The excerpt is read when the error is
-  rendered, not carried on the error. `FailureText` (`Goccia.CLI.G2FileEngine`)
+  rendered, not carried on the error. `FailureText` (`Goccia.CLI.FileEngine`)
   shows the entry's own source, and another file's only when
-  `TG2Engine.ModuleLoaded` says the run loaded it as a guest module. The
+  `TGocciaEngine.ModuleLoaded` says the run loaded it as a guest module. The
   modules the host loads before the entry runs (`--globals`,
   `--host-environment`, `--module`, `--modules` and their config-file and
   embedding forms) are host-owned, and so is every module they import, even
   when guest code calls an exported host function later (`HostOwnedReferrer`
-  in `G2.Modules`). A genuine error thrown inside a host-owned module shows its
+  in `Goccia.Modules`). A genuine error thrown inside a host-owned module shows its
   location line but **no source excerpt**.
 
 - **Canonical file identity.** A guest import of a file the host already loaded

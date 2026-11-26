@@ -17,40 +17,40 @@ type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner,
-    btBenchmarkRunner, btBundler, btREPL, btG2);
+    btBenchmarkRunner, btBundler, btREPL, btEngine);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
     'test262runner', 'tomlcompliancerunner',
-    'benchmarkrunner', 'bundler', 'repl', 'g2');
+    'benchmarkrunner', 'bundler', 'repl', 'engine');
 
-  { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
-  G2_PRELUDES: array[0..23, 0..2] of string = (
-    ('builtins5.js', 'G2.Builtins5.inc', 'Builtins5Src'),
-    ('disposal.js', 'G2.Disposal.inc', 'DisposalSrc'),
-    ('iterhelpers.js', 'G2.IterHelpers.inc', 'IterHelpersSrc'),
-    ('regexp.js', 'G2.RegExpPrelude.inc', 'RegExpSrc'),
-    ('temporal.js', 'G2.Temporal.inc', 'TemporalSrc'),
-    ('intl.js', 'G2.Intl.inc', 'IntlSrc'),
-    ('testing.js', 'G2.Testing.inc', 'TestingSrc'),
-    ('microbench.js', 'G2.Microbench.inc', 'MicrobenchSrc'),
-    ('host.js', 'G2.HostPrelude.inc', 'HostSrc'),
-    ('url.js', 'G2.UrlPrelude.inc', 'UrlSrc'),
-    ('web.js', 'G2.WebPrelude.inc', 'WebSrc'),
-    ('modules.js', 'G2.ModulesPrelude.inc', 'ModulesSrc'),
-    ('console.js', 'G2.ConsolePrelude.inc', 'ConsoleSrc'),
-    ('fetch.js', 'G2.FetchPrelude.inc', 'FetchSrc'),
-    ('json5.js', 'G2.Json5Prelude.inc', 'Json5Src'),
-    ('delimited.js', 'G2.DelimitedPrelude.inc', 'DelimitedSrc'),
-    ('jsonl.js', 'G2.JsonlPrelude.inc', 'JsonlSrc'),
-    ('datatree.js', 'G2.DataTreePrelude.inc', 'DataTreeSrc'),
-    ('semver.js', 'G2.SemverPrelude.inc', 'SemverSrc'),
-    ('asynchooks.js', 'G2.AsyncHooksPrelude.inc', 'AsyncHooksSrc'),
-    ('events.js', 'G2.EventsPrelude.inc', 'EventsSrc'),
-    ('timers.js', 'G2.TimersPrelude.inc', 'TimersSrc'),
-    ('sandbox.js', 'G2.SandboxPrelude.inc', 'SandboxSrc'),
-    ('test262host.js', 'G2.Test262Host.inc', 'Test262HostSrc'));
+  { G2: the JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
+  GOCCIA_PRELUDES: array[0..23, 0..2] of string = (
+    ('builtins5.js', 'Goccia.Builtins5.inc', 'Builtins5Src'),
+    ('disposal.js', 'Goccia.Disposal.inc', 'DisposalSrc'),
+    ('iterhelpers.js', 'Goccia.IterHelpers.inc', 'IterHelpersSrc'),
+    ('regexp.js', 'Goccia.RegExpPrelude.inc', 'RegExpSrc'),
+    ('temporal.js', 'Goccia.Temporal.inc', 'TemporalSrc'),
+    ('intl.js', 'Goccia.Intl.inc', 'IntlSrc'),
+    ('testing.js', 'Goccia.Testing.inc', 'TestingSrc'),
+    ('microbench.js', 'Goccia.Microbench.inc', 'MicrobenchSrc'),
+    ('host.js', 'Goccia.HostPrelude.inc', 'HostSrc'),
+    ('url.js', 'Goccia.UrlPrelude.inc', 'UrlSrc'),
+    ('web.js', 'Goccia.WebPrelude.inc', 'WebSrc'),
+    ('modules.js', 'Goccia.ModulesPrelude.inc', 'ModulesSrc'),
+    ('console.js', 'Goccia.ConsolePrelude.inc', 'ConsoleSrc'),
+    ('fetch.js', 'Goccia.FetchPrelude.inc', 'FetchSrc'),
+    ('json5.js', 'Goccia.Json5Prelude.inc', 'Json5Src'),
+    ('delimited.js', 'Goccia.DelimitedPrelude.inc', 'DelimitedSrc'),
+    ('jsonl.js', 'Goccia.JsonlPrelude.inc', 'JsonlSrc'),
+    ('datatree.js', 'Goccia.DataTreePrelude.inc', 'DataTreeSrc'),
+    ('semver.js', 'Goccia.SemverPrelude.inc', 'SemverSrc'),
+    ('asynchooks.js', 'Goccia.AsyncHooksPrelude.inc', 'AsyncHooksSrc'),
+    ('events.js', 'Goccia.EventsPrelude.inc', 'EventsSrc'),
+    ('timers.js', 'Goccia.TimersPrelude.inc', 'TimersSrc'),
+    ('sandbox.js', 'Goccia.SandboxPrelude.inc', 'SandboxSrc'),
+    ('test262host.js', 'Goccia.Test262Host.inc', 'Test262HostSrc'));
 
 var
   I: Integer;
@@ -604,9 +604,9 @@ end;
 
 { ---- G2 ---- }
 
-function G2GeneratedDirectory: string;
+function GocciaGeneratedDirectory: string;
 begin
-  Result := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'gen';
+  Result := 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'gen';
 end;
 
 { Writes AText to AFile unless it already holds it; True when it changed }
@@ -638,20 +638,20 @@ begin
 end;
 
 { each JS prelude as a Pascal UnicodeString constant, one line each (the preludes are ASCII) }
-procedure GenerateG2Preludes;
+procedure GenerateEnginePreludes;
 var
   K, L, C: Integer;
   Src, Text: TStringList;
   Line, Body: string;
 begin
-  ForceDirectories(G2GeneratedDirectory);
-  { scripts/g2/build.sh wrote the version include here, ahead of the one build.pas writes into source/units }
-  DeleteFile(G2GeneratedDirectory + DirectorySeparator + 'Goccia.Version.Generated.inc');
-  for K := 0 to High(G2_PRELUDES) do
+  ForceDirectories(GocciaGeneratedDirectory);
+  { scripts/engine/build.sh wrote the version include here, ahead of the one build.pas writes into source/units }
+  DeleteFile(GocciaGeneratedDirectory + DirectorySeparator + 'Goccia.Version.Generated.inc');
+  for K := 0 to High(GOCCIA_PRELUDES) do
   begin
     Src := TStringList.Create;
     try
-      Src.LoadFromFile('source/g2/prelude/' + G2_PRELUDES[K, 0]);
+      Src.LoadFromFile('source/engine/prelude/' + GOCCIA_PRELUDES[K, 0]);
       while (Src.Count > 0) and (Src[Src.Count - 1] = '') do
         Src.Delete(Src.Count - 1);
       Body := '';
@@ -661,7 +661,7 @@ begin
         for C := 1 to Length(Line) do
           if Ord(Line[C]) > 127 then
           begin
-            WriteLn('Non-ASCII character in prelude ', G2_PRELUDES[K, 0], ' line ', L + 1);
+            WriteLn('Non-ASCII character in prelude ', GOCCIA_PRELUDES[K, 0], ' line ', L + 1);
             Halt(1);
           end;
         if L > 0 then
@@ -670,11 +670,11 @@ begin
       end;
       Text := TStringList.Create;
       try
-        Text.Add('{ generated by build.pas from ' + G2_PRELUDES[K, 0] + ' }');
+        Text.Add('{ generated by build.pas from ' + GOCCIA_PRELUDES[K, 0] + ' }');
         Text.Add('const');
-        Text.Add('  ' + G2_PRELUDES[K, 2] + ' =');
+        Text.Add('  ' + GOCCIA_PRELUDES[K, 2] + ' =');
         Text.Add(Body + ';');
-        WriteIfChanged(G2GeneratedDirectory + DirectorySeparator + G2_PRELUDES[K, 1], Text.Text);
+        WriteIfChanged(GocciaGeneratedDirectory + DirectorySeparator + GOCCIA_PRELUDES[K, 1], Text.Text);
       finally
         Text.Free;
       end;
@@ -685,20 +685,20 @@ begin
 end;
 
 { Each G2 program's own prelude snapshot: a program that installs the host's preludes (the apps) compiles more of
-  them than the bare engine (g2), so they cannot share one }
-function G2SnapshotDirectory(const ATarget: string): string;
+  them than the bare engine (goccia), so they cannot share one }
+function GocciaSnapshotDirectory(const ATarget: string): string;
 begin
-  Result := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snapshot-' + ATarget;
+  Result := 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'snapshot-' + ATarget;
 end;
 
 { an empty snapshot until the program has made one }
-procedure EnsureG2Snapshot(const ATarget: string);
+procedure EnsureEngineSnapshot(const ATarget: string);
 begin
-  ForceDirectories(G2SnapshotDirectory(ATarget));
-  if not FileExists(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc') then
-    WriteIfChanged(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc',
-      'const' + LineEnding + '  G2PreludeSnapshotSize = 0;' + LineEnding +
-      '  G2PreludeSnapshot: array[0..0] of Byte = (0);' + LineEnding);
+  ForceDirectories(GocciaSnapshotDirectory(ATarget));
+  if not FileExists(GocciaSnapshotDirectory(ATarget) + DirectorySeparator + 'Goccia.PreludeSnapshot.inc') then
+    WriteIfChanged(GocciaSnapshotDirectory(ATarget) + DirectorySeparator + 'Goccia.PreludeSnapshot.inc',
+      'const' + LineEnding + '  GocciaPreludeSnapshotSize = 0;' + LineEnding +
+      '  GocciaPreludeSnapshot: array[0..0] of Byte = (0);' + LineEnding);
 end;
 
 { The compiler arguments of a G2 program. G2 always compiles optimized: its code
@@ -707,7 +707,7 @@ end;
 { FPC_TARGET_CPU and FPC_TARGET_OS name another platform than the one build.pas runs on: a G2 program is then
   built for the host first, to make its prelude snapshot (which does not depend on the platform), then for the
   target with it }
-function G2CrossBuild: Boolean;
+function GocciaCrossBuild: Boolean;
 var
   Cpu, OS: string;
 begin
@@ -718,7 +718,7 @@ begin
 end;
 
 { AOutput with .exe when the build (the host's when AHost) makes a Windows executable }
-function G2Executable(const AOutput: string; AHost: Boolean): string;
+function GocciaExecutable(const AOutput: string; AHost: Boolean): string;
 var
   OS: string;
 begin
@@ -730,8 +730,8 @@ begin
     Result := Result + '.exe';
 end;
 
-{ AHost: the host build of a cross build (no target options, no G2_FPC_FLAGS) }
-function G2Args(const ASource, AUnitDirectory, AOutput, ATarget: string; AHost: Boolean = False): TStringArray;
+{ AHost: the host build of a cross build (no target options, no GOCCIA_FPC_FLAGS) }
+function GocciaArgs(const ASource, AUnitDirectory, AOutput, ATarget: string; AHost: Boolean = False): TStringArray;
 var
   Args: TStringList;
   Extra, Word, Cpu: string;
@@ -746,7 +746,7 @@ begin
       if GetEnvironmentVariable('FPC_TARGET_OS') <> '' then
         Args.Add('-T' + GetEnvironmentVariable('FPC_TARGET_OS'));
       { the target's library options (CI's link libraries and SDK paths), space-separated }
-      Extra := GetEnvironmentVariable('G2_FPC_FLAGS') + ' ';
+      Extra := GetEnvironmentVariable('GOCCIA_FPC_FLAGS') + ' ';
       Word := '';
       for J := 1 to Length(Extra) do
         if Extra[J] = ' ' then
@@ -759,7 +759,7 @@ begin
           Word := Word + Extra[J];
     end;
     { i386 (win32): -O1. FPC 3.3.1's -O3 and -O4 address an inlined field read through a register they never
-      loaded in G2.VM's iterator step (an access violation on every typed array iteration), and with -O2 a
+      loaded in Goccia.VM's iterator step (an access violation on every typed array iteration), and with -O2 a
       describe.each inside a describe throws a TypeError that -O1 does not (the miscompile not yet isolated) }
     Cpu := LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU'));
     if AHost or (Cpu = '') then
@@ -774,14 +774,14 @@ begin
       Args.Add('-Xs')
     else
       Args.Add('-gl');
-    Args.Add('-Fusource/g2');
+    Args.Add('-Fusource/engine');
     Args.Add('-Fusource/units');
     Args.Add('-Fusource/shared');
     Args.Add('-Fusource/generated');
     Args.Add('-Fusource/app');
-    Args.Add('-Fi' + G2SnapshotDirectory(ATarget));
-    Args.Add('-Fi' + G2GeneratedDirectory);
-    Args.Add('-Fisource/g2');
+    Args.Add('-Fi' + GocciaSnapshotDirectory(ATarget));
+    Args.Add('-Fi' + GocciaGeneratedDirectory);
+    Args.Add('-Fisource/engine');
     Args.Add('-Fisource/units');
     Args.Add('-Fisource/shared');
     Args.Add('-Fisource/generated');
@@ -800,7 +800,7 @@ begin
 end;
 
 { Copies the compiled resources the units link (source/generated/*.res) into AUnitDirectory }
-procedure CopyG2Resources(const AUnitDirectory: string);
+procedure CopyEngineResources(const AUnitDirectory: string);
 var
   Res: TStringList;
   Source, Target: TFileStream;
@@ -831,24 +831,24 @@ begin
 end;
 
 { As CompileWithStaleRetry, with G2's arguments }
-function CompileG2Program(const ASource, AUnitDirectory, AOutput, ALabel: string;
+function CompileEngineProgram(const ASource, AUnitDirectory, AOutput, ALabel: string;
   out AOutputText: string; AHost: Boolean = False): Boolean;
 begin
-  CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
+  CopyEngineResources(AUnitDirectory);
+  Result := CompileProgram(GocciaArgs(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
   if Result or not HasStaleArtifactSignature(AOutputText) then
     Exit;
   WriteLn('FPC reported a stale-state error for ', ALabel, '; retrying once from a clean unit directory. The first attempt:');
   { what the first attempt said: a retry that fails as well shows only its own output }
   WriteLn(AOutputText);
   RemoveCompiledArtifacts(AUnitDirectory);
-  CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
+  CopyEngineResources(AUnitDirectory);
+  Result := CompileProgram(GocciaArgs(ASource, AUnitDirectory, AOutput, ALabel, AHost), AOutputText);
 end;
 
-{ Runs the stage-1 engine to snapshot its compiled preludes (G2.Snapshot) into G2.PreludeSnapshot.inc; True when
+{ Runs the stage-1 engine to snapshot its compiled preludes (Goccia.Snapshot) into Goccia.PreludeSnapshot.inc; True when
   the snapshot changed, so the engine is compiled again with it }
-function SnapshotG2Preludes(const AExecutable, ATarget: string): Boolean;
+function SnapshotEnginePreludes(const AExecutable, ATarget: string): Boolean;
 var
   Proc: TProcess;
   Snap, Empty: string;
@@ -857,13 +857,13 @@ var
   Text: TStringBuilder;
   K: Integer;
 begin
-  Snap := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap.bin';
-  Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-empty.js';
+  Snap := 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'snap.bin';
+  Empty := 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'snap-empty.js';
   WriteIfChanged(Empty, 'const x = 0;' + LineEnding);
   { the benchmark runner fails a file without benchmarks: its run measures one, as briefly as the settings allow }
   if ATarget = 'benchmarkrunner' then
   begin
-    Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-bench.js';
+    Empty := 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'snap-bench.js';
     WriteIfChanged(Empty, 'import { bench } from "goccia:microbench";' + LineEnding +
       'bench("snapshot", () => 0);' + LineEnding);
   end;
@@ -873,7 +873,7 @@ begin
     Proc.Parameters.Add(Empty);
     for K := 0 to GetEnvironmentVariableCount - 1 do
       Proc.Environment.Add(GetEnvironmentString(K));
-    Proc.Environment.Add('G2_SNAPSHOT_OUT=' + Snap);
+    Proc.Environment.Add('GOCCIA_SNAPSHOT_OUT=' + Snap);
     if ATarget = 'benchmarkrunner' then
     begin
       Proc.Parameters.Add('--no-progress');
@@ -881,7 +881,7 @@ begin
       Proc.Environment.Add('GOCCIA_BENCH_CALIBRATION_MS=1');
       Proc.Environment.Add('GOCCIA_BENCH_ROUNDS=1');
     end;
-    Proc.Environment.Add('G2_NO_SNAPSHOT=1');
+    Proc.Environment.Add('GOCCIA_NO_SNAPSHOT=1');
     Proc.Options := [poWaitOnExit];
     Proc.Execute;
     if Proc.ExitStatus <> 0 then
@@ -902,10 +902,10 @@ begin
   end;
   Text := TStringBuilder.Create;
   try
-    Text.Append('{ generated by build.pas from G2_SNAPSHOT_OUT: compiled JS preludes (see G2.Snapshot) }' + LineEnding);
+    Text.Append('{ generated by build.pas from GOCCIA_SNAPSHOT_OUT: compiled JS preludes (see Goccia.Snapshot) }' + LineEnding);
     Text.Append('const' + LineEnding);
-    Text.Append('  G2PreludeSnapshotSize = ' + IntToStr(Length(Bytes)) + ';' + LineEnding);
-    Text.Append('  G2PreludeSnapshot: array[0..' + IntToStr(Length(Bytes) - 1) + '] of Byte = (' + LineEnding + '    ');
+    Text.Append('  GocciaPreludeSnapshotSize = ' + IntToStr(Length(Bytes)) + ';' + LineEnding);
+    Text.Append('  GocciaPreludeSnapshot: array[0..' + IntToStr(Length(Bytes) - 1) + '] of Byte = (' + LineEnding + '    ');
     for K := 0 to High(Bytes) do
     begin
       if K > 0 then
@@ -917,15 +917,15 @@ begin
       Text.Append(IntToStr(Bytes[K]));
     end;
     Text.Append(');' + LineEnding);
-    Result := WriteIfChanged(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc',
+    Result := WriteIfChanged(GocciaSnapshotDirectory(ATarget) + DirectorySeparator + 'Goccia.PreludeSnapshot.inc',
       Text.ToString);
   finally
     Text.Free;
   end;
 end;
 
-{ Linux x86-64: the native-TLS relocation check (scripts/g2/tlsscan.py), when python3 and binutils are there }
-procedure CheckG2ThreadVarRelocations(const AUnitDirectory: string);
+{ Linux x86-64: the native-TLS relocation check (scripts/engine/tlsscan.py), when python3 and binutils are there }
+procedure CheckEngineThreadVarRelocations(const AUnitDirectory: string);
 var
   Objects: TStringList;
   Args: array of string;
@@ -937,7 +937,7 @@ begin
   try
     AddFoundFiles(Objects, AUnitDirectory, '.o');
     SetLength(Args, Objects.Count + 1);
-    Args[0] := 'scripts/g2/tlsscan.py';
+    Args[0] := 'scripts/engine/tlsscan.py';
     for K := 0 to Objects.Count - 1 do
       Args[K + 1] := Objects[K];
     if not RunCommand('python3', Args, Output) then
@@ -960,61 +960,61 @@ begin
 end;
 
 { Builds ASource as a G2 program: the preludes generated, stage 1 compiled, its compiled preludes snapshot, and
-  the program compiled again when the snapshot changed. A cross build (G2CrossBuild) makes the snapshot with a
-  host build of the program (build/g2/host), then compiles the target once with it. }
-{ G2_VARIANT names a variant build of a program, such as fuzz.yml's AFL-instrumented or heaptrc harness: it goes
+  the program compiled again when the snapshot changed. A cross build (GocciaCrossBuild) makes the snapshot with a
+  host build of the program (build/engine/host), then compiles the target once with it. }
+{ GOCCIA_VARIANT names a variant build of a program, such as fuzz.yml's AFL-instrumented or heaptrc harness: it goes
   to AOutput followed by the name (build/GocciaFuzzHarnessAfl) and compiles in a unit cache of its own, since FPC
-  does not recompile a unit for new options; G2_FPC_FLAGS carries its compiler options }
-procedure BuildG2Program(const ASource, ATarget, AOutput: string);
+  does not recompile a unit for new options; GOCCIA_FPC_FLAGS carries its compiler options }
+procedure BuildEngineProgram(const ASource, ATarget, AOutput: string);
 var
   UnitDir, Output, HostOutput, TargetOutput, Variant, Program_: string;
 begin
-  Variant := GetEnvironmentVariable('G2_VARIANT');
+  Variant := GetEnvironmentVariable('GOCCIA_VARIANT');
   Program_ := AOutput + Variant;
   WriteLn('');
   WriteLn('Building ', Program_, ' (G2)...');
-  GenerateG2Preludes;
-  EnsureG2Snapshot(ATarget);
+  GenerateEnginePreludes;
+  EnsureEngineSnapshot(ATarget);
   { its own unit cache per mode: G2 builds incrementally (no -B), and FPC does not recompile a unit for new options }
   UnitDir := TargetUnitOutputDirectory(ATarget);
   if BuildMode <> bmProd then
     UnitDir := UnitDir + '-dev';
   if Variant <> '' then
     UnitDir := UnitDir + '-' + LowerCase(Variant);
-  if G2CrossBuild then
+  if GocciaCrossBuild then
   begin
-    ForceDirectories('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host');
-    HostOutput := G2Executable('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host' +
+    ForceDirectories('build' + DirectorySeparator + 'engine' + DirectorySeparator + 'host');
+    HostOutput := GocciaExecutable('build' + DirectorySeparator + 'engine' + DirectorySeparator + 'host' +
       DirectorySeparator + ExtractFileName(Program_), True);
-    if not CompileG2Program(ASource, UnitDir + '-host', HostOutput, ATarget, Output, True) then
+    if not CompileEngineProgram(ASource, UnitDir + '-host', HostOutput, ATarget, Output, True) then
       PrintBuildFailureAndExit(Output, HostOutput + ' build failed');
-    SnapshotG2Preludes(HostOutput, ATarget);
+    SnapshotEnginePreludes(HostOutput, ATarget);
     { the target's own unit cache: units compiled for another platform }
     UnitDir := UnitDir + '-' + LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU')) + '-' +
       LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
-    TargetOutput := G2Executable(Program_, False);
-    if not CompileG2Program(ASource, UnitDir, TargetOutput, ATarget, Output) then
+    TargetOutput := GocciaExecutable(Program_, False);
+    if not CompileEngineProgram(ASource, UnitDir, TargetOutput, ATarget, Output) then
       PrintBuildFailureAndExit(Output, TargetOutput + ' build failed');
     WriteLn(TargetOutput, ' built successfully');
     Exit;
   end;
-  if not CompileG2Program(ASource, UnitDir, Program_, ATarget, Output) then
+  if not CompileEngineProgram(ASource, UnitDir, Program_, ATarget, Output) then
     PrintBuildFailureAndExit(Output, Program_ + ' build failed');
-  CheckG2ThreadVarRelocations(UnitDir);
-  if SnapshotG2Preludes(Program_, ATarget) then
+  CheckEngineThreadVarRelocations(UnitDir);
+  if SnapshotEnginePreludes(Program_, ATarget) then
   begin
     WriteLn('Prelude snapshot changed: compiling again with it');
-    DeleteFile(UnitDir + DirectorySeparator + 'G2.Snapshot.ppu');
-    DeleteFile(UnitDir + DirectorySeparator + 'G2.Snapshot.o');
-    if not CompileG2Program(ASource, UnitDir, Program_, ATarget, Output) then
+    DeleteFile(UnitDir + DirectorySeparator + 'Goccia.Snapshot.ppu');
+    DeleteFile(UnitDir + DirectorySeparator + 'Goccia.Snapshot.o');
+    if not CompileEngineProgram(ASource, UnitDir, Program_, ATarget, Output) then
       PrintBuildFailureAndExit(Output, Program_ + ' build failed');
-    CheckG2ThreadVarRelocations(UnitDir);
+    CheckEngineThreadVarRelocations(UnitDir);
   end;
   WriteLn(Program_, ' built successfully');
 end;
 
 { native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
-procedure CheckG2Compiler;
+procedure CheckEngineCompiler;
 var
   Version: string;
 begin
@@ -1026,59 +1026,59 @@ begin
   end;
 end;
 
-procedure BuildG2;
+procedure BuildEngine;
 begin
-  CheckG2Compiler;
-  ForceDirectories('build' + DirectorySeparator + 'g2');
-  BuildG2Program('source/g2/g2.dpr', 'g2', 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'g2');
+  CheckEngineCompiler;
+  ForceDirectories('build' + DirectorySeparator + 'engine');
+  BuildEngineProgram('source/engine/goccia.dpr', 'engine', 'build' + DirectorySeparator + 'engine' + DirectorySeparator + 'goccia');
 end;
 
 procedure BuildRunner;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaRunner.dpr', 'runner', 'build' + DirectorySeparator + 'GocciaRunner');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaRunner.dpr', 'runner', 'build' + DirectorySeparator + 'GocciaRunner');
 end;
 
 procedure BuildTestRunner;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaTestRunner.dpr', 'testrunner', 'build' + DirectorySeparator + 'GocciaTestRunner');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaTestRunner.dpr', 'testrunner', 'build' + DirectorySeparator + 'GocciaTestRunner');
 end;
 
 procedure BuildREPL;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaREPL.dpr', 'repl', 'build' + DirectorySeparator + 'GocciaREPL');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaREPL.dpr', 'repl', 'build' + DirectorySeparator + 'GocciaREPL');
 end;
 
 procedure BuildBenchmarkRunner;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaBenchmarkRunner.dpr', 'benchmarkrunner', 'build' + DirectorySeparator + 'GocciaBenchmarkRunner');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaBenchmarkRunner.dpr', 'benchmarkrunner', 'build' + DirectorySeparator + 'GocciaBenchmarkRunner');
 end;
 
 procedure BuildGocciaBundler;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaBundler.dpr', 'bundler', 'build' + DirectorySeparator + 'GocciaBundler');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaBundler.dpr', 'bundler', 'build' + DirectorySeparator + 'GocciaBundler');
 end;
 
 procedure BuildTest262Runner;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaTest262Runner.dpr', 'test262runner', 'build' + DirectorySeparator + 'GocciaTest262Runner');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaTest262Runner.dpr', 'test262runner', 'build' + DirectorySeparator + 'GocciaTest262Runner');
 end;
 
 procedure BuildFuzzHarness;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaFuzzHarness.dpr', 'fuzzharness', 'build' + DirectorySeparator + 'GocciaFuzzHarness');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaFuzzHarness.dpr', 'fuzzharness', 'build' + DirectorySeparator + 'GocciaFuzzHarness');
 end;
 
 procedure BuildScriptLoaderBare;
 begin
-  CheckG2Compiler;
-  BuildG2Program('source/app/GocciaScriptLoaderBare.dpr', 'loaderbare', 'build' + DirectorySeparator + 'GocciaScriptLoaderBare');
+  CheckEngineCompiler;
+  BuildEngineProgram('source/app/GocciaScriptLoaderBare.dpr', 'loaderbare', 'build' + DirectorySeparator + 'GocciaScriptLoaderBare');
 end;
 
 { Worker threads only compile. The coordinator joins every started worker and
@@ -1313,7 +1313,7 @@ begin
     btBenchmarkRunner: BuildBenchmarkRunner;
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;
-    btG2: BuildG2;
+    btEngine: BuildEngine;
   end;
 end;
 
@@ -1340,10 +1340,10 @@ begin
       BuildMode := bmProd
     else if (ParamStr(I) = '--gc-stress') or (ParamStr(I) = '--layout-probe') then
     begin
-      { G2 has no stress build: its binaries take --gc-stress and --gc-verify, and the G2_NURSERY_KB
-        environment variable shrinks the nursery (scripts/g2/gcstress.sh) }
+      { G2 has no stress build: its binaries take --gc-stress and --gc-verify, and the GOCCIA_NURSERY_KB
+        environment variable shrinks the nursery (scripts/engine/gcstress.sh) }
       WriteLn(ParamStr(I), ' built the old engine, which is gone; G2''s binaries take --gc-stress and ',
-        '--gc-verify at run time (scripts/g2/gcstress.sh)');
+        '--gc-verify at run time (scripts/engine/gcstress.sh)');
       Halt(1);
     end
     else if ParamStr(I) = '--clean' then

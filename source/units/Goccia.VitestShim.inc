@@ -1,5 +1,5 @@
 { The vitest compatibility shim's module source (docs/testing-api.md, Vitest compatibility): the body of a
-  function returning it, with LB the line break. Shared by Goccia.RuntimeExtensions.VitestCompat and G2.HostAPI. }
+  function returning it, with LB the line break. Shared by Goccia.RuntimeExtensions.VitestCompat and Goccia.HostAPI. }
   Result :=
     '// GocciaScript vitest compatibility shim. Shipped inside the runner.' + LB +
     'import {' + LB +

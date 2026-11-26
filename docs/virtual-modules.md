@@ -128,7 +128,7 @@ records, values, evaluation state, and caches.
 
 ## Embedding API
 
-`TG2Engine` (`G2.Embed`) defines virtual modules before `Run`, after
+`TGocciaEngine` (`Goccia.Embed`) defines virtual modules before `Run`, after
 `PrepareHost`; each call returns False with the reason in `Err`:
 
 ```pascal

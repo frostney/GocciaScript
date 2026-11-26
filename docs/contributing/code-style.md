@@ -20,7 +20,7 @@
 
 ### Compiler Directives
 
-Every unit outside `source/g2` includes the shared compiler directives file:
+Every unit outside `source/engine` includes the shared compiler directives file:
 
 ```pascal
 {$I Goccia.inc}
@@ -39,7 +39,7 @@ Which includes `Shared.inc` and so sets:
 Overflow and range checks are **enabled** in a development build of the Pascal test programs, so they catch an
 out-of-range index or a wrapped integer there. The applications always build with `-dPRODUCTION`
 ([Build System — Build Mode Flags](../build-system.md#build-mode-flags)), which turns them off, and the engine's
-own units in `source/g2` turn them off in every build (`G2.Checks.inc`).
+own units in `source/engine` turn them off in every build (`Goccia.Checks.inc`).
 
 Keep the entire compiler-conditional routine directive sequence on the
 declaration's final line:
@@ -69,7 +69,7 @@ Source files live in five directories under `source/`, each with different namin
 
 | Directory | Purpose | Unit prefix | Include file | Example |
 |-----------|---------|-------------|-------------|---------|
-| `source/g2/` | The engine: compiler, bytecode, VM, object model, collector and built-ins, plus its JavaScript preludes in `source/g2/prelude/` | `G2.*` | `{$I G2.Checks.inc}` after the unit's own mode directives | `G2.VM.pas` |
+| `source/engine/` | The engine: compiler, bytecode, VM, object model, collector and built-ins, plus its JavaScript preludes in `source/engine/prelude/` | `G2.*` | `{$I Goccia.Checks.inc}` after the unit's own mode directives | `Goccia.VM.pas` |
 | `source/units/` | GocciaScript-specific units the engine and the applications share: lexer, parser and AST, the RegExp compiler, modules and packages, coverage and profiling, error text | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Parser.pas` |
 | `source/shared/` | Reusable infrastructure — not GocciaScript-specific | No prefix | `{$I Shared.inc}` | `HashMap.pas`, `StringBuffer.pas`, `CLI.Options.pas` |
 | `source/generated/` | Generated source and resources consumed by the runtime; do not edit by hand | No required prefix | Generator-defined | `Generated.TimeZoneData.pas`, `Generated.TimeZoneData.res` |
@@ -77,9 +77,9 @@ Source files live in five directories under `source/`, each with different namin
 
 Generated units should contain generated data, generated resource links, and the minimum schema needed to describe that data. Hand-authored lookup, decoding, validation, and other behavior belongs in `source/units/` or `source/shared/`, depending on ownership.
 
-**When to use `Goccia.*`:** Any GocciaScript-specific unit outside the engine (parser, modules, CLI wiring, reports, etc.). The engine's own units live in `source/g2/` and use `G2.*`.
+**When to use `Goccia.*`:** Any GocciaScript-specific unit outside the engine (parser, modules, CLI wiring, reports, etc.). The engine's own units live in `source/engine/` and use `G2.*`.
 
-**`source/g2/` is outside these Pascal rules.** `./format.pas` covers `source/app`, `source/units` and `source/shared`, and the pre-commit format hook skips `source/g2`. G2's units keep their own style (parameters without the `A` prefix, short type names such as `TValue` and `PObj`, threadvars for engine state) and follow G2's own [working rules](../g2/README.md#working-rules).
+**`source/engine/` is outside these Pascal rules.** `./format.pas` covers `source/app`, `source/units` and `source/shared`, and the pre-commit format hook skips `source/engine`. G2's units keep their own style (parameters without the `A` prefix, short type names such as `TValue` and `PObj`, threadvars for engine state) and follow G2's own [working rules](../engine/README.md#working-rules).
 
 **When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
 
@@ -159,7 +159,7 @@ begin
 end;
 ```
 
-This is `Goccia.NumberConversion`. G2's units in `source/g2` usually cite the clause number in a brace comment instead (`{ 20.2.1.1.1 CreateDynamicFunction: ... }`).
+This is `Goccia.NumberConversion`. G2's units in `source/engine` usually cite the clause number in a brace comment instead (`{ 20.2.1.1.1 CreateDynamicFunction: ... }`).
 
 **Format:** `// ESYYYY §X.Y.Z SpecMethodName(specParams)`
 
@@ -394,7 +394,7 @@ Units are organized by category using dot-separated names:
 | `Goccia.Profiler.*` | Profile reports | `Compile`, `Report` |
 | `Goccia.Temporal.*` | Temporal calendar and time zone data | `Calendar`, `TimeZone`, `TimeZoneData`, `Utils` |
 
-The engine's units in `source/g2/` take a flat `G2.<Name>` instead (`G2.Core`, `G2.Compiler`, `G2.VM`, `G2.ObjModel`).
+The engine's units in `source/engine/` take a flat `G2.<Name>` instead (`Goccia.Core`, `Goccia.Compiler`, `Goccia.VM`, `Goccia.ObjModel`).
 
 ### Collection Return Types
 
@@ -408,8 +408,8 @@ When a method only needs to expose elements for iteration, an indexed getter wit
 
 2. **OOP over everything** — Rely on type safety of specialized classes. Each concept gets its own class rather than using generic data structures.
 
-3. **Separation of concerns** — Each unit has a single, clear responsibility. The parser doesn't know about built-ins; the VM (`G2.VM`) runs the bytecode `G2.Compiler` makes from the AST, never the AST itself.
+3. **Separation of concerns** — Each unit has a single, clear responsibility. The parser doesn't know about built-ins; the VM (`Goccia.VM`) runs the bytecode `Goccia.Compiler` makes from the AST, never the AST itself.
 
 4. **Minimal public API** — Units expose only what's needed. Implementation details stay in the `implementation` section.
 
-5. **No global mutable state** — In `source/units`, `source/shared` and `source/app`, state flows through parameters and objects rather than global variables; per-thread state (a profiler, a coverage tracker) is a threadvar instance. The engine is the exception by design: every piece of its state is a threadvar, one engine per thread (`G2.Engine`).
+5. **No global mutable state** — In `source/units`, `source/shared` and `source/app`, state flows through parameters and objects rather than global variables; per-thread state (a profiler, a coverage tracker) is a threadvar instance. The engine is the exception by design: every piece of its state is a threadvar, one engine per thread (`Goccia.Engine`).

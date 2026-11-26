@@ -122,7 +122,7 @@ type
       realm (the old engine's TGocciaValue); nil for the root run. }
     ResultValue: TObject;
     { The same copy for an engine whose values cannot outlive their thread
-      (G2): encoded by the child (G2.Sandbox EncodeSandboxValue), decoded in
+      (G2): encoded by the child (Goccia.Sandbox EncodeSandboxValue), decoded in
       the calling program's realm. }
     ResultEncoded: string;
     HasResultEncoded: Boolean;

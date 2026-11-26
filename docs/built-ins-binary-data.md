@@ -11,7 +11,7 @@
 - **TypedArrays** — array-like views over buffer data with 12 element types (Int8 through Float64, BigInt64, BigUint64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
 
-ArrayBuffer, the typed arrays and DataView are implemented in `G2.TypedArrays` over the storage in `G2.Typed`; SharedArrayBuffer and Atomics in `G2.Atomics` over `G2.Shared`; the Uint8Array encoding methods in `source/g2/prelude/builtins5.js`.
+ArrayBuffer, the typed arrays and DataView are implemented in `Goccia.TypedArrays` over the storage in `Goccia.Typed`; SharedArrayBuffer and Atomics in `Goccia.Atomics` over `Goccia.Shared`; the Uint8Array encoding methods in `source/engine/prelude/builtins5.js`.
 
 ## ArrayBuffer
 
@@ -21,7 +21,7 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, `DataView` setters, and `TextEncoder.prototype.encodeInto` throw `TypeError`. `slice`, `map`, `filter`, `TypedArray.from`, and `TypedArray.of` also throw `TypeError` when the species or `this` constructor returns a view of an immutable buffer, including the source's own buffer; `subarray` only reads, so its result may view one. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
 
-Its bytes live in one zero-filled bytes cell on the engine's heap (`G2.Typed`); a resizable buffer's cell holds `maxByteLength` bytes. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors)).
+Its bytes live in one zero-filled bytes cell on the engine's heap (`Goccia.Typed`); a resizable buffer's cell holds `maxByteLength` bytes. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors)).
 
 ## SharedArrayBuffer
 
