@@ -766,8 +766,9 @@ begin
     Require(FileExists(Result), 'SafeSEH manifest unavailable: ' + Result);
     Exit;
   end;
-  // Compiled tools normally live under build/. Walk toward the repository;
-  // instantfpc's cache is outside it, so also support the repository cwd.
+  // Compiled tools, instantfpc's "build/instantfpc cache" among them, normally
+  // live under build/. Walk toward the repository, and also support the
+  // repository cwd for a tool compiled outside it.
   Directory := ExtractFileDir(ExpandFileName(ParamStr(0)));
   repeat
     Result := IncludeTrailingPathDelimiter(Directory) + MANIFEST_NAME;
