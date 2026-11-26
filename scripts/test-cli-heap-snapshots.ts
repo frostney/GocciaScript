@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TESTRUNNER } from "./test-cli/binaries";
+import { FUZZHARNESS, TESTRUNNER } from "./test-cli/binaries";
 
 // Each accepted root must restore into a fresh engine. Module records are not
 // written: the restore compiles the entry's imported module without evaluating
@@ -114,4 +114,33 @@ const collected = Bun.spawnSync([
 ], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
 if (collected.exitCode !== 0 || JSON.parse(collected.stdout.toString()).ok !== true)
   throw new Error(`GC, dynamic-function or class-template round trip failed: ${collected.stderr}`);
+// A snapshot whose value slot names an internal cell (a value array, an
+// upvalue, an accessor) used to restore, and String() of it then converted
+// that cell forever without polling the deadline: the fuzz job's hangs. Every
+// one-bit change of a stretch of a seed that holds such references must be
+// refused or restored and exercised within the harness's own budget.
+{
+  const dir = mkdtempSync(join(tmpdir(), "goccia-snapshot-flips-"));
+  try {
+    const seeds = Bun.spawnSync([FUZZHARNESS, "--write-heap-snapshot-seeds", dir], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (seeds.exitCode !== 0) throw new Error(`Writing the heap snapshot seeds failed: ${seeds.stderr}`);
+    const seed = readFileSync(join(dir, "heap-snapshot-1.ghsn"));
+    const mutant = join(dir, "mutant.ghsn");
+    const slow: string[] = [];
+    for (let pos = 150; pos < Math.min(seed.length, 260); pos++) {
+      for (let bit = 0; bit < 8; bit++) {
+        const bytes = Buffer.from(seed);
+        bytes[pos] ^= 1 << bit;
+        writeFileSync(mutant, bytes);
+        const started = performance.now();
+        const run = Bun.spawnSync([FUZZHARNESS, "--heap-snapshot", mutant], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+        const ms = performance.now() - started;
+        if (run.exitCode !== 0 || ms > 4000) slow.push(`byte ${pos} bit ${bit}: exit ${run.exitCode} after ${Math.round(ms)} ms`);
+      }
+    }
+    if (slow.length > 0) throw new Error(`One-bit changes of a heap snapshot seed hang or fail:\n${slow.join("\n")}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 console.log("Heap snapshot CLI: module, global and module-only expectations passed");

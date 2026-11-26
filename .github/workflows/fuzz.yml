@@ -162,6 +162,14 @@ jobs:
           crashes=$(find build/fuzz/out -path '*/crashes/id:*' 2>/dev/null | wc -l)
           hangs=$(find build/fuzz/out -path '*/hangs/id:*' 2>/dev/null | wc -l)
           echo "AFL crashes: $crashes, hangs: $hangs"
+          # upload-artifact refuses a file name with a colon, and AFL names
+          # every finding id:...,src:...: the copies get underscores
+          for kind in crashes hangs; do
+            mkdir -p "build/fuzz/reproducers/$kind"
+            find build/fuzz/out -path "*/$kind/id:*" -type f 2>/dev/null | while read -r f; do
+              cp "$f" "build/fuzz/reproducers/$kind/$(basename "$f" | tr ',:' '__')"
+            done
+          done
           if [ "$crashes" -gt 0 ] || [ "$hangs" -gt 0 ]; then
             echo "::error::afl-fuzz recorded $crashes crashing input(s) and $hangs hanging input(s)"
             exit 1
@@ -173,8 +181,7 @@ jobs:
         with:
           name: fuzz-reproducers
           path: |
-            build/fuzz/out/**/crashes/**
-            build/fuzz/out/**/hangs/**
+            build/fuzz/reproducers/**
             build/fuzz/findings/**
           if-no-files-found: ignore
           retention-days: 30
@@ -342,6 +349,14 @@ jobs:
           crashes=$(find build/fuzz/heap-snapshot-out -path '*/crashes/id:*' 2>/dev/null | wc -l)
           hangs=$(find build/fuzz/heap-snapshot-out -path '*/hangs/id:*' 2>/dev/null | wc -l)
           echo "AFL crashes: $crashes, hangs: $hangs"
+          # upload-artifact refuses a file name with a colon, and AFL names
+          # every finding id:...,src:...: the copies get underscores
+          for kind in crashes hangs; do
+            mkdir -p "build/fuzz/heap-snapshot-reproducers/$kind"
+            find build/fuzz/heap-snapshot-out -path "*/$kind/id:*" -type f 2>/dev/null | while read -r f; do
+              cp "$f" "build/fuzz/heap-snapshot-reproducers/$kind/$(basename "$f" | tr ',:' '__')"
+            done
+          done
           if [ "$crashes" -gt 0 ] || [ "$hangs" -gt 0 ]; then
             echo "::error::afl-fuzz recorded $crashes crashing snapshot(s) and $hangs hanging snapshot(s)"
             exit 1
@@ -353,8 +368,7 @@ jobs:
         with:
           name: heap-snapshot-fuzz-reproducers
           path: |
-            build/fuzz/heap-snapshot-out/**/crashes/**
-            build/fuzz/heap-snapshot-out/**/hangs/**
+            build/fuzz/heap-snapshot-reproducers/**
             build/fuzz/heap-snapshot-replay-failures/**
           if-no-files-found: ignore
           retention-days: 30

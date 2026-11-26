@@ -3581,6 +3581,9 @@ begin
   { the conversion stops at a spent limit (TBigInteger's abort check) }
   if IsBigInt(V) then begin Res := StrFromUnicode(BigToString(V)); Exit(PollInterrupt); end;
   if not ToPrimitiveV(V, True, P) then Exit(False);
+  { a cell that is no value (only a malformed heap could hold one) is its own primitive: converting it again would
+    not end }
+  if P = V then Exit(ThrowTypeError('Cannot convert value to a string'));
   Result := ToStringV(P, Res);
 end;
 
@@ -4188,6 +4191,8 @@ begin
     O^.Aux2 := MkInt(I + 1);
     if O^.OFlags = 2 then Value := MkInt(I)
     else if not GetElemV(O^.Aux1, MkInt(I), Value) then begin PopRoots(1); Exit(False); end;
+    { the read can collect (a BigInt64Array's element is a new BigInt, a getter runs) and move the iterator }
+    O := ObjOf(RootAt(TempTop - 1));
     if O^.OFlags = 3 then
     begin
       { entries: CreateArrayFromList(« index, value ») }

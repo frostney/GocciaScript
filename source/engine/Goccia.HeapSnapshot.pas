@@ -838,6 +838,15 @@ var R: TSnapReader; Base, NB, NR, NT, NC, I, J, K, N, Ix, RootNo, Cnt: Integer; 
     Result := PValueArray(PtrOf(RootAt(Base)))^.Data[Id];
   end;
 
+  { a value a script can hold: not a pointer, or a string, BigInt, symbol or object. A reference may name any cell of
+    the table, and the engine treats a value array, upvalue or accessor where a value belongs as a primitive it does
+    not know (ToString then calls ToPrimitive on it forever) }
+  procedure NeedValue(V: TValue);
+  begin
+    if IsPtr(V) and not (KindOf(V) in [ckString, ckBigInt, ckSymbol, ckObject]) then
+      raise ERefused.Create('the snapshot is malformed: a value names an internal cell');
+  end;
+
   { what each restored object's kind keeps in Aux1, Aux2 and its elements (Goccia.Core's okXxx notes), which the
     engine reads without checking: a wrapper's primitive, a bound function's callable target and [this, args...],
     a closure's home object and closed upvalues (at least as many as its template has), an array's elements and, past them,
@@ -888,6 +897,15 @@ var R: TSnapReader; Base, NB, NR, NT, NC, I, J, K, N, Ix, RootNo, Cnt: Integer; 
         Ok := True;
       end;
       if not Ok then raise ERefused.Create('the snapshot is malformed');
+      { an object's elements, and a bound function's this and arguments, are values (a hole aside) }
+      if O^.Elements <> nil then
+        for J := 0 to Integer(O^.Elements^.Len) - 1 do
+          if O^.Elements^.Data[J] <> VHole then NeedValue(O^.Elements^.Data[J]);
+      if O^.OKind = okBound then
+      begin
+        A := PValueArray(PtrOf(O^.Aux2));
+        for J := 0 to Integer(A^.Len) - 1 do NeedValue(A^.Data[J]);
+      end;
     end;
   end;
 
@@ -1202,15 +1220,18 @@ begin
           ckUpval:
             begin
               V := ReadValue;
+              NeedValue(V);
               Cell := PCell(PtrOf(TableAt(I)));
               Store(Cell, @PUpval(Cell)^.Value, V);
             end;
           ckAccessor:
             begin
               V := ReadValue;
+              NeedValue(V);
               Cell := PCell(PtrOf(TableAt(I)));
               Store(Cell, @PAccessor(Cell)^.Getter, V);
               V := ReadValue;
+              NeedValue(V);
               Cell := PCell(PtrOf(TableAt(I)));
               Store(Cell, @PAccessor(Cell)^.Setter, V);
             end;
@@ -1249,6 +1270,7 @@ begin
                 V := ReadValue;
                 if ((Flags and pfAccessor) <> 0) <> (KindOf(V) = ckAccessor) then
                   raise ERefused.Create('the snapshot is malformed');
+                if (Flags and pfAccessor) = 0 then NeedValue(V);
                 O := ObjOf(TableAt(I));
                 if GetOwnSlot(O, Key) >= 0 then raise ERefused.Create('the snapshot is malformed');
                 AddProperty(O, Key, V, Flags);
@@ -1275,6 +1297,7 @@ begin
       CheckProtoChains;
       R.Pos := RootPos;
       Root := ReadValue;
+      NeedValue(Root);
       if R.Pos <> Length(Data) then raise ERefused.Create('the snapshot is malformed');
       Result := True;
     except
