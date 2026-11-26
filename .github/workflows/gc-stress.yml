@@ -1,22 +1,23 @@
 name: GC stress
 
-# Runs the GC-sensitive part of test262 and the whole tests/ tree under the
-# GC-stress build (`./build.pas --gc-stress`): the VM runs a full collection
-# every 8 dispatched instructions, and heaptrc keeps freed blocks out of reuse.
-# A value that only a Pascal local holds while guest code runs is then freed
-# at once, so a missing GC root faults here instead of in a production run
-# that collects at the wrong moment (#1625, #1628, #1629).
+# Runs GocciaScript's tests, the GC regression scripts and the GC-sensitive part
+# of test262 under GC stress (scripts/engine/gc-stress-ci.py): a 16 KB nursery and
+# --gc-verify, so the collector runs every few kilobytes and checks the heap
+# after each collection. A value that only a Pascal local holds across an
+# allocation is then moved or freed at once, so a missing root fails here
+# instead of in a production run that collects at the wrong moment.
 #
-# The same tests also run under an ordinary development build of the same
-# commit, and only tests that pass there but fail under stress fail the job.
-# Tests that fail in both builds are known failures, not GC findings.
+# The same tests also run plainly with the same binaries, and only tests that
+# pass plainly but fail under stress fail the job. A test that fails both ways
+# is a plain failure, which the suite's own CI reports, not a GC finding.
 #
-# Weekly rather than per-PR: the stress build is two orders of magnitude
-# slower. A failing scheduled or default-branch run opens or updates one
-# tracking issue; a run on any other branch only prints what it would file.
+# Weekly rather than per-PR: verifying the heap at every collection is two
+# orders of magnitude slower. A failing scheduled or default-branch run opens
+# or updates one tracking issue; a run on any other branch only prints what it
+# would file.
 #
 # Reproducing a finding locally is documented in
-# docs/contributing/tooling.md#gc-stress-build.
+# docs/contributing/tooling.md#gc-stress.
 
 on:
   schedule:
@@ -31,12 +32,14 @@ permissions:
 
 env:
   # The frostney/fpc-toolchain build, as in ci.yml.
-  FPC_VERSION: "3.2.4-rc2-b1"
+  FPC_VERSION: "3.3.1-b9"
 
 jobs:
   gc-stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # tests/ run twice through goccia --test, the stressed run with the heap verified
+    # at every collection: hours on four cores
+    timeout-minutes: 350
     permissions:
       contents: read
       # Open or comment on the tracking issue.
@@ -48,10 +51,6 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          no-cache: true
 
       - name: Install FPC
         uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
@@ -79,23 +78,22 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Build ordinary runners
-        run: ./build.pas testrunner test262runner
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
 
-      - name: Build GC-stress runners
-        # Separate unit caches under build/compiled/gc-stress and binaries in
-        # build/gc-stress, so the two builds never share compiled units.
-        run: ./build.pas --gc-stress testrunner test262runner
+      - name: Build the engine and the test262 runner
+        run: ./build.pas --prod engine test262runner
 
-      - name: Run both builds and compare
+      - name: Run plainly and under stress, and compare
         id: stress
         # --jobs=4 matches the 4 vCPUs of ubuntu-latest for public
-        # repositories. scripts/gc-stress.ts exits 1 for stress-only failures
-        # and 2 when a run could not be completed; the result is recorded so
-        # the report and upload steps still run, and the last step fails.
+        # repositories. gc-stress-ci.py exits 1 for stress-only failures and 2
+        # when a part could not run; the result is recorded so the report and
+        # upload steps still run, and the last step fails.
         run: |
           set +e
-          bun scripts/gc-stress.ts \
+          python3 scripts/engine/gc-stress-ci.py \
             --suite-dir=test262-suite \
             --out-dir=build/gc-stress-report \
             --jobs=4
@@ -133,8 +131,8 @@ jobs:
         if: steps.stress.outputs.result != 'pass'
         run: |
           if [ "${{ steps.stress.outputs.result }}" = "stress-only" ]; then
-            echo "::error::Tests pass in an ordinary build but fail under the GC-stress build; see the job summary."
+            echo "::error::Tests pass plainly but fail under GC stress; see the job summary."
           else
-            echo "::error::The GC-stress comparison could not be completed; see the 'Run both builds and compare' step."
+            echo "::error::The GC-stress comparison could not be completed; see the 'Run plainly and under stress, and compare' step."
           fi
           exit 1

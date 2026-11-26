@@ -15,6 +15,9 @@ const
   INITIAL_TIMING_STACK_CAPACITY = 32;
 
 type
+  { The name a report gives an opcode ordinal (nil: the bytecode VM's). }
+  TGocciaOpcodeNameFunction = function(AOp: Byte): string;
+
   TGocciaProfileModeItem = (pmOpcodes, pmFunctions, pmCompile);
   TGocciaProfileMode = set of TGocciaProfileModeItem;
 
@@ -92,6 +95,10 @@ type
     class function Instance: TGocciaProfiler;
     class procedure Initialize;
     class procedure Shutdown;
+    // Makes AInstance this thread's profiler without owning it (nil gives
+    // the thread none): the engine runs each file on a thread of its own
+    // and records into the reporting thread's profiler.
+    class procedure Adopt(const AInstance: TGocciaProfiler);
 
     constructor Create;
     destructor Destroy; override;
@@ -103,6 +110,7 @@ type
     procedure RecordScalarHit; {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordScalarMiss; {$IFDEF FPC}inline;{$ENDIF}
     procedure RecordAllocation; {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordAllocations(const ACount: Int64);
     // Shape system saturation events (cold paths; see Goccia.Values.Shape):
     // an object layout hitting the transition depth limit, and a realm
     // shape table reaching capacity. Both degrade caching silently, so the
@@ -140,6 +148,11 @@ type
     property CollapsedStacks: TOrderedStringMap<Int64> read GetCollapsedStacks;
   end;
 
+
+var
+  { The opcode names the reports use; nil for the bytecode VM's. }
+  ProfilerOpcodeName: TGocciaOpcodeNameFunction = nil;
+
 implementation
 
 uses
@@ -168,6 +181,11 @@ end;
 class procedure TGocciaProfiler.Shutdown;
 begin
   FreeAndNil(ProfilerThreadInstance);
+end;
+
+class procedure TGocciaProfiler.Adopt(const AInstance: TGocciaProfiler);
+begin
+  ProfilerThreadInstance := AInstance;
 end;
 
 constructor TGocciaProfiler.Create;
@@ -301,6 +319,13 @@ begin
   if FTimingStackCount > 0 then
     Inc(FFunctionProfiles[
       FTimingStack[FTimingStackCount - 1].ProfileIndex].Allocations);
+end;
+
+procedure TGocciaProfiler.RecordAllocations(const ACount: Int64);
+begin
+  if FTimingStackCount > 0 then
+    Inc(FFunctionProfiles[
+      FTimingStack[FTimingStackCount - 1].ProfileIndex].Allocations, ACount);
 end;
 
 function TGocciaProfiler.RegisterTemplate(const AName, ASourceFile: string;

@@ -15,6 +15,10 @@
 #   shared runners. AFL_MAP_SIZE and AFL_MAPSIZE are cleared, so the map is
 #   the 1 MiB that scripts/afl/build-afl.sh builds the tools with, and
 #   AFL_AUTORESUME too: each campaign starts fresh.
+# - AFL_CRASH_EXITCODE=1: AFL counts only a signal as a crash, and the
+#   harness reports what the engine does not model (an escaped exception, an
+#   access violation FPC turned into one) by catching it and exiting 1, so
+#   without it no such finding reaches crashes/.
 # - -t 5000: the harness's own budget is 1000 ms and a harness timeout is a
 #   normal exit-0 outcome, so AFL's exec threshold sits well above it;
 #   otherwise process overhead around a legitimate slow input lands it in
@@ -23,9 +27,11 @@
 #   calibration, and writes its final stats. It does not reliably exit on a
 #   SIGTERM: run 31771115536 sat 43 more minutes on one until the job's
 #   60-minute cap cancelled it, and v5.03c ignored timeout's every time (run
-#   45623922253). timeout -k 60 stays as a backstop 15 minutes past
-#   <seconds>, for the calibration (about 6 minutes for the script corpus on
-#   a runner). afl-fuzz still running then has stalled, which fails the run.
+#   45623922253). timeout -k 60 stays as a backstop 30 minutes past
+#   <seconds>, for the calibration: the engine's instrumented harness takes
+#   about 19 minutes over the script corpus's 2,064 seeds on a runner at -O-
+#   (run 45852001706), and less at the -O4 the workflow builds it with.
+#   afl-fuzz still running then has stalled, which fails the run.
 #   Findings are written to crashes/ and hangs/ as they are discovered, so a
 #   kill loses no reproducers, only the final stats.
 set -euo pipefail
@@ -56,7 +62,7 @@ if ! [[ $seconds =~ ^[0-9]+$ ]] || [ -z "$digits" ] || [ ${#digits} -gt 4 ] ||
   exit 2
 fi
 seconds=$((10#$digits))
-deadline=$((seconds + 900))
+deadline=$((seconds + 1800))
 
 # A fresh campaign only: on a resume afl-fuzz's run_time includes the earlier
 # run, so the check below could not tell whether this one ran its course.
@@ -69,7 +75,7 @@ mkdir -p "$out"
 status=0
 started=$SECONDS
 env -u AFL_MAP_SIZE -u AFL_MAPSIZE -u AFL_AUTORESUME \
-  AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+  AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 AFL_CRASH_EXITCODE=1 \
   timeout -k 60 "$deadline" afl-fuzz -V "$seconds" -t 5000 \
   -i "$seeds" -o "$out" -- "$@" || status=$?
 elapsed=$((SECONDS - started))

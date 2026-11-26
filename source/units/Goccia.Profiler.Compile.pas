@@ -143,6 +143,9 @@ type
     class function Instance: TGocciaCompileProfiler;
     class procedure Initialize;
     class procedure Shutdown;
+    // Makes AInstance this thread's compile profiler without owning it (nil
+    // gives the thread none), as TGocciaProfiler.Adopt.
+    class procedure Adopt(const AInstance: TGocciaCompileProfiler);
 
     constructor Create;
     destructor Destroy; override;
@@ -277,6 +280,12 @@ end;
 class procedure TGocciaCompileProfiler.Shutdown;
 begin
   FreeAndNil(CompileProfilerThreadInstance);
+end;
+
+class procedure TGocciaCompileProfiler.Adopt(
+  const AInstance: TGocciaCompileProfiler);
+begin
+  CompileProfilerThreadInstance := AInstance;
 end;
 
 constructor TGocciaCompileProfiler.Create;

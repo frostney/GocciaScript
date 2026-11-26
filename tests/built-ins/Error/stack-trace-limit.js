@@ -91,7 +91,7 @@ test("a stack-overflow RangeError under the default --max-stack is truncated", (
     caught = e;
   }
   expect(caught instanceof RangeError).toBe(true);
-  // The test runner's default --max-stack of 2,200 is far past the limit.
+  // The default bound of 200,000 nested calls is far past the limit.
   expect(depth > LIMIT).toBe(true);
   const lines = caught.stack.split("\n");
   expect(lines[0]).toBe("RangeError: Maximum call stack size exceeded");

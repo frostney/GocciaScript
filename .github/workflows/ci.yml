@@ -12,10 +12,12 @@ permissions:
   contents: read
 
 env:
-  # The frostney/fpc-toolchain release every job installs, pinned to one build.
-  # pr.yml, fuzz.yml, gc-stress.yml and timezone-data-bump.yml name the same
-  # one; moving to another build (3.2.4 final) changes this line in each.
-  FPC_VERSION: "3.2.4-rc2-b1"
+  # The frostney/fpc-toolchain release every job installs, pinned to one build:
+  # FPC 3.3.1, which the engine (source/engine) needs. pr.yml, engine.yml, fuzz.yml,
+  # gc-stress.yml and timezone-data-bump.yml name the same one; moving to
+  # another build changes this line in each, and the Win32 SafeSEH manifest
+  # (config/win32-safeseh) is audited again for it.
+  FPC_VERSION: "3.3.1-b9"
 
 jobs:
   # A newer push to main cancels the CI run of any older main commit as a whole,
@@ -167,8 +169,9 @@ jobs:
     needs: supersede
     # Only the Darwin targets need a macOS runner, the scarcest kind this
     # workflow uses; the Linux and Windows targets cross-compile on Linux.
-    # frostney/fpc-toolchain ships every target here for its runner's host;
-    # x86_64-darwin runs the x86_64 macOS compiler under Rosetta 2.
+    # Each Darwin target builds on a runner of its own architecture, as in
+    # engine.yml: build.pas makes the engine's prelude snapshot with a build for
+    # the runner's host, and there the host build is the target build.
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -181,7 +184,7 @@ jobs:
           - target: x86_64-darwin
             cpu: x86_64
             os: darwin
-            runner: macos-latest
+            runner: macos-15-intel
           - target: x86_64-linux
             cpu: x86_64
             os: linux
@@ -312,6 +315,11 @@ jobs:
           fi
           if [ "$JOBS" -gt 4 ]; then JOBS=4; fi
           python3 .github/scripts/compile-programs.py --jobs "$JOBS" "$CPU" "$OS" -- $EXTRA_FLAGS
+
+      - name: Fetch ICU for Windows
+        # Windows' icu.dll lacks part of ICU's C API, so a Windows build carries
+        # ICU's own (pinned) beside its binaries; a no-op for other targets.
+        run: bash scripts/fetch-windows-icu.sh ${{ matrix.target }} build
 
       - name: Stage build artifacts
         # -Xs already strips the ELF and PE binaries. Only Mach-O needs the
@@ -469,7 +477,12 @@ jobs:
           path: safeseh-*.json
 
       - name: Run all JavaScript tests
-        run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
+        # --timeout=120s: the macOS and Windows runners are several times
+        # slower than the Linux ones, and the default 30 s per file is there to
+        # stop a hang, not to time a file.
+        run: |
+          ./build/GocciaTestRunner -P tests --silent --no-progress --timeout=120s \
+            --output=test-results.json
 
       - name: Upload JavaScript test results
         if: always()
@@ -484,10 +497,17 @@ jobs:
         if: matrix.target == 'x86_64-linux'
         timeout-minutes: 30
         run: |
+          # A value that does not round-trip fails the step with its own error;
+          # a failing test fails it too.
           status=0
           ./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
             --output=heap-snapshot-test-results.json 2> heap-snapshot-roundtrip.log || status=$?
-          cat heap-snapshot-roundtrip.log
+          grep -E '^Heap snapshots:' heap-snapshot-roundtrip.log
+          if grep -q '^Heap snapshot failure' heap-snapshot-roundtrip.log; then
+            grep '^Heap snapshot failure' heap-snapshot-roundtrip.log | head -20
+            echo "::error::A value the suite observed did not round-trip through a heap snapshot"
+            exit 1
+          fi
           exit "$status"
 
       - name: Upload heap snapshot round-trip counts
@@ -774,6 +794,10 @@ jobs:
           path: test262-suite
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
 
       - name: Run test262 conformance suite
         continue-on-error: true

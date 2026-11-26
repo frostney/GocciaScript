@@ -83,22 +83,21 @@ test("var destructuring in for-await-of that runs zero times is undefined", asyn
   expect(b).toBe(undefined);
 });
 
+// A top-level for await is top-level await, which only a Module has: this
+// entry runs as one (docs/language.md, Entry source type), and its top-level
+// var is a binding of the module environment, not a global object property
+// (16.2.1.6.4 InitializeEnvironment).
 test("top-level var in for-await-of is visible after the loop", () => {
   expect(__gocciaForAwaitGlobalValues).toEqual([3, 4]);
   expect(__gocciaForAwaitGlobalValue).toBe(4);
-  expect(globalThis.__gocciaForAwaitGlobalValue).toBe(4);
+  expect(Object.hasOwn(globalThis, "__gocciaForAwaitGlobalValue")).toBe(false);
 });
 
 test("top-level var in for-await-of is hoisted before the loop", () => {
   expect(__gocciaForAwaitGlobalBeforeLoop).toBe(undefined);
 });
 
-test("top-level var destructuring in empty for-await-of creates global property", () => {
-  const desc = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "__gocciaForAwaitEmptyDestructured"
-  );
-  expect(typeof desc).toBe("object");
-  expect(desc.configurable).toBe(false);
-  expect(globalThis.__gocciaForAwaitEmptyDestructured).toBeUndefined();
+test("top-level var destructuring in empty for-await-of declares a module binding", () => {
+  expect(__gocciaForAwaitEmptyDestructured).toBeUndefined();
+  expect(Object.getOwnPropertyDescriptor(globalThis, "__gocciaForAwaitEmptyDestructured")).toBe(undefined);
 });

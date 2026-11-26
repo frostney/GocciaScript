@@ -265,7 +265,10 @@ describe("Array.fromAsync", () => {
     expect(asyncClosed).toBe(1);
   });
 
-  test("rejects when async iterator return() resolves to a non-object", async () => {
+  // The mapper's throw closes the iterator with a throw completion: 7.4.13
+  // AsyncIteratorClose awaits return()'s result but returns the original throw
+  // completion (step 5) before checking that result is an object (step 7).
+  test("rejects with the mapper's error even when return() resolves to a non-object", async () => {
     const asyncIterable = {
       [Symbol.asyncIterator]() {
         let i = 0;
@@ -289,7 +292,7 @@ describe("Array.fromAsync", () => {
         throw new Error("boom");
       }
       return value;
-    })).rejects.toThrow(TypeError);
+    })).rejects.toThrow("boom");
   });
 
   // Sync-iterable fallback path: when no [Symbol.asyncIterator], the
@@ -325,5 +328,53 @@ describe("Array.fromAsync non-finite array-like lengths", () => {
   test("length NaN resolves to empty array", async () => {
     const result = await Array.fromAsync({ length: NaN });
     expect(result.length).toBe(0);
+  });
+});
+
+describe("Array.fromAsync step order and iterator closing", () => {
+  // ES2026 23.1.2.2 steps 5-7: the iterator is taken before the result is
+  // constructed.
+  test("gets the iterator before constructing the result", async () => {
+    const log = [];
+    class Target {
+      constructor() {
+        log.push("construct");
+      }
+    }
+    const items = {
+      [Symbol.asyncIterator]() {
+        log.push("iterator");
+        return { next: () => Promise.resolve({ done: true }) };
+      },
+    };
+    await Array.fromAsync.call(Target, items);
+    expect(log).toEqual(["iterator", "construct"]);
+  });
+
+  // IfAbruptCloseAsyncIterator: AsyncIteratorClose with a throw completion
+  // drops whatever return() throws or rejects with.
+  test("the mapper's error survives a return() that rejects or throws", async () => {
+    const make = (onReturn) => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => Promise.resolve({ value: 1, done: false }),
+          return: onReturn,
+        };
+      },
+    });
+    const mapperError = new TypeError("from the mapper");
+    const fail = () => {
+      throw mapperError;
+    };
+    let returned = 0;
+    await expect(Array.fromAsync(make(() => {
+      returned++;
+      return Promise.reject(new RangeError("from return"));
+    }), fail)).rejects.toBe(mapperError);
+    await expect(Array.fromAsync(make(() => {
+      returned++;
+      throw new RangeError("from return");
+    }), fail)).rejects.toBe(mapperError);
+    expect(returned).toBe(2);
   });
 });

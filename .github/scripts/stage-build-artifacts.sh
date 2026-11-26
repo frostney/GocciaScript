@@ -56,6 +56,14 @@ for src in "${entrypoints[@]}"; do
   fi
 done
 
+# A Windows build's ICU (scripts/fetch-windows-icu.sh) goes beside its
+# binaries, with ICU's license; other builds use the system's.
+for icu_file in "$build_dir"/icu*.dll "$build_dir"/ICU-LICENSE.txt; do
+  if [ -f "$icu_file" ]; then
+    cp "$icu_file" "$artifact_dir/"
+  fi
+done
+
 if [ -n "$include_tests" ]; then
   copied_test=0
 

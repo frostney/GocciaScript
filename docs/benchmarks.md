@@ -222,18 +222,18 @@ The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
 2. Scans the provided path for script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`), skipping anything under a `helpers/` directory.
-3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
+3. For each file, creates a fresh `TGocciaEngine` (`Goccia.Embed`) on a thread of its own, with the loader's host (no timer globals) and the benchmark API (`InstallBenchmarkAPI`, which `Goccia.HostAPI` implements with the `goccia:microbench` prelude, `source/engine/prelude/microbench.js`).
 4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
-5. Measures lex, parse, compile, script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
+5. Measures compile time (lexing and parsing included) and execution time (the script and its benchmarks) with nanosecond precision via `TimingUtils.GetNanoseconds`. Lexing and parsing are not timed on their own, so the report's lex and parse fields are 0.
 6. `group()` calls execute immediately, registering nested `bench()` entries.
 7. After the script finishes, the runner auto-runs any benchmarks that were registered but not already consumed by a script-callable `run()`:
    - **Setup:** Advances generator callbacks to their first `yield` (timed) when a benchmark uses generator-style setup.
    - **Warmup:** Configurable iterations to stabilize (default 5). The yielded function or plain benchmark function is called for each iteration.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime` with `CLOCK_MONOTONIC` on Linux and `CLOCK_MONOTONIC_RAW` on macOS, where `CLOCK_MONOTONIC` only advances in whole microseconds; `QueryPerformanceCounter` on Windows).
-   - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
+   - **Measure:** Runs multiple measurement rounds (default 7, `GOCCIA_BENCH_ROUNDS`, at most 50). A full collection runs before the warm-up and again after calibration, so the rounds start from a collected heap; the collector is not paused during the rounds. After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
    - **Sample:** Individually times at most 10,000 calibrated invocations. This separate pass leaves historical ops/sec and variance semantics unchanged and cannot add more invocations than calibration selected.
    - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
-8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
+8. After each file completes, its engine is freed with its heap, so the next file starts on a fresh one.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
 10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If a file registered no benchmarks, or any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs` (outside `--profile-deterministic`, where throughput fields are placeholders), the process exits with code 1.
 
@@ -328,6 +328,9 @@ Benchmark Summary
   Total benchmarks: 3
   Total duration: 10.04s
 ```
+
+The excerpt comes from the old engine. The phase line now also shows `Compile:`, a figure
+that includes lexing and parsing, and its `Lex:` and `Parse:` figures are zero.
 
 Phase durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5µs display as `ns`, values below 0.5ms as `µs`, values below 10s as `ms` with two decimal places, and larger values as `s`.
 
@@ -600,9 +603,7 @@ node scripts/awfy-comment.js tmp/ab.json
 
 Read the instruction delta first. A per-opcode change that removes work shows
 fewer instructions in the benchmarks that run the opcode and none elsewhere;
-its time deltas elsewhere are placement. The layout probe
-([Dispatch layout](bytecode-vm.md#dispatch-layout)) measures how large
-placement deltas are on the machine at hand.
+its time deltas elsewhere are placement.
 
 ### Issue Acceptance Criteria
 
@@ -624,7 +625,7 @@ profile evidence for the mechanism.
 
 The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
 workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is
-one of the two lanes (with AWFY) that measure the interpreter against QuickJS for
+one of the two lanes (with AWFY) that measure GocciaScript against QuickJS for
 the first performance target ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)), not an attempt to
 reproduce the official browser suite.
 

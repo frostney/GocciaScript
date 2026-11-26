@@ -10,7 +10,6 @@ uses
   FileUtils,
   TestingPascalLibrary,
 
-  Goccia.GarbageCollector,
   Goccia.ScriptLoader.Input,
   Goccia.TestSetup;
 
@@ -358,12 +357,7 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(TScriptLoaderInputTests.Create('ScriptLoader Input'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(TScriptLoaderInputTests.Create('ScriptLoader Input'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

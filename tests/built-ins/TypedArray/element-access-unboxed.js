@@ -182,7 +182,11 @@ describe("TypedArray unboxed element fast path", () => {
       seed[0] = 23;
       const view = new Uint8Array(mutable.transferToImmutable());
 
-      view[0] = 99;
+      // [[Set]] returns false for an immutable buffer (Immutable ArrayBuffer
+      // proposal, 10.4.5.5): a TypeError in strict code
+      expect(() => {
+        view[0] = 99;
+      }).toThrow(TypeError);
       expect(view[0]).toBe(23);
     });
 

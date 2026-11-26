@@ -10,15 +10,11 @@ uses
   SysUtils,
 
   Goccia.Compliance,
-  Goccia.GarbageCollector,
-  Goccia.JSON,
+  Goccia.DataTree,
+  Goccia.DataTree.JSON,
   Goccia.JSON.Utils,
   Goccia.TextFiles,
-  Goccia.Threading,
   Goccia.TOML,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
 
   FileUtils,
   StringBuffer;
@@ -156,72 +152,73 @@ begin
     Delete(Result, 1, 1);
 end;
 
-function CompareTaggedJSON(const AExpected, AActual: TGocciaValue;
+function LeafText(const ANode: TGocciaDataNode): string;
+begin
+  case ANode.Kind of
+    dnkString:
+      Result := ANode.StringValue;
+    dnkNull:
+      Result := 'null';
+  else
+    Result := ANode.ToText;
+  end;
+end;
+
+function CompareTaggedJSON(const AExpected, AActual: TGocciaDataNode;
   const APath: string; out AMessage: string): Boolean;
 var
-  ExpectedObject, ActualObject: TGocciaObjectValue;
-  ExpectedArray, ActualArray: TGocciaArrayValue;
   ExpectedType, ActualType, ExpectedValue, ActualValue, ChildPath: string;
   ExpectedFloat, ActualFloat: Double;
   FloatFormat: TFormatSettings;
   I: Integer;
   ExpectedKeys: TArray<string>;
 begin
-  if ((AExpected is TGocciaObjectValue) <>
-      (AActual is TGocciaObjectValue)) or
-     ((AExpected is TGocciaArrayValue) <>
-      (AActual is TGocciaArrayValue)) then
+  if ((AExpected.Kind = dnkObject) <> (AActual.Kind = dnkObject)) or
+     ((AExpected.Kind = dnkArray) <> (AActual.Kind = dnkArray)) then
   begin
     AMessage := APath + ': JSON kinds differ';
     Exit(False);
   end;
-  if AExpected is TGocciaArrayValue then
+  if AExpected.Kind = dnkArray then
   begin
-    ExpectedArray := TGocciaArrayValue(AExpected);
-    ActualArray := TGocciaArrayValue(AActual);
-    if ExpectedArray.Elements.Count <> ActualArray.Elements.Count then
+    if AExpected.Count <> AActual.Count then
     begin
       AMessage := APath + ': array lengths differ';
       Exit(False);
     end;
-    for I := 0 to ExpectedArray.Elements.Count - 1 do
-      if not CompareTaggedJSON(ExpectedArray.Elements[I],
-          ActualArray.Elements[I], Format('%s[%d]', [APath, I]),
-          AMessage) then
+    for I := 0 to AExpected.Count - 1 do
+      if not CompareTaggedJSON(AExpected.Items[I], AActual.Items[I],
+          Format('%s[%d]', [APath, I]), AMessage) then
         Exit(False);
     Exit(True);
   end;
-  if AExpected is TGocciaObjectValue then
+  if AExpected.Kind = dnkObject then
   begin
-    ExpectedObject := TGocciaObjectValue(AExpected);
-    ActualObject := TGocciaObjectValue(AActual);
-    ExpectedKeys := ExpectedObject.GetOwnPropertyKeys;
-    if Length(ExpectedKeys) <> Length(ActualObject.GetOwnPropertyKeys) then
+    ExpectedKeys := AExpected.OwnKeys;
+    if Length(ExpectedKeys) <> Length(AActual.OwnKeys) then
     begin
       AMessage := APath + ': object keys differ';
       Exit(False);
     end;
-    if ExpectedObject.HasOwnProperty('type') and
-       ExpectedObject.HasOwnProperty('value') and
+    if AExpected.HasProperty('type') and AExpected.HasProperty('value') and
        (Length(ExpectedKeys) = 2) then
     begin
-      if not ActualObject.HasOwnProperty('type') or
-         not ActualObject.HasOwnProperty('value') then
+      if not AActual.HasProperty('type') or
+         not AActual.HasProperty('value') then
       begin
         AMessage := APath + ': malformed tagged value';
         Exit(False);
       end;
-      ExpectedType := ExpectedObject.GetProperty('type').ToStringLiteral.Value;
-      ActualType := ActualObject.GetProperty('type').ToStringLiteral.Value;
+      ExpectedType := LeafText(AExpected.GetProperty('type'));
+      ActualType := LeafText(AActual.GetProperty('type'));
       if ExpectedType <> ActualType then
       begin
         AMessage := Format('%s: expected type %s, got %s',
           [APath, ExpectedType, ActualType]);
         Exit(False);
       end;
-      ExpectedValue :=
-        ExpectedObject.GetProperty('value').ToStringLiteral.Value;
-      ActualValue := ActualObject.GetProperty('value').ToStringLiteral.Value;
+      ExpectedValue := LeafText(AExpected.GetProperty('value'));
+      ActualValue := LeafText(AActual.GetProperty('value'));
       if ExpectedType = 'float' then
       begin
         if SameText(WithoutSign(ExpectedValue), 'nan') or
@@ -259,7 +256,7 @@ begin
     end;
     for I := 0 to High(ExpectedKeys) do
     begin
-      if not ActualObject.HasOwnProperty(ExpectedKeys[I]) then
+      if not AActual.HasProperty(ExpectedKeys[I]) then
       begin
         AMessage := APath + ': object keys differ';
         Exit(False);
@@ -268,14 +265,13 @@ begin
         ChildPath := ExpectedKeys[I]
       else
         ChildPath := APath + '.' + ExpectedKeys[I];
-      if not CompareTaggedJSON(ExpectedObject.GetProperty(ExpectedKeys[I]),
-          ActualObject.GetProperty(ExpectedKeys[I]), ChildPath, AMessage) then
+      if not CompareTaggedJSON(AExpected.GetProperty(ExpectedKeys[I]),
+          AActual.GetProperty(ExpectedKeys[I]), ChildPath, AMessage) then
         Exit(False);
     end;
     Exit(True);
   end;
-  Result := AExpected.ToStringLiteral.Value =
-    AActual.ToStringLiteral.Value;
+  Result := LeafText(AExpected) = LeafText(AActual);
   if not Result then
     AMessage := APath + ': values differ';
 end;
@@ -292,8 +288,7 @@ end;
 procedure TTOMLComplianceExecutor.ExecuteCase(const ACaseID: string;
   const AIndex: Integer; out AResult: TComplianceCaseResult);
 var
-  ActualJSON, ExpectedJSON: TGocciaValue;
-  JSONParser: TGocciaJSONParser;
+  ActualJSON, ExpectedJSON: TGocciaDataTree;
   Arguments: TStringList;
   CasePath, ExpectedPath, MessageText: string;
   ProcessResult: TComplianceProcessResult;
@@ -340,11 +335,12 @@ begin
     end;
     ExpectedPath := ChangeFileExt(CasePath, '.json');
     try
-      JSONParser := TGocciaJSONParser.Create;
+      ExpectedJSON := nil;
+      ActualJSON := nil;
       try
-        ExpectedJSON := JSONParser.Parse(ReadUTF8FileText(ExpectedPath));
-        ActualJSON := JSONParser.Parse(Trim(ProcessResult.StdOutText));
-        if CompareTaggedJSON(ExpectedJSON, ActualJSON, '<root>',
+        ExpectedJSON := ParseJSONDataTree(ReadUTF8FileText(ExpectedPath));
+        ActualJSON := ParseJSONDataTree(Trim(ProcessResult.StdOutText));
+        if CompareTaggedJSON(ExpectedJSON.Root, ActualJSON.Root, '<root>',
             MessageText) then
         begin
           AResult.Outcome := coPassed;
@@ -356,7 +352,8 @@ begin
           AResult.MessageText := MessageText;
         end;
       finally
-        JSONParser.Free;
+        ActualJSON.Free;
+        ExpectedJSON.Free;
       end;
     except
       on E: Exception do
@@ -413,8 +410,6 @@ var
 begin
   if not ReadOptionValue('case', CasePath) then
     Halt(2);
-  TGarbageCollector.Initialize;
-  PinPrimitiveSingletons;
   Parser := TGocciaTOMLParser.Create;
   try
     try
@@ -444,7 +439,6 @@ begin
     end;
   finally
     Parser.Free;
-    TGarbageCollector.Shutdown;
   end;
 end;
 
@@ -495,12 +489,9 @@ begin
     SuiteDirectory, TimeoutMilliseconds);
   Coordinator := TComplianceCoordinator.Create(Executor);
   StartedAt := GetTickCount64;
-  TGarbageCollector.Initialize;
-  PinPrimitiveSingletons;
   try
     Results := Coordinator.Run(Cases, Jobs);
   finally
-    TGarbageCollector.Shutdown;
     Coordinator.Free;
     Executor.Free;
     Cases.Free;

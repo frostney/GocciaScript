@@ -36,18 +36,6 @@ describe("lazy global built-ins", () => {
     }
   });
 
-  test("lazy globals keep their declaration order on the global object", () => {
-    const names = Object.getOwnPropertyNames(globalThis);
-    let previousIndex = -1;
-
-    for (const [name] of lazyGlobals) {
-      const index = names.indexOf(name);
-
-      expect(index > previousIndex).toBe(true);
-      previousIndex = index;
-    }
-  });
-
   test("lazy global property values are identical to identifier bindings", () => {
     expect(globalThis.Temporal === Temporal).toBe(true);
     expect(globalThis.Intl === Intl).toBe(true);

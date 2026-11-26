@@ -94,12 +94,12 @@ uses
   Math,
   SysUtils,
 
+  CSVFields,
   HostOutputFiles,
   NumericText,
   TextEncoding,
   TimingUtils,
 
-  Goccia.CSV,
   Goccia.JSON.Utils;
 
 type
@@ -128,7 +128,7 @@ begin
   begin
     if Field <> Low(TBenchmarkCSVField) then
       Result := Result + ',';
-    Result := Result + TGocciaCSVStringifier.EscapeField(AFields[Field], ',');
+    Result := Result + EscapeCSVField(AFields[Field], ',');
   end;
 end;
 

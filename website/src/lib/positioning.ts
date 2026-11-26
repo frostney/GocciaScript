@@ -48,7 +48,7 @@ export const COMPILER_SUPPORT_QUESTION =
   "Does GocciaScript support FreePascal and Delphi?";
 
 export const COMPILER_SUPPORT_ANSWER =
-  "FreePascal is GocciaScript's cross-platform toolchain and builds every shipped binary. The repository also includes Delphi 12 Community Edition projects for its Win32 and Win64 application matrix: the REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler. The Delphi support contract covers those six applications and all applicable Pascal and JavaScript tests, with shared runtime semantics across both compilers.";
+  "FreePascal is GocciaScript's cross-platform toolchain: it builds every shipped binary and is the documented embedding path. Delphi support is planned for a later release; the engine builds with FreePascal only today.";
 
 export const POSITIONING_FAQS = [
   {

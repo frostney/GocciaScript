@@ -128,29 +128,28 @@ records, values, evaluation state, and caches.
 
 ## Embedding API
 
-Register one definition directly:
+`TGocciaEngine` (`Goccia.Embed`) defines virtual modules before `Run`, after
+`PrepareHost`; each call returns False with the reason in `Err`:
 
 ```pascal
-Engine.InjectModule('host:database',
-  'export const connect = () => "connected";');
+var
+  Err: UnicodeString;
+begin
+  { one definition: "address=source", or address= followed by a JSON descriptor }
+  if not Engine.DefineInlineVirtualModule(
+    'host:database=export const connect = () => "connected";', '', Err) then
+    WriteLn(Err);
+  { a module map in JSON, JSON5, TOML or YAML }
+  if not Engine.DefineManifestVirtualModules('modules.json', Err) then
+    WriteLn(Err);
+end;
 ```
 
-Register a module map from serialized configuration:
-
-```pascal
-Engine.InjectModulesFromJSON(
-  '{"host:settings":{"type":"json","content":{"version":3}}}');
-```
-
-`InjectModule` accepts optional content type and base-address arguments.
-`InjectModulesFromJSON`, `InjectModulesFromJSON5`, `InjectModulesFromTOML`, and
-`InjectModulesFromYAML` accept an optional base address. Strict JSON is part of
-the core engine; the other formats require their matching runtime extensions.
-`InjectModulesFromModule` loads a JavaScript or TypeScript default-exported map.
-
-Programmatically registered host modules use `RegisterHostModule` or
-`RegisterHostModuleProvider`. The historical `RegisterGlobalModule` names
-remain supported as compatibility aliases without warnings.
+`DefineConfigVirtualModules` reads a config file's `modules` and `module`
+keys, and `DefineModuleManifestVirtualModules` takes the module map from a
+JavaScript or TypeScript module's default export. Relative addresses and paths
+resolve from the declaring file's directory, or from the `Base` argument of
+`DefineInlineVirtualModule`.
 
 See [ADR 0094](adr/0094-virtual-modules-use-the-module-loader.md) for the
 architectural decision that keeps virtual modules inside the ordinary loader.

@@ -8,6 +8,15 @@ unit Goccia.URI;
 
 interface
 
+uses
+  SysUtils;
+
+type
+  { a malformed URI or percent-encoding (ES2026 §19.2.6.5 Encode, §19.2.6.6
+    Decode), for the engine that called the encoders to throw as a URIError;
+    the unit stays free of any engine's values }
+  EGocciaURIError = class(Exception);
+
 const
   { RFC 8089 — the scheme of the URLs import.meta.url carries for host
     files. }
@@ -26,7 +35,9 @@ function DecodeURI(const AString: string): string;
 function DecodeURIComponent(const AString: string): string;
 
 { RFC 3986 §2.3 — percent-encode file-path characters for file:// URLs.
-  Preserves unreserved characters plus sub-delims and '/', ':', '@'. }
+  Preserves unreserved characters plus sub-delims and '/', ':', '@'; every
+  other character is percent-encoded as its UTF-8 bytes (RFC 3986 §2.5), so
+  é is %C3%A9. }
 function PercentEncodePath(const APath: string): string;
 
 { RFC 8089 — the host path a `file:` URL names, the inverse of the URLs
@@ -43,14 +54,16 @@ function IsFileURL(const AText: string): Boolean;
 implementation
 
 uses
-  SysUtils,
-
   StringBuffer,
   TextEncoding,
 
   Goccia.Error.Messages,
-  Goccia.Error.Suggestions,
-  Goccia.Values.ErrorHelper;
+  Goccia.Error.Suggestions;
+
+procedure ThrowURIError(const AMessage, ASuggestion: string);
+begin
+  raise EGocciaURIError.Create(AMessage);
+end;
 
 const
   HEX_DIGITS = '0123456789ABCDEF';
@@ -363,20 +376,22 @@ end;
 function PercentEncodePath(const APath: string): string;
 var
   Buffer: TStringBuffer;
+  Bytes: RawByteString;
   I: Integer;
-  Ch: Char;
+  B: Byte;
 begin
   if Length(APath) = 0 then
     Exit('');
 
-  Buffer := TStringBuffer.Create(Length(APath));
-  for I := 1 to Length(APath) do
+  Bytes := UTF8Encode(UnicodeString(APath));
+  Buffer := TStringBuffer.Create(Length(Bytes));
+  for I := 1 to Length(Bytes) do
   begin
-    Ch := APath[I];
-    if Ch in PERCENT_ENCODE_PATH_UNESCAPED then
-      Buffer.Append(Ch)
+    B := Ord(Bytes[I]);
+    if (B < $80) and (Char(B) in PERCENT_ENCODE_PATH_UNESCAPED) then
+      Buffer.Append(Char(B))
     else
-      Buffer.Append(PercentEncodeByte(Ord(Ch)));
+      Buffer.Append(PercentEncodeByte(B));
   end;
   Result := Buffer.ToString;
 end;

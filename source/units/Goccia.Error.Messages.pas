@@ -4,7 +4,10 @@ unit Goccia.Error.Messages;
 
 interface
 
-resourcestring
+// Plain constants, not resourcestring: FPC keeps a resourcestring as an
+// AnsiString, so passing one as a string argument converts and allocates on
+// every call, and the parser passes one with every Consume.
+const
   // Scope errors
   SErrorIdentifierAlreadyDeclared = 'Identifier ''%s'' has already been declared';
   SErrorCannotAccessBeforeInit = 'Cannot access ''%s'' before initialization';

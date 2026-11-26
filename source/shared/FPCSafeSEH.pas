@@ -45,7 +45,7 @@ uses
   SHA256;
 
 const
-  MANIFEST_NAME = 'config/win32-safeseh/fpc-3.2.4.manifest';
+  MANIFEST_NAME = 'config/win32-safeseh/fpc-3.3.1.manifest';
   MANIFEST_HEADER = 'FPC-SAFESEH 2';
   // Format 1 bound source-nonseh entries to whole-file digests.
   LEGACY_MANIFEST_HEADER = 'FPC-SAFESEH 1';

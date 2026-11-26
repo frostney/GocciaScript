@@ -83,6 +83,15 @@ describe("import.meta", () => {
     expect(resolved).toBe(expected);
   });
 
+  test("import.meta.resolve percent-encodes a non-ASCII character as its UTF-8 bytes", () => {
+    // RFC 3986 §2.5: é (U+00E9) is the UTF-8 bytes C3 A9, and U+1F600 four bytes
+    const resolved = import.meta.resolve("/caf\u00e9/\u{1F600}.js");
+    const expected = driveMatch
+      ? "file:///" + driveMatch[1] + "/caf%C3%A9/%F0%9F%98%80.js"
+      : "file:///caf%C3%A9/%F0%9F%98%80.js";
+    expect(resolved).toBe(expected);
+  });
+
   test("import.meta.url percent-encodes spaces in the path", () => {
     // The URL should not contain raw spaces
     expect(import.meta.url.includes(" ")).toBe(false);

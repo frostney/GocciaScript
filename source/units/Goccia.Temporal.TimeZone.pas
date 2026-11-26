@@ -4,9 +4,17 @@ unit Goccia.Temporal.TimeZone;
 
 interface
 
+uses
+  SysUtils;
+
 type
   TTemporalTimeZoneDisambiguation = (ttzdCompatible, ttzdEarlier, ttzdLater, ttzdReject);
   TTemporalTimeZoneIdentifierArray = array of string;
+  { a local date-time the reject disambiguation cannot place
+    (LocalDateTimeToEpochMillisecondsWithDisambiguation), for the engine that
+    called it to throw as a RangeError; the unit stays free of any engine's
+    values }
+  ETemporalDisambiguationError = class(Exception);
 
 function GetSystemTimeZoneId: string;
 {$IFNDEF LAKON}
@@ -22,6 +30,10 @@ function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArra
 function TryCanonicalizeTimeZoneIdentifierCase(const ATimeZone: string;
   out ACanonicalTimeZone: string): Boolean;
 function TimeZoneIdentifiersEqual(const ALeft, ARight: string): Boolean;
+// The primary identifier of a named zone or link (CLDR's primary, as
+// GetAvailablePrimaryTimeZoneIdentifiers lists them), when it is known.
+function TryKnownPrimaryTimeZoneIdentifier(const ATimeZone: string;
+  out APrimaryTimeZone: string): Boolean;
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
 function TryGetTimeZoneTransitionMilliseconds(const ATimeZone: string;
   const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer;
@@ -52,8 +64,6 @@ implementation
   with the full implementation. }
 
 uses
-  SysUtils,
-
   CriticalSections,
 
   Goccia.Temporal.Utils;
@@ -142,15 +152,12 @@ end;
 {$ELSE}
 
 uses
-  SysUtils,
-
   CriticalSections,
   TextEncoding,
 
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Values.ErrorHelper,
   TimeZoneInformationFile,
   {$IFDEF UNIX}
   BaseUnix,
@@ -2085,8 +2092,10 @@ begin
 end;
 
 procedure ThrowDisambiguationRangeError;
+const
+  MESSAGE = 'Temporal local date-time is ambiguous or does not exist in the time zone';
 begin
-  ThrowRangeError('Temporal local date-time is ambiguous or does not exist in the time zone');
+  raise ETemporalDisambiguationError.Create(MESSAGE);
 end;
 
 function LocalDateTimeToEpochMilliseconds(const AYear, AMonth, ADay, AHour,

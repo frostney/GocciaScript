@@ -338,3 +338,47 @@ test("flags getter is generic for object receivers", () => {
     }).toThrow(TypeError);
   }
 });
+
+describe("RegExp construct with a new.target", () => {
+  const counting = (C) => {
+    const reads = { n: 0 };
+    const nt = new Proxy((class {}).bind(), {
+      get(target, key, receiver) {
+        if (key === "prototype") {
+          reads.n++;
+          return C.prototype;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    return { nt, reads };
+  };
+
+  test("reads new.target.prototype once (GetPrototypeFromConstructor)", () => {
+    const { nt, reads } = counting(RegExp);
+    const re = Reflect.construct(RegExp, [/a/g], nt);
+    expect(reads.n).toBe(1);
+    expect(Object.getPrototypeOf(re)).toBe(RegExp.prototype);
+    expect(re.source).toBe("a");
+  });
+
+  test("reads a subclass's new.target.prototype once", () => {
+    class Sub extends RegExp {}
+    const { nt, reads } = counting(Sub);
+    const re = Reflect.construct(Sub, ["b", "i"], nt);
+    expect(reads.n).toBe(1);
+    expect(Object.getPrototypeOf(re)).toBe(Sub.prototype);
+    expect(re.flags).toBe("i");
+  });
+});
+
+test("calling RegExp while a Number or String subclass converts its argument keeps the subclass prototype", () => {
+  const poke = {
+    valueOf() { RegExp({ toString() { return "a"; } }); return 1; },
+    toString() { RegExp({ toString() { return "a"; } }); return "m"; },
+  };
+  class N extends Number {}
+  class S extends String {}
+  expect(Object.getPrototypeOf(new N(poke))).toBe(N.prototype);
+  expect(Object.getPrototypeOf(new S(poke))).toBe(S.prototype);
+});

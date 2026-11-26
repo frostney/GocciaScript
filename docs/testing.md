@@ -17,7 +17,7 @@ GocciaScript uses three testing layers in priority order:
 
 1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. Every new feature or bug fix should include tests at this layer.
 2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`, `test-cli-intl-taint.ts`, `test-cli-ffi-callback-slots.ts`, `test-cli-differential.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaRunner`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading. The matchers these scripts share live in `scripts/test-cli/assertions.ts` and are themselves unit-tested by `scripts/test-cli-assertions.ts`, which spawns no binaries — a defect in a shared matcher silently weakens every harness that uses it, so its contract is locked by its own test.
-3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
+3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level front-end, data-format and host internals that are not reachable through a stable public API.
 
 When choosing where to add coverage, prefer the most public entry point — and match the **kind** of check to the layer that can actually express it:
 
@@ -27,7 +27,7 @@ When choosing where to add coverage, prefer the most public entry point — and 
 | Malformed source is **rejected** — a `SyntaxError`/early error, and its message, caret, suggestion, exit code, and JSON `error` envelope | `scripts/test-cli-parser.ts` (parser) or `scripts/test-cli-lexer.ts` (lexer), run by the CI `cli` job | A JS test **cannot** assert rejection: `eval` is not installed and the `Function` constructor is off by default, so a parse or lex error simply fails to load the whole test file. These scripts run `GocciaRunner` as a subprocess and assert on its exit code and error output |
 | CLI tool contract — output formats (`--output=json`, `--format`), `--coverage`, `--source-map`, `--timeout`, global injection, config loading, `--allow-*`/`--deny-*` permissions and `--max-*` limits | the matching `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-apps.ts`, `test-cli-config.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`), run by the CI `cli` job | Command-level behaviour over the real binaries |
 | Real-network fetch behavior requiring a live listener | JavaScript requests in `scripts/fetch-e2e.sh` with `scripts/fetch_test_server.py`, run by the PR and non-Windows main CI `cli` jobs | The ordinary `tests/` runner has no server fixture; this still exercises the public `fetch` API through `GocciaRunner` |
-| Low-level runtime/value internals not reachable from JavaScript | Pascal `*.Test.pas` | Internal-only behaviour |
+| Low-level front-end, data-format or host internals not reachable from JavaScript | Pascal `*.Test.pas` | Internal-only behaviour |
 
 A JavaScript test that merely *parses and runs* a construct — e.g. `(a / b)` evaluating to `1`, or `(/x/).test(...)` returning `true` — is a positive **execution/conformance** test. It confirms the construct works, but it does **not** prove that a *different*, malformed construct is rejected, and it is not the lexer/parser gate. When a change is about what the parser or lexer accepts or rejects (disambiguation, early errors, token classification), put the rejection cases in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`.
 
@@ -374,47 +374,15 @@ or a reproducible failure list — use `--jobs=1`.
 ./build/GocciaTestRunner tests --jobs=4
 ```
 
-#### Engine-integrity faults abort the run
+#### A file that crashes fails on its own
 
-There is one stop the runner makes on its own, without being asked for it. An
-**engine-integrity fault** — a use-after-free, an invalid dereference, a heap
-whose own bookkeeping is destroyed — unwinds past every guest `catch` to the
-host ([ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)), and when
-one escapes a test file's execution or the end-of-run inline-snapshot
-write-back, the whole run stops instead of the file being recorded as one more
-failure. Every later file would be executing on state the engine has already
-lost track of, so whatever it reported would mean nothing. (Those are the paths
-that abort. A fault from the runner's own setup — argument parsing, path
-expansion, config discovery — still lands in the shared CLI error handler that
-every Goccia binary uses, and exits `1` with no `Integrity fault:` line.)
-
-The runner names the faulting file and the exception class on stderr under a
-fixed prefix, stops dispatching files, and exits **70**:
-
-```text
-Integrity fault: EObjectCheck in tests/some/file.js: Object reference is Nil
-Integrity fault: the engine can no longer vouch for its own state, so the run is aborted and the remaining files were not executed.
-```
-
-No summary and no JSON envelope follow — a run that stopped mid-way has no total
-worth reporting. Grep CI logs for `Integrity fault:` to find these. Unlike
-`--exit-on-first-failure`, this does not let in-flight files finish: under
-`--jobs` the process ends as soon as the faulting worker has written its
-diagnostic, because a worker the watchdog has abandoned outlives the run and
-could otherwise fault after the main thread has stopped listening. The exit
-code is distinct from the ordinary failure exit `1` on purpose, so a harness can
-tell a suite that failed from a suite that stopped being trustworthy; see [CLI
-Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation
-under `--max-memory` is deliberately **not** one of these: it is a verdict on
-one file delivered by an intact heap, so it stays a per-file failure and the run
-carries on.
-
-Under `--jobs` a watchdog abandons a worker that makes no progress for twice the
-per-file timeout plus 10 s (stuck in native code that never checks the
-timeout). The file it was on fails with a `TIMEOUT (worker stalled …)` message,
-the other workers drain the queue, and the abandoned worker, if it ever runs
-on, takes no further file and records no result. When every worker is
-abandoned, the files none of them took fail as never run.
+A Pascal exception that escapes a file's run, an access violation included, is
+caught on the thread that ran the file: the file is recorded as one failed test
+with the exception's message, its engine is freed, and the run goes on with the
+other files. Each file runs under its own `--timeout` (30 seconds by default;
+`--timeout=0` disables it), which the VM checks at every backward jump and call
+and built-in loops poll, so a file stuck in a loop ends at its deadline as a
+failed file instead of holding up the run.
 
 ### Snapshot Testing
 
@@ -472,8 +440,7 @@ expect.addSnapshotSerializer({
 });
 ```
 
-Native embedders can replace snapshot text formatting through
-`IGocciaSnapshotFormatter` and persistence/source editing through
+Native embedders can replace snapshot persistence and source editing through
 `IGocciaSnapshotHost`. See
 [ADR 0096](adr/0096-host-injected-snapshot-testing.md) for the boundary.
 
@@ -549,7 +516,7 @@ See [Test Framework API](testing-api.md) for the complete test authoring referen
 
 1. **JavaScript tests are the source of truth** — The JavaScript test suite is the primary mechanism for verifying correctness and ECMAScript compatibility. If a behavior isn't covered by a JavaScript test, it isn't guaranteed.
 
-2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner executes each file in a fresh `TGocciaEngine`, and each engine owns its own [realm](core-patterns.md#realm-ownership--slot-registration). Engine tear-down between files unpins the per-engine intrinsic prototypes (`Array.prototype`, `Object.prototype`, every error and Temporal prototype, …), so userland mutations in one file — including non-configurable property additions — cannot leak into the next file even when the same worker thread runs both. When multiple explicit input paths are passed, the runner also keeps folder configs per-file; use `--config` for a deliberately shared root config. Native state that is process-wide is the exception: parallel workers are threads of one process, so they share the 64 FFI callback slots. FFI tests close every persistent callback in a `finally` block, and a check that needs the whole slot table runs in a process of its own (`scripts/test-cli-ffi-callback-slots.ts`).
+2. **Isolation** — Each test file is independent. No shared state between files. The GocciaTestRunner runs each file on a thread of its own in a fresh `TGocciaEngine` (`Goccia.Embed`); an engine's heap, realms and intrinsics belong to its thread and are freed with the engine when the file ends, so userland mutations in one file — including non-configurable property additions to `Array.prototype` or `Object.prototype` — cannot leak into the next file. When multiple explicit input paths are passed, the runner also keeps folder configs per-file; use `--config` for a deliberately shared root config. Native state that is process-wide is the exception: parallel workers are threads of one process, so they share the 64 FFI callback slots. FFI tests close every persistent callback in a `finally` block, and a check that needs the whole slot table runs in a process of its own (`scripts/test-cli-ffi-callback-slots.ts`).
 
 3. **Grouped by feature** — Tests are organized by the feature they validate, mirroring the structure of the language specification. Prototype methods live in `prototype/` subfolders; static methods live in the built-in's root folder.
 
@@ -599,12 +566,12 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, and `.mts` files. A directory named `node_modules` is never descended into: a committed `node_modules` tree is a module-resolution fixture the suites beside it import (see [Module Resolution](module-resolution.md)), not a suite of its own.
-2. For each file, creates a fresh `TGocciaEngine` with the capability set its options and `goccia.json` resolve to, applies source type from CLI/config or `.mjs`/`.mts` inference, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when that set grants `ffi` (`--allow-ffi` or the `permissions` block of the file's `goccia.json`).
-3. Loads the source. The runner calls `runTests` directly after evaluation, so a test function starts with the whole `--max-stack` limit. The runner then waits for the work the tests left pending, such as a timer an `afterAll` set, and a rejection that work leaves unhandled fails the file.
+2. For each file, on a thread of its own (at most `--jobs` at once), creates a fresh `TGocciaEngine` (`Goccia.Embed`) with the capability set its options and `goccia.json` resolve to, applies source type from CLI/config or `.mjs`/`.mts` inference, prepares the host (`TGocciaEngine.PrepareHost`: console, timers, web APIs and the `goccia:*` modules, and the `FFI` global when that set grants `ffi` through `--allow-ffi` or the `permissions` block of the file's `goccia.json`), injects `--global`/`--globals`, and installs the testing API (`InstallTestingAPI` in `Goccia.HostAPI`).
+3. Loads and runs the source (`TGocciaEngine.Run`). The testing prelude calls each test function through the host, so `--max-stack` counts from the test function's frame. After the suites, the runner waits for the work the tests left pending, such as a timer an `afterAll` set, and a rejection that work leaves unhandled fails the file.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
-5. `runTests()` executes all registered tests, reconciles snapshots through the
+5. `RunTests` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
-6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. The file's parsed AST is freed once the file is compiled, with its source text ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)). A one-file run does not collect after its file. When the run ends, each worker's runtime shuts down as the worker exits, and the main thread's once the run has reported, so the collectors destroy every value still alive and a heaptrc build reports no unfreed block.
+6. Frees the file's engine (`TGocciaEngine.Destroy`), and its heap with it, on the thread that ran the file. Every file starts on a fresh heap; there is no collection between files.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 
@@ -622,7 +589,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | GocciaRunner JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
 | GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as `GocciaRunner` and the test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
 | GocciaRunner error display | Syntax errors show source context, caret, and suggestions |
-| GocciaRunner coverage | `--coverage` summary, lcov/json file output, JSX source map translation for branch positions |
+| GocciaRunner coverage | `--coverage` summary, lcov/json file output, Istanbul's statement, line, branch (`if`, `cond-expr`, `binary-expr`, `switch`, `default-arg`) and function definitions, JSX positions |
 | GocciaRunner source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
@@ -636,22 +603,23 @@ This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `c
 
 ## Pascal Unit Tests (Tertiary)
 
-Pascal unit tests are the tertiary testing layer for low-level internals that are difficult to validate through JavaScript alone (e.g., value representation, function/scope internals, and test-framework state behavior).
+Pascal unit tests are the tertiary testing layer for low-level internals that are difficult to validate through JavaScript alone (e.g., data-format parsers, numeric conversion, coverage bookkeeping, and the snapshot store). They live beside the unit they test as `*.Test.pas` under `source/units`, `source/shared` and `source/app`. Some examples:
 
 | Test File | Tests |
 |-----------|-------|
-| `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
-| `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
-| `Goccia.Values.ArrayValue.Test.pas` | Joining an array or a typed array, and converting one to a string (template literal, `String`, `+`, `toString`), takes work linear in the result, counted in the bytes allocated at two lengths; one long string is returned without a copy and copied once when joined with more; separators between empty elements take no memory before the result; a result past the memory budget throws a catchable `RangeError` |
-| `Goccia.Builtins.TestingLibrary.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
+| `Goccia.Lexer.Test.pas` | Hashbang handling, Unicode line terminators in comments, identifier and keyword tokenization |
+| `Goccia.TOML.Test.pas` | `TGocciaTOMLParser.ParseDocument` scalar and array kinds, CRLF normalization in multiline strings, Unicode escapes and keys |
+| `Goccia.NumberConversion.Test.pas` | `ToUint32`, `ToInt32`, `ToUint16`, `ToUint8Clamp` and float32 rounding |
+| `Goccia.Coverage.Test.pas` | `TGocciaCoverageTracker.MergeFrom` summing statement, branch and function hits by location, the line count as the most among the statements starting on a line, Istanbul's ordering of sites, and report path keys |
+| `Goccia.Builtins.Testing.Snapshots.Test.pas` | Snapshot creation, comparison, update and pruning in each update mode |
 
 These compile as standalone executables and run directly:
 
 ```bash
 ./build.pas tests
-./build/Goccia.Values.Primitives.Test
-./build/Goccia.Values.ObjectValue.Test
-./build/Goccia.Builtins.TestingLibrary.Test
+./build/Goccia.Lexer.Test
+./build/Goccia.TOML.Test
+./build/Goccia.Coverage.Test
 ```
 
 ### Pascal Test Framework
@@ -672,11 +640,10 @@ end;
 
 procedure TMyTests.TestSomething;
 begin
-  Expect<string>(Value.ToStringLiteral.Value).ToBe('hello');
-  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(42);
+  Expect<string>(Name).ToBe('hello');
+  Expect<Double>(Total).ToBe(42);
   Expect<Integer>(Length(Params)).ToBe(2);
-  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
-  Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(False);
+  Expect<Boolean>(Found).ToBe(True);
 end;
 ```
 
@@ -702,31 +669,16 @@ On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "w
 
 ### NaN Checks in Pascal Tests
 
-When testing for NaN, use the `IsNaN` property on `TGocciaNumberLiteralValue`:
+`Expect<Double>(actual).ToBe(expected)` compares exactly, so it cannot assert NaN. Test NaN with `Math.IsNaN`:
 
 ```pascal
-// Correct — uses the property accessor
-Expect<Boolean>(Value.ToNumberLiteral.IsNaN).ToBe(True);
-
-// Also correct — IsNaN delegates to Math.IsNaN(FValue) internally
-Math.IsNaN(Value.ToNumberLiteral.Value)
+Expect<Boolean>(Math.IsNaN(Value)).ToBe(True);
 ```
-
-`TGocciaNumberLiteralValue` stores a single `Double` in `FValue` using standard IEEE 754 bit patterns for NaN, Infinity, and -0. The `IsNaN` and `IsNegativeZero` property accessors delegate to `Math.IsNaN` and an endian-neutral sign-bit check; `IsInfinity` is true for +Infinity only, and `IsNegativeInfinity` covers -Infinity. Prefer the property accessors for readability.
-
-#### Testing the Test Framework Itself
-
-`Goccia.Builtins.TestingLibrary.Test.pas` validates the JS-level assertion matchers from Pascal. Since the matchers call `AssertionPassed`/`AssertionFailed` (which update `TGocciaTestAssertions` internal state) rather than raising Pascal exceptions, the native tests use two helpers to verify both the return value and the recorded pass/fail outcome:
-
-- `ExpectPass(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `False`
-- `ExpectFail(result)` — Asserts the matcher returned `UndefinedValue` **and** `CurrentTestHasFailures` is `True`
-
-Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurrentTestState` to clear the failure flag. The `CurrentTestHasFailures` property and `ResetCurrentTestState` method are public on `TGocciaTestAssertions` for this purpose.
 
 **When to write Pascal unit tests vs JavaScript tests:**
 
 - **JavaScript tests** (preferred) — For any behavior observable from script code. This is almost everything.
-- **Pascal unit tests** — Only for internal implementation details not reachable from script code (e.g., the test framework's own pass/fail recording logic).
+- **Pascal unit tests** — Only for internal implementation details not reachable from script code (e.g., the coverage tracker's merge of per-thread hit counts).
 
 ## CI Integration
 
@@ -745,7 +697,7 @@ supersede → build → test             → artifacts (main), release (tags)
 docs, test-structure (no build)
 ```
 
-**`build`** — Installs FPC 3.2.4 through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`build`** — Installs FPC 3.3.1 (the pinned build `FPC_VERSION`, `3.3.1-b9`) through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
@@ -767,7 +719,7 @@ docs, test-structure (no build)
 
 **`nightly`** (`.github/workflows/nightly.yml`) — Runs on a schedule, every three hours. It takes the newest `CI` run that succeeded for a push to `main` and publishes that run's builds as the `nightly` prerelease when its commit is ahead of the one the last nightly was built from, or has diverged from it after a rewritten `main`; when nothing new has passed, or the run's one-day build artifacts have expired, it publishes nothing. "Run workflow" on `main` publishes the newest passing build at once. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
-**`gc-stress`** (`.github/workflows/gc-stress.yml`) — Runs every Sunday and on demand. It runs the whole `tests/` tree and the GC-sensitive test262 directories under the GC-stress build and an ordinary build of the same commit, and fails only on tests that pass in the ordinary build but fail under stress. A failing scheduled or `main` run opens or updates one tracking issue. See [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build).
+**`gc-stress`** (`.github/workflows/gc-stress.yml`) — Runs every Sunday and on demand. `scripts/engine/gc-stress-ci.py` runs GocciaScript's tests, the GC regression scripts and the GC-sensitive part of test262 with a 16 KB nursery and `--gc-verify`, so the collector runs every few kilobytes and checks the heap after each collection, and runs the same tests plainly with the same `--prod` binaries. Only tests that pass plainly but fail under stress fail the job. A failing scheduled or `main` run opens or updates one tracking issue; a run on any other branch only prints what it would file. See [Tooling — GC stress](contributing/tooling.md#gc-stress).
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 
@@ -789,7 +741,7 @@ docs, test-structure, website (no build)  * also needs build-main, a build of th
 
 `docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs the website's own checks ([Build System](build-system.md#pryml--pull-requests)).
 
-The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the main thread plus all worker thread-local GCs. The benchmark runner collects after every file. The test runner collects after every file of a run with more than one file, on the worker that ran it. The collection count includes those collections. Reclaiming a worker's heap at shutdown is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the per-file engines' heaps: collections and allocated bytes are summed over the files, in a parallel run live bytes add up across files and the peak is the largest `--jobs` files' peaks together, while in a sequential run the peak is the largest file's and the live bytes are the last file's (`AggregateMemoryStats` in `Goccia.CLI.FileEngine`). Freeing a file's engine and its heap at the end of the file is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, `node --jitless`, JavaScriptCore with its JIT off, and the latest Node Current release. The underlying `awfy-report` artifact keeps the six raw interleaved samples per engine, each with its warm-up times, measured window and place in the engine order, min/max/CV, environment metadata, and first-class failure outcomes.
 
@@ -834,7 +786,9 @@ cross-shard merge, profile aggregation, and comment rendering.
 
 ## Coverage
 
-The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime, over the entry file and every module it imports.
+The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which statements, lines, branches, and functions of JavaScript source code are executed at runtime, over the entry file and every module it imports.
+
+The definitions are **Istanbul's**, not those of any particular runtime: what counts as a statement, a line, a branch or a function, and how each is located and numbered, follow [istanbul-lib-instrument](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-lib-instrument) (its code visitor), [istanbul-lib-coverage](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-lib-coverage) (`FileCoverage`, `getLineCoverage`) and the `lcovonly` reporter of [istanbul-reports](https://github.com/istanbuljs/istanbuljs/tree/main/packages/istanbul-reports). Run on a CommonJS file, `nyc` and GocciaScript produce the same `lcov.info` records and the same `statementMap`, `fnMap`, `branchMap`, `s`, `f` and `b`, apart from the `SF:` path (see [Report Path Keys](#report-path-keys)). Two differences remain: the instrumenter's comment hints (`/* istanbul ignore next */`, `ignore if`, `ignore else`, `ignore file`) are not read, so hinted code is counted like any other ([#2186](https://github.com/frostney/GocciaScript/issues/2186)), and eval code is not covered.
 
 ### Usage
 
@@ -845,7 +799,7 @@ The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage r
 # lcov output (for Codecov, Coveralls, or genhtml)
 ./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 
-# JSON output (Istanbul-compatible)
+# JSON output (Istanbul's coverage map)
 ./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
 
 # GocciaRunner also supports coverage
@@ -854,26 +808,40 @@ The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage r
 
 ### What is Tracked
 
-**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop, with per-frame line-change deduplication so several instructions on one source line count as one hit.
+Locations are Babel's: line 1-based, column 0-based (in UTF-16 code units), end column exclusive. A counter runs each time execution reaches its site, so a loop statement's own counter runs once per entry and the statements in its body once per iteration. Istanbul instruments the whole file, so a function that is never called still lists its statements, with 0.
 
-**Branch coverage:** Which branch arms were taken at:
+**Statements (`s`, `statementMap`):** one counter for each of
 
-- `if`/`else` statements (branch 0 = consequent, branch 1 = alternate)
-- Ternary expressions (`? :`)
-- Short-circuit operators (`&&`, `||`, `??`)
-- `switch` statement case clauses
+- an expression statement and `break`, `continue`, `debugger`, `return`, `throw`, `try`, `if`, `for`, `for...in`, `for...of` (including `for await`), `while`, `do...while`, `switch`, `with` and labeled statements (each label is a statement of its own);
+- the initializer of each declarator that has one, located at the initializer: `let`, `const`, `var`, destructuring and `using` declarations, the declarators of a `for(;;)` head, and exported declarations;
+- the value of each class property, located at the value and counted each time the field initializer runs (an instance field once per construction, a static field once);
+- an arrow function's concise body, which Istanbul turns into `return <expression>`, located at the expression and counted on each call.
 
-**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated and is reported at its declaration line (what LCOV's `FN:` means), not at the first line of its body; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are never created and therefore do not appear.
+Function and class declarations, blocks, export wrappers, directives (`"use strict"`) and empty statements are not statements.
 
-**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end, so line, branch, and function hit counts for a given run are identical whatever `--jobs` is set to.
+**Lines (lcov `DA:`):** `FileCoverage.getLineCoverage`. Each statement is taken at its start line, and a line's count is the **most** among the statements that start on it. Only those lines are listed: a line no statement starts on (the closing brace of a block, a blank line, the second line of a multi-line statement) has no record. `LF` is the number of listed lines, `LH` the number with a count above 0. So `const f = () => 1;` called five times from a `for...of` on the next line is `DA:1,5` (the declarator's initializer ran once and the arrow's body five times; the line takes the greater count) and `DA:2,5`.
+
+**Functions (`f`, `fnMap`, lcov `FN:`/`FNDA:`):** every function declaration, function expression, arrow function, class method (the constructor, getters and setters included) and object method (getters and setters included); private methods are not listed, as in Istanbul, and neither are static blocks. `decl` is the identifier's location for a function declaration or expression that has one, otherwise the first character of the node; `loc` is the body; the count is the number of calls (a generator's, when its body first runs). Only a function declaration or expression with an identifier of its own has a name: any other function, an arrow bound to a `const` included, is named `(anonymous_<index>)` by its index in the file's function list, in source order.
+
+**Branches (`b`, `branchMap`, lcov `BRDA:`):** each branch has a type, a `loc` and one location and counter per path.
+
+| Type | Paths |
+|------|-------|
+| `if` | 2: the consequent (located at the whole `if` statement) and the alternate, which Istanbul counts without an `else` too (the empty block it adds has no location; its counter runs when the test is false) |
+| `cond-expr` | 2: the consequent and the alternate of `? :` |
+| `binary-expr` | one per leaf of a maximal chain of `&&`, `\|\|` and `??`: nested logical expressions flatten whatever their operator, and parentheses make no difference, so `(a && b) \|\| c` has the leaves `a`, `b` and `c`. A leaf counts how many times it was evaluated |
+| `switch` | one per case clause, `default` included: the counter is the clause's first statement, so a fall-through into it counts |
+| `default-arg` | 1 per default parameter or destructuring default, counted when the default value is evaluated |
+
+**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end (statements, branches and functions are matched by location, since each worker meets them in its own order), so every count for a given run is identical whatever `--jobs` is set to.
 
 ### Output Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after execution |
-| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
-| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
+| Console | `--coverage` | Summary table with statement, line, branch, and function totals printed to stdout after execution; with one file, its source with the count of each line a statement starts on (`!!` marks a listed line that never ran) |
+| lcov | `--coverage-format=lcov --coverage-output=<file>` | The `lcovonly` tracefile, in its order: `TN`, `SF`, the `FN` lines, `FNF`, `FNH`, the `FNDA` lines, the `DA` lines, `LF`, `LH`, the `BRDA` lines, `BRF`, `BRH`, `end_of_record`. `BRDA:<line>,<branch>,<path>,<count>` carries the line the branch starts on and the branch's 0-based index in the file, and prints a count of 0 rather than a dash |
+| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul's coverage map: per file, `path`, `statementMap`, `fnMap` (`name`, `decl`, `loc`, `line`), `branchMap` (`type`, `loc`, `locations`, `line`), `s`, `f` and `b`, keyed `"0"`, `"1"`, ... in the order Istanbul numbers its sites (source order, an enclosing site before the ones inside it). The alternate of an `if` without `else` has the empty location `{"start":{},"end":{}}`, as in Istanbul |
 
 ### Report Path Keys
 
@@ -914,10 +882,12 @@ outside the repository.
 
 ### JSX Source Map Integration
 
-When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The coverage system integrates this source map so that lcov and JSON reports reference **original** JSX source positions, not transformed positions. This ensures downstream tools (Codecov, genhtml, Istanbul) display accurate line and branch locations.
+When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The report writer can translate the location of every statement, branch path and function through such a map (`TGocciaSourceMap.Translate`), but no host registers it with the coverage tracker, so lcov and JSON reports give the positions the parser saw in the transformed source (see [Architecture](#architecture)). The CLI suite checks that a `.jsx` file's branches and functions are reported on their original lines.
 
 ### Architecture
 
-Coverage is recorded on the bytecode dispatch loop's instrumented fetch path (`FCoverageEnabled` on `TGocciaVM`). When `--coverage` is not passed, production dispatch omits line-hit recording; enabling coverage, opcode profiling, stop-IP, or an instruction limit selects the instrumented fetch path. No separate build is needed.
+Coverage is recorded by the interpreter, which counts the sites the compiler marks. With `TGocciaEngine.Coverage` set, `Goccia.Compiler` registers each Istanbul site of a covered source with the thread's `TGocciaCoverageTracker` (`Goccia.Coverage.pas`) and emits a counter instruction at it: `opCovStmt` at a statement (its `C` operand is the statement's index in the file's list), `opCovBranch` at the start of a branch path (`A` the path, `C` the branch) and `opCovFn` at the start of a function's body (`C` the function). Branches are registered with their type, location and the location of every path before their paths are emitted. The instructions do nothing in normal dispatch; with coverage on, `Goccia.VM`'s `Execute` runs every instruction through the coverage hook (`CovStep`), which counts these three. A coverage run takes neither `FastLoop` nor compiled code, and compiles every function eagerly (a lazily compiled function would not list its statements until it was called); without `--coverage` nothing is registered or recorded. No separate build is needed. Engine preludes (`<goccia:...>`) and eval code are not covered.
 
-Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker that follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. During parallel test runs each worker thread initializes its own thread-local instance; after all workers complete, `TGocciaThreadPool.MergeCoverageInto` merges their data into the main thread's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the source hit *counts* into the destination (via `AddLineHits` / `AddBranchHits`) rather than registering a single hit per covered entry. Output formatting is in `Goccia.Coverage.Report.pas`. A JSX source map is registered with `TGocciaCoverageTracker` during file registration and applied only at report generation time, so the recording hot path is unaffected: `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.
+Locations come from the AST's source spans, converted to Babel's. The parser gives an operator expression (a binary or conditional expression, a call, a member access) the span of its operator or last token, so the compiler takes an expression's location as the extent of the node and its operands, parentheses included, as Babel's node covers them.
+
+Data is collected by `TGocciaCoverageTracker`, a per-thread tracker holding, per file, the statement list (location and count), the branches (type, location, path locations and counts) and the functions, each with an index by location so that compiling a site again (the code of a `finally` block, which runs through two paths) finds the same counter. Each file's thread initializes its own instance and, when the file ends, merges it into the run's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the counts site by site, matched by location, because the indexes differ between threads. The lines, the totals and Istanbul's numbering of the maps are derived when a report is written (`LineCoverage`, `StatementOrder`, `BranchOrder`, `FunctionOrder`). Output formatting is in `Goccia.Coverage.Report.pas`, which can translate positions through a source map registered with `TGocciaCoverageTracker.RegisterSourceMap`. The hosts register no map: positions come from the source the parser saw, which for `.jsx`/`.tsx` is the JSX transformer's output.

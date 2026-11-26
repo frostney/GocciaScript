@@ -246,6 +246,13 @@ function TryHostDirectoryIdentity(const APath: string;
 function SameDirectoryIdentity(const AIdentity,
   AExpected: THostDirectoryIdentity): Boolean;
 
+{ Whether APath and AOther, following links along each, are one existing
+  file that is not a directory, by the identity THostDirectoryIdentity
+  describes. Two names of a file differ as paths when one is a hard link,
+  which no canonical path resolves. False when either identity cannot be read
+  (Lakon/WASI, or a Windows file ID the call would not give). }
+function SameHostFileIdentity(const APath, AOther: string): Boolean;
+
 { Why nothing may be written under ADirectory, recorded as AIdentity, or ''
   when its identity does not stand in the way. }
 function HostDirectoryIdentityProblem(const ADirectory: string;
@@ -1338,6 +1345,77 @@ begin
     (AIdentity.Device = AExpected.Device) and
     (AIdentity.Inode = AExpected.Inode) and
     (AIdentity.InodeHigh = AExpected.InodeHigh));
+end;
+
+{ The identity of the file at APath, following links along it, when it exists,
+  is not a directory, and the host says which file it is. }
+function TryHostFileIdentity(const APath: string;
+  out AIdentity: THostDirectoryIdentity): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+  PathBytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
+    Exit;
+  if (fpStat(PAnsiChar(@PathBytes[0]), Info) <> 0) or
+     fpS_ISDIR(Info.st_mode) then
+    Exit;
+  AIdentity.Known := True;
+  AIdentity.Device := QWord(Info.st_dev);
+  AIdentity.Inode := QWord(Info.st_ino);
+  Result := True;
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+var
+  Handle: THandle;
+  Information: THostFileIdInfo;
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+  if not FileExists(APath) or DirectoryExists(APath) then
+    Exit;
+  { Opened for no access at all, only to ask which file it is. }
+  Handle := CreateFileW(PWideChar(UnicodeString(APath)), 0,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, 0, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    { FileIdInfo only, as TryHostDirectoryIdentity: the 64-bit file index is
+      not unique on ReFS. }
+    Information := Default(THostFileIdInfo);
+    if not HostGetFileInformationByHandleEx(Handle, HOST_FILE_ID_INFO_CLASS,
+       @Information, SizeOf(Information)) then
+      Exit;
+    AIdentity.Known := True;
+    AIdentity.Device := Information.VolumeSerialNumber;
+    Move(Information.FileId[0], AIdentity.Inode, SizeOf(AIdentity.Inode));
+    Move(Information.FileId[8], AIdentity.InodeHigh,
+      SizeOf(AIdentity.InodeHigh));
+    Result := True;
+  finally
+    CloseHandle(Handle);
+  end;
+end;
+{$ELSE}
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+end;
+{$ENDIF}
+
+function SameHostFileIdentity(const APath, AOther: string): Boolean;
+var
+  Left, Right: THostDirectoryIdentity;
+begin
+  Result := TryHostFileIdentity(APath, Left) and
+    TryHostFileIdentity(AOther, Right) and
+    (Left.Device = Right.Device) and (Left.Inode = Right.Inode) and
+    (Left.InodeHigh = Right.InodeHigh);
 end;
 
 function HostDirectoryIdentityProblem(const ADirectory: string;

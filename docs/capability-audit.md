@@ -76,14 +76,14 @@ denied and reported once for the path normalization request, while the
 resulting in-jail path remains clamped and the filesystem operation continues.
 Ordinary sandbox reads and writes do not generate events.
 
-`capabilities.effective` is emitted when a host calls
-`AuditEffectiveCapabilities` after installing the sink (the CLI does), or
-otherwise just before the engine's first other event. Child contexts that
+`capabilities.effective` is the first event of a run's log. `TGocciaEngine` does
+not emit it: the host does, before the entry runs, as GocciaRunner does in host and
+sandbox mode, and an embedder that installs `AuditSink` sends its own. Child contexts that
 inherit the set — ShadowRealm realms and sandbox `runScript` children — do not
 repeat it. Its `subject` is
 `TGocciaCapabilities.ToJSON`: one object per layer, each with `allowAll`,
 `allow`, `denyAll`, and `deny` for every capability. Its `reason` is the
-engine's `CapabilityProvenance` when the host sets one; the CLI records the
+host's account of where the set came from; GocciaRunner records the
 command-line grants and the governing config's trust decision, such as
 `cli --allow-read=data; config /repo/goccia.json trusted sha256:<hex>`, or
 `config /repo/goccia.json denies only` for a config that only denies, or

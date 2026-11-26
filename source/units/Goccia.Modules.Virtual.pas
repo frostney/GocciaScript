@@ -99,6 +99,11 @@ function ParseVirtualModuleContentType(const AType: string;
   out AContentType: TGocciaVirtualModuleContentType): Boolean;
 function IsRelativeSpecifier(const AValue: string): Boolean;
 function IsVirtualModuleURI(const AValue: string): Boolean;
+{ AModulePath, a relative specifier, against a virtual module's address:
+  hierarchically, its query and fragment dropped (another engine's virtual
+  modules resolve as these do). }
+function ResolveRelativeVirtualAddress(const AModulePath,
+  AImportingAddress: string): string;
 function VirtualModuleContentTypeName(
   const AContentType: TGocciaVirtualModuleContentType): string;
 

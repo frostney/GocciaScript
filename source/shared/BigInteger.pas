@@ -7,6 +7,13 @@ interface
 type
   TLimbArray = array of Cardinal;
 
+  { Asked by the operations whose time grows faster than their operands'
+    size (multiplication, division, exponentiation, radix conversion) as
+    they go. True stops the operation at once, and it returns a value that
+    is not the one asked for: the engine that installed the check discards
+    it, since it stops the program too. }
+  TBigIntegerAbortCheck = function: Boolean;
+
   TBigInteger = record
   private
     FLimbs: TLimbArray;
@@ -75,6 +82,10 @@ type
     function AsUintN(const ABits: Integer): TBigInteger;
   end;
 
+var
+  { nil: operations always run to the end }
+  BigIntegerAbortCheck: TBigIntegerAbortCheck = nil;
+
 implementation
 
 uses
@@ -86,6 +97,17 @@ uses
 const
   LIMB_BITS = 32;
   LIMB_BASE: UInt64 = UInt64(1) shl LIMB_BITS;
+  { how many steps of a long operation's outer loop run between two asks of
+    BigIntegerAbortCheck }
+  ABORT_CHECK_STEPS = 16;
+
+{ True when the operation at step AStep should stop }
+function AbortRequested(const AStep: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := Assigned(BigIntegerAbortCheck) and
+    (AStep mod ABORT_CHECK_STEPS = ABORT_CHECK_STEPS - 1) and
+    BigIntegerAbortCheck();
+end;
 
 { --- Internal helpers --- }
 
@@ -251,6 +273,8 @@ begin
   // D2-D7: Main loop
   for J := M downto 0 do
   begin
+    if AbortRequested(J) then
+      Break;
     // D3: Calculate QHat
     QHat := (UInt64(U[J + N]) shl LIMB_BITS + UInt64(U[J + N - 1])) div UInt64(VNMinus1);
     RHat := (UInt64(U[J + N]) shl LIMB_BITS + UInt64(U[J + N - 1])) mod UInt64(VNMinus1);
@@ -718,7 +742,7 @@ function TBigInteger.ToRadixString(const ARadix: Integer): string;
 var
   Temp: TLimbArray;
   Carry, Remainder: UInt64;
-  I, Len: Integer;
+  I, Len, Fill, Steps: Integer;
   Digits: string;
   Digit: Integer;
 begin
@@ -733,17 +757,25 @@ begin
   for I := 0 to High(FLimbs) do
     Temp[I] := FLimbs[I];
 
-  Digits := '';
+  // The digits fill a buffer from its end: radix 2 needs the most, one per
+  // bit of the magnitude
+  SetLength(Digits, Length(FLimbs) * LIMB_BITS);
+  Fill := Length(Digits) + 1;
+  Steps := 0;
 
   {$Q-}{$R-}
   while True do
   begin
+    if AbortRequested(Steps) then
+      Break;
+    Inc(Steps);
     // Check if all limbs are zero
     Len := Length(Temp);
     while (Len > 0) and (Temp[Len - 1] = 0) do
       Dec(Len);
     if Len = 0 then
       Break;
+    SetLength(Temp, Len);
 
     // Divide by radix
     Remainder := 0;
@@ -755,13 +787,15 @@ begin
     end;
 
     Digit := Integer(Remainder);
+    Dec(Fill);
     if Digit < 10 then
-      Digits := Chr(Ord('0') + Digit) + Digits
+      Digits[Fill] := Chr(Ord('0') + Digit)
     else
-      Digits := Chr(Ord('a') + Digit - 10) + Digits;
+      Digits[Fill] := Chr(Ord('a') + Digit - 10);
   end;
   {$IFDEF PRODUCTION}{$Q-}{$R-}{$ELSE}{$Q+}{$R+}{$ENDIF}
 
+  Digits := Copy(Digits, Fill, Length(Digits) - Fill + 1);
   if FNegative then
     Result := '-' + Digits
   else
@@ -841,6 +875,8 @@ begin
   {$Q-}{$R-}
   for I := 0 to High(FLimbs) do
   begin
+    if AbortRequested(I) then
+      Break;
     Carry := 0;
     for J := 0 to High(AOther.FLimbs) do
     begin
@@ -914,10 +950,14 @@ begin
 
   while not Exp.IsZero do
   begin
+    if Assigned(BigIntegerAbortCheck) and BigIntegerAbortCheck() then
+      Break;
     if Exp.GetBit(0) then
       Result := Result.Multiply(Base);
-    Base := Base.Multiply(Base);
     Exp := Exp.ShiftRight(1);
+    // the base's square past the exponent's top bit is never used
+    if not Exp.IsZero then
+      Base := Base.Multiply(Base);
   end;
 end;
 

@@ -214,12 +214,11 @@ describe("GocciaScript positioning", () => {
     ]);
   });
 
-  test("states the complete Delphi support contract", () => {
+  test("states that Delphi support is planned, not shipped", () => {
     expectConcepts(COMPILER_SUPPORT_ANSWER, [
-      /Win32 and Win64 application matrix/i,
-      /REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler/,
-      /all applicable Pascal and JavaScript tests/i,
-      /shared runtime semantics across both compilers/i,
+      /builds every shipped binary/i,
+      /Delphi support is planned for a later release/i,
+      /FreePascal only today/i,
     ]);
   });
 

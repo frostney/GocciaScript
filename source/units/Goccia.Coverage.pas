@@ -2,21 +2,20 @@ unit Goccia.Coverage;
 
 {$I Goccia.inc}
 
+{ Code coverage as Istanbul defines it (istanbul-lib-instrument's visitor, istanbul-lib-coverage's FileCoverage and
+  the lcovonly reporter): the engine registers each statement, branch and function of a source file here as the
+  compiler reaches it (a "site"), the VM counts the site each time execution reaches it, and the reports derive
+  everything else (lines, totals, the ordering of Istanbul's maps) from those counts.
+
+  Locations are Babel's: line 1-based, column 0-based, end column exclusive. }
+
 interface
 
 uses
-  Classes,
-  Generics.Collections,
-
   OrderedStringMap,
 
-  Goccia.SourceMap;
-
-function CountExecutableLines(const ASourceLines: TStrings): Integer;
-procedure BuildExecutableLineFlags(const ASourceLines: TStrings;
-  var AFlags: array of Boolean);
-function IsStructuralOnly(const ATrimmed: string): Boolean;
-function StartsWithWord(const ALine, AWord: string): Boolean;
+  Goccia.SourceMap,
+  Goccia.SourceSpan;
 
 { Canonical coverage path form.
 
@@ -60,59 +59,117 @@ function NormalizeCoveragePathSeparators(const APath: string): string;
 function FindRepositoryRoot(const AStartDirectory: string): string;
 
 type
-  TGocciaCoverageBranch = record
-    Line: Integer;
-    Column: Integer;
-    BranchIndex: Integer;
-    HitCount: Integer;
+  { A source range in Babel's terms: line 1-based, column 0-based (in UTF-16 code units), end column exclusive.
+    StartLine 0: Istanbul has no location here (the empty alternate of an `if` without `else`). }
+  TGocciaCoverageLoc = record
+    StartLine: Integer;
+    StartColumn: Integer;
+    EndLine: Integer;
+    EndColumn: Integer;
   end;
 
-  TGocciaCoverageBranchList = TList<TGocciaCoverageBranch>;
+  TGocciaCoverageLocArray = array of TGocciaCoverageLoc;
 
+  { One entry of Istanbul's statementMap and s. }
+  TGocciaCoverageStatement = record
+    Loc: TGocciaCoverageLoc;
+    { where Istanbul numbers the statement, when that is not at its start: the visitor registers a declarator's
+      initializer and a class property's value when it enters the declarator or the property, before the pattern
+      or computed key that comes first in the source (OrderLine 0: at the start) }
+    OrderLine: Integer;
+    OrderColumn: Integer;
+    HitCount: Int64;
+  end;
+
+  { One entry of Istanbul's branchMap and b. BranchType is Istanbul's: 'if', 'cond-expr', 'binary-expr', 'switch' or
+    'default-arg'. }
+  TGocciaCoverageBranch = record
+    BranchType: string;
+    Loc: TGocciaCoverageLoc;
+    Locations: TGocciaCoverageLocArray;
+    HitCounts: array of Int64;
+  end;
+
+  { One entry of Istanbul's fnMap and f. Name is '' for an anonymous function: the reports name it
+    (anonymous_<index>) by its index in Istanbul's order. }
   TGocciaCoverageFunction = record
     Name: string;
-    Line: Integer;
-    Column: Integer;
-    HitCount: Integer;
+    Decl: TGocciaCoverageLoc;
+    Loc: TGocciaCoverageLoc;
+    HitCount: Int64;
   end;
 
-  TGocciaCoverageFunctionList = TList<TGocciaCoverageFunction>;
+  TGocciaCoverageIndexArray = array of Integer;
+
+  { A line of the lcov DA: records: a line some statement starts on, and the most hits among those statements. }
+  TGocciaCoverageLine = record
+    Line: Integer;
+    HitCount: Int64;
+  end;
+
+  TGocciaCoverageLineArray = array of TGocciaCoverageLine;
 
   TGocciaFileCoverage = class
   private
     FFileName: string;
-    FLineHits: array of Integer;
-    FExecutableLines: Integer;
-    FBranches: TGocciaCoverageBranchList;
-    FFunctions: TGocciaCoverageFunctionList;
+    FStatements: array of TGocciaCoverageStatement;
+    FStatementCount: Integer;
+    FStatementIndex: TOrderedStringMap<Integer>;
+    FBranches: array of TGocciaCoverageBranch;
+    FBranchCount: Integer;
+    FBranchIndex: TOrderedStringMap<Integer>;
+    FFunctions: array of TGocciaCoverageFunction;
+    FFunctionCount: Integer;
+    FFunctionIndex: TOrderedStringMap<Integer>;
+    function GetStatement(const AIndex: Integer): TGocciaCoverageStatement;
+    function GetBranch(const AIndex: Integer): TGocciaCoverageBranch;
+    function GetFunction(const AIndex: Integer): TGocciaCoverageFunction;
   public
-    constructor Create(const AFileName: string; const AExecutableLines: Integer);
+    constructor Create(const AFileName: string);
     destructor Destroy; override;
 
-    procedure AddLineHits(const ALine, ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
-    procedure RecordLineHit(const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
-    procedure RecordBranchHit(const ALine, AColumn, ABranchIndex: Integer);
-    procedure AddBranchHits(const ALine, AColumn, ABranchIndex,
-      ACount: Integer);
-    procedure EnsureBranchExists(const ALine, AColumn, ABranchIndex: Integer);
-    procedure RegisterFunction(const AName: string;
-      const ALine, AColumn: Integer);
-    procedure RecordFunctionHit(const AName: string;
-      const ALine, AColumn: Integer);
+    { Register a site, or find the one at the same location: compiling a site again (a `finally` block's code, which
+      runs through two paths) returns the same index. The counts start at 0. }
+    function RegisterStatement(const ALoc: TGocciaCoverageLoc;
+      const AOrderLine: Integer = 0; const AOrderColumn: Integer = 0): Integer;
+    function RegisterBranch(const ABranchType: string;
+      const ALoc: TGocciaCoverageLoc;
+      const ALocations: TGocciaCoverageLocArray): Integer;
+    function RegisterFunction(const AName: string;
+      const ADecl, ALoc: TGocciaCoverageLoc): Integer;
 
+    procedure RecordStatementHit(const AIndex: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordBranchHit(const ABranch, APath: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure RecordFunctionHit(const AIndex: Integer); {$IFDEF FPC}inline;{$ENDIF}
+
+    { The sites in Istanbul's order, which is the order its visitor reaches them in: the source order of their
+      starts, an enclosing site before the ones inside it. A site's key in Istanbul's maps ("0", "1", ...) is its
+      position in this order. Each result lists indexes into the file's registration order. }
+    function StatementOrder: TGocciaCoverageIndexArray;
+    function BranchOrder: TGocciaCoverageIndexArray;
+    function FunctionOrder: TGocciaCoverageIndexArray;
+
+    { FileCoverage.getLineCoverage: for each line a statement starts on, the most hits among the statements that
+      start on it, in line order. ASourceMap, when given, translates each statement's start first. }
+    function LineCoverage(const ASourceMap: TGocciaSourceMap = nil): TGocciaCoverageLineArray;
+
+    function StatementsFound: Integer;
+    function StatementsHit: Integer;
+    function LinesFound: Integer;
     function LinesHit: Integer;
+    { One path of a branch is one thing found: a branch with n paths adds n. }
     function BranchesFound: Integer;
     function BranchesHit: Integer;
     function FunctionsFound: Integer;
     function FunctionsHit: Integer;
 
-    function LineHitCount: Integer;
-
     property FileName: string read FFileName;
-    property ExecutableLines: Integer read FExecutableLines;
-    property Branches: TGocciaCoverageBranchList read FBranches;
-    property Functions: TGocciaCoverageFunctionList read FFunctions;
-    function GetLineHitCount(const ALine: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+    property StatementCount: Integer read FStatementCount;
+    property BranchCount: Integer read FBranchCount;
+    property FunctionCount: Integer read FFunctionCount;
+    property Statements[const AIndex: Integer]: TGocciaCoverageStatement read GetStatement;
+    property Branches[const AIndex: Integer]: TGocciaCoverageBranch read GetBranch;
+    property Functions[const AIndex: Integer]: TGocciaCoverageFunction read GetFunction;
   end;
 
   TGocciaCoverageFileMap = TOrderedStringMap<TGocciaFileCoverage>;
@@ -135,10 +192,9 @@ type
     { Canonical report key -> native on-disk path it was derived from. }
     FResolvedPaths: TGocciaCoveragePathMap;
     FEnabled: Boolean;
-    FLastHitFile: string;
-    FLastHitLine: Integer;
+    FSerial: Integer;
     { Single-entry memo over the canonicalize-then-look-up pair, which
-      together dominate the per-line-hit cost of a coverage run. }
+      together dominate the per-hit cost of a coverage run. }
     FLastLookupPath: string;
     FLastLookupFile: TGocciaFileCoverage;
     { Raw spellings of files that are engine code, not user source (the
@@ -149,8 +205,6 @@ type
     { AFilePath must already be canonical. }
     function GetOrCreateFile(const AFilePath: string): TGocciaFileCoverage;
     function CanonicalizePath(const AFilePath: string): string;
-    { Canonicalize AFilePath, then resolve it to its coverage record. }
-    function FileFor(const AFilePath: string): TGocciaFileCoverage;
   public
     class function Instance: TGocciaCoverageTracker;
     class procedure Initialize;
@@ -159,22 +213,31 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    procedure RegisterSourceFile(const AFilePath: string;
-      const AExecutableLines: Integer);
+    { Make sure the file has a record, so a report lists it even when it has no statements. }
+    procedure RegisterSourceFile(const AFilePath: string);
     { Leave the file named AFilePath, exactly as the VM reports it, out of
       every report: its hits are recorded nowhere. For engine code that runs
       as bytecode, such as a bootstrap shim. }
     procedure ExcludeFile(const AFilePath: string);
     procedure RegisterSourceMap(const AFilePath: string;
       const ASourceMap: TGocciaSourceMap);
-    procedure RecordLineHit(const AFilePath: string;
-      const ALine: Integer); {$IFDEF FPC}inline;{$ENDIF}
+
+    { Canonicalize AFilePath, then resolve it to its coverage record, creating it. The record is the handle the
+      hot path keeps: the VM looks a source up once and counts through the record. }
+    function FileFor(const AFilePath: string): TGocciaFileCoverage;
+
+    function RegisterStatement(const AFilePath: string;
+      const ALoc: TGocciaCoverageLoc; const AOrderLine: Integer = 0;
+      const AOrderColumn: Integer = 0): Integer;
+    function RegisterBranch(const AFilePath, ABranchType: string;
+      const ALoc: TGocciaCoverageLoc;
+      const ALocations: TGocciaCoverageLocArray): Integer;
+    function RegisterFunction(const AFilePath, AName: string;
+      const ADecl, ALoc: TGocciaCoverageLoc): Integer;
+    procedure RecordStatementHit(const AFilePath: string; const AIndex: Integer);
     procedure RecordBranchHit(const AFilePath: string;
-      const ALine, AColumn, ABranchIndex: Integer);
-    procedure RegisterFunction(const AFilePath, AName: string;
-      const ALine, AColumn: Integer);
-    procedure RecordFunctionHit(const AFilePath, AName: string;
-      const ALine, AColumn: Integer);
+      const ABranch, APath: Integer);
+    procedure RecordFunctionHit(const AFilePath: string; const AIndex: Integer);
 
     function GetFileCoverage(const AFilePath: string): TGocciaFileCoverage;
     function GetSourceMap(const AFilePath: string): TGocciaSourceMap;
@@ -188,24 +251,47 @@ type
     function ResolvedSourcePath(const ACanonicalPath: string): string;
 
     { Merge all coverage data from ASource into this tracker.
-      Line, branch, and function hit *counts* are added together, so merging
-      N workers yields the same totals a single-threaded run would produce.
-      Files present in ASource but not in this tracker are created with
-      0 executable lines. }
+      Sites are matched by their location (the registration order differs
+      between threads) and their hit *counts* are added together, so merging
+      N workers yields the same totals a single-threaded run would produce. }
     procedure MergeFrom(const ASource: TGocciaCoverageTracker);
 
     property Files: TGocciaCoverageFileMap read FFiles;
     property SourceMaps: TGocciaSourceMapMap read FSourceMaps;
     property Enabled: Boolean read FEnabled write FEnabled;
+    { unique among the trackers of the process: a cache of a tracker's records tells it from a later one at its address }
+    property Serial: Integer read FSerial;
   end;
+
+{ A site's location as a string key, as the registration and merge match locations by. }
+function CoverageLocKey(const ALoc: TGocciaCoverageLoc): string;
+
+{ The Babel location of a span, or of ASpan's source between two other offsets (a part of the node the AST has no
+  node for): StartLine 0 for a span with no coordinates (a node the parser did not read from source). Columns are
+  counted in UTF-16 code units, as Babel counts them. }
+function CoverageLocOfSpan(const ASpan: TGocciaSourceSpan): TGocciaCoverageLoc;
+function CoverageLocOfOffsets(const ASpan: TGocciaSourceSpan;
+  const AStartOffset, AEndOffset: Integer): TGocciaCoverageLoc;
+
+{ The offset where the label ahead of the statement at AOffset starts (`outer:` in `outer: for (...)`), or -1 when
+  no label precedes it. The AST keeps a statement's labels as names, not positions. }
+function CoverageLabelStart(const ASpan: TGocciaSourceSpan; const AOffset: Integer): Integer;
+
+{ The offset of the `get` or `set` keyword that ends just before AOffset (an accessor's span starts at its name), or
+  AOffset when no such keyword precedes it. }
+function CoverageAccessorStart(const ASpan: TGocciaSourceSpan; const AOffset: Integer;
+  const AKeyword: string): Integer;
+
+{ The offset where the identifier of the function whose node starts at AStartOffset begins (after `export`,
+  `default`, `async`, `function` and `*`), or -1 when the name is not there. }
+function CoverageFunctionNameStart(const ASpan: TGocciaSourceSpan;
+  const AStartOffset: Integer; const AName: string): Integer;
 
 implementation
 
 uses
   SysUtils;
 
-const
-  DEFAULT_LINE_CAPACITY = 256;
 
 { Coverage Path Canonicalization }
 
@@ -294,373 +380,577 @@ begin
   ResolveCoveragePath(APath, Result, Resolved);
 end;
 
-function IsStructuralOnly(const ATrimmed: string): Boolean;
+{ Locations }
+
+{ A span's source is UTF-16 text and its offsets index it, so a column is already counted in UTF-16 code units,
+  as Babel counts them. }
+procedure SourcePosition(const ASpan: TGocciaSourceSpan; const AOffset: Integer;
+  out ALine, AColumn: Integer);
 var
-  I: Integer;
+  FirstColumn: Integer;
 begin
-  // Returns True if the line contains only braces, brackets, parens,
-  // semicolons, commas, and whitespace — e.g., });  }  );  ],  ]);
-  for I := 1 to Length(ATrimmed) do
-    if not (ATrimmed[I] in ['}', ')', ']', ';', ',', '{', '(', '[', ' ', #9]) then
-      Exit(False);
-  Result := True;
+  ASpan.Coordinates.PositionAtOffset(AOffset, ALine, FirstColumn);
+  AColumn := FirstColumn - 1;
 end;
 
-function StartsWithWord(const ALine, AWord: string): Boolean;
-var
-  WordLen: Integer;
+function CoverageLocOfOffsets(const ASpan: TGocciaSourceSpan;
+  const AStartOffset, AEndOffset: Integer): TGocciaCoverageLoc;
 begin
-  WordLen := Length(AWord);
-  Result := (Length(ALine) > WordLen) and
-            (Copy(ALine, 1, WordLen) = AWord) and
-            (ALine[WordLen + 1] in [' ', '(', '<', '{', #9]);
+  FillChar(Result, SizeOf(Result), 0);
+  if ASpan.Coordinates = nil then Exit;
+  SourcePosition(ASpan, AStartOffset, Result.StartLine, Result.StartColumn);
+  SourcePosition(ASpan, AEndOffset, Result.EndLine, Result.EndColumn);
 end;
 
-function CountUnescapedBackticks(const ALine: string): Integer;
-var
-  J, Len: Integer;
+function CoverageLocOfSpan(const ASpan: TGocciaSourceSpan): TGocciaCoverageLoc;
 begin
-  Result := 0;
-  Len := Length(ALine);
-  J := 1;
-  while J <= Len do
+  Result := CoverageLocOfOffsets(ASpan, ASpan.StartOffset, ASpan.EndOffset);
+end;
+
+function IsIdentifierChar(const AChar: Char): Boolean;
+begin
+  Result := ((AChar >= '0') and (AChar <= '9')) or ((AChar >= 'A') and (AChar <= 'Z')) or
+    ((AChar >= 'a') and (AChar <= 'z')) or (AChar = '_') or (AChar = '$') or (Ord(AChar) >= $80);
+end;
+
+function IsSpaceChar(const AChar: Char): Boolean;
+begin
+  Result := (AChar = ' ') or (AChar = #9) or (AChar = #10) or (AChar = #13);
+end;
+
+{ the offset (0-based) after the whitespace and comments that start at AOffset }
+function SkipTrivia(const ASource: string; const AOffset: Integer): Integer;
+var
+  Length_: Integer;
+begin
+  Result := AOffset;
+  Length_ := Length(ASource);
+  while Result < Length_ do
   begin
-    if (ALine[J] = '\') then
-    begin
-      Inc(J, 2); // skip escaped character
-      Continue;
+    case ASource[Result + 1] of
+      ' ', #9, #10, #13: Inc(Result);
+      '/':
+        if (Result + 1 < Length_) and (ASource[Result + 2] = '/') then
+        begin
+          while (Result < Length_) and not ((ASource[Result + 1] = #10) or (ASource[Result + 1] = #13)) do Inc(Result);
+        end
+        else if (Result + 1 < Length_) and (ASource[Result + 2] = '*') then
+        begin
+          Inc(Result, 2);
+          while (Result + 1 < Length_) and not ((ASource[Result + 1] = '*') and (ASource[Result + 2] = '/')) do
+            Inc(Result);
+          Inc(Result, 2);
+        end
+        else Exit;
+    else
+      Exit;
     end;
-    if ALine[J] = '`' then
-      Inc(Result);
-    Inc(J);
   end;
 end;
 
-function IsSkippedTestLine(const ATrimmed: string): Boolean;
+{ the 1-based index of the last character before I's whitespace and comments, scanning back from I: a block
+  comment is skipped whole, and a line comment when the scan steps back over the line break that ends it (the
+  first // on that line outside a string starts it); 0 at the start of the source }
+function BackOverTrivia(const ASource: string; I: Integer): Integer;
+var
+  LineStart, J: Integer;
+  Quote: Char;
 begin
-  Result := (Pos('test.skip(', ATrimmed) > 0) or
-            (Pos('describe.skip(', ATrimmed) > 0);
+  while I > 0 do
+  begin
+    if ASource[I] = #10 then
+    begin
+      { the line before this break: a // in it starts a comment to its end }
+      LineStart := I - 1;
+      while (LineStart > 0) and (ASource[LineStart] <> #10) do Dec(LineStart);
+      Inc(LineStart);
+      Quote := #0;
+      J := LineStart;
+      while J < I - 1 do
+      begin
+        if Quote <> #0 then
+        begin
+          if ASource[J] = '\' then Inc(J)
+          else if ASource[J] = Quote then Quote := #0;
+        end
+        else if (ASource[J] = '"') or (ASource[J] = '''') or (ASource[J] = '`') then Quote := ASource[J]
+        else if (ASource[J] = '/') and (ASource[J + 1] = '/') then Break;
+        Inc(J);
+      end;
+      if J < I - 1 then I := J - 1
+      else Dec(I);
+    end
+    else if IsSpaceChar(ASource[I]) then Dec(I)
+    else if (I > 1) and (ASource[I] = '/') and (ASource[I - 1] = '*') then
+    begin
+      J := I - 2;
+      while (J > 1) and not ((ASource[J - 1] = '/') and (ASource[J] = '*')) do Dec(J);
+      if J <= 1 then Exit(I);
+      I := J - 2;
+    end
+    else Break;
+  end;
+  Result := I;
 end;
 
-procedure BuildExecutableLineFlags(const ASourceLines: TStrings;
-  var AFlags: array of Boolean);
+function CoverageLabelStart(const ASpan: TGocciaSourceSpan; const AOffset: Integer): Integer;
 var
-  I, J, Len: Integer;
-  Trimmed: string;
-  InBlockComment: Boolean;
-  InTemplateLiteral: Boolean;
-  TypeBodyDepth: Integer;
-  SkipBodyDepth: Integer;
+  Source: string;
+  I, Stop: Integer;
 begin
-  InBlockComment := False;
-  InTemplateLiteral := False;
-  TypeBodyDepth := 0;
-  SkipBodyDepth := 0;
+  Result := -1;
+  if ASpan.Coordinates = nil then Exit;
+  Source := ASpan.Source;
+  I := AOffset;
+  if I > Length(Source) then Exit;
+  { back over whitespace and comments to the colon }
+  I := BackOverTrivia(Source, I);
+  if (I <= 0) or (Source[I] <> ':') then Exit;
+  I := BackOverTrivia(Source, I - 1);
+  Stop := I;
+  while (I > 0) and IsIdentifierChar(Source[I]) do Dec(I);
+  if I = Stop then Exit;
+  Result := I;
+end;
 
-  for I := 0 to ASourceLines.Count - 1 do
+function CoverageAccessorStart(const ASpan: TGocciaSourceSpan; const AOffset: Integer;
+  const AKeyword: string): Integer;
+var
+  Source: string;
+  I, Depth: Integer;
+begin
+  Result := AOffset;
+  if ASpan.Coordinates = nil then Exit;
+  Source := ASpan.Source;
+  I := AOffset;
+  if I > Length(Source) then Exit;
+  { a computed key's span starts at its closing bracket }
+  if (I < Length(Source)) and (Source[I + 1] = ']') then Inc(I);
+  I := BackOverTrivia(Source, I);
+  { a computed key: back over its brackets }
+  if (I > 0) and (Source[I] = ']') then
   begin
-    AFlags[I] := False;
-    Trimmed := Trim(ASourceLines[I]);
-    Len := Length(Trimmed);
-
-    // Empty line
-    if Len = 0 then Continue;
-
-    // Template literal continuation — lines inside backtick strings are data
-    if InTemplateLiteral then
+    Depth := 0;
+    while I > 0 do
     begin
-      if Odd(CountUnescapedBackticks(Trimmed)) then
-        InTemplateLiteral := False;
+      if Source[I] = ']' then Inc(Depth)
+      else if Source[I] = '[' then Dec(Depth);
+      Dec(I);
+      if Depth = 0 then Break;
+    end;
+    I := BackOverTrivia(Source, I);
+  end;
+  if I < Length(AKeyword) then Exit;
+  if Copy(Source, I - Length(AKeyword) + 1, Length(AKeyword)) <> AKeyword then Exit;
+  if (I - Length(AKeyword) > 0) and IsIdentifierChar(Source[I - Length(AKeyword)]) then Exit;
+  Result := I - Length(AKeyword);
+end;
+
+function CoverageFunctionNameStart(const ASpan: TGocciaSourceSpan;
+  const AStartOffset: Integer; const AName: string): Integer;
+var
+  Source: string;
+  Offset, Word_, Limit: Integer;
+  Text: string;
+begin
+  Result := -1;
+  if (ASpan.Coordinates = nil) or (AName = '') then Exit;
+  Source := ASpan.Source;
+  Offset := AStartOffset;
+  Limit := 0;
+  while Limit < 8 do
+  begin
+    Inc(Limit);
+    Offset := SkipTrivia(Source, Offset);
+    if Offset >= Length(Source) then Exit;
+    if Source[Offset + 1] = '*' then
+    begin
+      Inc(Offset);
       Continue;
     end;
-
-    // Track block comment state
-    if InBlockComment then
+    if Copy(Source, Offset + 1, Length(AName)) = AName then
     begin
-      if Pos('*/', Trimmed) > 0 then
-        InBlockComment := False;
-      Continue;
+      Word_ := Offset + Length(AName);
+      if (Word_ >= Length(Source)) or not IsIdentifierChar(Source[Word_ + 1]) then
+        Exit(Offset);
     end;
+    { a keyword before the name: export, default, async, function }
+    Word_ := Offset;
+    while (Word_ < Length(Source)) and IsIdentifierChar(Source[Word_ + 1]) do Inc(Word_);
+    if Word_ = Offset then Exit;
+    Text := Copy(Source, Offset + 1, Word_ - Offset);
+    if (Text <> 'export') and (Text <> 'default') and (Text <> 'async') and (Text <> 'function') then Exit;
+    Offset := Word_;
+  end;
+end;
 
-    // Single-line comment
-    if (Len >= 2) and (Trimmed[1] = '/') and (Trimmed[2] = '/') then Continue;
 
-    // Block comment opening — check if it also closes on same line
-    if (Len >= 2) and (Trimmed[1] = '/') and (Trimmed[2] = '*') then
+function CoverageLocKey(const ALoc: TGocciaCoverageLoc): string;
+begin
+  Result := IntToStr(ALoc.StartLine) + ':' + IntToStr(ALoc.StartColumn) + '-' +
+    IntToStr(ALoc.EndLine) + ':' + IntToStr(ALoc.EndColumn);
+end;
+
+{ Orders sites the way Istanbul's visitor reaches them: by where they start, then an enclosing site (the one that
+  ends later) before the one inside it, then by registration. }
+type
+  TSiteKey = record
+    StartLine, StartColumn, EndLine, EndColumn, Index: Integer;
+  end;
+
+  TSiteKeyArray = array of TSiteKey;
+
+function SiteKeyLess(const A, B: TSiteKey): Boolean;
+begin
+  if A.StartLine <> B.StartLine then Exit(A.StartLine < B.StartLine);
+  if A.StartColumn <> B.StartColumn then Exit(A.StartColumn < B.StartColumn);
+  if A.EndLine <> B.EndLine then Exit(A.EndLine > B.EndLine);
+  if A.EndColumn <> B.EndColumn then Exit(A.EndColumn > B.EndColumn);
+  Result := A.Index < B.Index;
+end;
+
+procedure SortSiteKeys(var AKeys: TSiteKeyArray);
+var
+  Buffer: TSiteKeyArray;
+
+  procedure MergeSort(ALow, AHigh: Integer);
+  var
+    Middle, I, J, K: Integer;
+  begin
+    if AHigh - ALow < 1 then Exit;
+    Middle := (ALow + AHigh) div 2;
+    MergeSort(ALow, Middle);
+    MergeSort(Middle + 1, AHigh);
+    I := ALow;
+    J := Middle + 1;
+    K := ALow;
+    while (I <= Middle) and (J <= AHigh) do
     begin
-      if Pos('*/', Trimmed) > 2 then
-        { Single-line block comment like /* ... */ — skip the whole line }
+      if SiteKeyLess(AKeys[J], AKeys[I]) then
+      begin
+        Buffer[K] := AKeys[J];
+        Inc(J);
+      end
       else
-        InBlockComment := True;
-      Continue;
-    end;
-
-    // Check for template literal opening on this line (odd number of backticks
-    // means the line ends inside a template)
-    if Odd(CountUnescapedBackticks(Trimmed)) then
-      InTemplateLiteral := True;
-
-    // Track skipped test/describe body depth — lines inside are intentionally unexecuted
-    if SkipBodyDepth > 0 then
-    begin
-      for J := 1 to Len do
       begin
-        if Trimmed[J] = '(' then Inc(SkipBodyDepth)
-        else if Trimmed[J] = ')' then Dec(SkipBodyDepth);
+        Buffer[K] := AKeys[I];
+        Inc(I);
       end;
-      Continue;
+      Inc(K);
     end;
-
-    // Detect test.skip/describe.skip — body is unconditionally skipped
-    if IsSkippedTestLine(Trimmed) then
+    while I <= Middle do
     begin
-      SkipBodyDepth := 0;
-      for J := 1 to Len do
-      begin
-        if Trimmed[J] = '(' then Inc(SkipBodyDepth)
-        else if Trimmed[J] = ')' then Dec(SkipBodyDepth);
-      end;
-      AFlags[I] := True; // The skip line itself is executable (it gets evaluated)
-      Continue;
+      Buffer[K] := AKeys[I];
+      Inc(I);
+      Inc(K);
     end;
-
-    // Track interface body depth — lines inside are type-only
-    if TypeBodyDepth > 0 then
+    while J <= AHigh do
     begin
-      for J := 1 to Len do
-      begin
-        if Trimmed[J] = '{' then Inc(TypeBodyDepth)
-        else if Trimmed[J] = '}' then Dec(TypeBodyDepth);
-      end;
-      Continue;
+      Buffer[K] := AKeys[J];
+      Inc(J);
+      Inc(K);
     end;
-
-    // Detect interface block openings:
-    //   interface Foo {         → opening line is executable, body is not
-    //   interface Foo extends X {
-    if StartsWithWord(Trimmed, 'interface') and (Pos('{', Trimmed) > 0) then
-    begin
-      TypeBodyDepth := 1;
-      for J := Pos('{', Trimmed) + 1 to Len do
-      begin
-        if Trimmed[J] = '{' then Inc(TypeBodyDepth)
-        else if Trimmed[J] = '}' then Dec(TypeBodyDepth);
-      end;
-      AFlags[I] := True; // The opening line itself is executable
-      Continue;
-    end;
-
-    // Pure structural lines: only closing braces/parens/semicolons
-    if IsStructuralOnly(Trimmed) then Continue;
-
-    AFlags[I] := True;
+    for K := ALow to AHigh do
+      AKeys[K] := Buffer[K];
   end;
+
+begin
+  SetLength(Buffer, Length(AKeys));
+  MergeSort(0, High(AKeys));
 end;
 
-function CountExecutableLines(const ASourceLines: TStrings): Integer;
+function OrderOf(const AKeys: TSiteKeyArray): TGocciaCoverageIndexArray;
 var
-  Flags: array of Boolean;
+  Sorted: TSiteKeyArray;
   I: Integer;
 begin
-  SetLength(Flags, ASourceLines.Count);
-  BuildExecutableLineFlags(ASourceLines, Flags);
-  Result := 0;
-  for I := 0 to High(Flags) do
-    if Flags[I] then
-      Inc(Result);
+  Sorted := Copy(AKeys, 0, Length(AKeys));
+  SortSiteKeys(Sorted);
+  SetLength(Result, Length(Sorted));
+  for I := 0 to High(Sorted) do
+    Result[I] := Sorted[I].Index;
+end;
+
+function SiteKey(const ALoc: TGocciaCoverageLoc; const AIndex: Integer): TSiteKey;
+begin
+  Result.StartLine := ALoc.StartLine;
+  Result.StartColumn := ALoc.StartColumn;
+  Result.EndLine := ALoc.EndLine;
+  Result.EndColumn := ALoc.EndColumn;
+  Result.Index := AIndex;
+end;
+
+function BranchKey(const ABranchType: string; const ALoc: TGocciaCoverageLoc;
+  const ALocations: TGocciaCoverageLocArray): string;
+var
+  I: Integer;
+begin
+  Result := ABranchType + '@' + CoverageLocKey(ALoc);
+  for I := 0 to High(ALocations) do
+    Result := Result + '|' + CoverageLocKey(ALocations[I]);
+end;
+
+function FunctionKey(const ADecl, ALoc: TGocciaCoverageLoc): string;
+begin
+  Result := CoverageLocKey(ADecl) + '/' + CoverageLocKey(ALoc);
 end;
 
 { TGocciaFileCoverage }
 
-constructor TGocciaFileCoverage.Create(const AFileName: string;
-  const AExecutableLines: Integer);
-var
-  I, Capacity: Integer;
+constructor TGocciaFileCoverage.Create(const AFileName: string);
 begin
   inherited Create;
   FFileName := AFileName;
-  FExecutableLines := AExecutableLines;
-  if AExecutableLines > 0 then
-    Capacity := AExecutableLines + 1
-  else
-    Capacity := DEFAULT_LINE_CAPACITY;
-  SetLength(FLineHits, Capacity);
-  for I := 0 to High(FLineHits) do
-    FLineHits[I] := 0;
-  FBranches := TGocciaCoverageBranchList.Create;
-  FFunctions := TGocciaCoverageFunctionList.Create;
+  FStatementIndex := TOrderedStringMap<Integer>.Create;
+  FBranchIndex := TOrderedStringMap<Integer>.Create;
+  FFunctionIndex := TOrderedStringMap<Integer>.Create;
 end;
 
 destructor TGocciaFileCoverage.Destroy;
 begin
-  FFunctions.Free;
-  FBranches.Free;
+  FFunctionIndex.Free;
+  FBranchIndex.Free;
+  FStatementIndex.Free;
   inherited;
 end;
 
-procedure TGocciaFileCoverage.RegisterFunction(const AName: string;
-  const ALine, AColumn: Integer);
+function TGocciaFileCoverage.GetStatement(const AIndex: Integer): TGocciaCoverageStatement;
+begin
+  Result := FStatements[AIndex];
+end;
+
+function TGocciaFileCoverage.GetBranch(const AIndex: Integer): TGocciaCoverageBranch;
+begin
+  Result := FBranches[AIndex];
+end;
+
+function TGocciaFileCoverage.GetFunction(const AIndex: Integer): TGocciaCoverageFunction;
+begin
+  Result := FFunctions[AIndex];
+end;
+
+function TGocciaFileCoverage.RegisterStatement(const ALoc: TGocciaCoverageLoc;
+  const AOrderLine: Integer; const AOrderColumn: Integer): Integer;
 var
-  I: Integer;
-  Func: TGocciaCoverageFunction;
+  Key: string;
 begin
-  if ALine <= 0 then Exit;
-  for I := 0 to FFunctions.Count - 1 do
-    if (FFunctions[I].Line = ALine) and
-       (FFunctions[I].Column = AColumn) then
-    begin
-      if (FFunctions[I].Name = '') and (AName <> '') then
-      begin
-        Func := FFunctions[I];
-        Func.Name := AName;
-        FFunctions[I] := Func;
-      end;
-      Exit;
-    end;
-
-  Func.Name := AName;
-  Func.Line := ALine;
-  Func.Column := AColumn;
-  Func.HitCount := 0;
-  FFunctions.Add(Func);
-end;
-
-procedure TGocciaFileCoverage.RecordFunctionHit(const AName: string;
-  const ALine, AColumn: Integer);
-var
-  I: Integer;
-  Func: TGocciaCoverageFunction;
-begin
-  RegisterFunction(AName, ALine, AColumn);
-  for I := 0 to FFunctions.Count - 1 do
-    if (FFunctions[I].Line = ALine) and
-       (FFunctions[I].Column = AColumn) then
-    begin
-      Func := FFunctions[I];
-      if (Func.Name = '') and (AName <> '') then
-        Func.Name := AName;
-      Inc(Func.HitCount);
-      FFunctions[I] := Func;
-      Exit;
-    end;
-end;
-
-procedure TGocciaFileCoverage.AddLineHits(const ALine, ACount: Integer);
-var
-  NewLength, I: Integer;
-begin
-  if (ALine <= 0) or (ACount <= 0) then Exit;
-  if ALine >= Length(FLineHits) then
-  begin
-    NewLength := Length(FLineHits);
-    if NewLength < 16 then
-      NewLength := 16;
-    while NewLength <= ALine do
-      NewLength := NewLength * 2;
-    I := Length(FLineHits);
-    SetLength(FLineHits, NewLength);
-    while I < NewLength do
-    begin
-      FLineHits[I] := 0;
-      Inc(I);
-    end;
-  end;
-  Inc(FLineHits[ALine], ACount);
-end;
-
-procedure TGocciaFileCoverage.RecordLineHit(const ALine: Integer);
-begin
-  AddLineHits(ALine, 1);
-end;
-
-procedure TGocciaFileCoverage.RecordBranchHit(const ALine, AColumn,
-  ABranchIndex: Integer);
-begin
-  AddBranchHits(ALine, AColumn, ABranchIndex, 1);
-end;
-
-procedure TGocciaFileCoverage.AddBranchHits(const ALine, AColumn,
-  ABranchIndex, ACount: Integer);
-var
-  I: Integer;
-  Branch: TGocciaCoverageBranch;
-begin
-  if ACount <= 0 then
-  begin
-    EnsureBranchExists(ALine, AColumn, ABranchIndex);
+  Key := CoverageLocKey(ALoc);
+  if FStatementIndex.TryGetValue(Key, Result) then
     Exit;
-  end;
-
-  for I := 0 to FBranches.Count - 1 do
-    if (FBranches[I].Line = ALine) and (FBranches[I].Column = AColumn) and
-       (FBranches[I].BranchIndex = ABranchIndex) then
-    begin
-      Branch := FBranches[I];
-      Inc(Branch.HitCount, ACount);
-      FBranches[I] := Branch;
-      // Ensure the opposite arm exists for binary branches (if/ternary/short-circuit)
-      if ABranchIndex <= 1 then
-        EnsureBranchExists(ALine, AColumn, 1 - ABranchIndex);
-      Exit;
-    end;
-
-  Branch.Line := ALine;
-  Branch.Column := AColumn;
-  Branch.BranchIndex := ABranchIndex;
-  Branch.HitCount := ACount;
-  FBranches.Add(Branch);
-
-  // Ensure the opposite arm exists for binary branches
-  if ABranchIndex <= 1 then
-    EnsureBranchExists(ALine, AColumn, 1 - ABranchIndex);
+  if FStatementCount = Length(FStatements) then
+    SetLength(FStatements, FStatementCount * 2 + 16);
+  FStatements[FStatementCount].Loc := ALoc;
+  FStatements[FStatementCount].OrderLine := AOrderLine;
+  FStatements[FStatementCount].OrderColumn := AOrderColumn;
+  FStatements[FStatementCount].HitCount := 0;
+  Result := FStatementCount;
+  FStatementIndex.Add(Key, Result);
+  Inc(FStatementCount);
 end;
 
-procedure TGocciaFileCoverage.EnsureBranchExists(const ALine, AColumn,
-  ABranchIndex: Integer);
+function TGocciaFileCoverage.RegisterBranch(const ABranchType: string;
+  const ALoc: TGocciaCoverageLoc; const ALocations: TGocciaCoverageLocArray): Integer;
+var
+  Key: string;
+  I: Integer;
+begin
+  Key := BranchKey(ABranchType, ALoc, ALocations);
+  if FBranchIndex.TryGetValue(Key, Result) then
+    Exit;
+  if FBranchCount = Length(FBranches) then
+    SetLength(FBranches, FBranchCount * 2 + 16);
+  FBranches[FBranchCount].BranchType := ABranchType;
+  FBranches[FBranchCount].Loc := ALoc;
+  FBranches[FBranchCount].Locations := Copy(ALocations, 0, Length(ALocations));
+  SetLength(FBranches[FBranchCount].HitCounts, Length(ALocations));
+  for I := 0 to High(ALocations) do
+    FBranches[FBranchCount].HitCounts[I] := 0;
+  Result := FBranchCount;
+  FBranchIndex.Add(Key, Result);
+  Inc(FBranchCount);
+end;
+
+function TGocciaFileCoverage.RegisterFunction(const AName: string;
+  const ADecl, ALoc: TGocciaCoverageLoc): Integer;
+var
+  Key: string;
+begin
+  Key := FunctionKey(ADecl, ALoc);
+  if FFunctionIndex.TryGetValue(Key, Result) then
+    Exit;
+  if FFunctionCount = Length(FFunctions) then
+    SetLength(FFunctions, FFunctionCount * 2 + 16);
+  FFunctions[FFunctionCount].Name := AName;
+  FFunctions[FFunctionCount].Decl := ADecl;
+  FFunctions[FFunctionCount].Loc := ALoc;
+  FFunctions[FFunctionCount].HitCount := 0;
+  Result := FFunctionCount;
+  FFunctionIndex.Add(Key, Result);
+  Inc(FFunctionCount);
+end;
+
+procedure TGocciaFileCoverage.RecordStatementHit(const AIndex: Integer);
+begin
+  if (AIndex >= 0) and (AIndex < FStatementCount) then
+    Inc(FStatements[AIndex].HitCount);
+end;
+
+procedure TGocciaFileCoverage.RecordBranchHit(const ABranch, APath: Integer);
+begin
+  if (ABranch >= 0) and (ABranch < FBranchCount) and (APath >= 0) and
+     (APath < Length(FBranches[ABranch].HitCounts)) then
+    Inc(FBranches[ABranch].HitCounts[APath]);
+end;
+
+procedure TGocciaFileCoverage.RecordFunctionHit(const AIndex: Integer);
+begin
+  if (AIndex >= 0) and (AIndex < FFunctionCount) then
+    Inc(FFunctions[AIndex].HitCount);
+end;
+
+function TGocciaFileCoverage.StatementOrder: TGocciaCoverageIndexArray;
+var
+  Keys: TSiteKeyArray;
+  I: Integer;
+begin
+  SetLength(Keys, FStatementCount);
+  for I := 0 to FStatementCount - 1 do
+  begin
+    Keys[I] := SiteKey(FStatements[I].Loc, I);
+    if FStatements[I].OrderLine > 0 then
+    begin
+      Keys[I].StartLine := FStatements[I].OrderLine;
+      Keys[I].StartColumn := FStatements[I].OrderColumn;
+    end;
+  end;
+  Result := OrderOf(Keys);
+end;
+
+function TGocciaFileCoverage.BranchOrder: TGocciaCoverageIndexArray;
+var
+  Keys: TSiteKeyArray;
+  I: Integer;
+begin
+  SetLength(Keys, FBranchCount);
+  for I := 0 to FBranchCount - 1 do
+    Keys[I] := SiteKey(FBranches[I].Loc, I);
+  Result := OrderOf(Keys);
+end;
+
+function TGocciaFileCoverage.FunctionOrder: TGocciaCoverageIndexArray;
+var
+  Keys: TSiteKeyArray;
+  I: Integer;
+begin
+  { a function is ordered by its declaration: its identifier's start, else its node's }
+  SetLength(Keys, FFunctionCount);
+  for I := 0 to FFunctionCount - 1 do
+    Keys[I] := SiteKey(FFunctions[I].Decl, I);
+  Result := OrderOf(Keys);
+end;
+
+function TGocciaFileCoverage.LineCoverage(const ASourceMap: TGocciaSourceMap): TGocciaCoverageLineArray;
+var
+  HitCounts: array of Int64;
+  Sorted: TSiteKeyArray;
+  Count, I, J, Line, OrigLine, OrigColumn, Last: Integer;
+begin
+  { each statement at its start line (through the source map, when there is one) }
+  SetLength(Sorted, FStatementCount);
+  SetLength(HitCounts, FStatementCount);
+  Count := 0;
+  for I := 0 to FStatementCount - 1 do
+  begin
+    Line := FStatements[I].Loc.StartLine;
+    if Line <= 0 then Continue;
+    if Assigned(ASourceMap) and
+       ASourceMap.Translate(Line, FStatements[I].Loc.StartColumn + 1, OrigLine, OrigColumn) then
+      Line := OrigLine;
+    Sorted[Count].StartLine := Line;
+    Sorted[Count].StartColumn := 0;
+    Sorted[Count].EndLine := 0;
+    Sorted[Count].EndColumn := 0;
+    Sorted[Count].Index := Count;
+    HitCounts[Count] := FStatements[I].HitCount;
+    Inc(Count);
+  end;
+  SetLength(Sorted, Count);
+  SortSiteKeys(Sorted);
+  { one entry per distinct line: the greatest count among the statements starting on it }
+  SetLength(Result, Count);
+  J := 0;
+  Last := -1;
+  for I := 0 to Count - 1 do
+    if Sorted[I].StartLine = Last then
+    begin
+      if HitCounts[Sorted[I].Index] > Result[J - 1].HitCount then
+        Result[J - 1].HitCount := HitCounts[Sorted[I].Index];
+    end
+    else
+    begin
+      Result[J].Line := Sorted[I].StartLine;
+      Result[J].HitCount := HitCounts[Sorted[I].Index];
+      Last := Sorted[I].StartLine;
+      Inc(J);
+    end;
+  SetLength(Result, J);
+end;
+
+function TGocciaFileCoverage.StatementsFound: Integer;
+begin
+  Result := FStatementCount;
+end;
+
+function TGocciaFileCoverage.StatementsHit: Integer;
 var
   I: Integer;
-  Branch: TGocciaCoverageBranch;
 begin
-  for I := 0 to FBranches.Count - 1 do
-    if (FBranches[I].Line = ALine) and (FBranches[I].Column = AColumn) and
-       (FBranches[I].BranchIndex = ABranchIndex) then
-      Exit;
+  Result := 0;
+  for I := 0 to FStatementCount - 1 do
+    if FStatements[I].HitCount > 0 then
+      Inc(Result);
+end;
 
-  Branch.Line := ALine;
-  Branch.Column := AColumn;
-  Branch.BranchIndex := ABranchIndex;
-  Branch.HitCount := 0;
-  FBranches.Add(Branch);
+function TGocciaFileCoverage.LinesFound: Integer;
+begin
+  Result := Length(LineCoverage);
 end;
 
 function TGocciaFileCoverage.LinesHit: Integer;
 var
+  Lines: TGocciaCoverageLineArray;
   I: Integer;
 begin
   Result := 0;
-  for I := 1 to High(FLineHits) do
-    if FLineHits[I] > 0 then
+  Lines := LineCoverage;
+  for I := 0 to High(Lines) do
+    if Lines[I].HitCount > 0 then
       Inc(Result);
 end;
 
 function TGocciaFileCoverage.BranchesFound: Integer;
-begin
-  Result := FBranches.Count;
-end;
-
-function TGocciaFileCoverage.BranchesHit: Integer;
 var
   I: Integer;
 begin
   Result := 0;
-  for I := 0 to FBranches.Count - 1 do
-    if FBranches[I].HitCount > 0 then
-      Inc(Result);
+  for I := 0 to FBranchCount - 1 do
+    Inc(Result, Length(FBranches[I].HitCounts));
+end;
+
+function TGocciaFileCoverage.BranchesHit: Integer;
+var
+  I, J: Integer;
+begin
+  Result := 0;
+  for I := 0 to FBranchCount - 1 do
+    for J := 0 to High(FBranches[I].HitCounts) do
+      if FBranches[I].HitCounts[J] > 0 then
+        Inc(Result);
 end;
 
 function TGocciaFileCoverage.FunctionsFound: Integer;
 begin
-  Result := FFunctions.Count;
+  Result := FFunctionCount;
 end;
 
 function TGocciaFileCoverage.FunctionsHit: Integer;
@@ -668,25 +958,15 @@ var
   I: Integer;
 begin
   Result := 0;
-  for I := 0 to FFunctions.Count - 1 do
+  for I := 0 to FFunctionCount - 1 do
     if FFunctions[I].HitCount > 0 then
       Inc(Result);
 end;
 
-function TGocciaFileCoverage.LineHitCount: Integer;
-begin
-  Result := Length(FLineHits);
-end;
-
-function TGocciaFileCoverage.GetLineHitCount(const ALine: Integer): Integer;
-begin
-  if (ALine >= 0) and (ALine < Length(FLineHits)) then
-    Result := FLineHits[ALine]
-  else
-    Result := 0;
-end;
-
 { TGocciaCoverageTracker }
+
+var
+  TrackerSerialCounter: Integer;
 
 threadvar
   CoverageTrackerThreadInstance: TGocciaCoverageTracker;
@@ -717,6 +997,7 @@ begin
   FExcludedFiles := TGocciaCoveragePathMap.Create;
   FEnabled := False;
   FLastLookupFile := nil;
+  FSerial := InterlockedIncrement(TrackerSerialCounter);
 end;
 
 destructor TGocciaCoverageTracker.Destroy;
@@ -765,7 +1046,7 @@ function TGocciaCoverageTracker.GetOrCreateFile(
 begin
   if not FFiles.TryGetValue(AFilePath, Result) then
   begin
-    Result := TGocciaFileCoverage.Create(AFilePath, 0);
+    Result := TGocciaFileCoverage.Create(AFilePath);
     FFiles.Add(AFilePath, Result);
   end;
 end;
@@ -778,7 +1059,7 @@ begin
   if (FExcludedFiles.Count > 0) and FExcludedFiles.ContainsKey(AFilePath) then
   begin
     if not Assigned(FDiscardedFile) then
-      FDiscardedFile := TGocciaFileCoverage.Create(AFilePath, 0);
+      FDiscardedFile := TGocciaFileCoverage.Create(AFilePath);
     Result := FDiscardedFile;
   end
   else
@@ -803,22 +1084,11 @@ begin
     Result := ACanonicalPath;
 end;
 
-procedure TGocciaCoverageTracker.RegisterSourceFile(const AFilePath: string;
-  const AExecutableLines: Integer);
-var
-  FileCov: TGocciaFileCoverage;
-  Key: string;
+
+procedure TGocciaCoverageTracker.RegisterSourceFile(const AFilePath: string);
 begin
-  Key := CanonicalizePath(AFilePath);
-  if not FFiles.TryGetValue(Key, FileCov) then
-  begin
-    FileCov := TGocciaFileCoverage.Create(Key, AExecutableLines);
-    FFiles.Add(Key, FileCov);
-  end
-  { A file registered once as an import (auto-created with no executable
-    line count) and again as the entry point is one record, not two. }
-  else if (FileCov.ExecutableLines = 0) and (AExecutableLines > 0) then
-    FileCov.FExecutableLines := AExecutableLines;
+  { a file registered once as an import and again as the entry point is one record, not two }
+  FileFor(AFilePath);
 end;
 
 procedure TGocciaCoverageTracker.RegisterSourceMap(const AFilePath: string;
@@ -844,31 +1114,41 @@ begin
       Result := nil;
 end;
 
-procedure TGocciaCoverageTracker.RecordLineHit(const AFilePath: string;
-  const ALine: Integer);
+function TGocciaCoverageTracker.RegisterStatement(const AFilePath: string;
+  const ALoc: TGocciaCoverageLoc; const AOrderLine: Integer;
+  const AOrderColumn: Integer): Integer;
 begin
-  if (ALine = FLastHitLine) and (AFilePath = FLastHitFile) then Exit;
-  FLastHitLine := ALine;
-  FLastHitFile := AFilePath;
-  FileFor(AFilePath).RecordLineHit(ALine);
+  Result := FileFor(AFilePath).RegisterStatement(ALoc, AOrderLine, AOrderColumn);
+end;
+
+function TGocciaCoverageTracker.RegisterBranch(const AFilePath, ABranchType: string;
+  const ALoc: TGocciaCoverageLoc; const ALocations: TGocciaCoverageLocArray): Integer;
+begin
+  Result := FileFor(AFilePath).RegisterBranch(ABranchType, ALoc, ALocations);
+end;
+
+function TGocciaCoverageTracker.RegisterFunction(const AFilePath, AName: string;
+  const ADecl, ALoc: TGocciaCoverageLoc): Integer;
+begin
+  Result := FileFor(AFilePath).RegisterFunction(AName, ADecl, ALoc);
+end;
+
+procedure TGocciaCoverageTracker.RecordStatementHit(const AFilePath: string;
+  const AIndex: Integer);
+begin
+  FileFor(AFilePath).RecordStatementHit(AIndex);
 end;
 
 procedure TGocciaCoverageTracker.RecordBranchHit(const AFilePath: string;
-  const ALine, AColumn, ABranchIndex: Integer);
+  const ABranch, APath: Integer);
 begin
-  FileFor(AFilePath).RecordBranchHit(ALine, AColumn, ABranchIndex);
+  FileFor(AFilePath).RecordBranchHit(ABranch, APath);
 end;
 
-procedure TGocciaCoverageTracker.RegisterFunction(const AFilePath,
-  AName: string; const ALine, AColumn: Integer);
+procedure TGocciaCoverageTracker.RecordFunctionHit(const AFilePath: string;
+  const AIndex: Integer);
 begin
-  FileFor(AFilePath).RegisterFunction(AName, ALine, AColumn);
-end;
-
-procedure TGocciaCoverageTracker.RecordFunctionHit(const AFilePath,
-  AName: string; const ALine, AColumn: Integer);
-begin
-  FileFor(AFilePath).RecordFunctionHit(AName, ALine, AColumn);
+  FileFor(AFilePath).RecordFunctionHit(AIndex);
 end;
 
 function TGocciaCoverageTracker.GetFileCoverage(
@@ -881,12 +1161,12 @@ end;
 
 procedure TGocciaCoverageTracker.MergeFrom(const ASource: TGocciaCoverageTracker);
 var
-  IterState, I: Integer;
+  IterState, I, J, Index: Integer;
   Key: string;
   SrcFile, DstFile: TGocciaFileCoverage;
+  Stmt: TGocciaCoverageStatement;
   Branch: TGocciaCoverageBranch;
-  Func, DstFunc: TGocciaCoverageFunction;
-  J: Integer;
+  Func: TGocciaCoverageFunction;
   SrcMap: TGocciaSourceMap;
   ResolvedPath: string;
 begin
@@ -896,39 +1176,30 @@ begin
   while ASource.Files.GetNextEntry(IterState, Key, SrcFile) do
   begin
     DstFile := GetOrCreateFile(Key);
-    { If the destination was auto-created with 0 executable lines but the
-      source has a proper count, adopt it. }
-    if (DstFile.ExecutableLines = 0) and (SrcFile.ExecutableLines > 0) then
-      DstFile.FExecutableLines := SrcFile.ExecutableLines;
 
-    { Merge line hits — sum the source counts, not one hit per covered line. }
-    for I := 1 to SrcFile.LineHitCount - 1 do
-      DstFile.AddLineHits(I, SrcFile.GetLineHitCount(I));
-
-    { Merge branch hits — sum the source counts; zero-hit arms are still
-      registered so the branch map keeps its shape. }
-    for I := 0 to SrcFile.Branches.Count - 1 do
+    { sites are matched by location: each thread registered them in its own order, so an index means
+      nothing across trackers }
+    for I := 0 to SrcFile.StatementCount - 1 do
     begin
-      Branch := SrcFile.Branches[I];
-      DstFile.AddBranchHits(Branch.Line, Branch.Column, Branch.BranchIndex,
-        Branch.HitCount);
+      Stmt := SrcFile.Statements[I];
+      Index := DstFile.RegisterStatement(Stmt.Loc, Stmt.OrderLine, Stmt.OrderColumn);
+      Inc(DstFile.FStatements[Index].HitCount, Stmt.HitCount);
     end;
 
-    { Merge function definitions and hit counts by source position. }
-    for I := 0 to SrcFile.Functions.Count - 1 do
+    { a site no worker reached still keeps its place, with zero hits }
+    for I := 0 to SrcFile.BranchCount - 1 do
+    begin
+      Branch := SrcFile.Branches[I];
+      Index := DstFile.RegisterBranch(Branch.BranchType, Branch.Loc, Branch.Locations);
+      for J := 0 to High(Branch.HitCounts) do
+        Inc(DstFile.FBranches[Index].HitCounts[J], Branch.HitCounts[J]);
+    end;
+
+    for I := 0 to SrcFile.FunctionCount - 1 do
     begin
       Func := SrcFile.Functions[I];
-      DstFile.RegisterFunction(Func.Name, Func.Line, Func.Column);
-      if Func.HitCount > 0 then
-        for J := 0 to DstFile.Functions.Count - 1 do
-          if (DstFile.Functions[J].Line = Func.Line) and
-             (DstFile.Functions[J].Column = Func.Column) then
-          begin
-            DstFunc := DstFile.Functions[J];
-            Inc(DstFunc.HitCount, Func.HitCount);
-            DstFile.Functions[J] := DstFunc;
-            Break;
-          end;
+      Index := DstFile.RegisterFunction(Func.Name, Func.Decl, Func.Loc);
+      Inc(DstFile.FFunctions[Index].HitCount, Func.HitCount);
     end;
   end;
 

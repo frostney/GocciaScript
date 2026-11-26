@@ -1,0 +1,46 @@
+// test262 $262 host hooks: the engine's adaptation of GocciaScript's scripts/test262_harness/$262.js.
+//
+// `goccia --test262` installs the hidden GocciaHost object with the hooks the engine implements, then evaluates this
+// file as the first harness Script. $262 is the only global binding it creates, so a test may declare any
+// other name at its top level (ES2026 16.1.7 GlobalDeclarationInstantiation). A hook the engine does not
+// implement is left out, so a test that needs it fails honestly.
+
+if (typeof GocciaHost === "undefined") {
+  throw new Error("$262 host hooks require goccia --test262");
+}
+
+var $262 = (function () {
+  var H = GocciaHost;
+  var host262 = {
+    global: globalThis,
+    evalScript: function (sourceText) { return H.evalScript(sourceText); },
+    gc: function () { H.gc(); },
+    agent: H.agent,
+  };
+  if (typeof H.detachArrayBuffer === "function") {
+    host262.detachArrayBuffer = function (buffer) { return H.detachArrayBuffer(buffer); };
+  }
+  if (typeof H.createRealm === "function") {
+    host262.createRealm = function () { return H.createRealm(); };
+  }
+  if ("IsHTMLDDA" in H) host262.IsHTMLDDA = H.IsHTMLDDA;
+  if ("AbstractModuleSource" in H) host262.AbstractModuleSource = H.AbstractModuleSource;
+  return host262;
+})();
+
+// a host setTimeout for the harness's polling loops (atomicsHelper.js getReportAsync): the callback runs from a
+// microtask after a short blocking sleep, so a poll waits for agents without a timer queue in the engine. Each
+// tick also lets the host settle the Atomics.waitAsync waits that are due, as an event loop turn would.
+if (typeof globalThis.setTimeout !== "function") {
+  (function (pump) {
+    globalThis.setTimeout = function (callback, ms) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      Promise.resolve().then(function () {
+        if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(Math.min(ms, 20));
+        if (typeof pump === "function") pump();
+        callback.apply(undefined, args);
+      });
+      return 0;
+    };
+  })(GocciaHost.pumpAsyncWaits);
+}

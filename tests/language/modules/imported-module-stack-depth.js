@@ -5,10 +5,24 @@ import * as awaiting from "./helpers/stack-depth-tla.js";
 import defer * as deferred from "./helpers/stack-depth-deferred.js";
 import defer * as failing from "../../../fixtures/modules/deferred-evaluation-throws.js";
 
-// The test runner's default --max-stack. A module's top level is not a call,
-// so each helper's top level can make this many nested calls, less the calls
-// live when it starts to evaluate.
-const LIMIT = 2200;
+// The engine's default bound on nested calls. A module's top level is not a
+// call, so each helper's top level can make this many nested calls, less the
+// calls live when it starts to evaluate.
+const LIMIT = 200000;
+
+// How many nested calls a callee of the caller can make; the callee itself is
+// one of them.
+const callsFromHere = () => {
+  let calls = 0;
+  const recurse = () => {
+    calls++;
+    recurse();
+  };
+  try {
+    recurse();
+  } catch {}
+  return calls + 1;
+};
 
 describe("an imported module's top level allows --max-stack nested calls", () => {
   test("a statically imported module", () => {
@@ -49,7 +63,11 @@ describe("an imported module's top level allows --max-stack nested calls", () =>
       const calls = k ? readCalls(k - 1) : deferred.calls;
       return calls;
     };
-    expect(readCalls(3)).toBe(LIMIT - 4);
+    // The testing library calls each test function from JavaScript, a few
+    // frames down, so the deferred module's top level keeps what four calls
+    // below this test function leave, less the one frame its evaluation on
+    // first access takes.
+    expect(readCalls(3)).toBe(callsFromHere() - 5);
     expect(deferred.error).toBeInstanceOf(RangeError);
   });
 

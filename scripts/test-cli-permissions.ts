@@ -37,7 +37,6 @@ import {
   REPL,
   TEST262RUNNER,
   TESTRUNNER,
-  WASMTESTRUNNER,
 } from "./test-cli/binaries";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
@@ -536,35 +535,6 @@ console.log("Binaries with their own parser follow the same grammar...");
       expectIncludes(result.stderr, `Error: ${message}`, `${binary} ${args[0]}`);
     }
 
-    // The WASM runner rejects options cleanly instead of crashing.
-    const wasmHelp = run(WASMTESTRUNNER, ["--help"], { cwd: tmp });
-    expectExit(wasmHelp, 0, "WasmTestRunner --help");
-    expectIncludes(wasmHelp.stdout, "Usage: GocciaWasmTestRunner [-P] <manifest-file>", "WasmTestRunner --help");
-    const wasmFlag = run(WASMTESTRUNNER, ["--allow-read"], { cwd: tmp });
-    expectExit(wasmFlag, 2, "WasmTestRunner --allow-read");
-    expectIncludes(wasmFlag.stderr, "Unknown option: --allow-read", "WasmTestRunner --allow-read");
-    expectIncludes(wasmHelp.stdout, "-P", "WasmTestRunner --help lists -P");
-    const wasmNoManifest = run(WASMTESTRUNNER, ["-P"], { cwd: tmp });
-    expectExit(wasmNoManifest, 2, "WasmTestRunner -P without a manifest");
-    const wasmMissing = run(WASMTESTRUNNER, [join(tmp, "missing.txt")], { cwd: tmp });
-    expectExit(wasmMissing, 2, "WasmTestRunner missing manifest");
-    expectIncludes(wasmMissing.stderr, "manifest not found", "WasmTestRunner missing manifest");
-
-    // Its unsupported-request warning names the config once.
-    mkdirSync(join(tmp, "wasm"));
-    writeFileSync(join(tmp, "wasm", "goccia.json"), '{"permissions": {"allow-import": ["node_modules"]}}\n');
-    writeFileSync(join(tmp, "wasm", "t.js"), 'test("t", () => {});\n');
-    writeFileSync(join(tmp, "manifest.txt"), join(tmp, "wasm", "t.js") + "\n");
-    const wasmWarn = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")], { cwd: tmp });
-    // -P accepts config requests (none here needs it), and extra
-    // positional arguments are ignored with a warning, as before.
-    const wasmTolerant = run(WASMTESTRUNNER, ["-P", join(tmp, "manifest.txt"), "extra-argument"], { cwd: tmp });
-    expectExit(wasmTolerant, 0, "WasmTestRunner -P with an extra argument");
-    expectIncludes(wasmTolerant.stdout, "SUMMARY files=1", "WasmTestRunner -P runs the manifest");
-    expectIncludes(wasmTolerant.stderr, "Warning: ignoring extra argument: extra-argument", "WasmTestRunner extra argument");
-    const configPath = join(tmp, "wasm", "goccia.json");
-    expectIncludes(wasmWarn.stderr, `WARN ${configPath} :: requests allow-import, which GocciaWasmTestRunner cannot grant; ignoring it`, "WasmTestRunner warning");
-    expectExcludes(wasmWarn.stderr, `:: Warning: ${configPath}`, "WasmTestRunner warning names the config once");
   } finally {
     clean(tmp);
   }
@@ -2318,25 +2288,6 @@ console.log("Install mode: --install, --frozen, --remove, and its usage rules...
     writeFileSync(join(project, "goccia.json"), '{"install": true}');
     const fromConfig = run(RUNNER, [join(project, "app.js")], { cwd: project });
     expectExit(fromConfig, 2, "install mode from config");
-  } finally {
-    clean(tmp);
-  }
-}
-
-console.log("GocciaWasmTestRunner takes -P instead of a trust store...");
-if (existsSync(resolve(WASMTESTRUNNER))) {
-  const tmp = makeTmp();
-  try {
-    mkdirSync(join(tmp, "unsafe"));
-    writeFileSync(join(tmp, "unsafe", "goccia.json"), '{"unsafe-function-constructor": true}\n');
-    writeFileSync(join(tmp, "unsafe", "x.test.js"), 'test("x", () => { expect(new Function("return 1")()).toBe(1); });\n');
-    writeFileSync(join(tmp, "manifest.txt"), `${join(tmp, "unsafe", "x.test.js")}\n`);
-    const refused = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")]);
-    expectExit(refused, 1, "Wasm runner without -P");
-    expectIncludes(refused.stdout, `FILEERROR ${join(tmp, "unsafe", "x.test.js")} :: ${join(tmp, "unsafe", "goccia.json")} requests permissions; pass -P to accept them (GocciaWasmTestRunner has no trust store)`, "Wasm runner without -P");
-    const accepted = run(WASMTESTRUNNER, ["-P", join(tmp, "manifest.txt")]);
-    expectExit(accepted, 0, "Wasm runner -P");
-    expectIncludes(accepted.stdout, "PASS ", "Wasm runner -P");
   } finally {
     clean(tmp);
   }

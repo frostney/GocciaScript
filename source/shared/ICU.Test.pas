@@ -27,6 +27,8 @@ type
     procedure TestParseMajorVersion;
     procedure TestHighestInDirHasNoCap;
     procedure TestHighestInDirListAcrossPaths;
+    procedure TestParseDllMajorVersion;
+    procedure TestHighestDllInDir;
   public
     procedure SetupTests; override;
   end;
@@ -57,6 +59,10 @@ begin
     TestHighestInDirHasNoCap);
   Test('HighestICUMajorVersionInDirList scans every dir and skips empty segments',
     TestHighestInDirListAcrossPaths);
+  Test('ParseICUDllMajorVersion extracts the major from an ICU Windows DLL name',
+    TestParseDllMajorVersion);
+  Test('HighestICUDllMajorVersionInDir returns the newest icuin<major>.dll',
+    TestHighestDllInDir);
 end;
 
 procedure TICUTests.TestParseMajorVersion;
@@ -126,6 +132,38 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(DirB) + 'libicui18n.so.99');
     RemoveDir(DirA);
     RemoveDir(DirB);
+  end;
+end;
+
+procedure TICUTests.TestParseDllMajorVersion;
+begin
+  Expect<Integer>(ParseICUDllMajorVersion('icuin79.dll', 'icuin')).ToBe(79);
+  Expect<Integer>(ParseICUDllMajorVersion('ICUIN100.DLL', 'icuin')).ToBe(100);
+  Expect<Integer>(ParseICUDllMajorVersion('icuin.dll', 'icuin')).ToBe(0);
+  Expect<Integer>(ParseICUDllMajorVersion('icuin79d.dll', 'icuin')).ToBe(0);
+  Expect<Integer>(ParseICUDllMajorVersion('icuin79.dll.bak', 'icuin')).ToBe(0);
+  Expect<Integer>(ParseICUDllMajorVersion('icuuc79.dll', 'icuin')).ToBe(0);
+  Expect<Integer>(ParseICUDllMajorVersion('icu.dll', 'icuin')).ToBe(0);
+end;
+
+procedure TICUTests.TestHighestDllInDir;
+var
+  Dir: string;
+begin
+  Dir := MakeTempDir('gicud');
+  try
+    Expect<Integer>(HighestICUDllMajorVersionInDir(Dir, 'icuin')).ToBe(0);
+    TouchFile(IncludeTrailingPathDelimiter(Dir) + 'icuin74.dll');
+    TouchFile(IncludeTrailingPathDelimiter(Dir) + 'icuin79.dll');
+    TouchFile(IncludeTrailingPathDelimiter(Dir) + 'icuuc99.dll');
+    Expect<Integer>(HighestICUDllMajorVersionInDir(Dir, 'icuin')).ToBe(79);
+    Expect<Integer>(HighestICUDllMajorVersionInDirList(Dir + '|', '|',
+      'icuin')).ToBe(79);
+  finally
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'icuin74.dll');
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'icuin79.dll');
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'icuuc99.dll');
+    RemoveDir(Dir);
   end;
 end;
 

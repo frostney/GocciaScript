@@ -28,7 +28,6 @@ export const metadata: Metadata = {
     "bytecode",
     "virtual machine",
     "FreePascal",
-    "Delphi",
     "sandbox",
     "AI agents",
   ],

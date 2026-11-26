@@ -23,17 +23,26 @@ const deepDuplicateNames = (n) =>
 // The fastest of several rounds, so a collection or a busy machine during one
 // round does not decide the result. A round compiles the pattern enough times
 // to run for about MIN_ROUND_MS, so a fast pattern is not timed at the clock's
-// resolution, and counts the time per compile.
+// resolution, and counts the time per compile. Every compile gets a source of
+// its own (one more alternative, made before the clock starts), so an engine
+// that caches compiled patterns by their source still compiles each one: a
+// cache hit for the small pattern against a compile of the large one would
+// time the cache, not the compiler.
 const MIN_ROUND_MS = 20;
+let serial = 0;
+const fresh = (source, count) =>
+  Array.from({ length: count }, () => `${source}|z${serial++}`);
 const compileTime = (source) => {
+  const [probeSource] = fresh(source, 1);
   const probeStart = performance.now();
-  new RegExp(source);
+  new RegExp(probeSource);
   const probe = Math.max(performance.now() - probeStart, 0.01);
   const compiles = Math.min(1000, Math.max(1, Math.ceil(MIN_ROUND_MS / probe)));
   let best = Infinity;
   for (const _ of Array.from({ length: 7 })) {
+    const sources = fresh(source, compiles);
     const start = performance.now();
-    for (const __ of Array.from({ length: compiles })) new RegExp(source);
+    for (const each of sources) new RegExp(each);
     best = Math.min(best, (performance.now() - start) / compiles);
   }
   return best;

@@ -12,10 +12,8 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.Bytecode.Chunk,
-  Goccia.Modules,
-  Goccia.SourceSpan,
-  Goccia.Values.Primitives;
+  Goccia.Modules.Phases,
+  Goccia.SourceSpan;
 
 const
   GOCCIA_DEFAULT_EXPORT_BINDING = '*default*';
@@ -94,6 +92,18 @@ type
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
     property Nodes: TObjectList<TGocciaASTNode> read FNodes;
+  end;
+
+  { A function body the parser skipped for a host that compiles it when the
+    function is first called, as SetFunctionBodySkipper in Goccia.Parser
+    describes: an empty block standing for the braces, with the host's id
+    for the function. }
+  TGocciaLazyFunctionBody = class(TGocciaBlockStatement)
+  private
+    FLazyId: Integer;
+  public
+    constructor Create(const ALazyId: Integer; const ASpan: TGocciaSourceSpan);
+    property LazyId: Integer read FLazyId;
   end;
 
   TGocciaIfStatement = class(TGocciaStatement)
@@ -280,8 +290,10 @@ type
     FIsGenerator: Boolean;
     FReturnType: string;
     FGenericParams: string;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
@@ -294,7 +306,8 @@ type
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
@@ -381,6 +394,8 @@ type
 
   // Shared class definition structure
   TGocciaClassDefinition = class(TGocciaASTObject)
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     FName: string;
     FSuperClass: string;
@@ -409,7 +424,7 @@ type
     FDecorators: TGocciaDecoratorList;
     FElements: TGocciaClassElementArray;
     FFieldOrder: TGocciaFieldOrderEntryArray;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TGocciaClassMethodMap;
@@ -425,7 +440,8 @@ type
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property SuperClassExpression: TGocciaExpression read FSuperClassExpression;
     property Methods: TGocciaClassMethodMap read FMethods;
     property StaticMethods: TGocciaClassMethodMap read FStaticMethods;
@@ -751,23 +767,13 @@ uses
   SysUtils,
 
   Goccia.Constants,
-  Goccia.Execution.CallSite,
-  Goccia.GarbageCollector,
-  Goccia.Keywords.Reserved,
-  Goccia.Values.Error,
-  Goccia.Values.ObjectPropertyDescriptor;
-
-function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
-begin
-  Result := AModule.GetNamespaceObject;
-end;
+  Goccia.Keywords.Reserved;
 
 function DirectiveStatementIsUseStrict(const AStatement: TGocciaASTNode;
   out AContinuesDirectivePrologue: Boolean): Boolean;
 var
   LiteralExpression: TGocciaLiteralExpression;
   Expression: TGocciaExpression;
-  Literal: TGocciaValue;
   SourceText: string;
 begin
   Result := False;
@@ -781,8 +787,7 @@ begin
     Exit;
 
   LiteralExpression := TGocciaLiteralExpression(Expression);
-  Literal := LiteralExpression.Value;
-  if not (Literal is TGocciaStringLiteralValue) then
+  if LiteralExpression.Kind <> lkString then
     Exit;
 
   AContinuesDirectivePrologue := True;
@@ -882,6 +887,13 @@ end;
   begin
     inherited Create(ASpan);
     FNodes := ANodes;
+  end;
+
+  constructor TGocciaLazyFunctionBody.Create(const ALazyId: Integer;
+    const ASpan: TGocciaSourceSpan);
+  begin
+    inherited Create(TObjectList<TGocciaASTNode>.Create(True), ASpan);
+    FLazyId := ALazyId;
   end;
 
   { TGocciaClassDefinition }
@@ -1016,7 +1028,7 @@ end;
     inherited Create(ASpan);
     FHasExpression := AValue <> nil;
     if AValue = nil then
-      FValue := TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, ASpan)
+      FValue := TGocciaLiteralExpression.CreateUndefined(ASpan)
     else
       FValue := AValue;
   end;
@@ -1766,6 +1778,27 @@ begin
   VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FSignatureParameters);
   VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfAfterTypeParameters);
+end;
+
+
+function TGocciaClassMethod.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaClassMethod.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+function TGocciaClassDefinition.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaClassDefinition.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
 end;
 
 end.

@@ -2,6 +2,10 @@ program GocciaTest262Runner;
 
 {$I Goccia.inc}
 
+{ GocciaTest262Runner: the command line, discovery, sharding, grading contract 4 and JSON
+  report, with each run on the engine's test262 host (Goccia.Test262): in a forked process on Unix, elsewhere on a
+  thread of its own. }
+
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
   Classes,
@@ -17,32 +21,23 @@ uses
   TextSemantics,
   TimingUtils,
 
-  Goccia.Arguments.Collection,
+  NumericText,
+
   Goccia.Capabilities,
   Goccia.CLI.Options,
-  Goccia.Engine,
-  Goccia.Error,
-  Goccia.Error.Detail,
-  Goccia.GarbageCollector,
-  Goccia.InstructionLimit,
   Goccia.JSON.Utils,
   Goccia.Profiler,
   Goccia.Profiler.Report,
-  Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
-  Goccia.StackLimit,
-  Goccia.Test262.Host,
   Goccia.TextFiles,
-  Goccia.ThreadCleanupRegistry,
-  Goccia.Threading,
-  Goccia.Threading.Init,
-  Goccia.Timeout,
-  Goccia.Values.Error,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.VM.Exception;
+
+  Goccia.Core,
+  Goccia.VM,
+  Goccia.Embed,
+  Goccia.Engine,
+  Goccia.Profile,
+  Goccia.Test262,
+  Goccia.ThreadCleanupRegistry;
 
 const
   { Every top-level test262 category. annexB is part of the conformance
@@ -51,7 +46,6 @@ const
   DEFAULT_JOBS = 4;
   DEFAULT_TIMEOUT_MS = 20000;
   DEFAULT_MAX_MEMORY_BYTES = Int64(2) * 1024 * 1024 * 1024;
-  DEFAULT_STACK_DEPTH = 10000;
   FNV_OFFSET_BASIS = UInt32($811C9DC5);
   FNV_PRIME = UInt32($01000193);
   ASYNC_PASS_MARKER = 'Test262:AsyncTestComplete';
@@ -66,15 +60,6 @@ const
     between PASS and FAIL without an engine change, so the PR comparison
     does not block on a baseline graded under the old contract. }
   GRADING_CONTRACT_VERSION = 4;
-  { The compatibility flags every test262 engine runs with, test cases and
-    --eval-host probes alike: test262 uses these forms across its harness
-    and its tests. A test's own source type and strictness still decide
-    strict-mode semantics. An Annex B surface added behind its own flag
-    (ADR 0177) joins this set, so the runner tests it while the default
-    engine profile stays without it. }
-  TEST262_COMPATIBILITY: TGocciaCompatibilityFlags = [cfASI, cfVar,
-    cfFunction, cfTraditionalFor, cfWhileLoops, cfLooseEquality,
-    cfArgumentsObject, cfLabel, cfForIn, cfNonStrictMode];
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
@@ -146,27 +131,26 @@ type
     HostEval: Boolean;
     HostEvalDeterministic: Boolean;
     HostEvalWarningUnsupportedFeatures: Boolean;
-    HostEvalSourceType: TGocciaSourceType;
+    HostEvalModule: Boolean;
+    { --source-type was given: otherwise the goal is the source's (ADR 0140), as GocciaRunner settles it }
+    HostEvalSourceTypeSet: Boolean;
   end;
 
-  { One worker-owned result slot for the thread-pool path. A worker writes
-    only the slot it captured when it started the test, so the supervisor can
-    abandon a stalled worker and leak its slot instead of racing it. }
-  TTest262ResultSlot = class
-  public
-    Value: TTest262Result;
-  end;
+  TTest262App = class;
 
-  TTest262PrintHost = class
+  {$IFNDEF UNIX}
+  { a run without fork: each case on a thread of its own (a thread's engine state is made once), as
+    GocciaTestRunner runs each file }
+  TTest262Worker = class(TThread)
   private
-    FLines: TStringList;
+    FApp: TTest262App;
+    FIndex: Integer;
+  protected
+    procedure Execute; override;
   public
-    constructor Create;
-    destructor Destroy; override;
-    function PrintValue(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-    function Text: string;
+    constructor Create(AApp: TTest262App; AIndex: Integer);
   end;
+  {$ENDIF}
 
   TTest262App = class
   private
@@ -174,7 +158,6 @@ type
     FCases: TObjectList<TTest262Case>;
     FSelectedPaths: TStringList;
     FResults: array of TTest262Result;
-    FResultSlots: array of TTest262ResultSlot;
     FTotalDiscovered: Integer;
     FExpectedRuns: array[TTest262RunMode] of Integer;
     FDurationNanoseconds: Int64;
@@ -192,13 +175,10 @@ type
     function DetermineKind(
       const AMetadata: TTest262Metadata): TTest262TestKind;
     procedure ConfigureProfiler;
-    procedure WarmUpRuntime(const AEngine: TGocciaEngine);
     function ProfilePathForTest(const AId: string;
       const AMode: TTest262RunMode): string;
     procedure ExecuteOne(const ACase: TTest262Case;
       out AResult: TTest262Result);
-    procedure WorkerProc(const AFileName: string; const AIndex: Integer;
-      out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure ExecuteAll;
     procedure PrintSummary;
     procedure WriteReport;
@@ -445,41 +425,6 @@ begin
   Result := (NegativePhase <> '') or (NegativeType <> '');
 end;
 
-constructor TTest262PrintHost.Create;
-begin
-  inherited Create;
-  FLines := TStringList.Create;
-end;
-
-destructor TTest262PrintHost.Destroy;
-begin
-  FLines.Free;
-  inherited;
-end;
-
-function TTest262PrintHost.PrintValue(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  I: Integer;
-  Line: string;
-begin
-  Line := '';
-  for I := 0 to AArgs.Length - 1 do
-  begin
-    if I > 0 then
-      Line := Line + ' ';
-    Line := Line + AArgs.GetElement(I).ToStringLiteral.Value;
-  end;
-  FLines.Add(Line);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TTest262PrintHost.Text: string;
-begin
-  Result := FLines.Text;
-end;
-
 constructor TTest262App.Create;
 begin
   inherited Create;
@@ -491,7 +436,7 @@ begin
   FOptions.ProfileMode := tpmAll;
   FOptions.ShardIndex := -1;
   FOptions.ShardCount := 0;
-  FOptions.HostEvalSourceType := stScript;
+  FOptions.HostEvalModule := False;
   FCases := TObjectList<TTest262Case>.Create(True);
   FSelectedPaths := TStringList.Create;
 end;
@@ -609,11 +554,12 @@ begin
     begin
       Value := ArgumentValue('--source-type');
       if Value = 'script' then
-        FOptions.HostEvalSourceType := stScript
+        FOptions.HostEvalModule := False
       else if Value = 'module' then
-        FOptions.HostEvalSourceType := stModule
+        FOptions.HostEvalModule := True
       else
         raise TParseError.Create('--source-type requires script or module');
+      FOptions.HostEvalSourceTypeSet := True;
     end
     else if (Argument = '--suite-dir') or
         StartsStr('--suite-dir=', Argument) then
@@ -1012,11 +958,12 @@ begin
   Result := True;
 end;
 
+{ $262.js is the engine's host object, compiled into the test262 host (Goccia.Test262 takes it by name); the rest are the
+  suite's }
 function TTest262App.HarnessFilePath(const AName: string): string;
 begin
   if AName = '$262.js' then
-    Result := ExpandFileName('scripts' + PathDelim + 'test262_harness' +
-      PathDelim + AName)
+    Result := AName
   else
     Result := IncludeTrailingPathDelimiter(FOptions.SuiteDir) + 'harness' +
       PathDelim + AName;
@@ -1044,59 +991,6 @@ begin
   for I := 0 to AMetadata.Includes.Count - 1 do
     if Result.IndexOf(AMetadata.Includes[I]) < 0 then
       Result.Add(AMetadata.Includes[I]);
-end;
-
-{ Negative-runtime tests are graded against negative.type, which names the
-  thrown value's constructor (test262's Test262Error has no own or inherited
-  "name" data property). Read e.constructor.name through data properties
-  only, so grading never calls an accessor's getter. }
-function DataPropertyValue(const AObject: TGocciaObjectValue;
-  const AName: string): TGocciaValue;
-var
-  Current: TGocciaObjectValue;
-  Descriptor: TGocciaPropertyDescriptor;
-begin
-  Result := nil;
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    Descriptor := Current.GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
-    begin
-      if Descriptor is TGocciaPropertyDescriptorData then
-        Result := TGocciaPropertyDescriptorData(Descriptor).Value;
-      ReleaseDescriptor(Descriptor);
-      Exit;
-    end;
-    Current := Current.Prototype;
-  end;
-end;
-
-function NegativeErrorName(const AKind: TTest262TestKind;
-  const AThrown: TGocciaValue): string;
-var
-  Constructor_, Name: TGocciaValue;
-begin
-  Result := ThrownErrorName(AThrown);
-  if (AKind <> tkNegativeRuntime) or
-     not (AThrown is TGocciaObjectValue) then
-    Exit;
-  Constructor_ := DataPropertyValue(TGocciaObjectValue(AThrown),
-    'constructor');
-  if not (Constructor_ is TGocciaObjectValue) then
-    Exit;
-  Name := DataPropertyValue(TGocciaObjectValue(Constructor_), 'name');
-  if (Name is TGocciaStringLiteralValue) and
-     (TGocciaStringLiteralValue(Name).Value <> '') then
-    Result := TGocciaStringLiteralValue(Name).Value;
-end;
-
-{ True when the escaped value is the string sta.js $DONOTEVALUATE() throws,
-  i.e. the engine evaluated a body that should have been rejected first. }
-function IsDoNotEvaluateThrow(const AThrown: TGocciaValue): Boolean;
-begin
-  Result := (AThrown is TGocciaStringLiteralValue) and
-    (TGocciaStringLiteralValue(AThrown).Value = DONOTEVALUATE_THROWN);
 end;
 
 { INTERPRETING.md, "Strict Mode": a strict run inserts a "use strict"
@@ -1144,6 +1038,8 @@ begin
       TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
         Goccia.Profiler.pmFunctions];
   end;
+  ProfileStart(FOptions.ProfileMode in [tpmOpcodes, tpmAll],
+    FOptions.ProfileMode in [tpmFunctions, tpmAll]);
 end;
 
 { A strict run's profile carries a .strict suffix, so the two runs of a
@@ -1159,200 +1055,130 @@ begin
   Result := Result + '.profile.json';
 end;
 
+{ Grades a run's outcome under contract 4, as scripts/engine/run262.py does for the engine's gate. A parse, early or
+  resolution negative passes only when the test is rejected before evaluation (outcome parse) with the expected
+  constructor; a runtime negative only when evaluation throws (outcome throw) the expected constructor. A harness
+  file that failed is WRAPPER_INFRA (the test never ran). }
 procedure ClassifyResult(const AKind: TTest262TestKind;
-  const AExpectedErrorType, AOutput, AErrorName, ADiagnostic: string;
-  const AExecutionFailed, ATimedOut, AHostError,
-    ADoNotEvaluateReached: Boolean;
-  out AOutcome: TTest262Outcome; out AMessage, AResultDiagnostic: string);
+  const AExpectedErrorType: string; const AOutcome: TGocciaT262Outcome;
+  const AOutput: string; out AStatus: TTest262Outcome;
+  out AMessage, AResultDiagnostic: string);
 var
-  Actual: string;
+  Actual, Kind, Name, Msg, Desc: string;
 begin
   AMessage := '';
   AResultDiagnostic := '';
-  if ATimedOut then
+  Kind := string(AOutcome.Kind);
+  Name := string(AOutcome.Name);
+  Msg := string(AOutcome.Message);
+  if Name <> '' then
+    Desc := Name + ': ' + Msg
+  else
+    Desc := Msg;
+  { where a thrown error was made, after its first line (a diagnostic; the message stays the first line) }
+  if AOutcome.Site <> '' then
+    Desc := Desc + #10 + string(AOutcome.Site);
+  if Kind = 'harness' then
   begin
-    AOutcome := toTimeout;
-    AMessage := 'engine timeout';
+    AStatus := toWrapperInfra;
+    AMessage := 'harness include ' + ExtractFileName(string(AOutcome.FileName)) +
+      ' failed: ' + FirstLine(Msg);
+    AResultDiagnostic := Copy(Msg, 1, 800);
     Exit;
   end;
+  AStatus := toFail;
   if AKind = tkNegativeParse then
   begin
-    { A parse/early/resolution negative passes only when the source is
-      rejected before evaluation with the expected error constructor.
-      Parse, early-error and module-linking failures surface as host-level
-      TGocciaError exceptions before any statement runs; once evaluation has
-      started, errors escape as JS throw values instead. }
-    AOutcome := toFail;
-    if not AExecutionFailed then
+    if (Kind = 'parse') and (Name = AExpectedErrorType) then
+      AStatus := toPass
+    else if Kind = 'ok' then
       AMessage := 'expected ' + AExpectedErrorType +
         ' before evaluation, body executed cleanly'
-    else if ADoNotEvaluateReached then
+    else if (Kind = 'throw') and (Msg = DONOTEVALUATE_THROWN) then
       AMessage := 'expected ' + AExpectedErrorType +
         ' before evaluation, body was evaluated ($DONOTEVALUATE reached)'
-    else if not AHostError then
+    else if Kind = 'throw' then
     begin
       AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, ' +
-        AErrorName + ' was thrown as a JS value during evaluation';
-      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
-    end
-    else if (AExpectedErrorType <> '') and
-            (AErrorName <> AExpectedErrorType) then
-    begin
-      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
-        AErrorName;
-      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
+        Name + ' was thrown as a JS value during evaluation';
+      AResultDiagnostic := Copy(Desc, 1, 300);
     end
     else
-      AOutcome := toPass;
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
+        Name + ' in the ' + Kind + ' phase';
+      AResultDiagnostic := Copy(Desc, 1, 300);
+    end;
     Exit;
   end;
-
   if AKind = tkNegativeRuntime then
   begin
-    if not AExecutionFailed then
+    if (Kind = 'throw') and (Name = AExpectedErrorType) then
+      AStatus := toPass
+    else if Kind = 'ok' then
     begin
-      AOutcome := toFail;
       if AExpectedErrorType <> '' then
         AMessage := 'expected ' + AExpectedErrorType + ', none thrown'
       else
         AMessage := 'expected error, none thrown';
     end
-    else if (AExpectedErrorType <> '') and
-            (AErrorName <> AExpectedErrorType) then
-    begin
-      AOutcome := toFail;
-      AMessage := 'expected ' + AExpectedErrorType + ', got ' + AErrorName;
-      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
-    end
     else
-      AOutcome := toPass;
+    begin
+      { a thrown error is named as it is; another outcome (a parse or resolution error) with its phase }
+      if Kind = 'throw' then
+        AMessage := 'expected ' + AExpectedErrorType + ', got ' + Name
+      else
+        AMessage := 'expected ' + AExpectedErrorType + ', got ' + Name + ' in the ' + Kind + ' phase';
+      AResultDiagnostic := Copy(Desc, 1, 300);
+    end;
     Exit;
   end;
-
+  if Kind <> 'ok' then
+  begin
+    if Kind = 'throw' then
+      AMessage := FirstLine(Desc)
+    else
+      AMessage := FirstLine(Kind + ' ' + Desc);
+    AResultDiagnostic := Copy(Desc, 1, 800);
+    Exit;
+  end;
   if AKind = tkPositiveAsync then
   begin
     if Pos(ASYNC_PASS_MARKER, AOutput) > 0 then
-      AOutcome := toPass
+      AStatus := toPass
     else if ExtractMarkerValue(AOutput, ASYNC_FAIL_MARKER, Actual) then
-    begin
-      AOutcome := toFail;
-      AMessage := Copy(Actual, 1, 200);
-    end
+      AMessage := Copy(Actual, 1, 200)
     else
-    begin
-      AOutcome := toFail;
-      if AExecutionFailed then
-        AMessage := 'async test threw before $DONE'
-      else
-        AMessage := 'async test did not call $DONE';
-      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
-    end;
+      AMessage := 'async test did not call $DONE';
     Exit;
   end;
-
-  if AExecutionFailed then
-  begin
-    AOutcome := toFail;
-    AMessage := FirstLine(ADiagnostic);
-    AResultDiagnostic := Copy(ADiagnostic, 1, 800);
-  end
-  else
-    AOutcome := toPass;
+  AStatus := toPass;
 end;
 
+{ One run, in the forked process ExecuteAll made for it: the engine, its test262 host and the harness, then the
+  test. The process ends after it, so nothing here is torn down. }
 procedure TTest262App.ExecuteOne(const ACase: TTest262Case;
   out AResult: TTest262Result);
 var
-  Diagnostic: string;
-  DoNotEvaluateReached: Boolean;
-  Engine: TGocciaEngine;
-  EngineOptions: TGocciaTest262EngineOptions;
-  ErrorName: string;
-  ExecutionFailed: Boolean;
-  FailedInclude: string;
   HarnessNames: TStringList;
-  HarnessPaths: TStringList;
-  HarnessSources: TObjectList<TStringList>;
-  Host: TGocciaTest262Host;
-  HostError: Boolean;
+  Harness: array of string;
   I: Integer;
   Kind: TTest262TestKind;
   Metadata: TTest262Metadata;
-  PrintHost: TTest262PrintHost;
+  Outcome: TGocciaT262Outcome;
   ProfilePath: string;
-  Source: TStringList;
   SourceText: string;
   StartNanoseconds: Int64;
   StrictMode: Boolean;
-  TimedOut: Boolean;
-
-  { Records how the Script or Module at APath ended when it raised E. }
-  procedure RecordFailure(const E: Exception; const APath: string;
-    const ALines: TStringList);
-  begin
-    ExecutionFailed := True;
-    if E is TGocciaTimeoutError then
-    begin
-      TimedOut := True;
-      ErrorName := 'Timeout';
-      Diagnostic := E.Message;
-    end
-    else if E is EGocciaBytecodeThrow then
-    begin
-      ErrorName := NegativeErrorName(Kind,
-        EGocciaBytecodeThrow(E).ThrownValue);
-      DoNotEvaluateReached := IsDoNotEvaluateThrow(
-        EGocciaBytecodeThrow(E).ThrownValue);
-      Diagnostic := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-        APath, ALines, False, Engine.ModuleLoader.DiagnosticScope.Principal,
-        EGocciaBytecodeThrow(E).Suggestion);
-    end
-    else if E is TGocciaThrowValue then
-    begin
-      ErrorName := NegativeErrorName(Kind, TGocciaThrowValue(E).Value);
-      DoNotEvaluateReached := IsDoNotEvaluateThrow(
-        TGocciaThrowValue(E).Value);
-      Diagnostic := FormatThrowDetail(TGocciaThrowValue(E).Value, APath,
-        ALines, False, Engine.ModuleLoader.DiagnosticScope.Principal,
-        TGocciaThrowValue(E).Suggestion);
-    end
-    else if E is TGocciaError then
-    begin
-      { Parse, early-error and module-linking failures arrive here, as
-        host-level errors. JS-level throws arrive as TGocciaThrowValue or
-        EGocciaBytecodeThrow above instead. }
-      HostError := True;
-      ErrorName := ErrorDisplayName(TGocciaError(E));
-      Diagnostic := TGocciaError(E).GetDetailedMessage(False);
-    end
-    else
-    begin
-      HostError := True;
-      ErrorName := E.ClassName;
-      Diagnostic := E.ClassName + ': ' + E.Message;
-    end;
-  end;
-
+  {$IFNDEF UNIX}TimedOut, EngineMade: Boolean;{$ENDIF}
 begin
   AResult := Default(TTest262Result);
+  {$IFNDEF UNIX}EngineMade := False;{$ENDIF}
   AResult.Id := ACase.Id;
   AResult.Mode := ACase.Mode;
   StartNanoseconds := GetNanoseconds;
   Metadata := nil;
-  Source := nil;
-  Engine := nil;
-  Host := nil;
-  PrintHost := nil;
   HarnessNames := nil;
-  HarnessPaths := nil;
-  HarnessSources := nil;
-  ExecutionFailed := False;
-  DoNotEvaluateReached := False;
-  HostError := False;
-  TimedOut := False;
-  ErrorName := '';
-  Diagnostic := '';
-  FailedInclude := '';
   ProfilePath := '';
   try
     try
@@ -1360,119 +1186,51 @@ begin
       if not ParseTest(SourceText, Metadata) then
         raise Exception.Create('frontmatter parse failed');
       Kind := DetermineKind(Metadata);
-      { INTERPRETING.md: every test but a raw one evaluates the harness in
-        its realm first, each file as its own non-strict global Script, so
-        a negative parse or resolution body that is evaluated reaches sta.js
-        $DONOTEVALUATE(). A raw test's source "must not be modified in any
-        way": it runs alone, exactly as written, in non-strict mode. }
+      { INTERPRETING.md: every test but a raw one evaluates the harness in its realm first, each file as its own
+        non-strict global Script; a raw test runs alone, exactly as written, in non-strict mode }
       HarnessNames := HarnessIncludes(Metadata);
-      HarnessPaths := TStringList.Create;
-      HarnessSources := TObjectList<TStringList>.Create(True);
+      SetLength(Harness, HarnessNames.Count);
       for I := 0 to HarnessNames.Count - 1 do
       begin
-        HarnessPaths.Add(HarnessFilePath(HarnessNames[I]));
-        if not FileExists(HarnessPaths[I]) then
+        Harness[I] := HarnessFilePath(HarnessNames[I]);
+        { ($262.js is compiled in) }
+        if (HarnessNames[I] <> '$262.js') and not FileExists(Harness[I]) then
           raise Exception.Create('Missing harness include "' +
-            HarnessNames[I] + '": ' + HarnessPaths[I]);
-        HarnessSources.Add(CreateECMAScriptSourceLines(
-          ReadUTF8FileText(HarnessPaths[I])));
+            HarnessNames[I] + '": ' + Harness[I]);
       end;
-      { The case's mode is the one place strictness is decided. A strict
-        Script run gets the "use strict" prefix; a module test's run is
-        strict as module code and keeps its source as written
-        (INTERPRETING.md, the module flag). }
-      StrictMode := (ACase.Mode = trmStrict) and
-        not Metadata.HasFlag('module');
-      Source := CreateECMAScriptSourceLines(
-        TestSourceText(SourceText, StrictMode));
-
-      { Non-strict compatibility is a property of Script code: module code
-        stays strict whatever the flag says, while the harness Scripts a
-        module test evaluates first, and any Script it reaches through
-        $262.evalScript, indirect eval or Function, are non-strict unless
-        their own source opts in. }
-      EngineOptions := Default(TGocciaTest262EngineOptions);
-      EngineOptions.Compatibility := TEST262_COMPATIBILITY;
-      EngineOptions.ExperimentalJSModuleSourceEnabled :=
-        Metadata.HasFeature('source-phase-imports-module-source');
-      if EngineOptions.ExperimentalJSModuleSourceEnabled then
-        Include(EngineOptions.Compatibility,
-          cfExperimentalJSModuleSource);
-      EngineOptions.UnsafeShadowRealm :=
-        Metadata.HasFeature('ShadowRealm') or
-        Metadata.HasFeature('realms-tests');
-      EngineOptions.AgentCanSuspend :=
-        Test262SourceCanSuspendAgent(ACase.Path);
-      if Metadata.HasFlag('module') then
-        EngineOptions.SourceType := stModule
-      else
-        EngineOptions.SourceType := stScript;
-      EngineOptions.TimeoutMs := FOptions.TimeoutMs;
-      EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
-      EngineOptions.StackSize := DEFAULT_STACK_DEPTH;
-      { test262 reaches its fixtures through computed import() specifiers and
-        ShadowRealm.prototype.importValue, which are outside the module graph,
-        so the case may read the suite checkout. Realms and agents the case
-        creates inherit this set through EngineOptions. }
-      EngineOptions.Capabilities := TGocciaCapabilities.None.Allow(gcRead,
-        FOptions.SuiteDir);
-
-      StartExecutionTimeout(FOptions.TimeoutMs);
-      StartInstructionLimit(0);
-      SetMaxStackDepth(DEFAULT_STACK_DEPTH);
-      ConfigureProfiler;
+      { the case's mode decides strictness: a strict Script run gets the "use strict" prefix; a module test's run
+        is strict as module code and keeps its source as written }
+      StrictMode := (ACase.Mode = trmStrict) and not Metadata.HasFlag('module');
+      HeapCeiling := FOptions.MaxMemoryBytes;
+      InitTest262Engine(Metadata.HasFlag('CanBlockIsFalse'));
+      {$IFNDEF UNIX}EngineMade := True;{$ENDIF}
       if FOptions.ProfileDir <> '' then
       begin
         ProfilePath := ProfilePathForTest(ACase.Id, ACase.Mode);
         ForceHostDirectories(ExtractFileDir(ProfilePath));
+        ConfigureProfiler;
       end;
-
-      Engine := TGocciaEngine.Create(ACase.Path, Source,
-        EngineOptions.Capabilities);
-      ConfigureTest262Engine(Engine, EngineOptions);
-      Host := TGocciaTest262Host.Create(EngineOptions);
-      Host.ConfigureHostEnvironment(Engine.HostEnvironment);
-      PrintHost := TTest262PrintHost.Create;
-      Engine.RegisterGlobal('print',
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          PrintHost.PrintValue, 'print', -1));
-      Host.Install(Engine);
-      for I := 0 to HarnessPaths.Count - 1 do
+      {$IFNDEF UNIX}
+      { no fork: the run shares the process, so its deadline is the engine's own (LimitsArm), not a kill }
+      LimitsArm(FOptions.TimeoutMs, 0);
+      {$ENDIF}
+      Outcome := RunTest262Case(Harness, ACase.Path, StrictMode,
+        Metadata.HasFlag('module'));
+      if FOptions.ProfileDir <> '' then
+        ProfileStop;
+      {$IFNDEF UNIX}
+      TimedOut := LimitAbortKind = 1;
+      if TimedOut then
       begin
-        try
-          EvaluateTest262Script(Engine, HarnessSources[I], HarnessPaths[I]);
-        except
-          on E: Exception do
-          begin
-            RecordFailure(E, HarnessPaths[I], HarnessSources[I]);
-            FailedInclude := HarnessNames[I];
-            Break;
-          end;
-        end;
-      end;
-      if not ExecutionFailed then
-      begin
-        try
-          Engine.Execute;
-        except
-          on E: Exception do
-            RecordFailure(E, ACase.Path, Source);
-        end;
-      end;
-
-      if (FailedInclude <> '') and not TimedOut then
-      begin
-        { The test never ran, so this is no conformance result. }
-        AResult.Status := toWrapperInfra;
-        AResult.Message := 'harness include ' + FailedInclude + ' failed: ' +
-          FirstLine(Diagnostic);
-        AResult.Diagnostic := Copy(Diagnostic, 1, 800);
+        AResult.Status := toTimeout;
+        AResult.Message := Format('TIMEOUT after %dms', [FOptions.TimeoutMs]);
+        AResult.Diagnostic := AResult.Message;
       end
       else
-        ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
-          ErrorName, Diagnostic, ExecutionFailed, TimedOut, HostError,
-          DoNotEvaluateReached, AResult.Status,
-          AResult.Message, AResult.Diagnostic);
+      {$ENDIF}
+      ClassifyResult(Kind, Metadata.NegativeType, Outcome,
+        string(Test262PrintText), AResult.Status, AResult.Message,
+        AResult.Diagnostic);
     except
       on E: Exception do
       begin
@@ -1482,6 +1240,8 @@ begin
       end;
     end;
   finally
+    { no fork: the next case on this thread makes its own engine }
+    {$IFNDEF UNIX}if EngineMade then DoneTest262Engine;{$ENDIF}
     if (ProfilePath <> '') and Assigned(TGocciaProfiler.Instance) then
     begin
       try
@@ -1499,41 +1259,100 @@ begin
       [rfReplaceAll]);
     AResult.ProfileMissing := (ProfilePath <> '') and
       not FileExists(ProfilePath);
-    if Assigned(TGocciaProfiler.Instance) then
-      TGocciaProfiler.Shutdown;
-    PrintHost.Free;
-    Host.Free;
-    Engine.Free;
-    HarnessSources.Free;
-    HarnessPaths.Free;
     HarnessNames.Free;
-    Source.Free;
     Metadata.Free;
     AResult.DurationMs := Round(
       (GetNanoseconds - StartNanoseconds) / 1000000);
   end;
 end;
 
-procedure TTest262App.WorkerProc(const AFileName: string;
-  const AIndex: Integer; out AConsoleOutput: string;
-  out AErrorMessage: string; AData: Pointer);
+{$IFNDEF UNIX}
+const
+  { the native stack of a worker: as GocciaTestRunner's file threads (deep recursion tests) }
+  T262_THREAD_STACK = 64 * 1024 * 1024;
+
+constructor TTest262Worker.Create(AApp: TTest262App; AIndex: Integer);
+begin
+  FApp := AApp;
+  FIndex := AIndex;
+  inherited Create(True, T262_THREAD_STACK);
+end;
+
 var
-  Slot: TTest262ResultSlot;
+  { held by a run of a test that starts agents: their reports share one process-wide queue (Goccia.Agent) }
+  AgentRunLock: TRTLCriticalSection;
+
+procedure TTest262Worker.Execute;
+var
+  UsesAgents: Boolean;
 begin
-  AConsoleOutput := '';
-  AErrorMessage := '';
-  Slot := FResultSlots[AIndex];
-  ExecuteOne(FCases[AIndex], Slot.Value);
+  try
+    try
+      UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
+    except
+      UsesAgents := False;
+    end;
+    if UsesAgents then
+      EnterCriticalSection(AgentRunLock);
+    try
+      FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
+    finally
+      if UsesAgents then
+        LeaveCriticalSection(AgentRunLock);
+    end;
+    FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
+  finally
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
+  end;
 end;
 
-procedure TTest262App.WarmUpRuntime(const AEngine: TGocciaEngine);
-begin
-  WarmUpSharedLazyGlobals(AEngine);
-end;
-
+{ no fork: up to Jobs cases at a time, each on its own thread, each run bounded by its engine's deadline }
 procedure TTest262App.ExecuteAll;
 var
-  {$IFDEF UNIX}
+  Workers: array of TTest262Worker;
+  Next, Oldest, Done: Integer;
+  StartNanoseconds: Int64;
+
+  procedure Finish(I: Integer);
+  begin
+    Workers[I].WaitFor;
+    FreeAndNil(Workers[I]);
+    Inc(Done);
+    if FOptions.Verbose or (Done = FCases.Count) or ((Done mod 1024) = 0) then
+      WriteLn('[', Done, '/', FCases.Count, ']');
+  end;
+
+begin
+  SetLength(FResults, FCases.Count);
+  if FCases.Count = 0 then
+    Exit;
+  StartNanoseconds := GetNanoseconds;
+  InitCriticalSection(AgentRunLock);
+  SetLength(Workers, FCases.Count);
+  Oldest := 0;
+  Done := 0;
+  for Next := 0 to FCases.Count - 1 do
+  begin
+    if Next - Oldest >= Max(1, FOptions.Jobs) then
+    begin
+      Finish(Oldest);
+      Inc(Oldest);
+    end;
+    Workers[Next] := TTest262Worker.Create(Self, Next);
+    Workers[Next].Start;
+  end;
+  while Oldest < FCases.Count do
+  begin
+    Finish(Oldest);
+    Inc(Oldest);
+  end;
+  DoneCriticalSection(AgentRunLock);
+  FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
+end;
+{$ELSE}
+procedure TTest262App.ExecuteAll;
+var
   ActiveWorkers: Integer;
   ChildPid: TPid;
   CompletedCount: Integer;
@@ -1549,25 +1368,13 @@ var
   SlotTimedOut: array of Boolean;
   WaitStatus: cint;
   WorkerMessage: string;
-  {$ELSE}
-  I: Integer;
-  Pool: TGocciaThreadPool;
-  {$ENDIF}
+  DevNull: cint;
   StartNanoseconds: Int64;
 begin
   SetLength(FResults, FCases.Count);
   if FCases.Count = 0 then
     Exit;
-  EnsureSharedPrototypesInitialized(WarmUpRuntime);
-  {$IFDEF UNIX}
-  // The warm-up realm is deliberately discarded before workers fork. Clear
-  // its thread-local member definitions so children rebuild realm-owned data
-  // properties (such as Intl.Segmenter's @@toStringTag) for their one engine,
-  // while retaining the expensive process-shared ICU and time-zone data.
-  RunThreadvarCleanups;
-  {$ENDIF}
   StartNanoseconds := GetNanoseconds;
-  {$IFDEF UNIX}
   SetLength(SlotPids, FOptions.Jobs);
   SetLength(SlotIndices, FOptions.Jobs);
   SetLength(SlotStartedNanoseconds, FOptions.Jobs);
@@ -1592,6 +1399,13 @@ begin
       ChildPid := fpFork;
       if ChildPid = 0 then
       begin
+        { the run's own console output is not the runner's: print records into the host, the rest is dropped }
+        DevNull := fpOpen('/dev/null', O_WRONLY);
+        if DevNull >= 0 then
+        begin
+          fpDup2(DevNull, 1);
+          fpDup2(DevNull, 2);
+        end;
         try
           ExecuteOne(FCases[ResultIndex], FResults[ResultIndex]);
           WriteWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
@@ -1627,7 +1441,7 @@ begin
         if (SlotPids[Slot] <> 0) and
            (not SlotTimedOut[Slot]) and
            (GetNanoseconds - SlotStartedNanoseconds[Slot] >
-             Int64(FOptions.TimeoutMs * 2 + 1000) * 1000000) then
+             Int64(FOptions.TimeoutMs) * 1000000) then
         begin
           SlotTimedOut[Slot] := True;
           fpKill(SlotPids[Slot], SIGKILL);
@@ -1652,9 +1466,7 @@ begin
     begin
       FResults[ResultIndex].Id := FCases[ResultIndex].Id;
       FResults[ResultIndex].Status := toTimeout;
-      WorkerMessage := Format(
-        'Test262 worker exceeded %dms watchdog',
-        [FOptions.TimeoutMs * 2 + 1000]);
+      WorkerMessage := Format('TIMEOUT after %dms', [FOptions.TimeoutMs]);
     end
     else if WIFEXITED(WaitStatus) then
     begin
@@ -1700,45 +1512,9 @@ begin
   end;
   for Slot := 0 to High(ResultPaths) do
     DeleteFile(ResultPaths[Slot]);
-  {$ELSE}
-  SetLength(FResultSlots, FCases.Count);
-  for I := 0 to High(FResultSlots) do
-    FResultSlots[I] := TTest262ResultSlot.Create;
-  Pool := TGocciaThreadPool.Create(FOptions.Jobs);
-  try
-    Pool.MaxBytes := FOptions.MaxMemoryBytes;
-    Pool.ResetRuntimeBetweenItems := True;
-    Pool.RunAll(FSelectedPaths, WorkerProc, nil,
-      FOptions.TimeoutMs * 2 + 1000);
-    for I := 0 to High(FResults) do
-      if (I <= High(Pool.Results)) and Pool.Results[I].Success then
-      begin
-        FResults[I] := FResultSlots[I].Value;
-        FreeAndNil(FResultSlots[I]);
-      end
-      else
-      begin
-        // The test did not complete. A worker abandoned by the watchdog may
-        // still be writing this slot, so leave it allocated and never read it.
-        FResults[I] := Default(TTest262Result);
-        FResults[I].Id := FCases[I].Id;
-        FResults[I].Mode := FCases[I].Mode;
-        if I <= High(Pool.Results) then
-          FResults[I].Message := Pool.Results[I].ErrorMessage;
-        if StartsStr('TIMEOUT', FResults[I].Message) then
-          FResults[I].Status := toTimeout
-        else
-          FResults[I].Status := toWrapperInfra;
-        if FResults[I].Message = '' then
-          FResults[I].Message := 'Test262 worker produced no result';
-        FResults[I].Diagnostic := FResults[I].Message;
-      end;
-  finally
-    Pool.Free;
-  end;
-  {$ENDIF}
   FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
 end;
+{$ENDIF}
 
 function CategoryForId(const AId: string): string;
 var
@@ -1942,7 +1718,7 @@ begin
     Lines.Add('    "timeouts": ' +
       IntToStr(Totals.Timeouts) + ',');
     Lines.Add('    "durationSeconds": ' +
-      Format('%.3f', [DurationSeconds], InvariantFormatSettings) + ',');
+      Format('%.3f', [DurationSeconds], CreateInvariantFormatSettings) + ',');
     Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCounts) + ',');
     Lines.Add('    "expectedRuns": ' + ExpectedRunsJSON(FExpectedRuns) + ',');
     Lines.Add('    "byCategory": [');
@@ -2048,82 +1824,88 @@ begin
   Result := Totals.Run - Totals.Passed;
 end;
 
-function TTest262App.RunHostEval: Integer;
+{ Whether Source's goal is Module (ADR 0140, as GocciaRunner detects an entry's): an import or export declaration,
+  or top-level await, parsed with test262's compatibility flags. Source that does not parse either way is a Script
+  here, for the run to report its error. }
+function SourceDetectsModule(const ASource: string): Boolean;
 var
-  Engine: TGocciaEngine;
-  EngineOptions: TGocciaTest262EngineOptions;
-  Host: TGocciaTest262Host;
-  PrintHost: TTest262PrintHost;
-  Source: TStringList;
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
 begin
-  Result := 0;
-  Source := ReadSourceFromText(Input);
-  Engine := nil;
-  Host := nil;
-  PrintHost := nil;
+  Result := False;
+  Options := TGocciaSourcePipeline.DefaultOptions;
+  Options.Compatibility := [cfASI, cfVar, cfFunction, cfTraditionalFor, cfWhileLoops, cfLooseEquality,
+    cfNonStrictMode, cfArgumentsObject, cfLabel, cfForIn];
+  Options.SourceType := stDetect;
+  Lines := CreateFileTextLines(ASource);
   try
-    EngineOptions := Default(TGocciaTest262EngineOptions);
-    EngineOptions.Compatibility := TEST262_COMPATIBILITY;
-    EngineOptions.UnsafeShadowRealm := True;
-    EngineOptions.AgentCanSuspend := True;
-    EngineOptions.SourceType := FOptions.HostEvalSourceType;
-    EngineOptions.TimeoutMs := FOptions.TimeoutMs;
-    EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
-    EngineOptions.StackSize := DEFAULT_STACK_DEPTH;
-    { A host probe resolves imports against the working directory. }
-    EngineOptions.Capabilities := TGocciaCapabilities.None.Allow(gcRead,
-      GetCurrentDir);
-    StartExecutionTimeout(FOptions.TimeoutMs);
-    SetMaxStackDepth(DEFAULT_STACK_DEPTH);
-    Engine := TGocciaEngine.Create('<test262-host-eval>', Source,
-      EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, EngineOptions);
-    if FOptions.HostEvalDeterministic then
-      Engine.HostEnvironment.UseDeterministicProfile;
-    Engine.WarningUnsupportedFeatures :=
-      FOptions.HostEvalWarningUnsupportedFeatures;
-    Host := TGocciaTest262Host.Create(EngineOptions);
-    Host.ConfigureHostEnvironment(Engine.HostEnvironment);
-    PrintHost := TTest262PrintHost.Create;
-    Engine.RegisterGlobal('print',
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        PrintHost.PrintValue, 'print', -1));
-    Host.Install(Engine);
     try
-      // Emit buffered print output on every exit path, as Bare's unbuffered
-      // print did, so a probe that throws keeps what it printed first.
+      Parsed := TGocciaSourcePipeline.Parse(Lines, '<test262-host-eval>', Options);
       try
-        Engine.Execute;
+        Result := Parsed.SourceType = stModule;
       finally
-        Write(PrintHost.Text);
-        Flush(Output);
+        Parsed.Free;
       end;
     except
-      on E: EGocciaBytecodeThrow do
-      begin
-        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-          '<test262-host-eval>', Source, False,
-          Engine.ModuleLoader.DiagnosticScope.Principal, E.Suggestion));
-        Result := 1;
-      end;
-      on E: TGocciaThrowValue do
-      begin
-        WriteLn(ErrOutput, FormatThrowDetail(E.Value,
-          '<test262-host-eval>', Source, False,
-          Engine.ModuleLoader.DiagnosticScope.Principal, E.Suggestion));
-        Result := 1;
-      end;
-      on E: TGocciaError do
-      begin
-        WriteLn(ErrOutput, E.GetDetailedMessage(False));
-        Result := 1;
-      end;
+      on Exception do
+        Result := False;
     end;
   finally
-    PrintHost.Free;
-    Host.Free;
-    Engine.Free;
-    Source.Free;
+    Lines.Free;
+  end;
+end;
+
+{ --eval-host: stdin run after the $262.js harness on the test262 host, as a Script or a module (--source-type, else
+  the source's own goal); a module from a temporary file in the working directory, which its imports resolve
+  against. What print printed goes to stdout on every exit path, an uncaught error to stderr with exit code 1. }
+function TTest262App.RunHostEval: Integer;
+var
+  Source, Line: string;
+  ProbePath, HostPath: string;
+  Outcome: TGocciaT262Outcome;
+begin
+  Result := 0;
+  Source := '';
+  while not EOF(Input) do
+  begin
+    ReadLn(Input, Line);
+    Source := Source + Line + #10;
+  end;
+  HostPath := HarnessFilePath('$262.js');
+  if not FOptions.HostEvalSourceTypeSet then
+    FOptions.HostEvalModule := SourceDetectsModule(Source);
+  if FOptions.HostEvalModule then
+    ProbePath := IncludeTrailingPathDelimiter(GetCurrentDir) +
+      Format('.goccia-test262-host-eval-%d.mjs', [GetProcessID])
+  else
+    ProbePath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+      Format('goccia-test262-host-eval-%d.js', [GetProcessID]);
+  with TStringList.Create do
+  try
+    Text := Source;
+    SaveToFile(ProbePath);
+  finally
+    Free;
+  end;
+  try
+    HeapCeiling := FOptions.MaxMemoryBytes;
+    InitTest262Engine(False);
+    if FOptions.HostEvalDeterministic then SetTest262Deterministic;
+    Outcome := RunTest262Case([HostPath], ProbePath, False,
+      FOptions.HostEvalModule);
+    Write(UTF8Encode(Test262PrintText));
+    Flush(Output);
+    if Outcome.Kind <> 'ok' then
+    begin
+      if Outcome.Name <> '' then
+        WriteLn(ErrOutput, UTF8Encode(Outcome.Name + ': ' + Outcome.Message))
+      else
+        WriteLn(ErrOutput, UTF8Encode(Outcome.Kind + ': ' + Outcome.Message));
+      Result := 1;
+    end;
+  finally
+    DeleteFile(ProbePath);
   end;
 end;
 
@@ -2156,7 +1938,22 @@ end;
 
 var
   App: TTest262App;
+  SnapshotEngine: TGocciaEngine;
+  SnapshotErr: UnicodeString;
 begin
+  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
+    take them }
+  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
+  begin
+    SnapshotEngine := TGocciaEngine.Create;
+    SnapshotErr := '';
+    if not SnapshotEngine.PrepareHost(SnapshotErr) then
+    begin
+      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
+      Halt(1);
+    end;
+    Halt(0);
+  end;
   App := TTest262App.Create;
   try
     try
@@ -2184,13 +1981,6 @@ begin
       end;
     end;
   finally
-    { As TGocciaApplication.RunApplication does: a worker the watchdog
-      abandoned may still read the application, so end the process before
-      freeing it. }
-    EndProcessIfWorkerAbandoned(ExitCode);
     App.Free;
-    { As TGocciaApplication.RunApplication does: the main thread's collector
-      destroys what it still manages (#1592), unless a worker was abandoned. }
-    ShutdownMainThreadRuntime;
   end;
 end.

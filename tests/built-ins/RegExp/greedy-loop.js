@@ -59,13 +59,16 @@ test("a greedy loop prunes the same failed states on a long run as on a short on
   expect(long[0]).toBe(short[0]);
 });
 
-test("the step limit reports its own message", () => {
+test("the step limit reports its own message as an Error", () => {
   let message = "";
+  let name = "";
   try {
     /^(a+)+$/.test("a".repeat(30) + "b");
   } catch (e) {
     message = e.message;
+    name = e.constructor.name;
   }
+  expect(name).toBe("Error");
   expect(message).toBe("Maximum regular expression step count exceeded");
 });
 

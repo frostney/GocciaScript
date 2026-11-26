@@ -20,8 +20,7 @@ uses
 
 const
   { Usage-error exit code.  This matches the convention already in the
-    repository: GocciaWasmTestRunner exits 2 when invoked without a
-    manifest, and GocciaTOMLComplianceRunner exits 2 for an unusable
+    repository: GocciaTOMLComplianceRunner exits 2 for an unusable
     invocation.  Runtime and script failures keep exit code 1. }
   EXIT_CODE_USAGE = CLI.Options.EXIT_CODE_USAGE;
 

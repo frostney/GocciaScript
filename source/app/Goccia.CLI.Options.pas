@@ -23,6 +23,9 @@ const
     'bytecode is the only execution mode, so drop the option';
   EXECUTION_MODE_REMOVED_CONFIG_HINT =
     'bytecode is the only execution mode, so drop the key';
+  { --max-stack's default as the help states it: the engine's own bound on
+    nested calls (FRAME_MAX in Goccia.VM), which 0 also selects }
+  DEFAULT_MAX_STACK_DEPTH = 200000;
 
 type
   TGocciaCompatibilityFlagDescriptor = record
@@ -253,9 +256,7 @@ uses
   Classes,
   SysUtils,
 
-  CLI.Parser,
-
-  Goccia.StackLimit;
+  CLI.Parser;
 
 const
   ENGINE_FIXED_OPTION_COUNT = 18;
@@ -776,7 +777,7 @@ begin
   FMaxInstructions := TCountOption.Create('max-instructions',
     'Maximum execution steps before aborting (0 = no limit)', LIMITS_GROUP);
   FMaxStack := TCountOption.Create('max-stack',
-    Format('Maximum call stack depth (default: %d; 0 = no limit)',
+    Format('Maximum call stack depth (default and 0: %d, the engine''s bound)',
       [DEFAULT_MAX_STACK_DEPTH]), LIMITS_GROUP);
   FMaxStack.Maximum := High(Integer);
   FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',
@@ -945,7 +946,7 @@ constructor TGocciaCoverageOptions.Create;
 begin
   inherited Create;
   FEnabled := TFlagOption.Create('coverage',
-    'Enable line and branch coverage', 'Coverage');
+    'Enable statement, line, branch and function coverage (Istanbul definitions)', 'Coverage');
   FFormat := TEnumOption<TGocciaCoverageFormat>.Create('coverage-format',
     'Coverage output format', 'Coverage');
   FOutputPath := TStringOption.Create('coverage-output',

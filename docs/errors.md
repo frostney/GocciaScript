@@ -4,9 +4,9 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`) and `MemoryLimitError` (`--max-memory`), and the uncatchable host stop `RunAbortedError` (a host's abort from another thread)
-- **`--max-memory` refuses in two ways** -- both force a collection and re-test first, and they differ in what the guest can do about the answer. A *charged* allocation (string payload, `ArrayBuffer` backing store) throws a **catchable** `RangeError`; a *gated* growth point (array element storage, object property storage) ends the run with the **uncatchable** `MemoryLimitError`. Either way, a request larger than the whole budget is refused straight away, and a repeat of a request that a forced collection has already refused is usually refused without walking the heap: the first retry after a refusal forces a collection again, and each retry collection that makes no room doubles the interval before the next ([ADR 0173](adr/0173-a-refused-request-is-collected-for-again-after-a-backoff.md)). The same byte count can therefore be survivable on one path and fatal on the other -- see [Garbage Collector § Gated growth points](garbage-collector.md#gated-growth-points)
-- **Engine-integrity faults** -- A fifth uncatchable class, and not an error type at all: a use-after-free, an invalid dereference, or a broken heap unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`) and `MemoryLimitError` (`--max-memory`)
+- **`--max-memory` refuses at the next safe point** -- a full collection that leaves more live than the limit makes the next back edge or call throw a **catchable** `RangeError`, so a script can drop what it holds and go on; eight refusals in a row that free nothing end the run with the **uncatchable** `MemoryLimitError`. An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, is a `RangeError` at once ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md))
+- **Engine-integrity faults** -- Not an error type at all: an access violation or another Pascal exception inside the engine is never turned into a JavaScript error; it unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`. A promise left rejected with no handler is reported as an uncaught error and fails the run
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -16,7 +16,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus the resource-ceiling and host-stop types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only; a Pascal host's abort handle ends the run with `TGocciaAbortError`, which JSON reports name `RunAbortedError`. None of them is exposed as a JavaScript constructor.
+GocciaScript supports the standard ECMAScript error constructors plus the resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are the CLI's names for a run that `TGocciaEngine` ended with `gaTimeout`, `gaInstructionLimit` or `gaMemoryLimit` ([Embedding — Execution Limits](embedding.md#execution-limits)). None of them is exposed as a JavaScript constructor.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -30,15 +30,22 @@ GocciaScript supports the standard ECMAScript error constructors plus the resour
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
 | `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
-| `RunAbortedError` | A host stopped the run from another thread through an abort handle (`Goccia.ExecutionAbort`, [Embedding](embedding.md#aborting-a-run-from-another-thread)). The Pascal host API raises `TGocciaAbortError`; `RunAbortedError` is its name in JSON reports. The CLI tools never raise it, and it is not a JS-visible constructor | -- |
-| `MemoryLimitError` | A *gated* growth point -- array element storage or object property storage -- was refused by the `--max-memory` budget after a forced collection failed to make room. Charged allocations under the same budget throw a catchable `RangeError` instead (CLI only; not a JS-visible constructor) | -- |
+| `MemoryLimitError` | Eight `--max-memory` refusals in a row freed nothing, and the live heap still exceeds the limit. Each refusal before it is a catchable `RangeError` (CLI only; not a JS-visible constructor) | -- |
 
-The last four are resource ceilings and a host stop rather than in-language errors. Script
+The last three are resource ceilings rather than in-language errors. Script
 `try`/`catch` cannot observe them: they unwind past
 every handler to the host, because a ceiling the guest can catch is a ceiling
-the guest can ignore in a loop. Allocation sites that charge the budget
-against an owning value (string payloads, `ArrayBuffer`) still throw an
-ordinary catchable `RangeError`, which is unchanged.
+the guest can ignore in a loop. A `--max-memory` refusal is first an ordinary
+catchable `RangeError` (`Allocation failed: GC heap size exceeds the configured
+memory limit`), thrown at the next back edge or call after the full collection
+that found the heap over the limit; only when the script keeps holding the
+memory does the run end with `MemoryLimitError`. An explicit reservation that
+cannot fit, such as an `ArrayBuffer`'s bytes, throws its `RangeError` at once.
+
+`TGocciaEngine` has no abort handle, so another thread cannot stop a run. The one
+host stop is a capability audit sink that cannot record a decision: the run
+ends past every handler (`gaHostAbort`), and GocciaRunner's JSON report names
+it `EGocciaCapabilityAuditDeliveryError`.
 
 One more class of failure is uncatchable, for a stronger reason and without
 appearing in the table at all: an **engine-integrity fault** -- a virtual call
@@ -48,8 +55,9 @@ unlike a refused allocation they have no defined continuation, so they unwind
 past every `catch` to the host instead of becoming an `Error` object. A refused
 allocation is deliberately *not* one of them: it leaves the heap intact, so
 catching it and retrying with less remains valid. [ADR
-0109](adr/0109-engine-integrity-faults-are-uncatchable.md) records the decision;
-`source/units/Goccia.EngineFault.pas` is the authoritative list of the classes.
+0109](adr/0109-engine-integrity-faults-are-uncatchable.md) records the decision.
+`TGocciaEngine.Run` catches no Pascal exception, so one raised inside the engine
+reaches the host as itself, and the process should not resume the engine.
 
 ### Inheritance
 
@@ -135,13 +143,13 @@ TypeError: Cannot read properties of undefined (reading 'x')
 
 A failed property read is located at the property whose read failed, where V8 reports it (see [Stack Traces](#stack-traces)).
 
-Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use`, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` is located at the call that needed the larger stack, as an ordinary stack overflow is.
+Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use`, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `--max-memory` refusal met at a call with at least 1,024 frames on the stack is reported as `RangeError: Maximum call stack size exceeded`, located at that call, as an ordinary stack overflow is.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
 
 ### Unhandled promise rejections
 
-A promise that is still rejected with no handler once the run has nothing left to do is an uncaught error (ES2026 §27.2.1.9 HostPromiseRejectionTracker). `GocciaRunner` prints the reason in the format above and exits 1, so `Promise.reject(new Error("x"));` and an un-awaited `async` call that throws both fail the run; with `--output=json` the reason is the envelope's `error`. A handler that arrives before the queue drains (a `.catch` attached from a later job, an `await`, a combinator such as `Promise.all`) cancels the report. When several promises are left, the first one rejected is reported; a rejected top-level `await` is an uncaught throw of its own and is reported ahead of them. A `runScript` child that leaves one fails with `failureKind: "script-error"`, the [test runner](testing-api.md#async-tests-promises) fails the test, hook, or file that left it, and the REPL reports it and keeps the session. Embedders choose with `Engine.UnhandledRejections` ([Embedding](embedding.md#error-handling)); [ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md) records the decision.
+A promise that is still rejected with no handler once the run has nothing left to do is an uncaught error (ES2026 §27.2.1.9 HostPromiseRejectionTracker). `GocciaRunner` prints the reason in the format above and exits 1, so `Promise.reject(new Error("x"));` and an un-awaited `async` call that throws both fail the run; with `--output=json` the reason is the envelope's `error`. A handler that arrives before the queue drains (a `.catch` attached from a later job, an `await`, a combinator such as `Promise.all`) cancels the report. When several promises are left, the first one rejected is reported; a rejected top-level `await` is an uncaught throw of its own and is reported ahead of them. A `runScript` child that leaves one fails with `failureKind: "script-error"`, the [test runner](testing-api.md#async-tests-promises) fails the test, hook, or file that left it, and the REPL reports it and keeps the session. Embedders choose with `TGocciaEngine.FailOnUnhandledRejection`, off by default ([Embedding](embedding.md#error-handling)); [ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md) records the decision.
 
 ## Error Properties
 
@@ -303,21 +311,22 @@ paths are guest namespace, not host namespace.
 
 #### No content provider configured
 
-An engine that was never given a module content provider refuses every module
-load it is asked to *retrieve*. The refusal is a JavaScript error rather than an
-RTL exception: `import()` rejects with it and source can catch it, and a static
-import — which no `try`/`catch` in the importing module can wrap — surfaces it as
-a JavaScript throw (`TGocciaThrowValue`) carrying the same error value.
+An engine without a module content provider (`TGocciaEngine.Bare`, which
+`GocciaScriptLoaderBare` runs) refuses every module load it is asked to
+*retrieve*. The refusal is a JavaScript error rather than a Pascal exception:
+`import()` rejects with it and source can catch it, and a static import — which
+no `try`/`catch` in the importing module can wrap — fails the run with the same
+error value.
 
 Loading a module is resolution followed by retrieval, and only retrieval reaches
 the provider. A specifier the resolver rejects fails first, and that is a
 different failure carrying no `code` — with the default resolver, which resolves
 against the host filesystem, `import "./dep.js"` where `dep.js` does not exist
 fails there. `import()` rejects with a plain `Error` reading
-`Module not found: "./dep.js"`, and a **static import raises
-`TGocciaRuntimeError` out of the engine as a host-language exception**. So an
-embedder still has to guard its engine boundary. Resolution messages name only
-the specifier as written (see above), matching the refusal below.
+`Module not found: "./dep.js"`, and a static import fails the run with it:
+`TGocciaRunResult.ErrorResolvedPath` gives the host the path the resolution tried.
+Resolution messages name only the specifier as written (see above), matching
+the refusal below.
 
 In addition to the standard error properties, the refusal carries:
 
@@ -405,7 +414,7 @@ Positions follow V8's rules:
 
 V8 decides a call's position by the token before its `(`, so a reserved-word property name such as `catch`, `default` or `delete`, and a private name, leave the call at its `(`. The same position is what an audit event and a `PermissionDenied` error report for the call.
 
-A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as the VM works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
+A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default bound of 200,000 frames, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 199901 more frames`, and with `--max-stack=2200` `... 2101 more frames`. Frames past the limit are only counted, neither named nor located. The limit applies to every error that captures a stack and is fixed (`STACK_TRACE_FRAME_LIMIT`, used by `StackFramesText` in `Goccia.VM`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
 
 ## Error.cause
 
@@ -556,7 +565,7 @@ err.message;    // "An error was suppressed"
 
 ## Embedding
 
-For Pascal-side error handling when embedding GocciaScript in FreePascal applications, see [Embedding the Engine](embedding.md). The engine raises `TGocciaError` subclasses (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`, `TGocciaTypeError`, `TGocciaReferenceError`) on the Pascal side and `TGocciaThrowValue` for JS-level `throw` statements.
+For Pascal-side error handling when embedding GocciaScript in FreePascal applications, see [Embedding the Engine](embedding.md#error-handling). `TGocciaEngine.Run` reports a syntax error, an uncaught `throw` and a spent limit in its `TGocciaRunResult` (`Ok`, `Compiled`, `Aborted`, `ErrorName`, `ErrorText`, the location and the suggestion) instead of raising a Pascal exception.
 
 ## Related Documents
 

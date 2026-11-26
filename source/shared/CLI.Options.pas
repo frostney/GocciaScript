@@ -87,7 +87,7 @@ type
     { Alternate name used in config files when different from LongName.
       When empty, config files use LongName as usual. }
     property ConfigName: string read FConfigName write FConfigName;
-    property HelpText: string read FHelpText;
+    property HelpText: string read FHelpText write FHelpText;
     property Group: string read FGroup;
     property Present: Boolean read FPresent;
     property FromCommandLine: Boolean read FFromCommandLine;

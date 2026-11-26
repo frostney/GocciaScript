@@ -37,7 +37,7 @@ type
   );
 
 { The ranges in ATokens[AStartIndex] up to, not including, ATokens[AEndIndex]. }
-function ReadTypeRanges(const ATokens: TObjectList<TGocciaToken>;
+function ReadTypeRanges(const ATokens: TGocciaTokenList;
   const ASyntax: TGocciaTypeSyntax;
   const AStartIndex, AEndIndex: Integer): TGocciaTypeRangeArray;
 
@@ -81,7 +81,7 @@ type
 
   TTypeReader = class
   private
-    FTokens: TObjectList<TGocciaToken>;
+    FTokens: TGocciaTokenList;
     FPosition: Integer;
     FEnd: Integer;
     { How many `>` of a `>>` or `>>>` token have been read: one closes each
@@ -155,7 +155,7 @@ type
     procedure ParseHeritageList(const AKind: TGocciaASTPartKind);
     procedure SkipToWord(const AText: string);
   public
-    constructor Create(const ATokens: TObjectList<TGocciaToken>;
+    constructor Create(const ATokens: TGocciaTokenList;
       const AStartIndex, AEndIndex: Integer);
     function Read(const ASyntax: TGocciaTypeSyntax): TGocciaTypeRangeArray;
   end;
@@ -173,7 +173,7 @@ end;
 
 { TTypeReader }
 
-constructor TTypeReader.Create(const ATokens: TObjectList<TGocciaToken>;
+constructor TTypeReader.Create(const ATokens: TGocciaTokenList;
   const AStartIndex, AEndIndex: Integer);
 begin
   inherited Create;
@@ -1328,7 +1328,7 @@ begin
   Result := Copy(FRanges, 0, FCount);
 end;
 
-function ReadTypeRanges(const ATokens: TObjectList<TGocciaToken>;
+function ReadTypeRanges(const ATokens: TGocciaTokenList;
   const ASyntax: TGocciaTypeSyntax;
   const AStartIndex, AEndIndex: Integer): TGocciaTypeRangeArray;
 var

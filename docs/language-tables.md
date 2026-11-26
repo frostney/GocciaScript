@@ -29,7 +29,7 @@ profile exposes them, not whether the engine contains their semantics.
 | `arguments` | Yes | Disabled | `--compat-arguments-object`; mapped semantics also require non-strict Script source | ECMA-262 core |
 | non-strict Script semantics | Yes | Strict by default | `--compat-non-strict-mode`; modules remain strict | ECMA-262 core |
 | `with` | Yes | Disabled | `--compat-non-strict-mode` in Script source | ECMA-262 core |
-| `eval` | Yes | Not installed | Engine option `EnableEval(Engine)` only; no CLI flag or config key ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
+| `eval` | Yes | Not installed | None: every host `TGocciaEngine` installs removes it, with no CLI flag, config key or engine setting ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
 | `ShadowRealm` | Yes | Not installed | `--unsafe-shadowrealm` | TC39 Stage 2.7 |
 
@@ -87,7 +87,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 
 ## Runtime Extensions
 
-GocciaScript provides a `Goccia` global object with engine metadata and runtime APIs beyond the ECMAScript specification, including `spec` (implemented ES features by year) and `proposal` (a selected inventory of implemented TC39 proposals by stage). See [Built-in Objects — Goccia object](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas) for the full property reference.
+GocciaScript provides a `Goccia` global object with engine metadata and runtime APIs beyond the ECMAScript specification, including `spec` (implemented ES features by year) and `proposal` (a selected inventory of implemented TC39 proposals by stage). See [Built-in Objects — Goccia object](built-ins.md#global-constants-functions-and-error-constructors) for the full property reference.
 
 ## Related documents
 

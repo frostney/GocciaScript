@@ -75,12 +75,12 @@ describe("SharedArrayBuffer constructor error cases", () => {
     expect(events).toEqual([]);
   });
 
-  test("throws RangeError when length is 2^31 (one past High(Integer))", () => {
-    expect(() => new SharedArrayBuffer(2147483648)).toThrow(RangeError);
-  });
-
-  test("throws RangeError for length far above High(Integer)", () => {
-    expect(() => new SharedArrayBuffer(4294967296)).toThrow(RangeError);
+  // A block counts against the memory ceiling, as an ArrayBuffer's bytes do:
+  // 25.2.2.1 CreateSharedByteDataBlock throws a RangeError when it cannot get
+  // the memory. Lengths past 2^31 are not limited otherwise.
+  test.runIf(typeof Goccia !== "undefined")("throws RangeError for a length past the memory ceiling", () => {
+    expect(() => new SharedArrayBuffer(Goccia.gc.maxBytes + 1)).toThrow(RangeError);
+    expect(() => new SharedArrayBuffer(1, { maxByteLength: Goccia.gc.maxBytes + 1 })).toThrow(RangeError);
   });
 
   test("throws RangeError for length above MAX_SAFE_INTEGER", () => {

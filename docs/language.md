@@ -8,7 +8,7 @@
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
 - **Conformance evidence** — Generated test262 reports measure progress toward the [conformance target](../VISION.md#conformance); canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
-- **Host exposure** — `eval` is installed only by an embedder that opts in through the engine's `EnableEval` option; the shipped CLIs do not, apart from the `GocciaTest262Runner` conformance host, which also exposes `evalScript` and `createRealm`
+- **Host exposure** — every realm has `eval`, but the host that the CLIs and `TGocciaEngine` install removes the global; only the `GocciaTest262Runner` conformance host keeps it, and it also exposes `evalScript` and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
@@ -415,7 +415,7 @@ Each value is awaited before the loop body runs. Works with sync iterables too �
 
 ### JSX
 
-**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer, parser and compiler untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
+**Enabled by default.** JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer, parser and compiler untouched.
 
 Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
 
@@ -433,7 +433,7 @@ Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are 
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled for every source the recommended profile's front end parses (`HostPipelineOptions` in `Goccia.Eval` sets `ppJSX`); `TGocciaEngine` has no switch to turn it off. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
 
 **Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts` or `.mts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
 
@@ -672,7 +672,7 @@ With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal
 
 When disabled (default), `var` declarations are a `SyntaxError`. With `--warning-unsupported-features`, the parser warns and skips the declaration for migration diagnostics, but no `var` binding is created. Use `--compat-var` for real `var` semantics.
 
-When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [Architecture § Scope Chain Design](architecture.md#scope-chain-design).
+When enabled (CLI: `--compat-var`, engine API: the `VarDecl` switch of `Engine.Profile`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. See [Architecture § Scope Chain Design](architecture.md#scope-chain-design).
 
 ### `function` Keyword
 
@@ -693,10 +693,10 @@ GocciaScript provides two function definition styles that cover most use cases w
 - **Arrow functions** (`(x) => x + 1`) — Lexical `this`, no hoisting, no own `arguments`. Use for standalone functions, callbacks, and closures.
 - **Shorthand methods** (`method() {}`) — Call-site `this`. Use in object literals and class definitions where `this` binding is needed.
 
-When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
+When enabled (CLI: `--compat-function`, engine API: the `FuncDecl` switch of `Engine.Profile`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
 
-- **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.4 (InstantiateOrdinaryFunctionObject) / §10.2.11 (FunctionDeclarationInstantiation) semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
-- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. The bytecode compiler decides this in `Goccia.Compiler.BlockFunctions`. Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
+- **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.4 (InstantiateOrdinaryFunctionObject) / §10.2.11 (FunctionDeclarationInstantiation) semantics.
+- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. `Goccia.Compiler` decides this (`AnnexBWalkList`). Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
 - **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.5 (InstantiateOrdinaryFunctionExpression) semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
@@ -708,7 +708,7 @@ A function with defaults, rest or destructuring parameters cannot contain its ow
 
 ### Loose Equality (`==` and `!=`)
 
-**Implemented; disabled by the recommended profile.** Use `===` and `!==` by default. Enable `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config) when standard loose-equality semantics are required.
+**Implemented; disabled by the recommended profile.** Use `===` and `!==` by default. Enable `--compat-loose-equality` (CLI flag, the `LooseEq` switch of `Engine.Profile`, or `{"compat-loose-equality": true}` in config) when standard loose-equality semantics are required.
 
 When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal), including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
@@ -737,11 +737,11 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 **Implemented; off by default.** `GocciaRunner` (host and sandbox mode), `GocciaREPL`, `GocciaTestRunner`, and `GocciaScriptLoaderBare` do not expose `eval`, and no CLI flag or config key turns it on.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. An embedder that wants it calls `EnableEval(Engine)`, which installs `globalThis.eval` with direct and indirect eval semantics; see [Embedding — Changing the Defaults](embedding.md#changing-the-defaults). `GocciaTest262Runner` uses the same option, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The engine implements direct and indirect eval in every realm (`Goccia.Eval`), and the host that `TGocciaEngine` installs removes `globalThis.eval` (`source/engine/prelude/host.js`), so an embedder has no option to keep it. Only `GocciaTest262Runner`'s conformance host (`Goccia.Test262`) leaves it in place, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
 
 ### `arguments` Object
 
-**Implemented; disabled by the recommended profile.** Prefer rest parameters, or enable `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is not a reserved keyword, but strict code (the default) rejects it as a parameter name with `SyntaxError: eval and arguments are not allowed in strict function parameters`. In non-strict functions (`--compat-non-strict-mode` script source), parameters or body-level lexical declarations named `arguments` shadow the implicit object. Strict code currently also accepts `let arguments = …`, which ECMAScript rejects ([#1276](https://github.com/frostney/GocciaScript/issues/1276)).
+**Implemented; disabled by the recommended profile.** Prefer rest parameters, or enable `--compat-arguments-object` (CLI flag, the `ArgumentsObject` switch of `Engine.Profile`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is not a reserved keyword, but strict code (the default) rejects it as a parameter name with `SyntaxError: eval and arguments are not allowed in strict function parameters`. In non-strict functions (`--compat-non-strict-mode` script source), parameters or body-level lexical declarations named `arguments` shadow the implicit object. Strict code currently also accepts `let arguments = …`, which ECMAScript rejects ([#1276](https://github.com/frostney/GocciaScript/issues/1276)).
 
 ### Automatic Semicolon Insertion
 
@@ -768,10 +768,12 @@ ASI also interacts with the type syntax; see [Type Annotations](type-annotations
 
 ```pascal
 // Enable ASI via the engine API
-Engine := TGocciaEngine.Create(FileName, Source);
+Engine := TGocciaEngine.Create;
 try
-  Engine.Compatibility := [cfASI];
-  Engine.Execute;
+  Profile := RecommendedProfile;
+  Profile.Asi := True;
+  Engine.Profile := Profile;
+  RunResult := Engine.Run(FileName, Source);
 finally
   Engine.Free;
 end;
@@ -787,14 +789,14 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 ### Traditional `for(init; test; update)` Loop
 
-**Implemented; disabled by the recommended profile.** Enable `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-traditional-for-loop` (CLI flag, the `ForLoop` switch of `Engine.Profile`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
 When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported:
 
 - `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.3](https://tc39.es/ecma262/#sec-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
 - `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
 - All header parts are optional (`for(;;){…break}`, `for(;c;){…}`, `for(i;;u)`); comma expressions and destructuring are supported in init/update; `break`/`continue`/`return` unwind as in `for...of`.
-- The bytecode compiler reuses the counted-loop pattern from `CompileCountedForOf` for `for(let i = N; i <op> M; i++ | i--)` shapes (rejecting `var`/`const` and bodies that mutate the loop var); the general path uses an outer scope for the canonical slot plus a per-iteration `BeginScope`/`EndScope` cycle with `OP_CLOSE_UPVALUE` for captures.
+- `Goccia.Compiler` keeps the loop's `let` bindings in registers and, only when a closure captures them, closes them into fresh cells before each update (`opClose`), so a loop without closures pays nothing for per-iteration bindings.
 
 The flag exists to run code that depends on JavaScript loop semantics, such as test262 cases or compatibility harnesses. It does not change the default GocciaScript iteration guidance, which remains `for...of`, `for await...of`, or array methods:
 
@@ -811,7 +813,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 ### `for...in` Loop
 
-**Implemented; disabled by the recommended profile.** Enable `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-for-in-loop` (CLI flag, the `ForIn` switch of `Engine.Profile`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
 
 When disabled (default), `for...in` declaration and assignment-target forms are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported:
 
@@ -831,7 +833,7 @@ for (const key of Object.keys(obj)) {
 
 ### `while` and `do...while`
 
-**Implemented; disabled by the recommended profile.** Enable `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
+**Implemented; disabled by the recommended profile.** Enable `--compat-while-loops` (CLI flag, the `WhileLoop` switch of `Engine.Profile`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
 
 When disabled (default), `while` and `do...while` syntax is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating each loop as a no-op. When enabled, both loop forms are supported:
 
@@ -856,7 +858,7 @@ do {
 
 ### `with` Statement
 
-**Implemented for compatible script source; disabled by the recommended profile.** Use explicit property access by default, or enable `--compat-non-strict-mode` (CLI flag, `cfNonStrictMode` in `Engine.Compatibility`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing.
+**Implemented for compatible script source; disabled by the recommended profile.** Use explicit property access by default, or enable `--compat-non-strict-mode` (CLI flag, the `NonStrict` switch of `Engine.Profile`, or `{"compat-non-strict-mode": true}` in config). Module source remains strict even when this flag is enabled. When enabled in script source, `with (object) statement` evaluates the object expression, converts it with `ToObject`, and resolves unqualified identifiers through that object before falling back to outer lexical scopes. `Symbol.unscopables` is honored. Calls to functions resolved through the object environment use that object as `this`, closures created inside the body retain the object environment, and writes through non-writable or setter-less object properties silently keep the original value instead of throwing.
 
 When disabled (default), script-source `with` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the statement as a no-op. Module-source `with` is always a strict-mode `SyntaxError`, even with warning recovery enabled. `with` creates ambiguous scope and is forbidden by JavaScript strict mode, so new GocciaScript code should prefer explicit property access. The keyword is reserved (it cannot be used as a variable name), but it can be used as a property name (for example, `obj.with`).
 
@@ -870,7 +872,7 @@ By default, GocciaScript follows strict delete behavior: deleting an unqualified
 
 ### Labeled Statements
 
-**Implemented; disabled by the recommended profile.** Enable `--compat-label` (CLI flag, `cfLabel` in `Engine.Compatibility`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
+**Implemented; disabled by the recommended profile.** Enable `--compat-label` (CLI flag, the `Labels` switch of `Engine.Profile`, or `{"compat-label": true}` in config) when a program or conformance suite needs ECMAScript labeled control flow.
 
 When disabled (default), labeled statements are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning, strips the label, and parses the labeled statement:
 
@@ -900,7 +902,7 @@ These are deliberate differences from standard ECMAScript behavior, not missing 
 
 ### Annex B Web-Browser Legacy Features
 
-**Off by default for new surfaces.** Annex B covers legacy web-browser compatibility behavior and is not part of the core ECMAScript language, but test262 tests it and GocciaScript's conformance target includes it. The divergence is the default profile: a new Annex B surface goes behind an `Engine.Compatibility` flag with a matching `--compat-*` flag, off by default, which the test262 runner turns on; the 0.18.0 Annex B work adds that flag. An Annex B surface that has not shipped yet is a conformance gap, not a divergence.
+**Off by default for new surfaces.** Annex B covers legacy web-browser compatibility behavior and is not part of the core ECMAScript language, but test262 tests it and GocciaScript's conformance target includes it. The divergence is the default profile: a new Annex B surface goes behind a switch of `Engine.Profile` (`TLangProfile`) with a matching `--compat-*` flag, off by default, which the test262 runner turns on; the 0.18.0 Annex B work adds that flag. An Annex B surface that has not shipped yet is a conformance gap, not a divergence.
 
 The Annex B surfaces that already ship stay as they are. Always on: `String.prototype.substr`, `String.prototype.trimLeft` and `trimRight`, `Date.prototype.toGMTString`, `RegExp.prototype.compile`, and part of the legacy RegExp pattern grammar in a pattern without the `u` or `v` flag (identity escapes such as `\a` for `a`, and a lone `{`, `}` or `]`). Behind existing flags: block-level and `if`-clause function declarations under `--compat-function` plus `--compat-non-strict-mode` ([`function` Keyword](#function-keyword)), labeled function declarations under `--compat-label`, `--compat-function` and `--compat-non-strict-mode` ([Labeled Statements](#labeled-statements)), and a `var` that redeclares a simple catch parameter under `--compat-var`. `Object.prototype.__proto__` and the legacy accessor helpers (`__defineGetter__` and its siblings) are always on as well; they moved from Annex B into the main specification in ES2022. [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md) lists each surface and what is still missing.
 
@@ -929,7 +931,7 @@ Source parsed, or a pattern compiled, where the native stack is already deep, su
 
 ### Function Size
 
-**Each function's bytecode has 16-bit limits.** Operands of the bytecode format are 16 bits wide, so one function, the top level of a script or module included, may hold at most 65,535 constants (distinct property names, strings and numbers, so an object literal or class with more distinct names than that does not fit), define 65,536 functions directly in its body (methods and arrows included), use 65,535 registers and local bindings, and capture 65,535 outer bindings; a call passes at most 65,535 arguments and a tagged template at most 65,534 substitutions. A function past any of them is `SyntaxError: Too many constants in one function: more than 65535 property names, strings and numbers`, `Too many arguments in one call: more than 65535` and so on, reported at the expression or statement that reached the limit, and `new Function`, `ShadowRealm.prototype.evaluate` and dynamic `import()` throw it as a catchable error; such functions used to stop the process. Branches are not limited by the 16-bit offset of a conditional jump: when a branch of a function (an `if` body, a `switch`, a loop body, a `try` block, the right side of `&&`, `||` or `??`) spans more than it holds, that conditional jump takes a long form once the function is compiled: the jump skips one instruction to an unconditional jump with a 24-bit offset, behind a second unconditional jump that the other path takes. The two added instructions lengthen the jumps across them, and any conditional jump they put out of its reach takes the long form too; every other jump keeps its form, and a function without such a branch keeps its bytecode. The cost, one more instruction on each long-form jump, taken or not, stays in those jumps, and the script or module is compiled once. A branch may still span at most 8,388,607 instructions. Such a branch used to jump to the wrong instruction. Nothing else about a literal is limited: an object or array literal, an untagged template and an array binding pattern can be as long as memory and the limits above allow.
+**Each function's registers are limited to 16 bits.** An instruction is 64 bits: an 8-bit opcode, two 16-bit operands and a 24-bit one (`Goccia.Instructions`). Registers are 16-bit operands, so one function, the top level of a script or module included, may use at most 65,535 registers and local bindings; a call passes at most 65,535 arguments and a tagged template at most 65,534 substitutions. A function past one of them is a `SyntaxError` (`Too many local bindings in one function: more than 65535`, `Too many arguments in one call: more than 65535`, and so on). Constants and nested functions have no such limit: an object literal with 70,000 distinct property names compiles. A jump's offset is the signed 24-bit operand, so a branch can span up to 8,388,607 instructions. Nothing else about a literal is limited: an object or array literal, an untagged template and an array binding pattern can be as long as memory and the limits above allow.
 
 ## Strictness Guarantees
 

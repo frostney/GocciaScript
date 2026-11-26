@@ -74,7 +74,12 @@ test("invalid named group names throw SyntaxError", () => {
   expect(() => new RegExp("(?<a-b>a)")).toThrow(SyntaxError);
   expect(() => new RegExp("(?<a\\u002d>a)")).toThrow(SyntaxError);
   expect(() => new RegExp("(?<🦊>a)")).toThrow(SyntaxError);
-  expect(() => new RegExp("\\k<a-b>")).toThrow(SyntaxError);
+  // A pattern with a group name parses with [+NamedCaptureGroups] (22.2.3.1),
+  // where \k must name a group. Without one, the legacy grammar GocciaScript
+  // ships (B.1.2, as V8) reads \k as an identity escape.
+  expect(() => new RegExp("(?<a>x)\\k<a-b>")).toThrow(SyntaxError);
+  expect(() => new RegExp("(?<a>x)\\k")).toThrow(SyntaxError);
+  expect(new RegExp("\\k<a-b>").test("k<a-b>")).toBe(true);
 });
 
 test("named groups in replace with $<name>", () => {

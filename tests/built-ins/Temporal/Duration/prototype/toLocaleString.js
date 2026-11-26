@@ -16,18 +16,15 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.toLocaleString", () => {
     expect(() => duration.toLocaleString(sparseLocales)).toThrow(RangeError);
   });
 
-  test("options are coerced with ToObject", () => {
+  // toLocaleString formats with Intl.DurationFormat, whose constructor
+  // (ECMA-402 13.1.1) takes options through ResolveOptions without
+  // coerce-options: GetOptionsObject (9.2.11) accepts only undefined or an
+  // object, and throws a TypeError for anything else.
+  test("options must be an object or undefined", () => {
     const duration = new Temporal.Duration(0, 0, 0, 0, 1);
 
     expect(() => duration.toLocaleString("en-US", null)).toThrow(TypeError);
-
-    Boolean.prototype.style = "narrow";
-    try {
-      expect(duration.toLocaleString("en-US", true)).toBe(
-        duration.toLocaleString("en-US", new Boolean(true))
-      );
-    } finally {
-      delete Boolean.prototype.style;
-    }
+    expect(() => duration.toLocaleString("en-US", true)).toThrow(TypeError);
+    expect(duration.toLocaleString("en-US", new Boolean(true))).toBe(duration.toLocaleString("en-US"));
   });
 });

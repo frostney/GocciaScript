@@ -58,3 +58,22 @@ describe("CSV.parseChunk non-finite offsets", () => {
     expect(typeof CSV.parseChunk("a,b\n1,2", ",", Infinity)).toBe("object");
   });
 });
+
+describe("CSV.parseChunk end offset", () => {
+  test("a negative end reads to the end of the text", () => {
+    const text = "h1,h2\na1,b1\na2,b2\n";
+    for (const end of [-1, -100, -Infinity]) {
+      const result = CSV.parseChunk(text, {}, 0, end);
+      expect(result.values.length).toBe(2);
+      expect(result.read).toBe(text.length);
+      expect(result.done).toBe(true);
+    }
+  });
+
+  test("an end inside the text stops there", () => {
+    const text = "h1,h2\na1,b1\na2,b2\n";
+    const result = CSV.parseChunk(text, {}, 0, 12);
+    expect(result.values.length).toBe(1);
+    expect(result.values[0].h1).toBe("a1");
+  });
+});

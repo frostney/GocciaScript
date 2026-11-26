@@ -28,12 +28,13 @@ replacement is recorded in
   neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
   mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
-  checkout's `harness/` directory. The runner bundles one file,
-  `scripts/test262_harness/$262.js`, the host-provided hook object.
-- `Goccia.Test262.Host` installs the host hooks only in engines owned by the
+  checkout's `harness/` directory. The runner bundles one file, `$262.js`,
+  the host-provided hook object: the engine's version is
+  `source/engine/prelude/test262host.js`, compiled into the binary.
+- `Goccia.Test262` installs the host hooks only in engines owned by the
   Test262 runner.
-- Test feature metadata may add explicit engine options when test262 splits
-  proposal layers more narrowly than the base engine flag set.
+- Every test runs on the same engine options; test feature metadata does
+  not change them.
 - Each test file runs once per mode test262 requires: an unflagged Script
   test runs twice, non-strict and strict, and each result records its
   `mode`. Each harness file runs as a non-strict global Script of its own
@@ -147,16 +148,17 @@ GocciaTest262Runner
   → optionally select one deterministic --shard-index/--shard-count partition
   → read each selected file's flags and expand it into its runs, one per mode
     (see "Strict mode")
-  → dispatch runs to native workers (--jobs=N)
-  → on POSIX, fork one short-lived child per run without starting a new binary
-  → for each run in its owning worker process:
-      → create one runtime, heap, engine, and realm
+  → run up to --jobs=N runs at once
+  → on POSIX, fork one short-lived child per run without starting a new binary;
+    without fork (Windows), run each on a thread of its own
+  → for each run in its owning worker:
+      → create one engine (InitTest262Engine in Goccia.Test262): heap and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
       → install the Test262-only host, evaluate each harness file as its
         own Script, then evaluate the test file (prefixed with "use strict";
         in a strict run) as a Script or Module, in process
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
-      → return the Pascal result and exit the worker process
+      → hand the result back (a result file from a forked child) and exit
   → aggregate per top-level category and per mode
   → emit JSON and a console summary
 scripts/run_test262_suite.ts --merge-shards
@@ -177,9 +179,8 @@ provide the runner arguments and artifact names, so changing the matrix does
 not require synchronised numeric edits elsewhere.
 
 Both `--shard-index` and `--shard-count` are required, and the index is
-zero-based. Run the runner from the repository root: the bundled `$262.js`
-is resolved relative to the working directory, and every test reports
-`WRAPPER_INFRA` otherwise.
+zero-based. The bundled `$262.js` is compiled into the runner, so it runs
+from any working directory.
 
 ```bash
 ./build/GocciaTest262Runner \
@@ -237,9 +238,9 @@ describes ("Test262-Defined Bindings", the `async` flag, `includes`):
 3. the test's `includes`, in the order given;
 4. the test file itself: a Script, or a Module for a `module` test.
 
-Each harness file is its own global Script, evaluated through
-`EvaluateTest262Script` (`Goccia.Test262.Host`), the same path as
-`$262.evalScript`. Its own directive prologue alone decides its
+Each harness file is its own global Script, compiled and run in the
+realm by `RunTest262Case` (`Goccia.Test262`), as `$262.evalScript` runs its
+source. Its own directive prologue alone decides its
 strictness, so harness files are non-strict, in a strict run and before a
 module test too. Their top-level declarations are global bindings that the
 test, and any later Script, sees and is checked against, as
@@ -283,8 +284,8 @@ these hold:
    `$DONOTEVALUATE()` throws (`Test262: This statement should not be
    evaluated.`);
 3. the error was raised before evaluation, as a host-level engine error
-   from the parser, early-error checks, or module linking (of these, only
-   `TGocciaSyntaxError` is named `SyntaxError`). A `SyntaxError` thrown as a
+   from the parser, early-error checks, or module linking, named by the
+   error's constructor. A `SyntaxError` thrown as a
    JS value during evaluation does not count;
 4. the error name equals `negative.type`.
 
@@ -301,17 +302,18 @@ is the same grading the test262 interpretation rules and other runners apply.
 | Body assertion fails (`Test262Error` thrown)          | JS throw escapes the engine              | conformance fail   |
 | Body throws another value                             | JS throw escapes the engine              | conformance fail   |
 | Async body never calls `$DONE`                        | no captured `Test262:Async*` marker      | conformance fail   |
-| Body leaves a promise rejected with no handler        | none: the runner's engines set `UnhandledRejections := urIgnore` ([Errors](errors.md#unhandled-promise-rejections)) | not a failure |
-| Cooperative deadline expires                          | `TGocciaTimeoutError`                    | timeout            |
-| Pascal-side exception during engine execution         | structured engine diagnostic              | conformance fail |
+| Body leaves a promise rejected with no handler        | none: the test262 host does not track unhandled rejections | not a failure |
+| Run exceeds `--timeout`                               | POSIX: the runner kills the worker; without fork: the engine's deadline | timeout |
+| Pascal-side exception during engine execution         | `crash` outcome naming the exception class | conformance fail |
+| The compiler refuses the parsed test                  | `compile` outcome                         | conformance fail   |
 | Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |
-| Native worker stalls beyond the watchdog              | supervisor kills only that worker         | timeout            |
 | A harness Script fails to parse or throws             | `harness include <name> failed`           | wrapper infra      |
 
-`ClassifyResult` receives the structured engine outcome, captured output, and
-formatted diagnostic. On POSIX, a native signal terminates only the current
-worker process. The supervisor records a wrapper-infrastructure result for that
-test and continues the shard; a watchdog expiry is recorded as a timeout.
+`ClassifyResult` receives the structured engine outcome (`TGocciaT262Outcome`)
+and the captured output. On POSIX, a native signal terminates only the current
+worker process. The runner records a wrapper-infrastructure result for that
+test and continues the shard; a worker it killed at the timeout is recorded as
+a timeout.
 
 `summary.wrapperInfraFailures` is gated to zero in CI. Any non-zero count
 fails the run because the conformance numbers are not trustworthy when
@@ -329,7 +331,7 @@ Bodies see only the identifiers stock test262 expects:
 - `$262` helpers implemented by Goccia's bundled host object:
   `detachArrayBuffer`, `evalScript`, `gc`, `global`, `createRealm`,
   `AbstractModuleSource`, and `IsHTMLDDA`. `$262` is the only global
-  binding `scripts/test262_harness/$262.js` creates, so a test may declare
+  binding `$262.js` declares, so a test may declare
   any other name at its top level. The `annexB` emulates-undefined tests
   declare `IsHTMLDDA` there, most as `var IsHTMLDDA = $262.IsHTMLDDA;`,
   which a global lexical `IsHTMLDDA` would turn into a `SyntaxError`
@@ -339,10 +341,15 @@ Bodies see only the identifiers stock test262 expects:
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
-- Two properties on the `Goccia` namespace, both installed only by
-  `Goccia.Test262.Host`: the `test262Host` marker, which `$262.js` checks to
-  reject accidental use outside the conformance host, and the `test262` object
-  holding the host hooks `$262.js` delegates to.
+- `GocciaHost`, a non-enumerable global installed only by `Goccia.Test262`
+  (`InstallHostHooks`): the host hooks `$262.js` delegates to. `$262.js`
+  throws when it is missing, which rejects accidental use outside the
+  conformance host.
+- `setTimeout`, which `$262.js` defines for the harness's polling loops
+  (`atomicsHelper.js`): its callback runs from a microtask after a short
+  sleep, so it involves no timer queue.
+- The engine core's own `console` (`log`, `error`, `warn`), `performance.now()`
+  and `eval`
 - Anything declared in test-included harness files (e.g. `compareArray`,
   `propertyHelper`)
 
@@ -351,8 +358,8 @@ Bodies do NOT see:
 - `expect`, `describe`, `test`, `it`, `beforeAll`, `beforeEach`,
   `afterEach`, `afterAll`, `onTestFinished`, `runTests`, `mock`,
   `spyOn` — none of these exist in the Test262 runner's engines.
-- `console`, `fetch`, `URL`, `performance` — the Test262 engine doesn't register
-  Goccia's runtime extension.
+- `fetch`, `URL`, the `Goccia` namespace and the rest of the CLI host
+  (`Goccia.HostAPI`) — the Test262 engine does not install it.
 - Optional `$262` hooks outside the bundled implementation. Tests that
   depend on unavailable host hooks fail honestly.
 
@@ -369,22 +376,20 @@ If a stock helper fails, fix the language/runtime behavior or classify the
 test as a genuine conformance failure. `$262.js` may grow only by adding
 test262 host hooks or harness-local `$262` behavior.
 
-`$262.evalScript()` and `$262.createRealm()` delegate to
-`Goccia.Test262.Host`. `evalScript` parses and executes its source
-as script code in the current realm. `createRealm` creates a fresh Goccia
-engine/realm, returns a host record with the child realm's `globalThis`, its
-own `evalScript`, and `createRealm`, and keeps the child engine alive for the
-duration of the test run so cross-realm intrinsics remain valid.
+`$262.evalScript()` and `$262.createRealm()` delegate to `GocciaHost`
+(`Goccia.Test262`). `evalScript` parses and executes its source as script code
+in the current realm and returns its completion value. `createRealm` creates
+a new realm in the same engine, installs the host hooks and `$262.js` in it,
+and returns that realm's `$262`.
 
-`eval` is also host-gated. The Test262 runner installs it through the
-engine's `EnableEval` option, the one embedders use; default Bare execution
-does not expose it. Bytecode direct calls preserve
-the caller realm and caller lexical bindings, while shadowed or indirect eval
-calls use ordinary function-call semantics.
+`eval` is part of the engine's core realm. The CLI hosts remove it from the global
+object (`Goccia.HostAPI`); the Test262 engine installs no CLI host and keeps it.
+A direct `eval` call sees the caller's realm and lexical bindings, while a
+shadowed or indirect call is an indirect eval.
 
-`$262.agent` is host-gated in the same way. Agent `start` runs the supplied
-source in a Test262-owned thread with the bundled `$262`
-object installed; `broadcast`/`receiveBroadcast` share the provided value with
+`$262.agent` is host-gated in the same way (`Goccia.Agent`). Agent `start` runs
+the supplied source in an engine of its own on a thread of its own, with
+`$262.agent` installed; `broadcast`/`receiveBroadcast` share the provided value with
 agent threads, and `report`/`getReport` provide the report queue used by
 Atomics wait/notify tests.
 
@@ -428,47 +433,28 @@ rather than a regression. A strict run's profile is written to
 `per-test/<id>.strict.profile.json`, beside the non-strict run's
 `per-test/<id>.profile.json`.
 
-GocciaScript recognizes strict directive prologues at execution time for
-the compatibility behaviors that otherwise depend on Script non-strict
-mode. Independently, the engine's curated default semantics enforce most
-strict-mode behaviors statically:
-
-- Implicit globals throw `ReferenceError` (sloppy would create a global)
-- `delete <identifier>` and non-configurable property deletion throw by default
-
-The runner enables non-strict compatibility for every test. Module code
-stays strict whatever the flag says, so for a module test the flag reaches
-only Script code: its harness Scripts, `$262.evalScript`, indirect `eval`
-and the `Function` constructor. `onlyStrict` tests also receive the flag,
-but the directive inserted in front of the test file keeps `with`,
-non-strict assignment failures, legacy `delete` return values, and
-regular-function nullish `this` coercion on the strict path for the test's
-own code, while the harness Scripts stay non-strict. A strict run of an
-unflagged test is set up the same way. Remaining
-`noStrict` tests rely on sloppy-only behaviors that
-GocciaScript still does not provide and fail naturally as ordinary
-conformance failures, not as wrapper-infra failures.
-
-Every test runs with ASI, `var`, `function` declarations, traditional `for`,
-`while`/`do...while`, loose equality, labels, `for...in`, implicit
-`arguments` objects, and non-strict Script semantics
-(`--compat-non-strict-mode`) enabled, because test262 uses those forms across
-both harness helpers and test bodies
-([ADR 0175](adr/0175-test262-harness-includes-are-separate-non-strict-scripts.md)). That flag set is `TEST262_COMPATIBILITY` in
-`GocciaTest262Runner.dpr`, and `--eval-host` probes use it too. The test's source type and
-strictness still decide strict-mode semantics; `--compat-arguments-object`
-only enables the implicit `arguments` binding. Strictness and parameter-list
-shape decide whether that binding is unmapped or mapped.
+The test262 engine compiles every test, harness Script and `--eval-host`
+probe under the engine's unrestricted language profile (`TLangProfile` with
+`Restricted` off): the whole language, including everything the CLIs'
+compatibility flags enable — ASI, `var`, function declarations, traditional
+`for`, `while`/`do...while`, loose equality, labels, `for...in`, the
+`arguments` object, and non-strict Script semantics — because test262 uses
+those forms across both harness helpers and test bodies
+([ADR 0175](adr/0175-test262-harness-includes-are-separate-non-strict-scripts.md)).
+Non-strict code gets sloppy-mode semantics: an assignment to an undeclared
+name creates a global, `delete` of a non-configurable property returns
+`false`, and `with` is available. The directive inserted in front of a strict
+run's test file, and module code, give the test's own code strict semantics,
+while the harness Scripts stay non-strict.
 
 ## Source-phase import feature flags
 
-The runner reads the test262 `features` frontmatter when a feature maps to a
-Goccia engine option. `source-phase-imports` tests run with the base test262
-flag set only. Tests that also declare `source-phase-imports-module-source`
-enable the experimental JavaScript ModuleSource option, which provides
-`ModuleSource` objects for the separate ESM Phase Imports proposal. This is not
-an eligibility filter: every discovered test still runs, and feature metadata
-only changes the host options used for that test.
+The runner does not map `features` frontmatter to engine options: every test
+runs on the same engine. The engine's experimental JavaScript `ModuleSource` objects
+(`TGocciaEngine.JSModuleSources`, the ESM Phase Imports proposal) stay off in the
+test262 engine, so `source-phase-imports-module-source` tests run without them
+and fail where they need them. This is not an eligibility filter: every
+discovered test still runs.
 
 ## Path normalization
 
@@ -487,8 +473,8 @@ staging`, every top-level category in `suite/test`.
   and a release gate from 0.18.0. It runs by default and counts toward
   the published pass rate and the PR comparison like any other category.
   New Annex B surfaces will go behind a compatibility flag, added by the
-  0.18.0 Annex B work, that the runner turns on by adding it to its
-  [flag set](#strict-mode). See
+  0.18.0 Annex B work; the test262 engine's unrestricted profile includes
+  every such form (see [Strict mode](#strict-mode)). See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.
@@ -501,19 +487,20 @@ that depend on missing features fail with a real diagnostic, not an
 invisible skip. On POSIX, each worker process owns exactly one run, so its
 heap, roots, queues, VM, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
-Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
-(`--max-memory`, a size such as `512MiB`), and the native worker watchdog bound
-ordinary hangs and memory growth. The runner accepts no capability flags: it
+Without fork, each run makes its engine on its own thread and ends it after
+the run (`DoneTest262Engine`). Timeouts (`--timeout`, default `20s`) and
+per-test heap ceilings (`--max-memory`, a size such as `512MiB`, default
+2 GiB) bound ordinary hangs and memory growth. The runner accepts no capability flags: it
 rejects `--allow-*` and accepts `--deny-*` as a no-op (see
-[Permissions](permissions.md#what-each-binary-honors)). Internally each test
-engine may read only the `--suite-dir` checkout, which test262 fixtures need
-for computed `import()` specifiers.
+[Permissions](permissions.md#what-each-binary-honors)). The test engines do
+not apply the CLI hosts' read policy (`SetReadPolicy` in `Goccia.HostAPI`), so
+test262 fixtures' computed `import()` specifiers load from the checkout.
 
 ## Known engine crashes
 
 The native runner has no crash skip list and no generic eligibility filter.
 On POSIX, a native signal is contained to one worker and classified as wrapper
-infrastructure while the supervisor continues the shard. Any future quarantine
+infrastructure while the runner continues the shard. Any future quarantine
 must name the exact test and link an engine issue; it must not become a
 feature-level filter.
 
@@ -565,3 +552,17 @@ standard CI run posts the per-category delta vs. the previous main baseline.
 Merge once the delta is acceptable.
 
 Manual bump: `bun scripts/test262-bump-pin.ts <40-hex-sha>`.
+
+### Corrections the pin lacks
+
+When an upstream test contradicts the current specification and a
+tc39/test262 pull request corrects it, `scripts/test262-patches/` holds that
+pull request's diff, named after it, and CI applies it to the checkout with
+`scripts/apply-test262-patches.sh test262-suite` before the run. Apply it to
+a local checkout the same way. The script fails when a patch no longer
+applies, which happens once the pin includes the pull request: delete the
+patch in the bump PR. The current patch is tc39/test262#5112, which brings
+`annexB/language/function-code/block-decl-func-skip-arguments.js` in line with
+ES2026 §10.2.11 FunctionDeclarationInstantiation: its Annex B step checks
+`parameterNames`, not `argumentsObjectNeeded`, so a block function named
+`arguments` is still hoisted.

@@ -10,7 +10,6 @@ uses
   TestingPascalLibrary,
 
   Goccia.Error,
-  Goccia.GarbageCollector,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Lexer,
@@ -105,7 +104,7 @@ end;
 procedure TLexerTests.TestTokenSpansUseUTF16CodeUnitOffsets;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('"' + #$D83D#$DE00 + '";', '<test>');
   try
@@ -185,7 +184,7 @@ end;
 procedure TLexerTests.AssertIgnoresLeadingHashbang(const ALineBreak: string);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1 / 2;', '<test>');
   try
@@ -205,7 +204,7 @@ end;
 procedure TLexerTests.AssertPreservesLineNumbersAfterHashbang(const ALineBreak: string);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + ALineBreak + 'const value = 1;', '<test>');
   try
@@ -222,13 +221,21 @@ end;
 procedure TLexerTests.TestHashbangRequiresHashbangLexicalGoal;
 var
   Lexer: TGocciaLexer;
-  Token: TGocciaToken;
+  Raised: Boolean;
 begin
+  // Outside the hashbang goal `#!` is no comment: `#` starts a private name,
+  // and `!` cannot follow it.
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + sLineBreak +
     'const value = 1;', '<test>');
   try
-    Token := Lexer.ScanNextToken(glgInputElementDiv);
-    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttHash);
+    Raised := False;
+    try
+      Lexer.ScanNextToken(glgInputElementDiv);
+    except
+      on E: TGocciaLexerError do
+        Raised := Pos('Unexpected character: #', E.Message) > 0;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
   finally
     Lexer.Free;
   end;
@@ -237,7 +244,7 @@ end;
 procedure TLexerTests.AssertCommentTerminatedBy(const ALineBreak: string);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('// comment' + ALineBreak + 'const x = 1;', '<test>');
   try
@@ -254,7 +261,7 @@ end;
 procedure TLexerTests.AssertTokenizesKeywordToken(const AKeyword: string; const ATokenType: TGocciaTokenType);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create(AKeyword, '<test>');
   try
@@ -272,7 +279,7 @@ procedure TLexerTests.AssertContextualKeywordUsesDivGoal(const AKeyword: string;
   const ATokenType: TGocciaTokenType);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create(AKeyword + ' /', '<test>');
   try
@@ -291,7 +298,7 @@ procedure TLexerTests.AssertTokenizesIdentifier(const ASource: string;
   const AExpectedLexeme: string);
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   try
@@ -459,7 +466,7 @@ end;
 procedure TLexerTests.TestCRIncrementsLineInWhitespace;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   // Standalone CR between statements
   Lexer := TGocciaLexer.Create('const a = 1;' + #13 + 'const b = 2;', '<test>');
@@ -506,7 +513,7 @@ const
 var
   I: Integer;
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   for I := Low(WhitespaceSamples) to High(WhitespaceSamples) do
   begin
@@ -531,7 +538,7 @@ end;
 procedure TLexerTests.TestCRIncrementsLineInBlockComment;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   // Standalone CR inside block comment
   Lexer := TGocciaLexer.Create('/* a' + #13 + 'b */const x = 1;', '<test>');
@@ -562,7 +569,7 @@ const
   UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('/* a' + UNICODE_LINE_SEPARATOR + 'b */const x = 1;', '<test>');
   try
@@ -591,7 +598,7 @@ const
   UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create(
     'var' + UNICODE_LINE_SEPARATOR + 'x' + UNICODE_PARAGRAPH_SEPARATOR +
@@ -618,7 +625,7 @@ const
   FLAGS = 'gi';
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('const value = /a\/b[\/]/gi;', '<test>');
   try
@@ -689,7 +696,7 @@ const
   UNICODE_PARAGRAPH_SEPARATOR = #$2029;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create(
     'const half = (await) => await/' + UNICODE_LINE_SEPARATOR + '/2/;',
@@ -729,7 +736,7 @@ end;
 procedure TLexerTests.TestNumericSeparatorsNormalize;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('const a = 1_234.5_6e7_8; const b = 0xFF_FFn;', '<test>');
   try
@@ -747,7 +754,7 @@ end;
 procedure TLexerTests.TestTemplateInterpolationTracksLineTerminators;
 var
   Lexer: TGocciaLexer;
-  Tokens: TObjectList<TGocciaToken>;
+  Tokens: TGocciaTokenList;
 begin
   Lexer := TGocciaLexer.Create('`a${/* x' + #13#10 + '*/ 1}b`;const x = 1;', '<test>');
   try
@@ -826,12 +833,7 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(TLexerTests.Create('Lexer'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(TLexerTests.Create('Lexer'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

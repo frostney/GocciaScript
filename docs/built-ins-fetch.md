@@ -89,23 +89,20 @@ memory limit (`--max-memory`) like any other allocation the script makes. The
 bytes are reserved when the fetch settles, so a body that does not fit the
 room left rejects the fetch with the catchable
 `RangeError: Allocation failed: GC heap size exceeds the configured memory limit`,
-whatever `--max-fetch-bytes` allows. Responses a script keeps hold of keep
-their bodies reserved, so bodies that each fit can together pass the limit.
-`text()`, `json()` and `arrayBuffer()` give the body's bytes back once they
-have read it (`arrayBuffer()` hands them to the buffer it returns, without a
-copy), and a response that is collected unread gives them back too. A
-`new Response(body)` reserves its encoded body the same way and throws the
-`RangeError` when it does not fit. See [Garbage Collector — what `BytesAllocated`
-tracks](garbage-collector.md#what-bytesallocated-tracks).
+whatever `--max-fetch-bytes` allows. A body is then an ordinary heap
+allocation: it stays live as long as its response does, so bodies that each
+fit can together pass the limit. `text()` and `json()` leave it in place, and
+`arrayBuffer()` and `bytes()` return a copy. A `new Response(body)` holds its
+encoded body in a `Uint8Array`, whose bytes are reserved as any typed array's
+are, and throws the `RangeError` when they do not fit. See [Garbage Collector —
+what `bytesAllocated` tracks](garbage-collector.md#what-bytesallocated-tracks).
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
-request carries them to the worker or embedder transport that performs it, so
-engines that share a thread — a sandbox `runScript` child inside its parent —
-neither see nor change each other's policy. An embedder can also give an engine
-its own transport, which answers that engine's requests instead of the network
-after these checks; see [Embedding — Fetch
-Transport](embedding.md#fetch-transport).
+request carries them to the worker that performs it, so engines that share a
+thread — a sandbox `runScript` child inside its parent — neither see nor change
+each other's policy. The engine has no embedder transport; see [Embedding —
+Fetch Transport](embedding.md#fetch-transport).
 
 ### Threat model notes
 
@@ -135,11 +132,11 @@ refused rather than parsed.
 
 ### Runtime behavior and limits
 
-Requests run on fetch-specific background workers, or go to the engine's transport when an embedder installed one, and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
+Requests run on fetch-specific background workers and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
 
-The platform resolver returns both IPv4 and IPv6 candidates. Fetch starts with the first [permitted address](permissions.md#net-scopes-and-private-ranges), alternates families when both are available, and starts another TCP connection after up to 250 ms while an earlier one is pending. A failed attempt advances immediately. All attempts share the request deadline. Scoped IPv6 literals with a zone identifier are unsupported. See [ADR 0185](adr/0185-fetch-connects-across-address-families.md).
+The platform resolver returns both IPv4 and IPv6 candidates. Fetch starts with the first [permitted address](permissions.md#net-scopes-and-private-ranges), alternates families when both are available, and starts another TCP connection after up to 250 ms while an earlier one is pending. A failed attempt advances immediately. All attempts share the request deadline. Scoped IPv6 literals with a zone identifier are unsupported. See [ADR 0190](adr/0190-fetch-connects-across-address-families.md).
 
-Each host thread caps requests in flight at 16, and runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a slot frees: a worker frees its slot when it finishes, and a request an embedder's transport handles frees it when the request settles, aborts or is discarded. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to connecting and to reads over plain HTTP and HTTPS alike: a TLS handshake or read ends at the request's deadline however the server paces its bytes, whether it goes silent or trickles a record one byte at a time, and the worker ends with the request.
+Each host thread caps requests in flight at 16, and runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a slot frees: a worker frees its slot when it finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. The requests a timed-out test started are dropped as an abort drops them: the next test does not wait for them, and their promises stay pending. A request is given the deadline in force when it started, so one that outlives it otherwise rejects later with `TypeError: HTTP request timed out`. That message applies to connecting and to reads over plain HTTP and HTTPS alike: a TLS handshake or read ends at the request's deadline however the server paces its bytes, whether it goes silent or trickles a record one byte at a time, and the worker ends with the request.
 
 A response body that ends early is a network error, as the Fetch Standard requires for an incomplete message: when the connection closes before the `Content-Length` bytes, or before a `chunked` body's last chunk, the fetch rejects with `TypeError: HTTP response body ended before its declared length`, and a `chunked` body that does not follow the chunked coding (a chunk-size line that is not hexadecimal, or chunk data not followed by CRLF) rejects with `TypeError: Invalid HTTP response: malformed chunked body`; the trailer section after the last chunk is read through its closing empty line and its fields are dropped. A `Content-Length` that is not decimal digits rejects with `TypeError: Invalid HTTP response: malformed Content-Length`. A body with neither header ends when the connection closes, and a connection that fails rather than closes rejects.
 

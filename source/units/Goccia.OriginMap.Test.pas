@@ -7,7 +7,6 @@ uses
 
   TestingPascalLibrary,
 
-  Goccia.GarbageCollector,
   Goccia.OriginMap,
   Goccia.TestSetup;
 
@@ -400,12 +399,7 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(TOriginMapTests.Create('OriginMap'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(TOriginMapTests.Create('OriginMap'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

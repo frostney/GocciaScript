@@ -9,7 +9,13 @@ describe("Intl.DateTimeFormat.prototype.resolvedOptions", () => {
     expect(opts.locale).toBe("en-US");
     expect(opts.calendar).toBe("gregory");
     expect(opts.numberingSystem).toBe("latn");
-    expect(opts.timeZone).toBe("UTC");
+    // ECMA-402 11.1.2 CreateDateTimeFormat: without a timeZone option, the
+    // host's SystemTimeZoneIdentifier, which Temporal.Now.timeZoneId reports too
+    if (typeof Temporal !== "undefined") {
+      expect(opts.timeZone).toBe(Temporal.Now.timeZoneId());
+    } else {
+      expect(typeof opts.timeZone).toBe("string");
+    }
   });
 
   test("default resolves to year/month/day numeric", () => {

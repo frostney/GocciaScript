@@ -20,8 +20,12 @@ describe("bytes module import", () => {
     expect(bytesDefault.buffer.immutable).toBe(true);
   });
 
-  test("ignores indexed writes to the immutable bytes view", () => {
-    bytesDefault[0] = 99;
+  // the view's buffer is immutable: [[Set]] returns false (Immutable
+  // ArrayBuffer proposal, 10.4.5.5), a TypeError in module code
+  test("refuses indexed writes to the immutable bytes view", () => {
+    expect(() => {
+      bytesDefault[0] = 99;
+    }).toThrow(TypeError);
     expect(bytesDefault[0]).toBe(0);
   });
 

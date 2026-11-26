@@ -1,468 +1,161 @@
 # Heap Snapshots
 
-*Writing what a paused run's heap holds and restoring it in a fresh engine, for embedders that resume runs later.*
+*Writing what a value reaches and restoring it in a fresh engine of the same build; a test-runner round trip and a fuzz target.*
 
 ## Executive Summary
 
-- **Opt-in, for embedders** — a `TGocciaHeapSnapshotSession` writes what a set of roots reaches; a `TGocciaHeapSnapshotRestore` reads it back in a fresh engine of the same build
-- **Refusal is normal** — a class without a codec or state outside the heap refuses the snapshot, and the embedder resumes by replay instead
-- **Built-ins are named, not written** — a snapshot refers to `Math`, `Array.prototype.map` or a lazily built `Temporal.PlainDate` by name, and the restoring engine resolves its own
-- **Changed built-ins are written as differences** — a built-in the run changed (`Object.prototype.polyfill = …`, `globalThis.answer = 42`, `Object.freeze(Math)`) is written as its whole own state, which the restore gives the same built-in last
-- **The reader expects hostile input** — every count, index and length is checked against the input and the limits, the run's memory ceiling and execution limits apply, and every truncation and mutant of a real snapshot is refused or restored, never a fault
-- **The pause checkpoint** — an engine with a host-call owner calls `OnPauseCheckpoint` when its run waits on nothing but host calls, and a handler that pauses ends the run with `EGocciaRunPaused`
-- **Functions and generators** — closures, the cells they share and suspended generators are written, each function named by its module's bytecode and its place there; the restoring engine must have compiled the same module
-- **Modules** — every module record the loader caches is written with its environment, exports and namespace object; a restore compiles each source module from its path without running it, and caches the records as evaluated modules
-- **Still growing** — plain objects, object literals, arrays, symbols, VM state, modules and built-in differences are written; the codec families that follow (the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
+- **A small writer and reader** — `Goccia.HeapSnapshot` writes what one root value reaches (`SnapshotWrite`) and restores it in a fresh engine set up the same way (`SnapshotRestore`)
+- **Where it is used** — GocciaTestRunner's `--heap-snapshots` round-trips every object `expect()` is given ([below](#round-tripping-the-javascript-suite)), and GocciaFuzzHarness fuzzes the reader with real snapshots. `TGocciaEngine` exposes only that round trip; the engine has no embedder session or pause checkpoint
+- **Refusal is normal** — A value whose state lives outside the cells the writer copies (a Map's table, a buffer's bytes, a promise's reactions, a generator's frame, a Proxy, a Date, a RegExp) refuses the snapshot with a reason
+- **Built-ins are named, not written** — What `globalThis` reaches before the run's code is named by its path; a built-in is written as that name and a fingerprint of its state, and a restore refuses a built-in the run changed
+- **Functions are named by their code's place** — A closure is written with its bindings, and its code as a path in the entry's or a module's function tree; the restoring engine compiles that code without running it
+- **The reader expects hostile input** — Every count, index and value is checked against the input, the object kinds and the code, and a prototype or bound-function chain that loops is refused
 
-The design, its trust model and its phases are recorded in
-[ADR 0148](adr/0148-heap-snapshots-at-idle-points.md); the prototype it grew
-from is the [heap snapshot spike](spikes/heap-snapshot-prototype.md).
+## Scope
+
+The engine's heap snapshots copy cells as they are. The writer handles these kinds:
+
+| Cell | Written as |
+|---|---|
+| String | Its text. A private name or an engine key no source text names refuses |
+| BigInt | Its sign and limbs |
+| Symbol | A registered symbol by its registry key; any other by its description |
+| Value array | Its capacity, length and values |
+| Closed binding (upvalue) | Its value. A binding a running frame still holds open refuses |
+| Accessor pair | Its getter and setter |
+| Object | Its kind, flags, prototype, keys with their attribute flags and values, elements, and its two internal values (`Aux1`, `Aux2`) |
+
+An object is written only when it is an ordinary object, an array, a closure, a bound function, an error, a
+`Boolean`, `Number`, `String` or `Symbol` wrapper, or an unmapped arguments object, and holds no native state outside
+its fields. Everything else refuses with `no snapshot codec for ...`: a Map, a Set, an `ArrayBuffer`, a typed array,
+a `DataView`, a promise, a RegExp, a Date, a Proxy, a generator, an async generator, a module namespace, an array
+iterator, a mapped arguments object and a native function the engine did not have before the run. The refusal names
+the kind as the old engine's class name, so refusal reports stay comparable.
+
+What the old engine's heap snapshots also had and the engine does not: the embedder session and restore classes, the pause
+checkpoint, built-in differences (a changed built-in refuses instead), module records (a restored engine that imports
+a module evaluates it again), configurable reader limits, the accounting check, and a format version or build
+identity in the header.
 
 ## Taking a snapshot
 
-Create the session right after the engine, before anything runs on it: it
-names the engine's built-ins then, records their state (a built-in the run
-changes is written as its difference, see
-[Built-ins the run changed](#built-ins-the-run-changed)), and marks where
-the run's objects begin, which the accounting check counts.
+Three calls, all on the engine's thread:
 
-Built-ins the run builds later (a lazily built global such as `Temporal`, an
-iterator prototype made on first use) are named too. Lazy members are watched
-as they are built: what one holds is named and recorded right then, so
-building it is not a change and changing it later is a difference. A
-built-in filled on first use some other way (natively, as the iterator
-prototypes are) is named before the snapshot and written with its
-fingerprint; the restoring engine builds the same built-in by name and
-compares, refusing the snapshot when the run had changed it. A built-in's
-state is its prototype, flags and
-own properties, and for a function also its kind, whether its code is a
-shim's, and its synthesized `length` and `name`: a run's function standing
-where a built-in's was is not the engine's own.
+1. `SnapshotNameBuiltins`, before the run's code. It runs a minor collection, so every cell it names is in old space,
+   then walks everything `globalThis` and the symbol registry reach (prototypes, properties, accessors, elements and
+   a function's internal values) and names each object and symbol by its path, such as
+   `globalThis.Array.prototype.map`. The named cells go into one rooted array, so a built-in the run drops is never
+   mistaken for a cell made later.
+2. `SnapshotNoteEntry` once the entry Script is compiled, or `SnapshotSetEntry` for a module entry: the entry's file
+   name, source and kind, which the writer uses to name functions compiled from it.
+3. `SnapshotWrite(Root, Data, Refusal)` at idle. It returns `False` with the reason in `Refusal` when it cannot write.
+   It allocates nothing on the heap.
 
-```pascal
-uses
-  Goccia.HeapSnapshot,
-  Goccia.HeapSnapshot.Codec;
+`TGocciaEngine` makes these calls when its `HeapSnapshots` property is set before `Run`: it names the built-ins before the
+entry compiles, notes the entry once compiled, and `HeapSnapshotObserved` writes every object `expect()` was given.
 
-Session := TGocciaHeapSnapshotSession.Create(Engine);
-try
-  // ... the run builds Value ...
-  try
-    Session.Snapshot([Value], Output);
-  except
-    on E: EGocciaHeapSnapshotRefused do
-      ResumeByReplayLater(E.Message);
-  end;
-finally
-  Session.Free;
-end;
-```
+### The format
 
-`Snapshot` writes what its roots reach from the stream's position and ends
-the stream there, or refuses with `EGocciaHeapSnapshotRefused` and leaves the
-stream as it was. The run must be idle, as at a pause checkpoint: a running
-bytecode frame, a queued job, a pending `Atomics.waitAsync` waiter, pending
-work on an extension other than `HostCallOwner`, or state outside the heap
-(below) refuses it, and `Engine.SnapshotIdleRefusal` says which. The message
-names the reason and, for an object without a codec, the chain of objects
-that reached it. The run's timeout and instruction limit still end the run
-while the writer works; its memory ceiling, reached by the writer's own
-buffers, refuses the snapshot instead.
+A snapshot starts with the magic number `2GH1` and then holds, in order:
 
-The **accounting check** (on by default, `CheckAccounting`) collects, then
-refuses when a live object the run created is neither written nor a
-built-in: it finds objects a codec missed, not fields. What the named
-built-ins reach counts as theirs: a built-in written in JavaScript (a shim
-such as `Date`) keeps its module scope, cells and private functions, built
-when the run first used it, and those are not missed objects. Only what a
-shim's load created counts as its own, and only when the load ran no code
-but shims' (the engine marks the code it compiles from a shim). A shim
-loads with the built-ins the engine had before any script ran (`WeakMap`,
-`Object.defineProperty`, `Number.parseInt` and `Number.parseFloat`, bound in
-its own scope), so what the run did to those globals does not reach it; a
-load that still ran a run's function, on any engine of the thread (a getter
-the run put on `Object.prototype`, say), has all it made counted. What the
-run's own top-level bindings hold is counted too.
-Should the collector's mark stack fail
-to grow while it marks what built-ins reach, the snapshot is refused, since
-its recovery traces the global scope as well. Objects the embedder
-keeps alive itself go into the baseline with `AddToBaseline`. The collection
-runs before anything is written; one that queues a job (a
-`FinalizationRegistry` whose target died) refuses the snapshot, since the run
-is not idle any more.
+- **The built-ins it refers to**, each as its path and a 64-bit fingerprint. A fingerprint covers the built-in's
+  kind, flags, prototype, keys with their flags and values, the elements present, a native function's entry point and
+  a closure's name and declaration position; another built-in counts by its index and a string by its text.
+- **The code roots it refers to**: the entry Script by its file name, or a module record by its path and a hash of
+  the source it was compiled from.
+- **The function templates it refers to**, each as its code root, its path of child indices in that root's function
+  tree (-1 for a template's field initializer), and its name and declaration line and column.
+- **The cells**, in the order the writer reached them, each referring to others by index, to built-ins by their
+  table index, and holding immediates (numbers, `undefined`, `null`, booleans, the array hole) as they are.
+- **The root value.**
+
+A closure is written as its object: its home object and its array of bindings sit in its internal values, and the
+bindings it shares with other closures are written once. Its code is never written. A function compiled outside the
+entry and its module records, such as eval code or the `Function` constructor's, refuses.
 
 ## Restoring
 
-```pascal
-Restore := TGocciaHeapSnapshotRestore.Create(FreshEngine, Input,
-  TGocciaHeapSnapshotLimits.Defaults);
-try
-  if Restore.Roots[0] is TGocciaValue then
-    Value := TGocciaValue(Restore.Roots[0]);
-  // ... root what you keep, then free the restore ...
-finally
-  Restore.Free;
-end;
-```
+`SnapshotRestore(Data, Root, Refusal)` restores into a fresh engine of the same build that has named its own
+built-ins (`SnapshotNameBuiltins`) and been told the entry (`SnapshotSetEntry`), set up as the writing engine was:
+the same globals, testing API and settings. The caller roots `Root` at once. The restore:
 
-The roots come back in the order they were written and stay rooted until
-the restore is freed. A root is whatever object was written, and a hostile
-snapshot can make it any object it holds, a closure's cell among them, so
-check its class before using it. A snapshot from another engine build, format version
-or codec schema, one naming a built-in this engine does not have, one over
-the limits or one that is malformed is refused with
-`EGocciaHeapSnapshotInvalid` (a subclass of `EGocciaHeapSnapshotRefused`).
+1. Checks the magic number, then resolves each built-in by its path and compares its fingerprint in this engine with
+   the one written: a missing built-in refuses (`the snapshot names a built-in this engine does not have`), and a
+   different fingerprint means the run changed it (`the run changed the built-in ...`).
+2. Finds each code root: the entry, compiled from the source it was told without running it, or a module, loaded
+   with what it imports, compiled and not evaluated, whose source hash must match the one written.
+3. Finds each template at its path, compiling lazy functions on the way, and refuses one whose name or declaration
+   position differs (`the snapshot names a function this engine compiled differently`).
+4. Allocates every cell empty into a rooted table, then fills each one, applying the write barrier to every store,
+   since a cell allocated early may be old by the time it is filled.
+5. Checks every object's internal values against its kind, checks that no prototype chain or bound-function target
+   chain loops, reads the root, and refuses trailing bytes.
 
-Authenticate a snapshot before restoring it, for example with an HMAC under a
-key no script can reach, and never accept one from a script or a user: the
-reader is written for hostile input, but a snapshot that passes its checks
-still decides what the restored run holds. Compression is the embedder's:
-decompress after authenticating and keep the decoded size within the
-reader's input limit.
+The format holds no build identity: a snapshot from another build is caught only when one of these checks fails, so
+restore only snapshots the same build wrote.
 
-### Reader limits
+### Reader checks
 
-`TGocciaHeapSnapshotLimits` bounds what a reader accepts before it allocates
-anything for it:
+The reader treats a snapshot as hostile input. Every refusal is `ERefused` inside the unit and comes back as `False`
+with the reason; none is a fault.
 
-| Field | Default | Bounds |
-|---|---|---|
-| `MaxInputBytes` | 512 MiB | the snapshot's size |
-| `MaxObjects` | 16 Mi | the object table |
-| `MaxStrings` | 16 Mi | the string table |
-| `MaxStringBytes` | 256 MiB | one string |
-| `MaxBuiltins` | 1 Mi | built-in names |
-| `MaxCodecs` | 4,096 | codecs named in the header, modules named in the module section, and module records |
-| `MaxRoots` | 1 Mi | roots |
+- **Counts and lengths** — Built-ins at most what this engine named, code roots at most 4,096, templates at most
+  1,048,576 with paths of at most 4,096 steps, cells at most 16,777,216 (`MAX_CELLS`) and never more than the input's
+  bytes, an inline capacity at most 4,096, a value array's length at most its capacity and its capacity at most the
+  longest dense array (`ArrayDenseMax`), and every string, BigInt, value array and key count within the bytes left. A
+  short input is `the snapshot is truncated`.
+- **Values** — An immediate must be one the engine makes: a number (a NaN only as the canonical one), an Int32 in its
+  tag, or one of the five special constants; a pointer is never an immediate. A cell or built-in reference must be in
+  range, and a prototype must be `null` or an object.
+- **Kinds** — Only the object kinds the writer writes, and each object's internal values must fit its kind: a
+  wrapper's primitive, a bound function's callable target and argument array, a closure's home object and at least as
+  many closed bindings as its code has, an array's elements and, past them, a length up to 2^32 - 1.
+- **Keys and attributes** — A symbol key must be a symbol, a key may not repeat on one object, and an accessor flag
+  must come with an accessor pair.
+- **Chains** — A prototype chain or bound-target chain that loops is refused; ordinary objects cannot have such a
+  prototype chain (ES2026 §10.1.2.1 OrdinarySetPrototypeOf), and `[[Get]]`, `[[HasProperty]]` and `instanceof` walk
+  it to its end.
 
-The reader also charges its input, its tables and what it restores to the
-run's memory ceiling, and polls the run's timeout and instruction limit in
-every loop whose length follows the input. A restored BigInt keeps the charge
-for its digits for as long as it lives.
-
-## The pause checkpoint
-
-An embedder that owns the run's host calls (a tool call, an approval) names
-that extension `HostCallOwner` and sets `OnPauseCheckpoint`. Where the idle
-wait would call the owner's `WaitForIdle`, before it blocks, the engine calls
-the handler if the run is at a pause checkpoint: no frame running, no job
-queued, no `Atomics.waitAsync` waiter, no other extension with pending work,
-and pending host calls on the owner. `IsAtPauseCheckpoint` answers the same
-question. The wait that drives one promise to settlement inside a run (an async
-test, a synchronous `await`) does not call the owner while a handler is set,
-so its host calls are served only where a checkpoint is offered
-([ADR 0171](adr/0171-the-promise-wait-runs-extension-host-work.md)).
-
-```pascal
-procedure THost.OnCheckpoint(const AEngine: TGocciaEngine;
-  var APause: Boolean);
-begin
-  try
-    FSession.Snapshot(FPendingCallPromises, FOutput);
-    APause := True;
-  except
-    on E: EGocciaHeapSnapshotRefused do
-      ; // keep waiting; resume by replay later
-  end;
-end;
-
-Engine.HostCallOwner := MyToolsExtension;
-Engine.OnPauseCheckpoint := Host.OnCheckpoint;
-try
-  Engine.Execute;
-except
-  on E: EGocciaRunPaused do
-    StoreForLater(FOutput);
-end;
-```
-
-Leaving `APause` false goes on waiting for the host calls as usual. An
-extension that keeps state outside the heap no codec covers reports it
-through `HeapSnapshotRefusal` (the timer extension does for any scheduled
-timer, a mocked clock or an unreported timer error); while any extension
-does, the run is not at a checkpoint, and `Snapshot` refuses too.
-
-Until the promise codecs land, a run paused at a checkpoint holds pending
-promises that no codec writes yet (an entry module awaiting a host call
-holds its evaluation promise), so a snapshot of a paused run is refused; the
-values API above already round-trips the graphs the codecs so far cover.
-
-## Functions and generators
-
-A function is written as its closure: the code it runs, the cells it
-shares with other closures, its home object and its own properties. The code
-is never written. Each compiled module the engine keeps is named by the
-SHA-256 of its bytecode as the bytecode format writes it, its source path
-included, and each function's code by its depth-first place in its module;
-the restoring engine names its own compiled modules the same way and finds
-one with the same bytecode, so it must compile the module from the same
-path. Two modules with the same bytecode are interchangeable. A snapshot
-naming a module the restoring engine has not compiled is refused. Global
-`eval` code has no bytecode file form and so no name: its functions refuse
-the snapshot. The hashes are streamed and polled. The writer hashes only the
-modules a snapshot names; the reader hashes every module its engine keeps
-(eval code aside), once, at the first function it restores.
-
-A suspended generator is written with its frame: its registers, its cells,
-its exception handlers and where it resumes. The reader checks that frame
-against the code it runs: the resume point on an instruction boundary,
-registers and cells within the frame's windows, and each handler one that
-the function's own push instructions push, no more of them than it has push
-instructions. It charges each frame array to the run's memory ceiling before
-allocating it, and the restored generator keeps that charge, as a suspended
-frame always does. A register may hold the marker of a binding still in its
-temporal dead zone, which stays there until the generator runs the
-declaration. A generator inside `yield*`, an async generator and an async
-function waiting on a promise refuse until the promise and iterator codecs
-land.
-
-The reader keeps the frame within its code, but cannot tell a forged
-register value from a real one: that is what authenticating snapshots is for.
-
-## Modules
-
-A snapshot holds every module record the engine's loader caches, whatever
-its roots reach: a module the run evaluated stays evaluated, so a later
-import of it runs no body ([ADR 0150](adr/0150-heap-snapshots-restore-module-records-whole.md)). Module
-records are not managed objects, so they have a table of their own,
-written and read by `TGocciaModuleSnapshotRecords`
-(`source/units/Goccia.Modules.Snapshot.pas`). Each record has a header and
-a payload:
-
-- **The header** names the record: its path, the keys the loader caches it
-  under, whether the host owns it, and for a source module the source path
-  and bytecode hash of the code the engine compiled it to, and whether it was
-  the entry `Execute` evaluated, which is compiled keeping its completion
-  value where an imported module keeps none ([ADR 0183](adr/0183-module-code-clears-each-top-level-statement-and-imports-keep-no-completion-value.md)).
-  The reader reads every header before it allocates any object.
-- **The payload** is the record's state: its environment, its export
-  bindings (local, forwarded from another record, or a value), its exports
-  table, its star and ambiguous export names, its namespace object, its
-  evaluation promise and the root of its asynchronous cycle. The reader
-  fills every record once every object is filled.
-
-A module's environment is a module scope: its top-level bindings by name,
-its var bindings and its import bindings, each naming the record and the
-export it reads. A local export must name one of its own module
-environment's bindings that is not an import binding. A namespace object is
-written as its record and restored as the one the record holds.
-
-A restore compiles each source module from the path its header names,
-through the loader and under its read policy (the engine's own source when
-the path is the engine's source path, compiled as `CompileModule` compiles
-it when the run's entry was compiled that way and run with
-`RunModuleForSourceType`), without linking or running it. A
-module whose bytecode is not the one the snapshot ran, one that no longer
-compiles, and one cached under a key the restoring engine's loader already
-holds are refused. Once the whole snapshot is restored, the records are
-cached in the loader as evaluated modules; a refused restore, or one the
-run's limits stop while it caches them, frees them and leaves the loader as
-it was. Restore into a fresh engine with the same files: one that has not
-loaded the modules or compiled them for an earlier restore (a refused
-restore keeps the bytecode it compiled, and a later restore that would use
-it is refused). A source module the restore compiled from its file takes the
-file's modification time, which a later import compares to decide whether
-to load the module again, so a copy of the same file does not evaluate it
-again; one compiled from the source the engine was created with keeps the
-run's.
-
-A data module (JSON, text) is written as its exported values, not read
-again: the run may have changed them. It keeps the run's modification time,
-so a later import of a newer file loads it again, as it would have in the
-run. The entry module, still evaluating
-while its run waits at a checkpoint, is restored as evaluated. A
-forwarded export is followed through at most 1,024 records on restore, and
-until a record's forwardings are checked, resolving an import through it
-stops there, the collector's marking included. These refuse the snapshot:
-
-- a module loaded from precompiled bytecode: these records are not
-  source-backed records the restore can recompile from its headers;
-- a record a host or a runtime module loader built, and a binding of a host
-  module, until host module codecs land;
-- loader state outside the records: a module still linking, being reloaded
-  or whose evaluation failed, a deferred namespace and a module source
-  object;
-- an `import.meta` object, which the realm caches outside the heap;
-- a pending evaluation promise, until the promise codecs land.
-
-## Writing a codec
-
-A class gets a codec by registering one, by exact class, in the
-initialization of the unit that owns the class, which can reach its private
-state:
-
-```pascal
-RegisterSnapshotCodec(TMyValue, TMyValueSnapshotCodec.Create);
-```
-
-A codec has a unique `Tag`, a `SchemaVersion` that changes whenever the
-fields it writes change, and four steps: `Write` the object, `Allocate` an
-empty shell (it may read non-reference data), `Fill` it from its payload,
-reading every byte (references resolve to shells), and optionally `Finish`
-once every object is filled. `WriteObjectCore` and `ReadObjectCore` write
-and read an ordinary object's prototype, extensibility, integrity and own
-properties. An object that holds private elements (a class prototype's
-private methods, or what a derived constructor stamped on an object its
-base constructor returned) refuses the snapshot: they are not properties.
-The same holds for a built-in, which is written by name and by a difference
-of its properties. A reader codec checks what it reads and calls `Refuse` rather
-than guessing, and calls `Poll` once per item in any loop whose length comes
-from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
-codec as an example.
-
-## Built-ins filled on first use
-
-A snapshot may name a built-in by the realm slot, or owned slot, that holds
-it, and a slot filled on first use may be named before anything else that
-fills it, as when a runtime extension loads the `Date` shim natively. So the
-unit that owns such a slot registers, under the slot's name, how a restore
-fills it:
-
-- `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
-  current realm (the iterator prototypes, the function-object intrinsics,
-  Intl's legacy fallback symbol, the segment and module source prototypes);
-- `RegisterSnapshotSlotNamedMaterializer`, the same told the slot's name,
-  so one procedure fills a family of slots: each shim's slot, and the `Date`
-  shim's own slots, are filled by loading the shim as native code can;
-- or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
-  fills it, by its path from the global object (`Temporal.PlainDate` for
-  Temporal's and Intl's shared prototypes, `DisposableStack`).
-
-A restore fills a slot by building only what fills it. A lazy member the
-restore built and the run did not would be named, by a session watching the
-restore, as one the run built, and a snapshot of the restored run would not
-be the run's. So a global path is only for a slot that nothing but that read
-fills. A shim is loaded through any of its members (`Array.prototype` and
-`Number.prototype` share the `toLocaleString` shim) or natively, so its slot
-is filled by loading it; the members the run built are named apart and
-resolve by their own paths. Native code that makes an instance only for one
-operation and drops it (the collator `String.prototype.localeCompare` uses,
-the number format of `BigInt.prototype.toLocaleString`) leaves the shared
-prototype unbuilt, so only its global builds that.
-
-Every slot a run can fill resolves by its name on its own in a fresh engine.
-`Goccia.HeapSnapshot.Builtins.Test` builds everything an engine builds lazily
-and checks each slot's names, and lists the slots nothing fills: `eval`,
-which the host installs, and the shared prototypes of runtime extensions an
-engine without them never builds.
-
-An extension whose native built-in is created only when imported implements
-`MaterializeHeapSnapshotBuiltin` on its engine or runtime extension. The
-resolver requests a missing `%builtin` name through that hook, then checks
-the resulting object's fingerprint. The hook must build only the named
-native built-in, without guest execution or host I/O, and leave unknown names
-alone. The data-format extensions use it for their native namespace objects.
-FFI slot materializers rebuild shared prototypes without opening libraries;
-ordinary FFI instances still require a codec and remain refused.
-
-A `Date` keeps its time value outside the object, in the `Date` shim's
-WeakMap, which is a built-in and named, not written: an object with a time
-value refuses the snapshot until a codec covers it.
-
-## Built-ins the run changed
-
-A built-in whose state differs from what the session recorded is written in
-its own section (format version 4, after the object table and before module
-payloads and roots)
-as its whole own state: its prototype, its extensibility and integrity, a
-function's or a class's synthesized `length` and `name`, an array's length
-and elements, and every own property, string- and symbol-keyed, in its
-final order. A member the engine built and the run left alone, or one still
-lazy, is written as kept: the restoring engine's own member of that key,
-lazy or built, stays. The run's objects a changed built-in holds are written like
-any others, and the naming walk does not reach them through it.
-
-The reader checks each difference against the built-in it names in this
-engine, as it checks a restored object: no built-in changed twice, flags that
-agree with each other and with every member (kept ones included), parts that
-fit the built-in's kind, a kept member the built-in has, an array's elements
-within its length, no new prototype for `Object.prototype` and no prototype
-chain that loops through a changed built-in. The differences are applied
-last, after the roots are read and every check has passed: each built-in's
-new properties and elements are built aside first (under the run's memory
-ceiling and execution limits), then installed in a step that allocates
-nothing and cannot fail, so a refused restore leaves this engine's built-ins
-as they were. [ADR 0152](adr/0152-heap-snapshot-builtins-commit-last.md)
-replaces ADR 0148's earlier ordering; nothing the fill does reads a built-in's
-own state. Resolving names can
-still build lazy built-ins, which a later restore into the same engine
-cannot tell from changes: restore into a fresh engine. To snapshot a restored run again, create the session before
-the restore, as for any run; the restore is then the run's first change.
-
-A change to a built-in's native internal state (an error's or a RegExp's
-data, a Date's time value) has no difference yet, and refuses the snapshot.
+The reader keeps a restored value within these rules, but cannot tell a forged property value from a real one.
+Authenticate snapshots, for example with an HMAC under a key no script can reach, before restoring them, and never
+accept one from a script or a user.
 
 ## Testing
 
-`source/units/Goccia.HeapSnapshot.Test.pas` round-trips graphs through two
-engines and checks them by script, and feeds the reader every truncation
-and 10,000 mutants of a real snapshot, and of one holding closures and a
-suspended generator, which it then resumes. It also points that snapshot's
-root at each object it holds in turn, a closure's cell among them, so a root
-that is not a value is checked before use, as an embedder must check it.
-The random mutants of every test edit only the bytes after the build
-identity: the version and commit a build bakes in do not move the edits, so
-a release tag's build runs the same mutants as the pull request before it.
-`source/units/Goccia.HeapSnapshot.Modules.Test.pas` does the same for a run
-that imports modules from files, restoring each mutant in a fresh engine.
-`Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
-checks the reader's refusals of impossible ones, restores every cut and
-11,000 mutants of snapshots with differences, and restores under rising
-memory ceilings and deadlines, every refusal leaving the built-ins as they
-were. The fuzz harness restores one input
-as a snapshot with `--heap-snapshot <file>` and writes its own seed
-snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
-[fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with
-them ([Tooling — Fuzzing](contributing/tooling.md#fuzzing-and-memory-safety)).
+GocciaScript's own suite exercises the round trip ([below](#round-tripping-the-javascript-suite)): PR CI and the Engine
+workflow (`.github/workflows/engine.yml`) run `tests/` with `--heap-snapshots`, and the Engine workflow fails when any
+round trip fails.
 
-`source/units/Goccia.HeapSnapshot.Hardening.Test.pas` takes two real
-snapshots apart along the format, one of a plain graph with built-ins the
-run changed and one holding closures and suspended generators: every count, index and length of the
-header and its tables set to its boundary values, every object entry read by
-every other codec, dropped, doubled, swapped and cut short, references to
-objects and built-ins pointed at other objects and built-ins, and payload bytes set
-to the value tags. Each mutant restores or is refused, and what restores is
-used (`THeapSnapshotExerciser` in `Goccia.HeapSnapshot.Exercise`: up to 600
-distinct objects, what the run's values hold before any prototype, each
-property read, each function called, each generator resumed, returned or
-thrown into while it is suspended). It also round-trips deep chains of every
-kind of link, refuses at the end of one and stops a restore of one at half
-its memory, so no walk recurses per link; restores with the collector's
-`CollectBeforeEveryReservation` on, so each reservation the reader makes
-collects first; restores under 401 ceilings spread evenly up to what a
-restore needs; and restores the same mutants again to check that the heap
-stays where it was.
-
-| Size | Payload values and reference targets | Chains | Runs |
-|---|---|---|---|
-| default | one in 4 at each, rotating | 200,000 links | on every pull request |
-| `GOCCIA_HEAP_SNAPSHOT_HARDENING=full` | all | 1,000,000 links | in the scheduled fuzz workflow |
-
-The fuzz workflow also runs every heap snapshot test program at its default
-size under heaptrc.
+GocciaFuzzHarness restores one input as a snapshot with `--heap-snapshot <file>` and writes its own seed snapshots
+with `--write-heap-snapshot-seeds <dir>`. Seeds and restores run one program, which in a seed run hands each seed
+graph to the writer and in a restore run uses what restored, calling its functions: data graphs with holes, cycles
+and shared objects, symbols, frozen and sealed objects, closures, bound functions, errors and wrapper objects. The
+scheduled [fuzz workflow](../.github/workflows/fuzz.yml) writes the seeds, checks that each one restores, and fuzzes
+the reader with AFL++ from them ([Tooling — Fuzzing](contributing/tooling.md#fuzzing-and-memory-safety)).
 
 ### Round-tripping the JavaScript suite
 
-`./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress`
-collects each distinct object passed to `expect()` and keeps it rooted until
-that file finishes. It writes each object at file idle, with accounting off,
-then restores each accepted object into its own fresh engine. The restore
-compiles the entry and imported module records itself, without running them,
-as [ADR 0150](adr/0150-heap-snapshots-restore-module-records-whole.md) requires.
-Only retained code without a cached module record (script entries and dynamically
-compiled functions) is copied through the bytecode format without execution,
-preserving its generated private identifiers and computed class keys.
-Objects are checked in their **final file state**, not their state at the
-assertion: writing inside `expect()` would violate the idle-frame requirement.
+`./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress` keeps each distinct object passed to
+`expect()` (the `observe` native in the testing API, `SnapshotObserve`), rooted until the file finishes; a primitive
+is not observed. Once the file's tests have run without an error, `TGocciaEngine.HeapSnapshotObserved` writes each object
+at idle and describes it (`SnapshotDescribe`). Objects are therefore checked in their **final file state**, not their
+state at the assertion: writing inside `expect()` would write a running frame.
 
-The checker compares a native description of identities, prototypes, stored
-properties and descriptors, symbols, array holes and lengths, and function
-name/length state. It does not call getters, proxy traps, `toJSON` or testing
-serializers. Re-snapshot byte equality also checks state owned by the codecs.
-A writer refusal is counted by reason; a restore refusal, either mismatch or
-an unexpected exception fails the file. An integrity fault aborts the runner.
+After the file's engine is freed, each written object is restored by `TGocciaEngine.HeapSnapshotVerify` in a fresh
+engine of its own, set up as the file's was (globals, testing API, settings). It passes when writing the restored
+object again gives the same bytes and its description matches the original's. The description lists each object's
+kind, extensibility, prototype, code position or primitive, and its own keys in order with their descriptors,
+read without calling getters; built-ins appear by name.
 
-This diagnostic mode runs files serially, including when `--jobs` is supplied.
-Counts and refusal reasons go to stderr, leaving JSON stdout intact. PR CI
-and the Linux x64 full-CI job run the mode over `tests/` and retain its report,
-so newly supported codec families become checked without another corpus.
+Each object ends `passed`, `refused` (the writer refused it, or the restoring engine could not restore it) or
+`failed`. A failed round trip adds a suite error to its file (`Heap snapshot round-trip failed`). The mode runs files
+serially, including when `--jobs` is given. The report goes to stderr, leaving JSON stdout intact:
+
+```text
+Heap snapshot failure: <file>: <what differed>
+Heap snapshots: observations=<n> objects=<n> passed=<n> refused=<n> failed=<n>
+Heap snapshot refusal: <count> <reason>
+```
+
+`observations` counts every object `expect()` was given, repeats included; `objects` the distinct ones written or
+refused. Refusal reasons are listed in sorted order with how often each came.

@@ -1,15 +1,19 @@
 unit Goccia.CLI.SandboxHost;
 
-{ Runs a program inside a sandbox virtual filesystem for GocciaRunner's
-  sandbox mode (ADR 0122): owns the top-level sandbox context, builds and
-  runs an engine over it, nests `runScript` / `goccia` children, classifies
-  how a run ended, and renders the filesystem diff.
+{ GocciaRunner's sandbox mode (ADR 0122): owns the top-level sandbox context, runs each program
+  over a context (the root, and every runScript or goccia child) on a thread
+  of its own with a fresh engine, nests the children, classifies how a run
+  ended, and renders the filesystem diff.
+
+  An engine's state is its thread's, so a nested run cannot share its
+  caller's thread: the caller's thread waits in the runScript native while
+  the child runs on a new one, and the child's completion value comes back
+  as text (Goccia.Sandbox EncodeSandboxValue) that the caller decodes.
 
   What an engine may do is not decided here. The application configures each
-  engine it creates through OnConfigureEngine (runtime, audit, host
-  environment, file-level options), and gives the root engine's capability
-  set through RootCapabilities; a nested child inherits its parent's set, so
-  a child never reaches more than its parent. }
+  engine through OnConfigureEngine and formats a failed run's error through
+  OnFormatFailure; a nested child inherits its parent's capability set, so a
+  child never reaches more than its parent. }
 
 {$I Goccia.inc}
 
@@ -23,27 +27,53 @@ uses
   SandboxVirtualFileSystem,
 
   Goccia.Capabilities,
-  Goccia.Engine,
-  Goccia.HostEnvironment,
-  Goccia.Sandbox.Context,
-  Goccia.Sandbox.Modules,
-  Goccia.Values.Primitives;
+  Goccia.Embed,
+  Goccia.Packages.Address,
+  Goccia.Sandbox.Context;
 
 const
-  { Each nesting level holds an engine, a realm, and a virtual filesystem
-    alive on the native stack, so the depth a guest may ask for is a resource
-    ceiling like the memory budget, not a taste judgement about how deep
-    orchestration should go. }
+  { Each nesting level holds an engine, a thread and a virtual filesystem, so
+    the depth a guest may ask for is a resource ceiling, as on the old
+    engine. }
   MAX_RUN_SCRIPT_DEPTH = 32;
 
 type
-  { Configures an engine the host just created over AContext to run
-    AEntryPath. AParentEngine and AParentHostEnvironment are nil for the root
-    run and the calling engine's for a nested one. }
-  TGocciaSandboxEngineConfigurator = procedure(const AEngine: TGocciaEngine;
-    const AContext: TGocciaSandboxContext; const AEntryPath: string;
-    const AParentEngine: TGocciaEngine;
-    const AParentHostEnvironment: TGocciaHostEnvironment) of object;
+  TGocciaSandboxHost = class;
+
+  { One program's run: its context, entry and engine, its parent run (nil
+    for the root), and the console lines it printed. }
+  TGocciaSandboxRun = class
+  private
+    FHost: TGocciaSandboxHost;
+    FPreviousClamp: TSandboxRootClampCallback;
+    procedure HandleRootClamp(const APath, ABase, ACanonicalPath: string);
+  public
+    Context: TGocciaSandboxContext;
+    EntryPath: string;
+    Source: TStringList;
+    Engine: TGocciaEngine;
+    Parent: TGocciaSandboxRun;
+    Depth: Integer;
+    Capabilities: TGocciaCapabilities;
+    Output: TStringList;
+    { the run's timeout in milliseconds (0 none): the host's, or what is left of the caller's when that is less }
+    TimeoutMilliseconds: Int64;
+    Deterministic: Boolean;
+    { --silent: the console prints nothing; LogLine: each console line to the --log file too }
+    Silent: Boolean;
+    LogLine: procedure(const AMethod, ALine: string) of object;
+    constructor Create;
+    destructor Destroy; override;
+    procedure CaptureConsole(const AMethod, ALine: UnicodeString);
+    property Host: TGocciaSandboxHost read FHost;
+  end;
+
+  { Configures the engine ARun.Engine was just given (language profile,
+    settings, audit, deterministic profile, console). }
+  TGocciaSandboxEngineConfigurator = procedure(const ARun: TGocciaSandboxRun) of object;
+  { The error text of a run that failed with a script error. }
+  TGocciaSandboxFailureFormatter = function(const ARun: TGocciaSandboxRun;
+    const AResult: TGocciaRunResult): string of object;
 
   TGocciaSandboxHost = class
   private
@@ -51,53 +81,44 @@ type
     FInputs: TSandboxHostInputs;
     FTimeoutMilliseconds: Integer;
     FMaxInstructions: Int64;
+    FInspectDepth: Integer;
     FImportMapPath: string;
     FAliases: TStringList;
     FRootCapabilities: TGocciaCapabilities;
     FOnConfigureEngine: TGocciaSandboxEngineConfigurator;
-    FRunScriptDepth: Integer;
-    FCurrentOutputLines: TStrings;
-    FCurrentHostEnvironment: TGocciaHostEnvironment;
-    FCurrentCapabilities: TGocciaCapabilities;
-    FHasCurrentCapabilities: Boolean;
-    FCurrentEngine: TGocciaEngine;
+    FOnFormatFailure: TGocciaSandboxFailureFormatter;
     FPrintRootResult: Boolean;
-
-    procedure ConfigureResolver(const AResolver: TGocciaSandboxModuleResolver);
-    procedure CopyNestedInputs(const AParentContext,
-      AChildContext: TGocciaSandboxContext;
-      const AOptions: TGocciaSandboxRunOptions);
+    FDeterministic: Boolean;
     function ExecuteInContext(const AContext: TGocciaSandboxContext;
-      const AEntryPath: string): TGocciaSandboxRunResult;
+      const AEntryPath: string; const AParent: TGocciaSandboxRun): TGocciaSandboxRunResult;
     function ExecuteNested(const AContext: TGocciaSandboxContext;
       const AEntryPath: string; const AOptions: TGocciaSandboxRunOptions):
       TGocciaSandboxRunResult;
+    procedure CopyNestedInputs(const AParentContext,
+      AChildContext: TGocciaSandboxContext;
+      const AOptions: TGocciaSandboxRunOptions);
   public
     { AClock stamps the files of the host's sandbox filesystem and of every
-      isolated nested run's (see TGocciaSandboxContext.Create); nil reads the
-      wall clock. Pass it here, before any input is copied in. The host does
-      not own AClock: free it after the host. }
+      isolated nested run's; nil reads the wall clock. Not owned. }
     constructor Create(const AQuotaBytes: Int64; const ANodeQuota: Integer;
       const AClock: TSandboxFsClock = nil);
     destructor Destroy; override;
-
-    { Copies a host input into the sandbox; see TSandboxHostInputs.CopyIn. }
     function CopyIn(const AHostPath, ASandboxPath: string;
       const AReadWrite: Boolean): string; overload;
     function CopyIn(const AHostPath, ASandboxPath: string;
       const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
       overload;
-    { Records the filesystem as the run starts, for the diff and the
-      write-back. Call after the inputs are copied. }
     procedure CaptureBaseline;
     { Runs AEntryPath, a sandbox path, as the root program. A failure is
-      returned, classified, never raised. }
+      returned, classified; only a capability audit the sink could not take
+      is raised (EGocciaCapabilityAuditDeliveryError). }
     function Run(const AEntryPath: string): TGocciaSandboxRunResult;
-    { The changes since CaptureBaseline: JSON always with timestamp metadata,
-      unified never. }
     function DiffText(const AUnified: Boolean): string;
-    { For the console output callback OnConfigureEngine installs. }
-    procedure CaptureConsoleLine(const AMethod, ALine: string);
+    { the resolver's import map and aliases, for a run's module resolver }
+    procedure ConfigureResolver(const AResolver: TObject);
+    { sandbox mode never grants a provider package: the refusal is the PermissionDenied a missing import
+      capability is (TGocciaSandboxModuleResolver asks before it refuses) }
+    procedure RefuseProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
 
     property Context: TGocciaSandboxContext read FContext;
     property Inputs: TSandboxHostInputs read FInputs;
@@ -105,20 +126,20 @@ type
       write FTimeoutMilliseconds;
     property MaxInstructions: Int64 read FMaxInstructions
       write FMaxInstructions;
+    { console output's inspection depth in each run (--inspect-depth), 0 for
+      the default }
+    property InspectDepth: Integer read FInspectDepth write FInspectDepth;
     property ImportMapPath: string read FImportMapPath write FImportMapPath;
-    { `key=value` module aliases. }
     property Aliases: TStringList read FAliases;
     property RootCapabilities: TGocciaCapabilities read FRootCapabilities
       write FRootCapabilities;
+    { the deterministic profile (--deterministic) for every run }
+    property Deterministic: Boolean read FDeterministic write FDeterministic;
     property OnConfigureEngine: TGocciaSandboxEngineConfigurator
       read FOnConfigureEngine write FOnConfigureEngine;
-    { Whether Run converts the root program's completion value to a string
-      into its result's ResultText, as host mode's --print does (False by
-      default). The conversion can run the value's own methods, so it happens
-      while the run's engine is alive, inside the run's limits, and an error
-      it throws fails the run. The root value itself is never copied out: it
-      belongs to an engine that is freed when Run returns. A nested run's
-      value is always copied: runScript returns it to the calling program. }
+    property OnFormatFailure: TGocciaSandboxFailureFormatter
+      read FOnFormatFailure write FOnFormatFailure;
+    { the root run's completion value as --print shows it (ResultText) }
     property PrintRootResult: Boolean read FPrintRootResult
       write FPrintRootResult;
   end;
@@ -129,23 +150,43 @@ uses
   TextSemantics,
 
   Goccia.CapabilityAudit,
-  Goccia.Diagnostics.SourceRegistry,
-  Goccia.Error,
-  Goccia.Error.Detail,
-  Goccia.GarbageCollector,
-  Goccia.InstructionLimit,
-  Goccia.MemoryLimit,
-  Goccia.MicrotaskQueue,
-  Goccia.Realm,
-  Goccia.Timeout,
-  Goccia.Utils.Arrays,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.Error,
-  Goccia.Values.ObjectValue,
-  Goccia.VM.Exception;
+  Goccia.Error.Suggestions,
+  Goccia.HostAPI,
+  Goccia.HostEnvironment,
+  Goccia.Sandbox,
+  Goccia.Sandbox.Modules,
+  Goccia.ThreadCleanupRegistry,
+  Goccia.VM;
 
 const
   SANDBOX_ROOT = '/';
+  { reserved, not committed: room for native recursion as deep as a file thread's. A 32-bit process has 2 GB of
+    address space, which the nesting ceiling's 33 run threads would fill at 64 MB each before the ceiling is
+    reached, so there each reserves 16 MB (the native stack guard reads the thread's own bounds) }
+  {$IFDEF CPU64}
+  RUN_THREAD_STACK = 64 * 1024 * 1024;
+  {$ELSE}
+  RUN_THREAD_STACK = 16 * 1024 * 1024;
+  {$ENDIF}
+
+threadvar
+  { the run this thread is carrying out: a nested run's parent }
+  CurrentRun: TGocciaSandboxRun;
+
+type
+  { one run on a thread of its own }
+  TGocciaSandboxRunThread = class(TThread)
+  public
+    Host: TGocciaSandboxHost;
+    Run: TGocciaSandboxRun;
+    Source: UnicodeString;
+    RandomRoot: IGocciaHostRandom;
+    Result: TGocciaSandboxRunResult;
+    AuditFailure: string;
+    AuditFailed: Boolean;
+  protected
+    procedure Execute; override;
+  end;
 
 function EnsureSandboxAbsolute(const APath: string): string;
 var
@@ -256,109 +297,193 @@ begin
       ADestinationIsDirectory);
 end;
 
-function CloneResultValueRecursive(const AValue: TGocciaValue;
-  const ASeen: TList): TGocciaValue;
-var
-  ArrayValue, ClonedArray: TGocciaArrayValue;
-  ObjectValue, ClonedObject: TGocciaObjectValue;
-  ClonedRoot: TGocciaTempRoot;
-  Key: string;
-  I: Integer;
+{ TGocciaSandboxRun }
+
+constructor TGocciaSandboxRun.Create;
 begin
-  if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  if AValue is TGocciaNullLiteralValue then
-    Exit(TGocciaNullLiteralValue.NullValue);
-  if AValue is TGocciaBooleanLiteralValue then
-    Exit(TGocciaBooleanLiteralValue.Create(
-      TGocciaBooleanLiteralValue(AValue).Value));
-  if AValue is TGocciaNumberLiteralValue then
-    Exit(TGocciaNumberLiteralValue.Create(
-      TGocciaNumberLiteralValue(AValue).Value));
-  if AValue is TGocciaStringLiteralValue then
-    Exit(TGocciaStringLiteralValue.Create(
-      TGocciaStringLiteralValue(AValue).Value));
-
-  if ASeen.IndexOf(AValue) >= 0 then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-
-  if AValue is TGocciaArrayValue then
-  begin
-    ASeen.Add(AValue);
-    try
-      ArrayValue := TGocciaArrayValue(AValue);
-      ClonedArray := TGocciaArrayValue.Create(nil, ArrayValue.GetLength);
-      // Only this frame holds the copy while its elements are cloned, and
-      // creating an element can collect at the growth gate.
-      InitializeTempRoot(ClonedRoot);
-      AddTempRootIfNeeded(ClonedRoot, ClonedArray);
-      try
-        for I := 0 to ArrayValue.GetLength - 1 do
-          ArrayCreateDataProperty(ClonedArray, I,
-            CloneResultValueRecursive(ArrayValue.GetElement(I), ASeen));
-      finally
-        RemoveTempRootIfNeeded(ClonedRoot);
-      end;
-      Exit(ClonedArray);
-    finally
-      ASeen.Remove(AValue);
-    end;
-  end;
-
-  if AValue is TGocciaObjectValue then
-  begin
-    ASeen.Add(AValue);
-    try
-      ObjectValue := TGocciaObjectValue(AValue);
-      ClonedObject := TGocciaObjectValue.Create(
-        TGocciaObjectValue.SharedObjectPrototype, 8);
-      InitializeTempRoot(ClonedRoot);
-      AddTempRootIfNeeded(ClonedRoot, ClonedObject);
-      try
-        for Key in ObjectValue.GetOwnPropertyKeys do
-          ClonedObject.SetProperty(Key,
-            CloneResultValueRecursive(ObjectValue.GetProperty(Key), ASeen));
-      finally
-        RemoveTempRootIfNeeded(ClonedRoot);
-      end;
-      Exit(ClonedObject);
-    finally
-      ASeen.Remove(AValue);
-    end;
-  end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  inherited Create;
+  Output := TStringList.Create;
 end;
 
-{ A copy of a run's result that outlives the engine that produced it:
-  primitives, arrays, and plain own data properties, with cycles cut. }
-function CloneResultValue(const AValue: TGocciaValue): TGocciaValue;
-var
-  Seen: TList;
+destructor TGocciaSandboxRun.Destroy;
 begin
-  Seen := TList.Create;
-  try
-    Result := CloneResultValueRecursive(AValue, Seen);
-  finally
-    Seen.Free;
-  end;
+  Output.Free;
+  Source.Free;
+  inherited Destroy;
 end;
 
-{ The text --print shows for a run's value: its string conversion, as host
-  mode prints it, with no value printed as undefined. Converting can run the
-  value's own toString or valueOf, so it is rooted while that code runs. }
-function ResultValueText(const AValue: TGocciaValue): string;
-var
-  Root: TGocciaTempRoot;
+procedure TGocciaSandboxRun.CaptureConsole(const AMethod, ALine: UnicodeString);
 begin
-  if not Assigned(AValue) then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value);
-  InitializeTempRoot(Root);
-  AddTempRootIfNeeded(Root, AValue);
+  if Assigned(LogLine) then
+    LogLine(AMethod, ALine);
+  if not Silent then
+    Output.Add(ALine);
+end;
+
+{ a path that left the sandbox root was clamped back into it: audited as a
+  denial at the script's call site }
+procedure TGocciaSandboxRun.HandleRootClamp(const APath, ABase,
+  ACanonicalPath: string);
+begin
+  if Assigned(Engine) then
+    Engine.Audit(gckSandboxFileSystem, False, APath,
+      Format('path from %s escaped the sandbox root and was clamped to %s',
+        [ABase, ACanonicalPath]));
+end;
+
+{ TGocciaSandboxRunThread }
+
+procedure TGocciaSandboxRunThread.Execute;
+var
+  Resolver: TGocciaSandboxModuleResolver;
+  R: TGocciaRunResult;
+  Message_: string;
+begin
   try
-    Result := AValue.ToStringLiteral.Value;
+    Result := Default(TGocciaSandboxRunResult);
+    Result.Ok := False;
+    Result.ExitCode := 1;
+    { every path below assigns a kind; this one stands for the runner returning
+      without classifying }
+    Result.FailureKind := sfkHostError;
+    Resolver := nil;
+    CurrentRun := Run;
+    SetSandbox(Run.Context);
+    try
+      try
+        Resolver := TGocciaSandboxModuleResolver.Create(Run.Context.Fs,
+          SANDBOX_ROOT);
+        Host.ConfigureResolver(Resolver);
+        Run.Engine := TGocciaEngine.Create;
+        Run.Engine.Resolver := Resolver;
+        Run.Engine.Capabilities := Run.Capabilities;
+        Run.Engine.Deterministic := Run.Deterministic;
+        if RandomRoot <> nil then
+          Run.Engine.RandomRoot := RandomRoot;
+        Run.Engine.OnConsole := Run.CaptureConsole;
+        Run.Engine.FailOnUnhandledRejection := True;
+        Run.Engine.ExposeTimers := False;
+        Run.Engine.TimeoutMs := Run.TimeoutMilliseconds;
+        Run.Engine.MaxInstructions := Host.MaxInstructions;
+        Run.Engine.InspectDepth := Host.InspectDepth;
+        if Run.Parent <> nil then
+          Run.Engine.ResultForm := grfSandbox
+        else if Host.PrintRootResult then
+          Run.Engine.ResultForm := grfString;
+        if Assigned(Host.OnConfigureEngine) then
+          Host.OnConfigureEngine(Run);
+        Run.FPreviousClamp := Run.Context.Fs.RootClampCallback;
+        Run.Context.Fs.RootClampCallback := Run.HandleRootClamp;
+        try
+          R := Run.Engine.Run(Run.EntryPath, Source);
+        finally
+          Run.Context.Fs.RootClampCallback := Run.FPreviousClamp;
+        end;
+        if R.Ok then
+        begin
+          Result.Ok := True;
+          Result.ExitCode := 0;
+          Result.FailureKind := sfkNone;
+          if Run.Parent <> nil then
+          begin
+            Result.ResultEncoded := R.ResultText;
+            Result.HasResultEncoded := R.HasResult;
+          end
+          else if R.HasResult then
+          begin
+            Result.ResultText := R.ResultText;
+            Result.HasResultText := True;
+          end;
+        end
+        else
+        begin
+          { each kind the guest can steer is named before the script error }
+          case R.Aborted of
+            gaTimeout:
+              begin
+                Result.ErrorMessage := Format('file timed out after %dms',
+                  [Host.TimeoutMilliseconds]);
+                Result.FailureKind := sfkTimeout;
+              end;
+            gaInstructionLimit:
+              begin
+                Result.ErrorMessage := Format(
+                  'Execution exceeded instruction limit of %d',
+                  [Host.MaxInstructions]);
+                Result.FailureKind := sfkResourceLimit;
+              end;
+            gaMemoryLimit:
+              begin
+                Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
+                Result.FailureKind := sfkResourceLimit;
+              end;
+            gaHostAbort:
+              if TakeSandboxCeiling then
+              begin
+                Result.ErrorMessage := R.ErrorText;
+                Result.FailureKind := sfkResourceLimit;
+              end
+              else
+              begin
+                { a capability audit the sink could not take: the host's
+                  failure, raised in the caller }
+                AuditFailed := True;
+                AuditFailure := R.ErrorText;
+              end;
+          else
+            if (R.ErrorSuggestion = SSuggestMemoryLimitExceeded) or
+               (R.ErrorSuggestion = SSuggestStackMemoryLimitExceeded) then
+            begin
+              { --max-memory's refusal (ADR 0185: a catchable RangeError, which the engine marks with its suggestion
+                in a slot the script cannot set) left uncaught: the host's ceiling, as the run the limit ends }
+              Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
+              Result.FailureKind := sfkResourceLimit;
+            end
+            else
+            begin
+              if Assigned(Host.OnFormatFailure) then
+                Message_ := Host.OnFormatFailure(Run, R)
+              else
+                Message_ := R.ErrorMessage;
+              Result.ErrorMessage := Message_;
+              Result.FailureKind := sfkScriptError;
+            end;
+          end;
+        end;
+      except
+        on E: EOutOfMemory do
+        begin
+          { a nested run's engine the process has no memory for (on a 32-bit build the nesting limit's engines,
+            each with its register stack and frames, fill the address space first): the host's ceiling, which a
+            guest reaches by nesting, as the nesting depth is }
+          Result.Ok := False;
+          Result.ExitCode := 1;
+          Result.ErrorMessage := E.Message;
+          if Run.Parent <> nil then
+            Result.FailureKind := sfkResourceLimit
+          else
+            Result.FailureKind := sfkHostError;
+        end;
+        on E: Exception do
+        begin
+          Result.Ok := False;
+          Result.ExitCode := 1;
+          Result.ErrorMessage := E.Message;
+          Result.FailureKind := sfkHostError;
+        end;
+      end;
+      Result.Output := Run.Output.Text;
+      if Result.ErrorMessage <> '' then
+        Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
+    finally
+      FreeAndNil(Run.Engine);
+      Resolver.Free;
+      SetSandbox(nil);
+      CurrentRun := nil;
+    end;
   finally
-    RemoveTempRootIfNeeded(Root);
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 
@@ -373,7 +498,6 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
-  FPrintRootResult := False;
 end;
 
 destructor TGocciaSandboxHost.Destroy;
@@ -409,37 +533,32 @@ begin
     Result := FContext.DiffJson(True);
 end;
 
-procedure TGocciaSandboxHost.CaptureConsoleLine(const AMethod, ALine: string);
+procedure TGocciaSandboxHost.RefuseProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
 begin
-  if Assigned(FCurrentOutputLines) then
-    FCurrentOutputLines.Add(ALine);
+  raise EGocciaPermissionDenied.CreateDenied(CapabilityName(gcImport), AAddress.PackageKey, '');
 end;
 
-procedure TGocciaSandboxHost.ConfigureResolver(
-  const AResolver: TGocciaSandboxModuleResolver);
+procedure TGocciaSandboxHost.ConfigureResolver(const AResolver: TObject);
 var
+  Resolver: TGocciaSandboxModuleResolver;
   AliasSpec, AliasKey, AliasValue: string;
   I, SeparatorIndex: Integer;
 begin
-  if not Assigned(AResolver) then
-    Exit;
-
+  Resolver := AResolver as TGocciaSandboxModuleResolver;
+  Resolver.ProviderGrant := RefuseProvider;
   if FImportMapPath <> '' then
-    AResolver.LoadImportMap(FImportMapPath);
-
+    Resolver.LoadImportMap(FImportMapPath);
   for I := 0 to FAliases.Count - 1 do
   begin
     AliasSpec := FAliases[I];
     SeparatorIndex := Pos('=', AliasSpec);
     if SeparatorIndex <= 1 then
       raise Exception.Create('Invalid --alias argument. Use --alias key=value.');
-
     AliasKey := Copy(AliasSpec, 1, SeparatorIndex - 1);
     AliasValue := Copy(AliasSpec, SeparatorIndex + 1, MaxInt);
     if AliasValue = '' then
       raise Exception.Create('Invalid --alias argument. Use --alias key=value.');
-
-    AResolver.AddAlias(AliasKey, AliasValue);
+    Resolver.AddAlias(AliasKey, AliasValue);
   end;
 end;
 
@@ -450,351 +569,196 @@ var
   CopySpec: TGocciaSandboxCopySpec;
 begin
   for CopySpec in AOptions.Copies do
-  begin
     case CopySpec.Kind of
       sckParentPath:
         ImportVirtualPath(AParentContext.Fs, AChildContext.Fs,
           CopySpec.FromPath, CopySpec.ToPath, CopySpec.ToDirectory);
       sckText:
-      begin
-        AChildContext.Fs.MakeDirectory(SandboxPathParent(CopySpec.Path),
-          True);
-        AChildContext.Fs.WriteAllText(CopySpec.Path, CopySpec.Text);
-      end;
+        begin
+          AChildContext.Fs.MakeDirectory(SandboxPathParent(CopySpec.Path),
+            True);
+          AChildContext.Fs.WriteAllText(CopySpec.Path, CopySpec.Text);
+        end;
       sckBytes:
-      begin
-        AChildContext.Fs.MakeDirectory(SandboxPathParent(CopySpec.Path),
-          True);
-        AChildContext.Fs.WriteAllBytes(CopySpec.Path, CopySpec.Bytes);
-      end;
+        begin
+          AChildContext.Fs.MakeDirectory(SandboxPathParent(CopySpec.Path),
+            True);
+          AChildContext.Fs.WriteAllBytes(CopySpec.Path, CopySpec.Bytes);
+        end;
     end;
-  end;
 end;
 
-function TGocciaSandboxHost.Run(const AEntryPath: string):
-  TGocciaSandboxRunResult;
+function TGocciaSandboxHost.Run(const AEntryPath: string): TGocciaSandboxRunResult;
 begin
-  Result := ExecuteInContext(FContext, FContext.Fs.Normalize(AEntryPath));
+  Result := ExecuteInContext(FContext, FContext.Fs.Normalize(AEntryPath), nil);
 end;
 
 function TGocciaSandboxHost.ExecuteInContext(
-  const AContext: TGocciaSandboxContext; const AEntryPath: string):
-  TGocciaSandboxRunResult;
+  const AContext: TGocciaSandboxContext; const AEntryPath: string;
+  const AParent: TGocciaSandboxRun): TGocciaSandboxRunResult;
 var
-  Source: TStringList;
-  OutputLines: TStringList;
-  Resolver: TGocciaSandboxModuleResolver;
-  Provider: TGocciaSandboxModuleContentProvider;
-  Engine: TGocciaEngine;
-  ScriptResult: TGocciaScriptResult;
-  CloneRealm, ExecutionRealm: TGocciaRealm;
-  PreviousOutputLines: TStrings;
-  PreviousHostEnvironment: TGocciaHostEnvironment;
-  PreviousCapabilities: TGocciaCapabilities;
-  PreviousHasCapabilities: Boolean;
-  PreviousEngine: TGocciaEngine;
-  EngineCapabilities: TGocciaCapabilities;
-  RenderScope: TGocciaDiagnosticSourceScope;
-  ExpectedPrincipal: Int64;
-  MicrotaskQueue: TGocciaMicrotaskQueue;
-  CloneScopeToken: Integer;
+  Run: TGocciaSandboxRun;
+  Thread: TGocciaSandboxRunThread;
+  Remaining: Int64;
+  Text, AuditFailure: string;
+  AuditFailed: Boolean;
+  Paused: Int64;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result := Default(TGocciaSandboxRunResult);
   Result.Ok := False;
   Result.ExitCode := 1;
-  { Only a fall-through default: every path below assigns a kind, so this
-    stands for "the runner returned without classifying", which is a runner
-    defect by definition. }
-  Result.FailureKind := sfkHostError;
-
   if not AContext.Fs.IsFile(AEntryPath) then
   begin
-    { The entry path is an argument, and for a nested run the guest chose
-      it — sfkHostError here would let the guest name the runner as the
-      party at fault by passing a path that does not exist. }
+    { the entry is an argument, and for a nested run the guest chose it }
     Result.ErrorMessage := 'sandbox entry file not found: ' + AEntryPath;
+    Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
     Result.FailureKind := sfkScriptError;
     Exit;
   end;
-
-  Source := CreateFileTextLines(AContext.Fs.SnapshotReadAllText(AEntryPath));
-  OutputLines := TStringList.Create;
-  Resolver := TGocciaSandboxModuleResolver.Create(AContext.Fs, SANDBOX_ROOT);
-  Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
-  Engine := nil;
-  CloneRealm := CurrentRealm;
-  PreviousOutputLines := FCurrentOutputLines;
-  PreviousHostEnvironment := FCurrentHostEnvironment;
-  PreviousCapabilities := FCurrentCapabilities;
-  PreviousHasCapabilities := FHasCurrentCapabilities;
-  PreviousEngine := FCurrentEngine;
-  FCurrentOutputLines := OutputLines;
+  Text := AContext.Fs.SnapshotReadAllText(AEntryPath);
+  Run := TGocciaSandboxRun.Create;
   try
+    Run.FHost := Self;
+    Run.Context := AContext;
+    Run.EntryPath := AEntryPath;
+    Run.Source := CreateFileTextLines(Text);
+    Run.Parent := AParent;
+    Run.Deterministic := FDeterministic;
+    Run.TimeoutMilliseconds := FTimeoutMilliseconds;
+    if AParent = nil then
+    begin
+      Run.Depth := 0;
+      Run.Capabilities := FRootCapabilities;
+    end
+    else
+    begin
+      { a child inherits its parent's capabilities, and at most the time its
+        parent has left }
+      Run.Depth := AParent.Depth + 1;
+      Run.Capabilities := AParent.Capabilities;
+      Remaining := LimitRemainingMs;
+      if (Remaining > 0) and ((Run.TimeoutMilliseconds = 0) or
+         (Remaining < Run.TimeoutMilliseconds)) then
+        Run.TimeoutMilliseconds := Remaining;
+    end;
     try
-      ConfigureResolver(Resolver);
-
-      { The root run's set comes from the application; a nested run
-        inherits its parent's. }
-      if FHasCurrentCapabilities then
-        EngineCapabilities := FCurrentCapabilities
-      else
-        EngineCapabilities := FRootCapabilities;
-
-      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver,
-        EngineCapabilities);
-      Engine.GlobalBackedTopLevel := True;
-      { The entry is a sandbox path, so the project the engine derives from
-        it names a host directory that has nothing to do with the run (for
-        /tmp/x.js, the host's /tmp). No host directory is exempt from the
-        read capability here. }
-      Engine.ProjectRoot := '';
-      FCurrentCapabilities := Engine.Capabilities;
-      FHasCurrentCapabilities := True;
-      Engine.ModuleLoader.SetContentProvider(Provider, True);
-      Provider := nil;
-      if Assigned(FOnConfigureEngine) then
-        FOnConfigureEngine(Engine, AContext, AEntryPath, PreviousEngine,
-          PreviousHostEnvironment);
-      FCurrentHostEnvironment := Engine.HostEnvironment;
-      FCurrentEngine := Engine;
-
-      { The recipient owns render authorization. A top-level run explicitly
-        authorizes the engine it just created. During nested runScript, the
-        parent scope is active before the child transition, so the returned
-        error string is authorized only for the parent and the child's
-        excerpt is withheld. Engine.Execute restores that same scope before
-        its exception reaches the formatter below. }
-      RenderScope := TGocciaDiagnosticSourceRegistry.Current;
-      if Assigned(RenderScope) then
-        ExpectedPrincipal := RenderScope.Principal
-      else
-        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-
-      try
-        PushTimeoutScope(tsFile, FTimeoutMilliseconds);
-        PushInstructionLimitScope(FMaxInstructions);
-        ScriptResult := Engine.Execute;
-        ExecutionRealm := CurrentRealm;
-        { ExecuteNested counts the depth before it calls here, so a depth of
-          zero is the root run. }
-        if (FRunScriptDepth > 0) or FPrintRootResult then
-        begin
-          { Cloning or converting reads the run's result, and reading can run
-            its getters or its toString. The run's microtask scope has ended,
-            so without one of its own here, a job that code queued would run
-            in the caller, and a promise it left rejected would fail the
-            caller. Both end here instead. }
-          MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
-          CloneScopeToken := 0;
-          if Assigned(MicrotaskQueue) then
-            CloneScopeToken := MicrotaskQueue.EnterScope;
-          try
-            if FRunScriptDepth > 0 then
-            begin
-              { The copy is made in the calling program's realm, which
-                outlives this run's engine. }
-              SetCurrentRealm(CloneRealm);
-              Result.ResultValue := CloneResultValue(ScriptResult.Result);
-            end
-            else
-            begin
-              { The root run has no calling realm for a copy to live in, so
-                its value is converted here, in its own realm, before the
-                engine is freed. }
-              Result.ResultText := ResultValueText(ScriptResult.Result);
-              Result.HasResultText := True;
-            end;
-          finally
-            SetCurrentRealm(ExecutionRealm);
-            if Assigned(MicrotaskQueue) then
-              MicrotaskQueue.LeaveScope(CloneScopeToken);
-          end;
-        end;
-        Result.Ok := True;
-        Result.ExitCode := 0;
-        Result.FailureKind := sfkNone;
-      finally
-        PopTimeoutScope;
-        PopInstructionLimitScope;
-      end;
+      Thread := TGocciaSandboxRunThread.Create(True, RUN_THREAD_STACK);
     except
-      on E: EGocciaCapabilityAuditDeliveryError do
-        raise;
-      { Each branch classifies as well as formats. The order is what does the
-        classifying: every kind the guest can steer is named ahead of the
-        generic Exception branch, so a ceiling is reported as the ceiling it
-        is and a guest throw as the guest's, rather than either being folded
-        into "some native error happened". }
-      on E: TGocciaMemoryLimitError do
+      on E: EThread do
       begin
-        Result.ErrorMessage := 'memory limit exceeded: ' + E.Message;
-        Result.FailureKind := sfkResourceLimit;
-      end;
-      on E: TGocciaInstructionLimitError do
-      begin
-        Result.ErrorMessage := E.Message;
-        Result.FailureKind := sfkResourceLimit;
-      end;
-      { Reached from a nested isolated runScript, which checks the inherited
-        quota before it builds the child context and raises out through the
-        calling guest rather than returning a result; this frame is where
-        that lands. }
-      on E: ESandboxFsQuotaExceeded do
-      begin
-        Result.ErrorMessage := E.Message;
-        Result.FailureKind := sfkResourceLimit;
-      end;
-      on E: EGocciaSandboxNestingLimitExceeded do
-      begin
-        Result.ErrorMessage := E.Message;
-        Result.FailureKind := sfkResourceLimit;
-      end;
-      on E: TGocciaTimeoutError do
-      begin
-        Result.ErrorMessage := E.Message;
-        Result.FailureKind := sfkTimeout;
-      end;
-      on E: TGocciaError do
-      begin
-        Result.ErrorMessage := E.GetDetailedMessage(False);
-        Result.FailureKind := sfkScriptError;
-      end;
-      on E: TGocciaThrowValue do
-      begin
-        Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-          False, ExpectedPrincipal, E.Suggestion, True,
-          E.SuggestionIsHostOnly);
-        Result.FailureKind := sfkScriptError;
-      end;
-      { The same guest throw, as the bytecode VM delivers it. Without this
-        branch a bytecode run reported an uncaught throw as a host fault and
-        printed the bare message instead of the frame — the guest picking
-        both the classification and the format. }
-      on E: EGocciaBytecodeThrow do
-      begin
-        Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
-          Source, False, ExpectedPrincipal, E.Suggestion, True,
-          E.SuggestionIsHostOnly);
-        Result.FailureKind := sfkScriptError;
-      end;
-      { Whatever is left is a native error the engine does not model. Every
-        failure the guest can steer is named above, so reaching here means
-        the runner malfunctioned; if a guest-reachable condition ever lands
-        here it belongs in a branch of its own rather than in this one. }
-      on E: Exception do
-      begin
-        Result.ErrorMessage := E.Message;
-        Result.FailureKind := sfkHostError;
+        { no room for another run's thread: for a nested run a ceiling of the host's, as the nesting depth is,
+          which a guest reaches by nesting and so never a host fault }
+        if AParent = nil then
+          raise;
+        raise EGocciaSandboxNestingLimitExceeded.Create(
+          'sandbox runScript nesting limit exceeded: no room for another run (' + E.Message + ')');
       end;
     end;
-
-    Result.Output := OutputLines.Text;
-    if Result.ErrorMessage <> '' then
-      Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
+    try
+      Thread.FreeOnTerminate := False;
+      Thread.Host := Self;
+      Thread.Run := Run;
+      Thread.Source := UnicodeString(Text);
+      { a deterministic child draws a stream forked from its caller's, on the
+        caller's thread }
+      if (AParent <> nil) and Assigned(AParent.Engine) and FDeterministic then
+        Thread.RandomRoot := AParent.Engine.ForkRandom;
+      { the caller's deadline waits while the child, which has what is left of it, runs }
+      Paused := LimitsSuspend;
+      try
+        Thread.Start;
+        Thread.WaitFor;
+      finally
+        LimitsResume(Paused);
+      end;
+      Result := Thread.Result;
+      AuditFailed := Thread.AuditFailed;
+      AuditFailure := Thread.AuditFailure;
+    finally
+      Thread.Free;
+    end;
   finally
-    Engine.Free;
-    Resolver.Free;
-    Provider.Free;
-    FCurrentHostEnvironment := PreviousHostEnvironment;
-    FCurrentCapabilities := PreviousCapabilities;
-    FHasCurrentCapabilities := PreviousHasCapabilities;
-    FCurrentEngine := PreviousEngine;
-    FCurrentOutputLines := PreviousOutputLines;
-    OutputLines.Free;
-    Source.Free;
+    Run.Free;
   end;
+  if AuditFailed then
+    raise EGocciaCapabilityAuditDeliveryError.Create(AuditFailure);
 end;
 
-function TGocciaSandboxHost.ExecuteNested(
-  const AContext: TGocciaSandboxContext; const AEntryPath: string;
-  const AOptions: TGocciaSandboxRunOptions): TGocciaSandboxRunResult;
+function TGocciaSandboxHost.ExecuteNested(const AContext: TGocciaSandboxContext;
+  const AEntryPath: string; const AOptions: TGocciaSandboxRunOptions):
+  TGocciaSandboxRunResult;
 var
+  Parent: TGocciaSandboxRun;
   ChildContext: TGocciaSandboxContext;
   RemainingBytes: Int64;
   RemainingNodes: Integer;
 begin
-  if FRunScriptDepth >= MAX_RUN_SCRIPT_DEPTH then
+  Parent := CurrentRun;
+  if (Parent <> nil) and (Parent.Depth >= MAX_RUN_SCRIPT_DEPTH) then
     raise EGocciaSandboxNestingLimitExceeded.Create(
       'sandbox runScript nesting limit exceeded');
-  Inc(FRunScriptDepth);
-  try
-    if not AOptions.Isolated then
-      Exit(ExecuteInContext(AContext, AEntryPath));
+  if not AOptions.Isolated then
+    Exit(ExecuteInContext(AContext, AEntryPath, Parent));
 
-    FillChar(Result, SizeOf(Result), 0);
-    Result.Ok := False;
-    Result.ExitCode := 1;
-    { Fall-through default, as in ExecuteInContext: the child run replaces
-      the whole record and every except branch assigns a kind, so this only
-      survives if the runner returned unclassified. }
-    Result.FailureKind := sfkHostError;
-    RemainingBytes := AContext.Fs.QuotaBytes - AContext.Fs.UsedBytes;
-    RemainingNodes := AContext.Fs.NodeQuota - AContext.Fs.NodeCount;
-    if RemainingBytes <= 0 then
-      raise ESandboxFsQuotaExceeded.Create('sandbox byte quota exhausted');
-    if RemainingNodes <= 0 then
-      raise ESandboxFsQuotaExceeded.Create('sandbox node quota exhausted');
-    { The child's filesystem keeps its parent's clock, as its quotas are
-      inherited: a deterministic run's children are deterministic too. }
-    ChildContext := TGocciaSandboxContext.Create(RemainingBytes,
-      RemainingNodes, AContext.Clock);
+  Result := Default(TGocciaSandboxRunResult);
+  Result.Ok := False;
+  Result.ExitCode := 1;
+  Result.FailureKind := sfkHostError;
+  RemainingBytes := AContext.Fs.QuotaBytes - AContext.Fs.UsedBytes;
+  RemainingNodes := AContext.Fs.NodeQuota - AContext.Fs.NodeCount;
+  if RemainingBytes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox byte quota exhausted');
+  if RemainingNodes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox node quota exhausted');
+  { the child's filesystem keeps its parent's clock, as its quotas are
+    inherited }
+  ChildContext := TGocciaSandboxContext.Create(RemainingBytes,
+    RemainingNodes, AContext.Clock);
+  try
     try
-      try
-        ChildContext.RunScriptCallback := ExecuteNested;
-        CopyNestedInputs(AContext, ChildContext, AOptions);
-        ChildContext.CaptureBaseline;
-        Result := ExecuteInContext(ChildContext,
-          ChildContext.Fs.Normalize(AEntryPath));
-        if AOptions.IncludeDiff then
-        begin
-          Result.DiffRequested := True;
-          if AOptions.DiffFormat = SANDBOX_DIFF_FORMAT_UNIFIED then
-            Result.Diff := ChildContext.DiffUnified(False)
-          else
-            Result.Diff := ChildContext.DiffJson(True);
-        end;
-      except
-        on E: EGocciaCapabilityAuditDeliveryError do
-          raise;
-        { Copying into and diffing the child context, not the child
-          program — but the guest supplies the copy list, so most of what
-          fails here is still its own doing: the inherited quotas are a
-          ceiling like any other, and a copy path that is missing, is not a
-          directory, or is otherwise unusable is the guest naming a path the
-          parent filesystem does not have. }
-        on E: ESandboxFsQuotaExceeded do
-        begin
-          Result.Ok := False;
-          Result.ExitCode := 1;
-          Result.ErrorMessage := E.Message;
-          Result.ErrorOutput := E.Message + sLineBreak;
-          Result.FailureKind := sfkResourceLimit;
-        end;
-        on E: ESandboxFsError do
-        begin
-          Result.Ok := False;
-          Result.ExitCode := 1;
-          Result.ErrorMessage := E.Message;
-          Result.ErrorOutput := E.Message + sLineBreak;
-          Result.FailureKind := sfkScriptError;
-        end;
-        { What is left is copying or diffing failing for a reason the guest
-          did not name — a native error in the runner's own copy or diff
-          machinery. }
-        on E: Exception do
-        begin
-          Result.Ok := False;
-          Result.ExitCode := 1;
-          Result.ErrorMessage := E.Message;
-          Result.ErrorOutput := E.Message + sLineBreak;
-          Result.FailureKind := sfkHostError;
-        end;
+      ChildContext.RunScriptCallback := ExecuteNested;
+      CopyNestedInputs(AContext, ChildContext, AOptions);
+      ChildContext.CaptureBaseline;
+      Result := ExecuteInContext(ChildContext,
+        ChildContext.Fs.Normalize(AEntryPath), Parent);
+      if AOptions.IncludeDiff then
+      begin
+        Result.DiffRequested := True;
+        if AOptions.DiffFormat = SANDBOX_DIFF_FORMAT_UNIFIED then
+          Result.Diff := ChildContext.DiffUnified(False)
+        else
+          Result.Diff := ChildContext.DiffJson(True);
       end;
-    finally
-      ChildContext.Free;
+    except
+      on E: EGocciaCapabilityAuditDeliveryError do
+        raise;
+      on E: ESandboxFsQuotaExceeded do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: ESandboxFsError do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkScriptError;
+      end;
+      on E: Exception do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkHostError;
+      end;
     end;
   finally
-    Dec(FRunScriptDepth);
+    ChildContext.Free;
   end;
 end;
 

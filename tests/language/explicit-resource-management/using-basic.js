@@ -240,17 +240,20 @@ describe("using declaration", () => {
     expect(order).toEqual(["b", "a"]);
   });
 
-  test("using in switch case disposes on break", () => {
+  // A using declaration directly in a case or default clause is a SyntaxError
+  // (ES2027 draft §14.3.1.1; tests/language/modules/using-early-errors.js);
+  // a block inside the clause holds one, disposed when the block ends.
+  test("using in a block of a switch case disposes on break", () => {
     const order = [];
 
     switch (1) {
-      case 1:
-        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed at switch exit.
+      case 1: {
         using resource = {
           [Symbol.dispose]() { order.push("dispose"); }
         };
         order.push("body");
         break;
+      }
       default:
         order.push("default");
     }
@@ -258,18 +261,18 @@ describe("using declaration", () => {
     expect(order).toEqual(["body", "dispose"]);
   });
 
-  test("using in switch case disposes on return", () => {
+  test("using in a block of a switch case disposes on return", () => {
     const order = [];
 
     const run = () => {
       switch (1) {
-        case 1:
-          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed on return.
+        case 1: {
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
           order.push("body");
           return "done";
+        }
       }
     };
 
@@ -277,19 +280,19 @@ describe("using declaration", () => {
     expect(order).toEqual(["body", "dispose"]);
   });
 
-  test("using in switch case disposes when body throws", () => {
+  test("using in a block of a switch case disposes when the body throws", () => {
     const order = [];
     let caught;
 
     try {
       switch (1) {
-        case 1:
-          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - CaseBlock using declarations are spec-valid and disposed before rethrow.
+        case 1: {
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
           order.push("body");
           throw "boom";
+        }
       }
     } catch (e) {
       caught = e;
@@ -299,19 +302,19 @@ describe("using declaration", () => {
     expect(order).toEqual(["body", "dispose"]);
   });
 
-  test("unmatched switch with using case does not leave active handler", () => {
+  test("an unmatched case's using block leaves no active handler", () => {
     const order = [];
     let caught;
 
     try {
       switch (0) {
-        case 1:
-          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using declarations must not become active.
+        case 1: {
           using resource = {
             [Symbol.dispose]() { order.push("dispose"); }
           };
           order.push("body");
           break;
+        }
       }
       throw "after";
     } catch (e) {
@@ -322,45 +325,26 @@ describe("using declaration", () => {
     expect(order).toEqual([]);
   });
 
-  test("skipped switch case using does not dispose stale case-test value", () => {
+  test("a skipped case's using block does not dispose the case-test value", () => {
     const order = [];
     const marker = () => {
       order.push("stale-dispose");
     };
 
     switch (marker) {
-      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later matching case must not dispose skipped using.
-      case 1:
-        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - this covers stale switch-dispatch registers for skipped CaseBlock using declarations.
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - the matching case after it must not dispose the skipped block's resource.
+      case 1: {
         using skipped = {
           [Symbol.dispose]() { order.push("skipped"); }
         };
         order.push("case1");
+      }
       case marker:
         order.push("case2");
         break;
     }
 
     expect(order).toEqual(["case2"]);
-  });
-
-  test("switch case using lives across fallthrough until switch exit", () => {
-    const order = [];
-
-    switch (1) {
-      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - selected CaseBlock using must live across fallthrough.
-      case 1:
-        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - wrapping this case would dispose before fallthrough.
-        using resource = {
-          [Symbol.dispose]() { order.push("dispose"); }
-        };
-        order.push("case1");
-      case 2:
-        order.push("case2");
-        break;
-    }
-
-    expect(order).toEqual(["case1", "case2", "dispose"]);
   });
 
   test("block-wrapped switch case using disposes before fallthrough", () => {
@@ -382,7 +366,7 @@ describe("using declaration", () => {
     expect(order).toEqual(["case1", "dispose", "case2"]);
   });
 
-  test("skipped switch case using stays inactive before return", () => {
+  test("a skipped case's using block stays inactive before a return", () => {
     const order = [];
     const marker = () => {
       order.push("stale-dispose");
@@ -390,13 +374,13 @@ describe("using declaration", () => {
 
     const run = () => {
       switch (marker) {
-        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later return must not dispose skipped using.
-        case 1:
-          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using must not run during return cleanup.
+        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - the later return must not dispose the skipped block's resource.
+        case 1: {
           using skipped = {
             [Symbol.dispose]() { order.push("skipped"); }
           };
           order.push("case1");
+        }
         case marker:
           order.push("case2");
           return "done";
@@ -407,7 +391,7 @@ describe("using declaration", () => {
     expect(order).toEqual(["case2"]);
   });
 
-  test("skipped switch case using stays inactive before throw", () => {
+  test("a skipped case's using block stays inactive before a throw", () => {
     const order = [];
     const marker = () => {
       order.push("stale-dispose");
@@ -416,13 +400,13 @@ describe("using declaration", () => {
 
     try {
       switch (marker) {
-        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - later throw must not dispose skipped using.
-        case 1:
-          // biome-ignore lint/correctness/noSwitchDeclarations: intentional - skipped CaseBlock using must not run during throw cleanup.
+        // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - the later throw must not dispose the skipped block's resource.
+        case 1: {
           using skipped = {
             [Symbol.dispose]() { order.push("skipped"); }
           };
           order.push("case1");
+        }
         case marker:
           order.push("case2");
           throw "boom";
@@ -435,20 +419,20 @@ describe("using declaration", () => {
     expect(order).toEqual(["case2"]);
   });
 
-  test("default after skipped switch case using stays inactive", () => {
+  test("the default after a skipped case's using block", () => {
     const order = [];
     const marker = () => {
       order.push("stale-dispose");
     };
 
     switch (0) {
-      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - default dispatch must not dispose skipped using.
-      case marker:
-        // biome-ignore lint/correctness/noSwitchDeclarations: intentional - default dispatch must not activate skipped CaseBlock using.
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: intentional - default dispatch must not dispose the skipped block's resource.
+      case marker: {
         using skipped = {
           [Symbol.dispose]() { order.push("skipped"); }
         };
         order.push("case1");
+      }
       default:
         order.push("default");
         break;

@@ -7,15 +7,15 @@ A drop of JavaScript, built for embedding.
 GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
 are easy to customize. An application embeds it to add scripting: the host
 chooses the runtime surface, grants the capabilities a script may use, and
-bounds a run by time, instructions and a memory budget. The budget gates
-allocations and does not cap resident memory, so a hard ceiling also needs an
+bounds a run by time, instructions and a memory budget. The budget bounds the
+collected heap, not resident memory, so a hard ceiling also needs an
 operating-system limit
 ([Garbage Collector](docs/garbage-collector.md#gated-growth-points)). Beyond the files of its own
 project's static module graph, a script reaches no filesystem, network or
 process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
 and a run can be made deterministic, with a fixed clock and seeded randomness.
-Today the host is a FreePascal or Delphi application; see
+Today the host is a FreePascal application; see
 [Embedding the Engine](docs/embedding.md).
 
 [![test262 pass rate on main, runs in both modes combined, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
@@ -35,10 +35,10 @@ Today the host is a FreePascal or Delphi application; see
 - **Fuzzed and memory-checked.** Every night the engine and its heap snapshot
   reader are [fuzzed](https://github.com/frostney/GocciaScript/actions/workflows/fuzz.yml),
   and the full test suite runs under FreePascal's heap checker and under
-  Valgrind memcheck. Every week a
-  [GC-stress run](https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml)
-  collects garbage every 8 instructions across the whole test suite and the
-  GC-sensitive part of test262.
+  Valgrind memcheck. A GC-stress sweep runs the test suite and the benchmark
+  bundles with a nursery of a few kilobytes, so the collector runs constantly,
+  and checks the heap after every collection
+  ([GC stress](docs/contributing/tooling.md#gc-stress)).
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
@@ -47,7 +47,7 @@ Today the host is a FreePascal or Delphi application; see
   V8 or other runtime to install beside the binary (HTTPS on Linux uses the
   system's OpenSSL). Prebuilt for
   macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
-  in FreePascal and Delphi applications.
+  in FreePascal applications.
 - **Modern JavaScript and TypeScript.** ES modules, classes with private
   fields, async/await, Temporal, Intl, TC39 type annotations run directly, and
   a Vitest-compatible test runner. GocciaScript also tracks TC39 proposals,
@@ -69,19 +69,21 @@ needs the FreePascal compiler; see [Getting Started](#getting-started).
 GocciaScript provides a Node.js or Web API capability when it fits the vision
 and cannot be shimmed in userland, and leaves what userland or npm can shim to
 userland; see [Node compatibility](#node-compatibility-to-a-degree). What it
-provides is a set of runtime extensions a host installs, not a default host
+provides is a small runtime around the language, which a host can leave out
+altogether with a bare engine (`TGocciaEngine.Bare`), not a Node.js or browser
 environment.
 
 ## Embed it
 
 Native hosts can embed GocciaScript to run portable JavaScript with
 application-specific globals, modules, capabilities, and limits. A host can
-answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, and stop a run from another thread through an
-[abort handle](docs/embedding.md#aborting-a-run-from-another-thread). A stop
-takes effect at the engine's next check, so a native call blocked outside the
-engine is not interrupted until it returns; give such calls their own deadlines
-or isolate the process. A host can also snapshot the object graphs the snapshot
+grant or withhold `fetch` through the `net` capability
+([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
+read-only, and bound a run with a timeout
+([Execution Limits](docs/embedding.md#execution-limits)). The timeout takes
+effect at the engine's next check, so a native call blocked outside the engine
+is not interrupted until it returns; give such calls their own deadlines or
+isolate the process. A host can also snapshot the object graphs the snapshot
 codecs cover and restore them in a fresh engine. A graph it cannot write is
 refused, and the host resumes by replay instead; a run paused at a checkpoint
 still holds pending promises with no codec, so its snapshot is refused today
@@ -92,22 +94,23 @@ An engine starts with the recommended language profile and without dynamic code
 generation. A host changes that with a few knobs, one by one; there are no
 presets:
 
-- `Engine.Compatibility` turns on the ECMAScript forms the recommended profile
-  leaves out (`--compat-*` on the command-line hosts);
-- `Engine.FunctionConstructor.Enabled` turns on the `Function()` constructor
+- the switches of `Engine.Profile` (a `TLangProfile`) turn on the ECMAScript
+  forms the recommended profile leaves out (`--compat-*` on the command-line
+  hosts);
+- its `FunctionCtor` switch turns on the `Function()` constructor
   (`--unsafe-function-constructor`);
-- `EnableShadowRealm` installs the `ShadowRealm` global
-  (`--unsafe-shadowrealm`);
-- `EnableEval` installs `eval()`; only an embedder can call it, since no
-  command-line flag or config key turns it on
-  ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md)).
+- its `ShadowRealm` switch keeps the `ShadowRealm` global
+  (`--unsafe-shadowrealm`).
+
+The host removes the global `eval()` in every case; no switch keeps it.
 
 [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults)
 documents each knob.
 
-The host also chooses its runtime extensions: `fetch`, `URL`,
-`TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,
-a virtual filesystem, and Node.js compatibility to a degree. The Web APIs React
+The runtime a host installs has `fetch` (reaching only the hosts the `net`
+capability grants), `URL`, `TextEncoder`/`TextDecoder`, `Blob`,
+`AbortController` and `EventTarget` today; sandbox mode adds a virtual
+filesystem and Node.js compatibility to a degree. The Web APIs React
 server rendering relies on, such as `MessageChannel`, `ReadableStream` and
 `crypto`, are planned ([#1562](https://github.com/frostney/GocciaScript/issues/1562));
 none of them ships yet.
@@ -121,8 +124,8 @@ The goals, in the order [VISION.md](VISION.md) sets them. The stable C ABI and
   non-strict, Annex B and staging included. Progress is on the
   [compatibility dashboard](https://www.gocciascript.dev/compatibility).
 - **Performance.** An interpreter faster than QuickJS first, then `.gcbundle`
-  bytecode artifacts, an opt-in baseline JIT and a compiled executable; see
-  [Benchmarks](docs/benchmarks.md).
+  bytecode artifacts, a baseline JIT on every target (today only Linux x86-64
+  has one) and a compiled executable; see [Benchmarks](docs/benchmarks.md).
 - **1.0.** A stable C ABI and public API, all of test262, an interpreter faster
   than QuickJS, and `.gcbundle`.
 
@@ -167,7 +170,7 @@ host's command line. See
 The host can also define globals, virtual modules, network grants
 (`--allow-net`), instruction and memory limits, deterministic time/randomness, and
 application-specific APIs. See [Build System — GocciaRunner sandbox mode](docs/build-system.md#gocciarunner-sandbox-mode)
-and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas).
+and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules).
 
 ## ECMAScript implementation and recommended profile
 
@@ -194,7 +197,7 @@ explicit compatibility paths:
 | `while` / `do...while` | Disabled | `--compat-while-loops` |
 | `arguments` | Disabled | `--compat-arguments-object` |
 | non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
-| `eval` | Not installed | engine option `EnableEval` only (no CLI flag) |
+| `eval` | Not installed | none: the host removes it |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
 | `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
 
@@ -226,7 +229,7 @@ GocciaScript provides a Node.js capability when it fits the vision and cannot
 be shimmed in userland, and leaves what userland can shim to userland. The
 same rule covers CommonJS, the general `node:` modules and Web APIs; see
 [Module Resolution](docs/module-resolution.md) for how to bring a package in.
-What GocciaScript provides are runtime extensions a host installs: `node:async_hooks`; bare-specifier lookup through
+What GocciaScript provides: `node:async_hooks`; bare-specifier lookup through
 `node_modules` (ESM only, a subset of Node's resolver), which is opt-in with
 `--allow-import=node_modules`;
 and a Node-compatible `fs` API over a virtual filesystem, which
@@ -241,7 +244,7 @@ and a Node-compatible `fs` API over a virtual filesystem, which
   ([Sandbox Search Built-ins](docs/built-ins-sandbox-search.md)).
 
 The documented method set never reaches the ambient host filesystem. See
-[Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)
+[Sandbox Modules](docs/built-ins.md#sandbox-modules)
 for supported options, return types, error shapes, and method-level deviations.
 An embedder can mark parts of the virtual filesystem read-only; a script's
 writes there fail with `EROFS` (see
@@ -263,8 +266,8 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
 `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
 `BigInt64Array`, `BigUint64Array`), alongside the global functions `atob` and
-`btoa`. The loader runtime profile (applied by `GocciaRunner`, `GocciaREPL`,
-`GocciaTestRunner`, and `GocciaBenchmarkRunner`) adds the global functions
+`btoa`. The command-line hosts (`GocciaRunner`, `GocciaREPL`,
+`GocciaTestRunner`, and `GocciaBenchmarkRunner`) add the global functions
 `queueMicrotask` and `structuredClone`, and
 `console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
 `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
@@ -344,26 +347,26 @@ embedded data otherwise.
 
 ### Build from source
 
-Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`),
-version 3.2.2 or 3.2.4. The package managers install 3.2.2:
-
-- macOS: `brew install fpc`
-- Ubuntu/Debian: `sudo apt-get install fpc`
-- Windows: `choco install freepascal`
+Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`)
+3.3.1 from [fpc-toolchain](https://github.com/frostney/fpc-toolchain), build
+`3.3.1-b5` or later: the engine ([docs/engine](docs/engine/README.md)) relies on its
+native thread-local variables and code generator fixes. `build.pas` stops
+with a message on a compiler older than 3.3.1; it cannot tell the builds of
+3.3.1 apart, so an earlier one fails later, while compiling. The FPC 3.2.2 that package managers
+install builds only the code outside `source/engine`.
 
 A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in
 SSE2, so it runs only on a Pentium 4, Athlon 64 or later CPU
-([ADR 0186](docs/adr/0186-fpc-i386-builds-compute-doubles-in-sse2.md)).
+([ADR 0191](docs/adr/0191-fpc-i386-builds-compute-doubles-in-sse2.md)).
 
-CI is pinned to the FPC 3.2.4 build `3.2.4-rc2-b1` from
-[fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
-same compiler on Linux or macOS, install it next to any other FPC and put it
-first on `PATH` (Windows: see its README):
+CI is pinned to the build `3.3.1-b9`. To build with the same compiler on Linux
+or macOS, install it next to any other FPC and put it first on `PATH`
+(Windows: see its README):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
-sh install.sh 3.2.4-rc2-b1
-eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.2.4)"
+sh install.sh 3.3.1-b9
+eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.3.1)"
 ```
 
 ```bash
@@ -398,7 +401,7 @@ resource limits.
 ### Run via Bytecode
 
 Scripts, tests, benchmarks, and the REPL compile to bytecode and run in the
-Goccia VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
+engine's VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 
 ```bash
 ./build/GocciaRunner example.js
@@ -408,8 +411,8 @@ Goccia VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 
 See [Bytecode VM](docs/bytecode-vm.md) for the compiler and VM architecture.
 Module artifacts can also satisfy imports: use `GocciaRunner
---prefer-bytecode app.mjs` for disk companions, or register cached buffers
-through the [embedding API](docs/bytecode-loading.md). Loading
+--prefer-bytecode app.mjs` for disk companions, or import a `.gbc` file
+explicitly ([Precompiled bytecode modules](docs/bytecode-loading.md)). Loading
 checks that the artifact's compile profile matches the engine.
 
 ### Reproduce An Execution
@@ -529,35 +532,27 @@ For a full guided walkthrough, see the [Tutorial](docs/tutorial.md). For the
 complete implementation, default-profile, and compatibility-path detail, see
 [Language](docs/language.md).
 
-## FreePascal, Delphi, and native embedding
+## FreePascal and native embedding
 
 FreePascal builds GocciaScript's native binaries, so the engine needs no other
 runtime underneath, and it is the toolchain for releases and the documented
-embedding API. The repository also includes
-[`GocciaScript.Delphi.groupproj`](source/app/GocciaScript.Delphi.groupproj) and
-Delphi projects for the REPL, the Runner, the Bare Script Loader, Test Runner,
-Benchmark Runner, and Bundler on Win32 and Win64.
-
-The Delphi support contract requires the complete application matrix and all
-applicable Pascal and JavaScript tests to pass with the same runtime semantics
-as the FreePascal build. Delphi 12 Community Edition contributors validate that
-contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
-and [Build System](docs/build-system.md#prerequisites).
+embedding API. Delphi support is planned for a later release
+([ADR 0188](docs/adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)).
 
 Embedding is covered under [Embed it](#embed-it) and in
 [Embedding the Engine](docs/embedding.md).
 
 ## Architecture
 
-GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, the compiler turns it into Goccia bytecode, and the Goccia VM runs it:
+GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, the engine's compiler (`Goccia.Compiler`) turns it into register bytecode, and its VM (`Goccia.VM`) runs it:
 
 ```mermaid
 flowchart LR
     Source["Source Code"] --> Preprocessors["Preprocessors"] --> Lexer --> Parser --> AST
-    AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result["Result"]
+    AST --> Compiler["Bytecode Compiler"] --> VM["VM"] --> Result["Result"]
 ```
 
-The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
+Every value is one NaN-boxed 64-bit `TValue`: numbers never allocate, and strings, objects and the other heap things are cells in a generational heap with a moving nursery and a mark-and-sweep old space (`Goccia.Core`). Objects keep their properties in shapes shared through a transition tree, which inline caches key on. The VM interprets the bytecode (`Execute`, with `FastLoop` for the hot instructions); on Linux x86-64 a baseline JIT and an optimizing tier compile hot functions. Hosts drive the engine through `TGocciaEngine` (`Goccia.Embed`), one engine per thread. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
 
 See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 
@@ -566,8 +561,8 @@ See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode 
 - **Explicitness**: Modules, classes, methods, and properties use explicit, descriptive names even at the cost of verbosity. Shortcuts are avoided.
 - **OOP over everything**: Rely on type safety of specialized classes rather than generic data structures.
 - **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase (see [Core patterns](docs/core-patterns.md#define-vs-assign)).
-- **No global mutable state**: All runtime state flows through explicit parameters — the evaluation context, the scope chain, and value objects.
-- **Virtual dispatch**: Property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope lookups (`GetThisValue`, `ResolveIdentifier`) all use virtual methods, replacing type checks with single VMT calls.
+- **One engine per thread**: The engine's state (heap, shapes, built-ins, job queue) lives in threadvars, so a thread runs at most one engine and values never cross threads; code outside the engine keeps its state in parameters and objects.
+- **Root values across allocations**: The collector moves young cells, so native code keeps the values it needs on the temporary root stack (`PushRoot`, `RootAt`, `PopRoots`) instead of in Pascal locals.
 
 See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.md) for the design rationale.
 
@@ -593,8 +588,8 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Bytecode VM](docs/bytecode-vm.md) | Compiler, opcodes, register VM, `.gbc` format |
 | [Core patterns](docs/core-patterns.md) | Recurring implementation patterns |
 | [GocciaScript Context](CONTEXT.md) | Canonical project terminology and glossary |
-| [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |
-| [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
+| [Value System](docs/value-system.md) | NaN-boxed values, heap cells, shapes, property access and conversions |
+| [Garbage Collector](docs/garbage-collector.md) | Generational GC: moving nursery, mark-and-sweep old space, contributor rules, stress tooling |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
 | [Heap Snapshots](docs/heap-snapshots.md) | Writing and restoring heaps, the pause checkpoint, codecs, and `--heap-snapshots` test diagnostics |

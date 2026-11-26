@@ -6,7 +6,8 @@ uses
   NumberBits,
   TestingPascalLibrary,
 
-  Goccia.Float16;
+  Goccia.Float16,
+  Goccia.TestSetup;
 
 type
   TFloat16Tests = class(TTestSuite)
@@ -71,7 +72,9 @@ end;
 
 begin
   TestRunnerProgram.AddSuite(TFloat16Tests.Create('Goccia.Float16'));
-  TestRunnerProgram.Run;
+  { in the engine's floating-point mode, which masks invalid operations: a signaling NaN returned through the x87
+    stack (i386) traps otherwise }
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

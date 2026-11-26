@@ -117,12 +117,15 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.until", () => {
     expect(d1.until(d2, { largestUnit: "years", smallestUnit: "month", roundingIncrement: 2, roundingMode: "halfExpand" }).toString()).toBe("-P4M");
   });
 
+  // CalendarDateUntil with largestUnit "month" gives 1 month (2020-01-31 plus
+  // one month constrains to 2020-02-29) and 28 days; rounding to smallestUnit
+  // "week" turns the days into 4 weeks and leaves none.
   test("until() smallestUnit week with largestUnit month does not leak days", () => {
     const d1 = Temporal.PlainDate.from("2020-01-31");
     const d2 = Temporal.PlainDate.from("2020-03-28");
     const dur = d1.until(d2, { largestUnit: "month", smallestUnit: "week" });
     expect(dur.days).toBe(0);
-    expect(dur.weeks).toBe(8);
-    expect(dur.months).toBe(0);
+    expect(dur.weeks).toBe(4);
+    expect(dur.months).toBe(1);
   });
 });

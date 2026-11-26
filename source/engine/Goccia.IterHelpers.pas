@@ -1,0 +1,40 @@
+unit Goccia.IterHelpers;
+{ 27.1 Iterator: the Iterator constructor and statics, %Iterator.prototype% helpers and their prototypes, written in
+  JS (source/engine/prelude/iterhelpers.js, turned into Goccia.IterHelpers.inc by build.pas) and compiled once
+  into the prelude snapshot like Goccia.Builtins4's prelude. }
+{$mode delphiunicode}{$H+}
+{$I Goccia.Checks.inc}
+{$MINFPCONSTPREC 64}
+
+interface
+
+procedure InitIterHelpers;
+
+implementation
+
+uses
+  SysUtils, Goccia.Core, Goccia.Instructions, Goccia.VM, Goccia.Snapshot;
+
+{$I Goccia.IterHelpers.inc}
+
+procedure InitIterHelpers;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..1] of TValue;
+begin
+  if not CompilePrelude('<iterhelpers>', IterHelpersSrc, T, Err) then
+    raise Exception.Create('iterator helpers prelude: ' + string(Err));
+  if not MakeScriptClosure(T, Clo) then raise Exception.Create('iterator helpers prelude closure');
+  if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('iterator helpers prelude run');
+  PushRoot(Fn);
+  CA[1] := NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1);
+  CA[0] := GlobalObj;
+  if not CallValue(RootAt(TempTop - 1), VUndefined, @CA[0], 2, R) then
+  begin
+    PopRoots(1);
+    if ToStringV(Pending, R) and IsString(R) then
+      raise Exception.Create('iterator helpers prelude call: ' + string(StrToUnicode(StrOf(R))));
+    raise Exception.Create('iterator helpers prelude call');
+  end;
+  PopRoots(1);
+end;
+
+end.

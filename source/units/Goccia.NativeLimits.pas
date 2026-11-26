@@ -4,6 +4,9 @@ unit Goccia.NativeLimits;
 
 interface
 
+uses
+  SysUtils;
+
 const
   MAX_NATIVE_DATA_DEPTH = 256;
   // The most one native allocation may ask for on this target. FPC works out
@@ -20,30 +23,46 @@ function CheckedNativeByteSize(const AElementCount,
 procedure ReserveNativeBytes(const ABytes: Int64);
 procedure ReleaseNativeBytes(const ABytes: Int64);
 { StringJoin's gate: before a native join allocates ABytes, for its tables or
-  its result, raises the catchable RangeError a string's own charge raises
-  past the memory budget, once a forced collection has not made room, as the
-  charge's own path does; and "Invalid string length" for a result no string
-  can hold (TOO_LONG_RESULT_BYTES). }
+  its result, raises ENativeMemoryLimit "Invalid string length" for a result
+  no string can hold (TOO_LONG_RESULT_BYTES). }
 procedure CheckStringResultBytes(const ABytes: Int64);
 { StringJoin's charge: reserves ABytes when positive, as ReserveNativeBytes
   does, with its catchable RangeError when they do not fit, and releases
   -ABytes when negative. }
 procedure ChargeJoinBytes(const ABytes: Int64);
 
+type
+  { The engine's ledger for native bytes: AReserve charges ABytes,
+    False refusing them; otherwise it releases them. While a thread has
+    one, a refusal raises ENativeMemoryLimit for that engine to throw. }
+  TNativeBytesHook = function(const ABytes: Int64;
+    const AReserve: Boolean): Boolean;
+  ENativeMemoryLimit = class(Exception);
+  { The nesting guard's refusal, for the engine to throw as a RangeError. }
+  ENativeDepthLimit = class(Exception);
+
+threadvar
+  NativeBytesHook: TNativeBytesHook;
+
 implementation
 
 uses
-  SysUtils,
-
   StringJoin,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
-  Goccia.MemoryLimit,
-  Goccia.Timeout,
-  Goccia.Values.ErrorHelper;
+  Goccia.Timeout;
+
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallNativeBytesHook(const ABytes: Int64; const AReserve: Boolean): Boolean;
+var H: TNativeBytesHook;
+begin
+  H := NativeBytesHook;
+  Result := H(ABytes, AReserve);
+end;
+
 
 threadvar
   GNativeDataDepth: Integer;
@@ -53,7 +72,9 @@ begin
   Inc(GNativeDataDepth);
   try
     if GNativeDataDepth > MAX_NATIVE_DATA_DEPTH then
-      ThrowRangeError(SErrorMaxCallStackExceeded);
+    begin
+      raise ENativeDepthLimit.Create(SErrorMaxCallStackExceeded);
+    end;
     CheckNativeWork;
   except
     Dec(GNativeDataDepth);
@@ -82,50 +103,28 @@ begin
   if (AElementCount < 0) or (AElementSize < 0) or
      ((AElementSize > 0) and
       (AElementCount > MAX_NATIVE_ALLOCATION_BYTES div AElementSize)) then
-    ThrowRangeError(SErrorMemoryLimitExceeded);
+    raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
   Result := AElementCount * AElementSize;
 end;
 
 procedure ReserveNativeBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
   if ABytes <= 0 then
     Exit;
-  GC := TGarbageCollector.Instance;
-  if not Assigned(GC) then
-    Exit;
-  if not GC.TryReserveExternalBytes(ABytes) then
-    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  if Assigned(NativeBytesHook) and not CallNativeBytesHook(ABytes, True) then
+    raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
 end;
 
 procedure ReleaseNativeBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and (ABytes > 0) then
-    GC.ReleaseExternalBytes(ABytes);
+  if Assigned(NativeBytesHook) and (ABytes > 0) then
+    CallNativeBytesHook(ABytes, False);
 end;
 
 procedure CheckStringResultBytes(const ABytes: Int64);
-var
-  GC: TGarbageCollector;
 begin
   if ABytes = TOO_LONG_RESULT_BYTES then
-    ThrowRangeError(SErrorInvalidStringLength);
-  // The joins that call this hold no value their receiver and arguments do
-  // not root, so a collection frees only what nothing reaches. The stress
-  // switch makes every ask the collecting safe point it is near the ceiling,
-  // as RequireNativeBytes does.
-  GC := TGarbageCollector.Instance;
-  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
-    GC.CollectForMemoryPressure(nil, True);
-  if CanAllocateNativeBytes(ABytes) then
-    Exit;
-  if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
-    Exit;
-  ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+    raise ENativeMemoryLimit.Create(SErrorInvalidStringLength);
 end;
 
 procedure ChargeJoinBytes(const ABytes: Int64);

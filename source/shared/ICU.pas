@@ -25,6 +25,13 @@ function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
 function HighestICUMajorVersionInDir(const ADir, ABase: string): Integer;
 function HighestICUMajorVersionInDirList(const ADirList: string; ASeparator: Char;
   const ABase: string): Integer;
+{ The same for ICU's own Windows build, whose libraries carry the major in their
+  names: ParseICUDllMajorVersion('icuin79.dll', 'icuin') -> 79, case-insensitive,
+  0 for any other name; the scans find the newest '<APrefix><major>.dll'. }
+function ParseICUDllMajorVersion(const AFileName, APrefix: string): Integer;
+function HighestICUDllMajorVersionInDir(const ADir, APrefix: string): Integer;
+function HighestICUDllMajorVersionInDirList(const ADirList: string;
+  ASeparator: Char; const APrefix: string): Integer;
 
 implementation
 
@@ -36,8 +43,14 @@ const
   ICU_LIBRARY_NAME = 'libicucore.dylib';
   {$ENDIF}
   {$IFDEF MSWINDOWS}
+  { ICU's own Windows build (icuin<major>.dll and icuuc<major>.dll, their
+    symbols suffixed _<major>) is preferred: Windows' icu.dll exports only part
+    of ICU's C API. The system library is the fallback. }
+  ICU_WIN_I18N_PREFIX = 'icuin';
+  ICU_WIN_UC_PREFIX = 'icuuc';
   ICU_LIBRARY_PRIMARY = 'icu.dll';
   ICU_LIBRARY_FALLBACK = 'icuin.dll';
+  ICU_VERSION_MIN = 70;
   {$ENDIF}
   {$IFDEF LINUX}
   ICU_I18N_BASE = 'libicui18n.so';
@@ -54,10 +67,10 @@ var
   LoadAttempted: Boolean;
   LoadSucceeded: Boolean;
   InitLock: TGocciaCriticalSection;
-  {$IFDEF LINUX}
+  {$IF DEFINED(LINUX) OR DEFINED(MSWINDOWS)}
   UCHandle: TLibHandle;
   ICUVersionSuffix: string;
-  {$ENDIF}
+  {$IFEND}
 
 function ParseICUSoMajorVersion(const AFileName, ABase: string): Integer;
 var
@@ -134,6 +147,124 @@ begin
     end;
   end;
 end;
+
+function ParseICUDllMajorVersion(const AFileName, APrefix: string): Integer;
+var
+  Name, Digits: string;
+  Index: Integer;
+begin
+  Result := 0;
+  Name := LowerCase(AFileName);
+  if (Copy(Name, 1, Length(APrefix)) <> LowerCase(APrefix)) or
+     (Length(Name) < Length(APrefix) + 5) or
+     (Copy(Name, Length(Name) - 3, 4) <> '.dll') then
+    Exit;
+  Digits := Copy(Name, Length(APrefix) + 1, Length(Name) - Length(APrefix) - 4);
+  for Index := 1 to Length(Digits) do
+    if (Digits[Index] < '0') or (Digits[Index] > '9') then
+      Exit;
+  if Length(Digits) <= 4 then
+    Result := StrToIntDef(Digits, 0);
+end;
+
+function HighestICUDllMajorVersionInDir(const ADir, APrefix: string): Integer;
+var
+  SearchRec: TSearchRec;
+  Major: Integer;
+begin
+  Result := 0;
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*',
+      faAnyFile, SearchRec) = 0 then
+    try
+      repeat
+        if (SearchRec.Attr and faDirectory) = 0 then
+        begin
+          Major := ParseICUDllMajorVersion(SearchRec.Name, APrefix);
+          if Major > Result then
+            Result := Major;
+        end;
+      until FindNext(SearchRec) <> 0;
+    finally
+      FindClose(SearchRec);
+    end;
+end;
+
+function HighestICUDllMajorVersionInDirList(const ADirList: string;
+  ASeparator: Char; const APrefix: string): Integer;
+var
+  Rest, Dir: string;
+  SepPos, Major: Integer;
+begin
+  Result := 0;
+  Rest := ADirList;
+  while Rest <> '' do
+  begin
+    SepPos := Pos(ASeparator, Rest);
+    if SepPos > 0 then
+    begin
+      Dir := Copy(Rest, 1, SepPos - 1);
+      Delete(Rest, 1, SepPos);
+    end
+    else
+    begin
+      Dir := Rest;
+      Rest := '';
+    end;
+    if Dir <> '' then
+    begin
+      Major := HighestICUDllMajorVersionInDir(Dir, APrefix);
+      if Major > Result then
+        Result := Major;
+    end;
+  end;
+end;
+
+{$IFDEF MSWINDOWS}
+function TryLoadVersionedWindowsICU(AVersion: Integer;
+  out AHandle: TLibHandle): Boolean;
+var
+  UC: TLibHandle;
+begin
+  Result := False;
+  AHandle := LoadLibrary(ICU_WIN_I18N_PREFIX + IntToStr(AVersion) + '.dll');
+  if AHandle = NilHandle then
+    Exit;
+  UC := LoadLibrary(ICU_WIN_UC_PREFIX + IntToStr(AVersion) + '.dll');
+  if UC = NilHandle then
+  begin
+    UnloadLibrary(AHandle);
+    AHandle := NilHandle;
+    Exit;
+  end;
+  UCHandle := UC;
+  ICUVersionSuffix := '_' + IntToStr(AVersion);
+  Result := True;
+end;
+
+{ ICU's own build beside the executable or on PATH, the newest major first (the
+  loader's search order then finds it by name), else the system's icu.dll }
+function TryLoadWindowsICU(out AHandle: TLibHandle): Boolean;
+var
+  Version, Highest, Major: Integer;
+begin
+  AHandle := NilHandle;
+  UCHandle := NilHandle;
+  ICUVersionSuffix := '';
+  Highest := HighestICUDllMajorVersionInDir(ExtractFileDir(ParamStr(0)),
+    ICU_WIN_I18N_PREFIX);
+  Major := HighestICUDllMajorVersionInDirList(GetEnvironmentVariable('PATH'),
+    ';', ICU_WIN_I18N_PREFIX);
+  if Major > Highest then
+    Highest := Major;
+  for Version := Highest downto ICU_VERSION_MIN do
+    if TryLoadVersionedWindowsICU(Version, AHandle) then
+      Exit(True);
+  AHandle := LoadLibrary(ICU_LIBRARY_PRIMARY);
+  if AHandle = NilHandle then
+    AHandle := LoadLibrary(ICU_LIBRARY_FALLBACK);
+  Result := AHandle <> NilHandle;
+end;
+{$ENDIF}
 
 {$IFDEF LINUX}
 const
@@ -247,10 +378,7 @@ begin
       {$ENDIF}
 
       {$IFDEF MSWINDOWS}
-      LoadedHandle := LoadLibrary(ICU_LIBRARY_PRIMARY);
-      if LoadedHandle = NilHandle then
-        LoadedHandle := LoadLibrary(ICU_LIBRARY_FALLBACK);
-      LoadSucceeded := LoadedHandle <> NilHandle;
+      LoadSucceeded := TryLoadWindowsICU(LoadedHandle);
       {$ENDIF}
 
       {$IFDEF LINUX}
@@ -278,9 +406,9 @@ end;
 function ICUGetProcAddress(const AName: string): Pointer;
 var
   Handle: TLibHandle;
-  {$IFDEF LINUX}
+  {$IF DEFINED(LINUX) OR DEFINED(MSWINDOWS)}
   VersionedName: string;
-  {$ENDIF}
+  {$IFEND}
 begin
   Result := nil;
   if not TryGetICULibraryHandle(Handle) then
@@ -288,7 +416,7 @@ begin
   {$IFNDEF LAKON}
   Result := GetProcedureAddress(Handle, AName);
   {$ENDIF}
-  {$IFDEF LINUX}
+  {$IF DEFINED(LINUX) OR DEFINED(MSWINDOWS)}
   if (Result = nil) and (ICUVersionSuffix <> '') then
   begin
     VersionedName := AName + ICUVersionSuffix;
@@ -303,7 +431,7 @@ begin
       Result := GetProcedureAddress(UCHandle, VersionedName);
     end;
   end;
-  {$ENDIF}
+  {$IFEND}
 end;
 
 initialization
@@ -311,10 +439,10 @@ initialization
   LibraryHandle := NilHandle;
   LoadAttempted := False;
   LoadSucceeded := False;
-  {$IFDEF LINUX}
+  {$IF DEFINED(LINUX) OR DEFINED(MSWINDOWS)}
   UCHandle := NilHandle;
   ICUVersionSuffix := '';
-  {$ENDIF}
+  {$IFEND}
 
 finalization
   CriticalSectionDone(InitLock);
@@ -322,9 +450,9 @@ finalization
   if LibraryHandle <> NilHandle then
     UnloadLibrary(LibraryHandle);
   {$ENDIF}
-  {$IFDEF LINUX}
+  {$IF DEFINED(LINUX) OR DEFINED(MSWINDOWS)}
   if UCHandle <> NilHandle then
     UnloadLibrary(UCHandle);
-  {$ENDIF}
+  {$IFEND}
 
 end.

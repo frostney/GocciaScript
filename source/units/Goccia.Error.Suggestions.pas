@@ -4,7 +4,10 @@ unit Goccia.Error.Suggestions;
 
 interface
 
-resourcestring
+// Plain constants, not resourcestring: FPC keeps a resourcestring as an
+// AnsiString, so passing one as a string argument converts and allocates on
+// every call, and the parser passes one with every Consume.
+const
   // Semicolons
   SSuggestAddSemicolon = 'Add a '';'' at the end of the statement';
 

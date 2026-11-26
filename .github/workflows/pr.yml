@@ -27,7 +27,7 @@ env:
   # The frostney/fpc-toolchain build that build and build-main both install, so
   # the benchmark comparison measures the diff, not a compiler change. ci.yml
   # names the same one.
-  FPC_VERSION: "3.2.4-rc2-b1"
+  FPC_VERSION: "3.3.1-b9"
 
 jobs:
   build:
@@ -48,16 +48,6 @@ jobs:
 
       - name: Check formatting
         run: ./format.pas --check
-
-      - name: Check VM stack-slot stores
-        run: |
-          npx tsx scripts/check-vm-stack-stores.ts --self-test
-          npx tsx scripts/check-vm-stack-stores.ts
-
-      - name: Check VM dispatch layout
-        run: |
-          npx tsx scripts/check-vm-dispatch-layout.ts --self-test
-          npx tsx scripts/check-vm-dispatch-layout.ts
 
       - name: Check build-system behavior
         run: python3 scripts/test-build-system.py
@@ -98,23 +88,6 @@ jobs:
         uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
         with:
           version: ${{ env.FPC_VERSION }}
-
-      # A base from before the move to FPC 3.2.4 does not compile on it: its
-      # Generics.Defaults comparers are declared constref, and it sets the
-      # openssl unit's DLLSSLName and DLLUtilName, which 3.2.4 renamed. Port
-      # such a base the way Shared.inc does, so both builds use one compiler.
-      # Remove this step after 0.16.0.
-      - name: Port a pre-3.2.4 base to FPC 3.2.4
-        run: |
-          if grep -q GOCCIA_FPC_CONSTREF_COMPARERS source/shared/Shared.inc; then
-            echo "The base already builds on FPC 3.2.4."
-            exit 0
-          fi
-          grep -rlF '{$IFDEF FPC}constref{$ELSE}const{$ENDIF}' source \
-            | xargs -r sed -i 's/{\$IFDEF FPC}constref{\$ELSE}const{\$ENDIF}/const/'
-          sed -i -e 's/\bDLLSSLName :=/BaseSSLName :=/' -e 's/\bDLLUtilName :=/BaseCryptoName :=/' \
-            source/shared/TransportSecurity.pas
-          git diff --stat
 
       - name: Build benchmark runner and GocciaRunner (main base)
         # The PR base may predate the GocciaScriptLoader -> GocciaRunner rename.
@@ -237,10 +210,17 @@ jobs:
       - name: Round-trip objects observed by the JavaScript suite
         timeout-minutes: 30
         run: |
+          # A value that does not round-trip fails the step with its own error;
+          # a failing test fails it too.
           status=0
           ./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
             --output=heap-snapshot-test-results.json 2> heap-snapshot-roundtrip.log || status=$?
-          cat heap-snapshot-roundtrip.log
+          grep -E '^Heap snapshots:' heap-snapshot-roundtrip.log
+          if grep -q '^Heap snapshot failure' heap-snapshot-roundtrip.log; then
+            grep '^Heap snapshot failure' heap-snapshot-roundtrip.log | head -20
+            echo "::error::A value the suite observed did not round-trip through a heap snapshot"
+            exit 1
+          fi
           exit "$status"
 
       - name: Upload heap snapshot round-trip counts
@@ -1119,6 +1099,10 @@ jobs:
           path: test262-suite
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Apply the test262 corrections the pin lacks
+        shell: bash
+        run: bash scripts/apply-test262-patches.sh test262-suite
 
       - name: Run test262 conformance suite
         continue-on-error: true

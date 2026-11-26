@@ -6,8 +6,9 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — code that must build on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
+- **Platform pitfalls** — the engine builds with FPC 3.3.1 while the code outside `source/engine` also builds on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
+- **GC stress** — The engine's binaries take `--gc-stress` and `--gc-verify` at run time and `GOCCIA_NURSERY_KB` shrinks the nursery; `scripts/engine/gcstress.sh` runs the stress sweep
 
 ## Auto-Formatting
 
@@ -24,7 +25,7 @@ Install Lefthook as described in [Workflow — Local setup](workflow.md#local-se
 ./format.pas
 
 # Format specific files
-./format.pas source/units/Goccia.Engine.pas
+./format.pas source/units/Goccia.Parser.pas
 
 # Check only (exit 1 if changes needed)
 ./format.pas --check
@@ -95,7 +96,7 @@ for explicit targets, test selection, parallelism and scoped cleaning.
 
 ### FPC 3.2.2 and 3.2.4
 
-CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Three RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+CI builds with FPC 3.3.1 from fpc-toolchain (`3.3.1+9`), which the engine in `source/engine` needs (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)). The source outside `source/engine` must keep building on FPC 3.2.2 and 3.2.4 as well. Three RTL interfaces differ between those two, and `Shared.inc` defines a symbol for each on 3.2.2 only:
 
 - `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
 - `GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY` — a `Generics.Collections` list's virtual `Notify` takes its value as `constref` on 3.2.2 and `const` on 3.2.4 (and Delphi); an override declares it the same way (`TUnicodeStringList`).
@@ -105,7 +106,7 @@ Workarounds for 3.2.2 compiler bugs stay while 3.2.2 is supported, including tho
 
 ### Stale FPC Build Artifacts
 
-FPC 3.2.2 can report stale compiled state as misleading internal compiler
+FPC can report stale compiled state as misleading internal compiler
 errors or resource-list errors, for example after a branch switch, merge, PR
 sync, or generated resource update.
 
@@ -128,6 +129,15 @@ targets from empty unit directories on purpose:
 ./build.pas --clean testrunner
 ./build.pas --clean tests --test=TimingUtils
 ```
+
+Switching compilers needs no `--clean` either. FPC gives every build of one
+release the same unit version, so it would reuse the units another build of
+that release compiled (3.3.1+6's units under 3.3.1+7, miscompiles included).
+Each unit directory holds `compiler-identity.txt`, the `fpc -iWD` output of
+the compiler that filled it (such as `3.3.1+7 2026/11/24`). When the selected
+compiler's differs, or the file is missing, `build.pas` empties that directory
+first and prints `Units in <directory> were made by FPC <old>: compiling them
+again with <new>`.
 
 ### Website Checks Are Inert Without Its Dependencies
 
@@ -208,7 +218,7 @@ Result := D * 1000000.0;
 // CORRECT — implicit promotion at function call boundary
 // When passing Int64 to a function/constructor that takes Double,
 // FPC generates the correct 64-bit SCVTF instruction.
-Result := TGocciaNumberLiteralValue.Create(SomeInt64Value);
+Result := NumberToString(SomeInt64Value);
 ```
 
 Parameter passing is safe only when the parameter is declared `Double`. When the
@@ -293,7 +303,7 @@ characters outside the console's code page, and the code page itself is never
 changed. The RTL opens the standard text files again for each new thread, so
 this covers the main thread, which writes the output the thread pool's workers
 capture. A unit that converts strings through the RTL before `FileUtils` or
-the console built-in is initialized lists it in its uses. Because the setting is
+`ConsoleOutput` is initialized lists it in its uses. Because the setting is
 process-wide, it also applies to an application that embeds the engine. On
 Linux and macOS the unit installs `cwstring`, which converts through iconv, and
 in front of it a direct conversion for ASCII text to and from UTF-8 or
@@ -333,15 +343,20 @@ RTL opens files non-inheritable.
 
 ## Fuzzing and Memory Safety
 
-`GocciaFuzzHarness` drives a single input through lex, parse, bytecode
-compilation, and the VM under tight instruction, timeout, memory, and stack bounds. It exists
+`GocciaFuzzHarness` runs a single input twice, each time on an engine of its
+own: once under tight instruction, timeout, memory and frame bounds, which
+keep the JIT off and so exercise the parser, the compiler and the interpreter,
+and once without the engine's limits, so the baseline JIT and the optimizing
+tier compile what gets hot (Linux x86-64 only; a watchdog thread ends that run
+with exit `0` at the deadline, since compiled code does not poll it). It exists
 because the engine is a from-scratch, manually memory-managed implementation
 whose hosts, sandbox mode among them, run untrusted input — see
 [VISION.md](../../VISION.md).
 
-The harness classifies every outcome the engine models — parse error, runtime
-error, script throw, instruction limit, timeout, memory limit, denied module —
-as **normal**, and exits `0`. Only an outcome the engine does *not* model
+The harness classifies every outcome the engine models — parse error, script
+throw (a frame-limit `RangeError` included), instruction limit, timeout, memory
+limit, host abort, denied module, rejected input (over 1 MB) — as **normal**,
+and exits `0`. Only an outcome the engine does *not* model
 (an unexpected Pascal exception, an access violation, a heap abort) exits
 nonzero. That is what makes a nonzero exit a finding rather than noise.
 
@@ -352,9 +367,12 @@ nonzero. That is what makes a nonzero exit a finding rather than noise.
 ./build/GocciaFuzzHarness --verbose path/to/input.js
 ```
 
-Read from stdin with `-`. `--verbose` prints the classification;
+Read from stdin with `-`. `--verbose` prints each run's classification;
 without it the harness is silent and communicates only through its exit code,
-which is what `afl-fuzz` needs.
+which is what `afl-fuzz` needs. `--grammar` reads the input's bytes as the
+choices of a program generator (`Goccia.Fuzz.Generator`) and compares the two
+runs' output; see [Engine — GocciaFuzzHarness](../engine/README.md#gocciafuzzharness) for that mode and
+`scripts/engine/grammar-fuzz.py`.
 
 ### Seed corpus
 
@@ -382,10 +400,8 @@ and access to GitHub, a C compiler and make:
 scripts/afl/build-afl.sh
 export PATH="$PWD/build/afl:$PATH"
 unset AFL_MAP_SIZE AFL_MAPSIZE
-mkdir -p build/compiled/targets/fuzzharness-afl
-AFL_PATH= fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
-  -FUbuild/compiled/targets/fuzzharness-afl \
-  -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+AFL_PATH= GOCCIA_VARIANT=Afl GOCCIA_FPC_FLAGS="-gl -Ct -Cr -Sa -B -Aas -FDscripts/afl" \
+  ./build.pas fuzzharness
 afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
 ```
 
@@ -428,6 +444,14 @@ a fresh output directory, stops it after the given seconds of fuzzing (1 to
 3600) and fails a run that ends any other way, unless it stopped on a crash
 it saved.
 
+The build is the scheduled workflow's: `build.pas` builds the variant
+(`GOCCIA_VARIANT`) in a unit cache of its own, as `build/GocciaFuzzHarnessAfl`,
+with `GOCCIA_FPC_FLAGS` after its own options, so it keeps their `-O4`. The
+engine calls each procedural threadvar through a local copy: FPC 3.3.1's GNU
+assembler output writes a direct call of the variable otherwise, which ld
+refuses or which jumps into the thread's data, and the build's threadvar check
+(`scripts/engine/tlsscan.py`) names such a call, also when the link fails.
+
 ### Reproducing a finding
 
 A reproducer from CI or from `build/fuzz/out/default/crashes/` replays directly:
@@ -456,11 +480,12 @@ That must print a backtrace and exit `1`.
 
 ### Modules are denied, deliberately
 
-The harness installs a content provider that refuses every module load. A fuzz
-input must not be able to reach the host filesystem — without this,
-`import "/etc/passwd"` would be a file read driven by attacker-shaped input.
-Inputs containing `import` are therefore classified `module-denied`, and the
-harness does not exercise the module loader.
+The harness installs a module resolver that refuses every specifier before it
+probes a path, and a file-read hook (`SetFileReadHook` in `Goccia.Modules`) that
+refuses every read. A fuzz input must not be able to reach the host
+filesystem — without this, `import "/etc/passwd"` would be a file read driven
+by attacker-shaped input. An input that imports is therefore classified
+`module-denied`, and the harness does not exercise the module loader.
 
 ### The heap snapshot reader
 
@@ -476,40 +501,21 @@ afl-fuzz -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
   -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@
 ```
 
-Four of the seeds hold closures and suspended generators, and one holds
-built-ins the run changed (their differences). Functions are named
-by the bytecode of the module that compiled them, so the harness runs the
-seeds' program before it restores an input, and then uses what restored: it
-walks up to 600 distinct objects, reading properties, calling functions and
-resuming, returning or throwing into generators (the input's size picks
-which). A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
-a script error (`script-throw`); anything else is a finding. The scheduled
-workflow runs this as its `fuzz-heap-snapshot` job. It replays the seeds, a
-sample of what AFL kept and an input the reader refuses under a heaptrc build
-of the harness, and each must end with no unfreed block: like the application
-runners, the harness shuts its runtime down before it exits, which destroys
-what the collector still manages.
-
-Its `heap-snapshot-hardening` job runs
-`Goccia.HeapSnapshot.Hardening.Test` with
-`GOCCIA_HEAP_SNAPSHOT_HARDENING=full`, which sweeps every payload value and
-every reference target and makes its chains 1,000,000 links long (pull
-requests run a rotating share and 200,000;
-[Heap Snapshots — Testing](../heap-snapshots.md#testing)), and every
-`Goccia.HeapSnapshot*.Test` program under heaptrc. Freed blocks are not kept
-there (`keepreleased` grows past a runner's memory within a minute), so
-heaptrc catches double frees and writes past a block. The job does not judge
-heaptrc's exit leak report, which counts what the test programs leave to
-process exit; the hardening program's leak test checks the heap between
-passes instead.
-
-`TGarbageCollector.CollectBeforeEveryReservation` is a test switch: every
-external reservation (`TryReserveExternalBytes`) runs the last-resort
-collection first, as one over the memory ceiling would, so a value the
-reader holds only in a local is freed at once. The hardening program sets it
-only while the reader runs; engine creation and some lazy built-in
-initialisers are not safe under it yet
-([#1816](https://github.com/frostney/GocciaScript/issues/1816)).
+The eight seeds hold primitives, sparse arrays, shared and cyclic graphs,
+symbols and built-ins, descriptors and integrity levels, closures with
+accessors and bound functions, and errors with wrapper objects. The engine's writer
+has no codec for a generator's frame, a Map's table or a buffer's bytes
+(`Goccia.HeapSnapshot`), so no seed holds one. A snapshot names the code its
+closures were compiled from, so the seeds and the restore run one program:
+after restoring an input it walks up to 4,096 distinct objects, at most 12
+deep, reading descriptors and prototypes and calling each function in one of
+three ways (a plain call, a call with a receiver, or a construction; the
+input's size picks which), then stringifies the root. A refusal
+(`snapshot-refused`) is a normal outcome, as are the run limits and a script
+error (`script-throw`); anything else is a finding. The scheduled workflow runs
+this as its `fuzz-heap-snapshot` job. The Pascal hardening programs the
+`heap-snapshot-hardening` job names belonged to the previous engine and are
+gone.
 
 ### Memory safety
 
@@ -518,32 +524,34 @@ JavaScript suite under two tools that answer different questions:
 
 | Tool | Catches | Invocation |
 |------|---------|-----------|
-| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
+| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `GOCCIA_VARIANT=Heaptrc GOCCIA_FPC_FLAGS="-gh -gl" ./build.pas testrunner`, which writes `build/GocciaTestRunnerHeaptrc`, then `HEAPTRC=log=build/heaptrc.log ./build/GocciaTestRunnerHeaptrc -P tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `bash scripts/valgrind/strip-debug-symbols.sh build/GocciaTestRunner`, then `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
-`DIR` is a unit-output directory of your own (CI uses
-`build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
-unit-output directory per the
-[per-program `-FU` rule](#shared--fu-directories-across-programs--internal-error-200611011) —
-and create the directory first, because `fpc` writes into a `-FU` directory but
-will not create one; against a missing directory it fails with
-`Can't create object file: … (error code: 2)` (on external-assembler targets
-such as macOS the message is `Can't create assembler file: …` instead).
+`GOCCIA_VARIANT` gives the build a unit-output directory of its own
+(`build/compiled/targets/testrunner-dev-heaptrc`, or `testrunner-heaptrc` with `--prod`), since FPC does not
+recompile a unit for new options, and `GOCCIA_FPC_FLAGS` comes after
+`build.pas`'s own options, so its flags win. `HEAPTRC=log=FILE` matters: FPC
+3.3.1's heaptrc leaves its report unflushed when stderr is a regular file, so
+`2> FILE` can capture nothing.
 
 `scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
-Pascal runtime's `IndexByte` and `IndexWord`, whose aligned 16-byte loads can
-read past the end of a buffer and ignore what they find there. The file's
-header explains the over-read and what the suppression gives up, including the
-undefined values it hides inside those two routines.
+Pascal runtime's `IndexByte` and `IndexWord`, and on FPC 3.3.1 also
+`CompareByte` and `CompareWord`, whose 16-byte loads can read past the end of
+a buffer and ignore what they find there. The file explains the over-read and
+what the suppression gives up, including the undefined values it hides inside
+those routines. Run `bash scripts/valgrind/strip-debug-symbols.sh <binary>`
+first: FPC 3.3.1's debugging symbols otherwise give frames inside these
+routines names no suppression can follow.
 
 Valgrind runs one thread of a process at a time. Under `--jobs` the pool's
 workers wait for each other, and its watchdog abandons workers that are only
 waiting, so run memcheck with `--jobs=1`. One process for the whole suite took
-58.6 minutes on a fast workstation, so CI splits the suite into one shard per
+58.6 minutes on a fast workstation on the previous engine, so CI splits the suite into one shard per
 CPU, balanced by each file's native time
 (`bun scripts/valgrind/shard-suite.ts`), and runs one single-worker Valgrind
 process per shard side by side. Memcheck slowed the files that take longest
-natively by 68 to 109 times (measured with one worker on 2026-10-19), so the
+natively by 68 to 109 times (measured with one worker on 2026-10-19, on the
+previous engine), so the
 step gives each file the default 30-second budget times 110: `--timeout=55m`.
 
 heaptrc costs about 0.6 µs per allocation and free, so a file that allocates
@@ -551,39 +559,61 @@ per character or per digit is slow under it; see
 [`WideChar in [set]` Allocates](#widechar-in-set-allocates).
 
 Both run on Linux only, and neither runs per-PR. Findings upload as artifacts
-with a 30-day retention.
+with a 30-day retention. Neither looks inside the engine's own heap: the engine allocates its
+cells in its nursery and old-space pages (`Goccia.Core`), so a read of a moved or
+freed cell reads memory those pages still own, and a missing root is a
+[GC stress](#gc-stress) finding instead.
 
-### GC-stress build
+### GC stress
 
-A missing GC root is a value that only a Pascal local holds while guest code
-runs. It is freed only if a collection falls inside that window, and an
-ordinary build collects only under memory pressure, so it usually is not.
-`./build.pas --gc-stress` makes the window certain:
+A missing GC root is a `TValue` that only a Pascal local holds across an
+allocation. The engine's collector moves young cells, so the local then points at a
+moved or freed cell, but only if a collection falls inside that window, and
+with the default 8 MB nursery it usually does not. The engine has no separate stress
+build: its binaries make the window certain at run time.
 
-| Defined by `-dGOCCIA_GC_STRESS` | Effect |
+| Switch | Effect |
 |---|---|
-| `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
-| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: leaks are the memory-safety job's concern. |
-
-`--gc-stress` adds `-gh` and the define to the development flags. It compiles
-into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
-it never shares FPC units with an ordinary build. It cannot be combined with
-`--prod`. Without the define, both units compile to the same machine code as
-before.
+| `--gc-stress` (`goccia` command line) | Every allocation runs a minor collection, and every eighth minor collection a major one (`GCStress` in `Goccia.Core`). The JIT's and the optimizing tier's inline allocations take the helper path, which allocates through the collector. |
+| `--gc-verify` (`goccia` command line) | After each collection, `VerifyHeap` checks that no live old cell points into the nursery or at a freed cell, and the VM checks that a nursery pointer it is about to use (a closure's upvalues, a captured register) still leads to the start of a live cell (`NurseryCellOK`). A minor collection fills the emptied nursery with `$DB`, so a pointer a collection did not update meets a header no cell has. A failure prints the cell and field and exits 9. |
+| `GOCCIA_NURSERY_KB=<n>` (environment) | Sizes the nursery in KB, so collections run every few kilobytes. `goccia` reads it for its own engine and, with `--test`, for a test file's engine (`EngineNurseryBytes` in `Goccia.Engine`); the test262 host reads it with `GOCCIA_GC_VERIFY` (`Goccia.Test262`). |
+| `GOCCIA_ROOTCHECK=1` (environment, `goccia`) | Each native call must leave the temporary root stack as it found it; an imbalance prints the native and exits 9. |
+| `GOCCIA_HOST=1` (environment, `goccia`) | Installs the hidden `GocciaHost` object, whose `gc()` collects at once. |
 
 ```bash
-./build.pas --gc-stress testrunner test262runner
-./build/gc-stress/GocciaTestRunner -P tests/built-ins/Promise --timeout=0
+./build.pas engine
+GOCCIA_NURSERY_KB=16 build/engine/goccia --gc-verify script.js
+GOCCIA_NURSERY_KB=16 build/engine/goccia --test --gc-verify tests/built-ins/Promise/prototype/then.js
 ```
 
-Pass `--timeout=0`: under stress, `tests/language/functions/function-parameters.js`
-alone takes about 50 seconds.
+`scripts/engine/gcstress.sh` runs the whole sweep and writes
+`build/engine/gcstress.txt`:
 
-Each collection marks the whole live heap, so a test that builds N objects
-costs time proportional to N times the heap under stress. `Goccia.build.gcStress`
-is `true` in a stress build ([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)).
-A test with a large N reads it to shrink N, or to skip a case whose point is a
-size past an engine bound, so its other cases still run under stress:
+- every Web Tooling digest bundle and JetStream bundle (`GOCCIA_WT_DIR`,
+  `GOCCIA_JS_DIR`; the AWFY bundles in `GOCCIA_AWFY_DIR` too, when given, without
+  `--gc-verify`) with a 256 KB nursery (the script's argument changes it) and
+  `--gc-verify`, each digest compared with `scripts/engine/digests.txt`;
+- each regression script in `scripts/engine/regress` with 16, 64 and 128 KB
+  nurseries, `--gc-verify` and `GOCCIA_HOST=1`; a first line `// goccia-flags: ...`
+  adds options such as `--gc-stress`, and each script prints `ok` last;
+- every test file under `tests/` through `scripts/engine/gcstress-tests.py`, which
+  runs it with `goccia --test` twice, as is and with a 16 KB nursery and
+  `--gc-verify`, and reports a file whose totals differ or whose stressed run
+  crashes.
+
+It prints the number of `OK` lines and every `BAD` and `TIMEOUT` line. A
+`TIMEOUT` is not a failure: verifying a large heap at every collection is slow,
+and the deep-chain tests under `tests/built-ins/Goccia/gc` take longest. Run it
+for any change near allocation or rooting, as part of the
+[engine gate](../engine/README.md#gate); CI does not run it.
+
+Each collection under stress costs time proportional to the live heap, so a
+test that builds N objects costs time proportional to N times the heap. A test
+with a large N may read `Goccia.build.gcStress` to shrink N, or to skip a case
+whose point is a size past an engine bound
+([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)). The engine sets
+it from the build define `GOCCIA_GC_STRESS`, which no build defines, so it is
+`false` in every build, including a run with `--gc-stress`:
 
 ```javascript
 // 100,000 nested Proxies: seconds normally, hours under stress.
@@ -593,84 +623,14 @@ test.runIf(deepNestRuns)("a read through 100,000 nested Proxies throws RangeErro
 });
 ```
 
-The scheduled [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
-every Sunday at 04:41 UTC and on demand. `scripts/gc-stress.ts` runs the
-GC-sensitive test262 directories (Promise, Iterator, the async-function and
-await directories, eval code, arguments objects and generators) and the whole
-`tests/` tree under the stress build and under an ordinary development build
-of the same commit. It reports only tests that pass in the ordinary build and
-fail under stress. Each `tests/` file runs in its own process, because an
-engine-integrity fault stops a whole test-runner run. To reproduce the whole
-comparison locally, build both variants and point the script at a test262
-checkout:
-
-```bash
-./build.pas testrunner test262runner
-./build.pas --gc-stress testrunner test262runner
-bun scripts/gc-stress.ts --suite-dir=../test262 --jobs=8
-```
-
-The report goes to `build/gc-stress-report/report.md`. A stress-only failure
-fails the job. On a scheduled or `main` run, it also opens one tracking issue
-or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
-other branches only print what they would file.
-
-### GC stress at every reservation
-
-The GC-stress build collects at instruction boundaries. Native code also
-collects at a reservation: making a string, a buffer or an error, or growing
-element or property storage past the gate, collects first when the request
-would cross the `--max-memory` ceiling. Two switches on the collector make
-that certain in a test, in any build:
-
-| Switch | Effect |
-|---|---|
-| `CollectBeforeEveryReservation` | Every `TryReserveExternalBytes` and every gated growth (`RequireNativeBytes`) runs the full collection a request over the ceiling runs. |
-| `QuarantineSwept` | A sweep keeps what it would free, intact. A later collection that reaches a kept object counts a violation instead of reading freed memory: `QuarantineViolations`, with the first one's class (`FirstQuarantineViolation`) and the collection that swept it (`FirstQuarantineViolationSweptIn`, a `TotalCollections` value). Turning it off frees what it kept. |
-
-`Goccia.GCStress.Test` sets both and runs engine creation, every lazy global
-and its members, and the native construction paths issue #1816 found
-unrooted. It takes a few seconds, so it runs per PR in the Pascal unit-test
-loop, and the scheduled memory-safety job (`fuzz.yml`) runs it again under
-heaptrc and under Valgrind memcheck. A swept value that is stored again
-reports a violation; one that native code only reads afterwards (a key list,
-an operand) does not, so the memcheck run sets `GOCCIA_GC_STRESS_FREE=1`,
-which frees what each sweep takes, and memcheck reports the read. That build
-loads `cmem` first (`fpc -Facmem`): FPC's own heap keeps a freed block as
-valid memory, so memcheck sees a read of it only when the C allocator owns
-it.
-`GOCCIA_GC_STRESS_ONLY=<text>` runs only the cases whose name contains the
-text.
-
-To sweep a wider workload, set both switches in `TGarbageCollector.Create`
-in a local build of `GocciaTestRunner` or `GocciaTest262Runner` and run each
-file in its own process with one worker. A violation names the class that was
-swept while something still held it; running the file again and stopping in
-the collection that swept it (when `TotalCollections` is one less) shows the
-native frame that was holding it.
-
-The quarantine misses a value native code only reads after the sweep. For
-those, set only `CollectBeforeEveryReservation`, build the runner with
-`-Facmem`, and run each file (or each test262 directory with one worker)
-under memcheck with `--trace-children=yes`. Each report names the read, the
-allocation and the collection that freed the value. Sweeping `tests/` and
-parts of test262 this way found the windows that #1816's quarantine sweeps
-missed.
-
-A window opens only when guest code allocates while a builtin holds a fresh
-value, and test262's getters, `valueOf` methods and traps rarely allocate. A
-probe that does finds more: call every method and getter of each builtin with
-receivers (a number held in a register, a primitive through `.call`, a
-Proxy) and arguments whose coercions, getters, callbacks and traps make a
-fresh string first (`({ valueOf() { (s + "x").slice(0, -1); return 2; } })`),
-under the same `-Facmem` build and memcheck. Giving the
-primitives' prototypes an allocating getter or a Proxy in their chain
-reaches the wrappers builtins make with `ToObject`. Issue #1834's probes
-found the unrooted number receiver of every native call (and of a callable
-Proxy's `apply` trap), the receiver of a Proxy `get` trap, `fill`'s wrapper
-and coerced value, Intl options given as a primitive, and the key lists of
-`Object.assign`, `Object.getOwnPropertySymbols` and `Promise.allKeyed` this
-way.
+`./build.pas --gc-stress` built the previous engine's stress variant and now
+stops with an error that names these run-time switches. The scheduled
+[GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
+`scripts/engine/gc-stress-ci.py`: `tests/` through `gcstress-tests.py`, the
+regression scripts at 16, 64 and 128 KB nurseries, and the GC-sensitive
+test262 directories through `GocciaTest262Runner` plainly and with
+`GOCCIA_NURSERY_KB=16 GOCCIA_GC_VERIFY=1`. A test that passes plainly and fails under
+stress is a finding.
 
 ## Depth and Fuzz Probe
 
@@ -695,10 +655,12 @@ bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17
 ```
 
-Probe production and development builds separately: the production build
-compiles without FPC's stack checking (`-Ct`), so a native stack overflow that
-the development build often reports as a `RangeError` or as
-`Fatal error: Stack overflow` is a segmentation fault there.
+The engine's production and development builds differ only in debug information
+(`GocciaArgs` in `build.pas` gives both `-dPRODUCTION`), and the engine's units
+compile without FPC's stack checking in both. The engine guards the native
+stack itself: a call that native code makes once that stack runs low
+(`NativeStackLow`) is refused with `RangeError: Maximum call stack size
+exceeded`, so a crash past it is a finding.
 
 **Every probe process is memory-capped and timed out by default** (2 GiB,
 60 s; `--memory` and `--timeout` change them). Exponential shapes and

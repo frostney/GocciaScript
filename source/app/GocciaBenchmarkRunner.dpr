@@ -1,5 +1,14 @@
 program GocciaBenchmarkRunner;
 
+{ GocciaBenchmarkRunner: the command line, configs, trust and capability policy
+  (the base class), each benchmark file run by a TGocciaEngine in benchmark mode
+  (Goccia.Embed BenchMode, goccia:microbench from prelude/microbench.js) on a
+  thread of its own, its benchmarks measured by Goccia.HostAPI
+  RunBenchmarkSuites and reported by Goccia.Benchmark.Reporter.
+  `./build.pas benchmarkrunner` builds it as build/GocciaBenchmarkRunner.
+
+  Not yet supported: bytecode files. }
+
 {$I Goccia.inc}
 
 uses
@@ -7,54 +16,37 @@ uses
   Classes,
   SysUtils,
 
-  CriticalSections,
+  CLI.ConfigFile,
+  CLI.Options,
+  FileUtils,
   TimingUtils,
 
   Goccia.Application,
   Goccia.Benchmark.Reporter,
-  Goccia.Builtins.Benchmark,
-  Goccia.Bytecode.Module,
+  Goccia.CapabilityAudit,
+  Goccia.Capabilities,
   Goccia.CLI.Application,
-  Goccia.CLI.Stdin,
-  Goccia.CLI.SourcePipelineResult,
+  Goccia.CLI.FileSettings,
+  Goccia.CLI.FileEngine,
+  Goccia.CLI.JSON.Reporter,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
-  CLI.ConfigFile,
-  CLI.Options,
-  Goccia.Constants.PropertyNames,
-  Goccia.Engine,
-  Goccia.Error,
-  Goccia.Error.Detail,
+  Goccia.CLI.Stdin,
+  Goccia.CLI.Trust,
   Goccia.FileExtensions,
-  Goccia.GarbageCollector,
-  Goccia.InstructionLimit,
+  Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Compile,
   Goccia.Profiler.Report,
-  Goccia.Runtime,
-  Goccia.RuntimeExtensions.Benchmark,
-  Goccia.RuntimeExtensions.Console,
-  Goccia.RuntimeExtensions.FFI,
-  Goccia.RuntimeProfiles.BenchmarkRunner,
-  Goccia.Scope,
   Goccia.ScriptLoader.Input,
-  Goccia.CLI.JSON.Reporter,
-  Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
-  Goccia.Timeout,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.Error,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
-  Goccia.VM.Exception,
 
-  Goccia.Threading,
-  Goccia.Threading.Flags,
-  Goccia.Threading.Init,
-
-  FileUtils;
+  Goccia.Embed,
+  Goccia.HostAPI,
+  Goccia.VM,
+  Goccia.ThreadCleanupRegistry;
 
 type
   TReportSpec = record
@@ -62,801 +54,141 @@ type
     OutputFile: string;
   end;
 
-  TBenchmarkProgress = class
-    class procedure WriteLine(const AMessage: string);
-    class procedure OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
+  { one file's results, plain data so they cross from its thread }
+  TGocciaBenchFileResult = record
+    Result: TBenchmarkFileResult;
+    { its engine's and the memory manager's counters over the file }
+    Memory: TCLIJSONMemoryStats;
   end;
 
-var
-  BenchmarkProgressLock: TGocciaCriticalSection;
-
-class procedure TBenchmarkProgress.WriteLine(const AMessage: string);
-begin
-  CriticalSectionEnter(BenchmarkProgressLock);
-  try
-    WriteLn(AMessage);
-    Flush(Output);
-  finally
-    CriticalSectionLeave(BenchmarkProgressLock);
-  end;
-end;
-
-class procedure TBenchmarkProgress.OnProgress(const ASuiteName, ABenchName: string; const AIndex, ATotal: Integer);
-begin
-  if ASuiteName <> '' then
-    WriteLine(SysUtils.Format('  [%d/%d] %s > %s', [AIndex, ATotal, ASuiteName, ABenchName]))
-  else
-    WriteLine(SysUtils.Format('  [%d/%d] %s', [AIndex, ATotal, ABenchName]));
-end;
-
-type
-  PBenchmarkFileResult = ^TBenchmarkFileResult;
-  TBenchmarkFileResultPtrArray = array[0..MaxInt div SizeOf(PBenchmarkFileResult) - 1] of PBenchmarkFileResult;
-  PBenchmarkFileResultPtrArray = ^TBenchmarkFileResultPtrArray;
-
-procedure PopulateFileResult(const AFileResult: TBenchmarkFileResult;
-  const AScriptResult: TGocciaObjectValue; const AReporter: TBenchmarkReporter);
-var
-  ResultsArray: TGocciaArrayValue;
-  SingleResult: TGocciaObjectValue;
-  MutableFileResult: TBenchmarkFileResult;
-  Entry: TBenchmarkEntry;
-  ErrorMsg: string;
-  I, EntryCount: Integer;
-begin
-  MutableFileResult := AFileResult;
-
-  if AScriptResult <> nil then
-  begin
-    MutableFileResult.TotalBenchmarks := Round(AScriptResult.GetProperty('totalBenchmarks').ToNumberLiteral.Value);
-    MutableFileResult.DurationNanoseconds := Round(AScriptResult.GetProperty('durationNanoseconds').ToNumberLiteral.Value);
-
-    if AScriptResult.GetProperty('results') is TGocciaArrayValue then
-    begin
-      ResultsArray := TGocciaArrayValue(AScriptResult.GetProperty('results'));
-      EntryCount := ResultsArray.GetLength;
-      SetLength(MutableFileResult.Entries, EntryCount);
-
-      for I := 0 to EntryCount - 1 do
-      begin
-        Entry := Default(TBenchmarkEntry);
-        SingleResult := TGocciaObjectValue(ResultsArray.GetElement(I));
-
-        Entry.Suite := SingleResult.GetProperty('suite').ToStringLiteral.Value;
-        Entry.Name := SingleResult.GetProperty(PROP_NAME).ToStringLiteral.Value;
-        Entry.SummaryScope := Round(SingleResult.GetProperty('summaryScope').ToNumberLiteral.Value);
-        Entry.BoxplotScope := Round(SingleResult.GetProperty('boxplotScope').ToNumberLiteral.Value);
-
-        ErrorMsg := SingleResult.GetProperty('error').ToStringLiteral.Value;
-        if ErrorMsg <> 'undefined' then
-        begin
-          Entry.Error := ErrorMsg;
-          Entry.OpsPerSec := 0;
-          Entry.MeanMs := 0;
-          Entry.Iterations := 0;
-          Entry.VariancePercentage := 0;
-          Entry.SetupMs := 0;
-          Entry.TeardownMs := 0;
-        end
-        else
-        begin
-          Entry.Error := '';
-          Entry.OpsPerSec := SingleResult.GetProperty('opsPerSec').ToNumberLiteral.Value;
-          Entry.MeanMs := SingleResult.GetProperty('meanMs').ToNumberLiteral.Value;
-          Entry.Iterations := Round(SingleResult.GetProperty('iterations').ToNumberLiteral.Value);
-          Entry.VariancePercentage := SingleResult.GetProperty('variancePercentage').ToNumberLiteral.Value;
-          Entry.SetupMs := SingleResult.GetProperty('setupMs').ToNumberLiteral.Value;
-          Entry.TeardownMs := SingleResult.GetProperty('teardownMs').ToNumberLiteral.Value;
-          Entry.MinOpsPerSec := SingleResult.GetProperty('minOpsPerSec').ToNumberLiteral.Value;
-          Entry.MaxOpsPerSec := SingleResult.GetProperty('maxOpsPerSec').ToNumberLiteral.Value;
-          Entry.SampleCount := Round(SingleResult.GetProperty('sampleCount').ToNumberLiteral.Value);
-          Entry.MinSampleMs := SingleResult.GetProperty('minSampleMs').ToNumberLiteral.Value;
-          Entry.P25Ms := SingleResult.GetProperty('p25Ms').ToNumberLiteral.Value;
-          Entry.MedianMs := SingleResult.GetProperty('medianMs').ToNumberLiteral.Value;
-          Entry.P75Ms := SingleResult.GetProperty('p75Ms').ToNumberLiteral.Value;
-          Entry.P99Ms := SingleResult.GetProperty('p99Ms').ToNumberLiteral.Value;
-          Entry.P999Ms := SingleResult.GetProperty('p999Ms').ToNumberLiteral.Value;
-          Entry.MaxSampleMs := SingleResult.GetProperty('maxSampleMs').ToNumberLiteral.Value;
-        end;
-
-        MutableFileResult.Entries[I] := Entry;
-      end;
-    end;
-
-    AReporter.AddFileResult(MutableFileResult);
-  end
-  else
-  begin
-    MutableFileResult.TotalBenchmarks := 0;
-    MutableFileResult.DurationNanoseconds := 0;
-    SetLength(MutableFileResult.Entries, 0);
-    AReporter.AddFileResult(MutableFileResult);
-  end;
-end;
-
-procedure AssignErrorFileResult(var AFileResult: TBenchmarkFileResult;
-  const AFileName, AMessage: string);
-begin
-  AFileResult := Default(TBenchmarkFileResult);
-  AFileResult.FileName := AFileName;
-  AFileResult.LexTimeNanoseconds := 0;
-  AFileResult.ParseTimeNanoseconds := 0;
-  AFileResult.CompileTimeNanoseconds := 0;
-  AFileResult.ExecuteTimeNanoseconds := 0;
-  AFileResult.TotalBenchmarks := 0;
-  AFileResult.DurationNanoseconds := 0;
-  SetLength(AFileResult.Entries, 1);
-  AFileResult.Entries[0].Suite := '';
-  AFileResult.Entries[0].Name := '(fatal)';
-  AFileResult.Entries[0].Error := AMessage;
-end;
-
-procedure MakeErrorFileResult(const AFileName, AMessage: string;
-  const AReporter: TBenchmarkReporter);
-var
-  FileResult: TBenchmarkFileResult;
-begin
-  AssignErrorFileResult(FileResult, AFileName, AMessage);
-  AReporter.AddFileResult(FileResult);
-end;
-
-type
-  TBenchmarkRunnerApp = class(TGocciaCLIApplication)
+  TGocciaBenchmarkRunnerApp = class(TGocciaCLIApplication)
   private
     FNoProgress: TFlagOption;
     FProfileDeterministic: TFlagOption;
     FFormats: TRepeatableOption;
     FOutputFile: TStringOption;
     FCanPrintProfile: Boolean;
-    FWorkerProgressEnabled: Boolean;
+    { the progress lines: before each file when they run one at a time, and before each benchmark }
+    FShowProgress: Boolean;
+    FJobCount: Integer;
+    { more than one file runs at once: their diagnostics are not printed as they happen }
+    FParallel: Boolean;
+    { the input is stdin: GocciaBenchmarkRunner prints no file progress lines for it }
+    FFromStdin: Boolean;
+    FResults: array of TGocciaBenchFileResult;
+    { --profile: the main thread's profilers, which each file's thread records into (profiled files run one at a
+      time) }
+    FProfiler: TGocciaProfiler;
+    FCompileProfiler: TGocciaCompileProfiler;
     function ProfilingEnabled: Boolean;
-    procedure RunBytecodeBenchmarkModule(const AEngine: TGocciaEngine;
-      const AModule: TGocciaBytecodeModule; const AFileName: string);
-    procedure CollectBenchmarkFileBytecode(const AFileName: string;
-      const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
-    procedure CollectBenchmarkSourceBytecode(const ASource: TStringList;
-      const AFileName: string; const AReporter: TBenchmarkReporter;
-      const AShowProgress: Boolean);
-    procedure RunBenchmarksFromStdin(const AReports: array of TReportSpec;
-      const AShowProgress: Boolean);
-    procedure BenchmarkWorkerProc(const AFileName: string;
-      const AIndex: Integer; out AConsoleOutput: string;
-      out AErrorMessage: string; AData: Pointer);
-    procedure RunBenchmarks(const APaths: TStringList;
-      const AReports: array of TReportSpec;
-      const AShowProgress: Boolean);
-    procedure InitializeRuntime(const AEngine: TGocciaEngine);
-    procedure WarmUpRuntime(const AEngine: TGocciaEngine);
+    procedure RunBenchmarkFile(AIndex: Integer; ASource: TStringList);
+    procedure RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
+    procedure RunAndReport(const AFiles: TStringList; const AStdinSource: TStringList;
+      const AReports: array of TReportSpec);
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure Validate; override;
     procedure AfterExecute; override;
-    procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
-      const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
-function IsBenchmarkHelperFile(const AFileName: string): Boolean;
-var
-  NormalizedPath: string;
-begin
-  NormalizedPath := StringReplace(AFileName, PathDelim, '/', [rfReplaceAll]);
-  Result := Pos('/helpers/', NormalizedPath) > 0;
-end;
-
-function TBenchmarkRunnerApp.ProfilingEnabled: Boolean;
-begin
-  Result := Assigned(ProfilerOptions) and ProfilerOptions.Mode.Present;
-end;
-
-function RuntimeBenchmark(const AEngine: TGocciaEngine): TGocciaBenchmark;
-var
-  BenchmarkExtension: TGocciaBenchmarkRuntimeExtension;
-  Runtime: TGocciaRuntimeCore;
-begin
-  Runtime := GetRuntime(AEngine);
-  if Assigned(Runtime) then
-  begin
-    BenchmarkExtension := TGocciaBenchmarkRuntimeExtension(
-      Runtime.FindRuntimeExtension(TGocciaBenchmarkRuntimeExtension));
-    if Assigned(BenchmarkExtension) then
-      Exit(BenchmarkExtension.BuiltinBenchmark);
+  { one benchmark file on a thread of its own: an engine's state is its thread's, so each file gets a fresh
+    engine }
+  TGocciaBenchThread = class(TThread)
+  private
+    FApp: TGocciaBenchmarkRunnerApp;
+    FIndex: Integer;
+    FSource: TStringList;
+    FOwnsSource: Boolean;
+    FErrorClass: ExceptClass;
+    FErrorMessage: string;
+  protected
+    procedure Execute; override;
   end;
-  Result := nil;
+
+var
+  ProgressLock: TRTLCriticalSection;
+
+{ a progress line, whole, from any file's thread }
+procedure WriteProgressLine(const AMessage: string);
+begin
+  EnterCriticalSection(ProgressLock);
+  try
+    WriteLn(AMessage);
+    Flush(Output);
+  finally
+    LeaveCriticalSection(ProgressLock);
+  end;
 end;
 
-procedure ConfigureBenchmarkRuntime(const AEngine: TGocciaEngine;
-  const AShowProgress, AClearBeforeMeasurement: Boolean);
-var
-  Benchmark: TGocciaBenchmark;
+{ Goccia.HostAPI BenchProgress: the benchmark about to be measured, as GocciaBenchmarkRunner prints it }
+procedure BenchmarkProgress(const ASuite, AName: UnicodeString; AIndex, ATotal: Integer);
 begin
-  Benchmark := RuntimeBenchmark(AEngine);
-  if not Assigned(Benchmark) then
-    Exit;
-  if AShowProgress then
-    Benchmark.OnProgress := TBenchmarkProgress.OnProgress;
-  if AClearBeforeMeasurement then
-    Benchmark.OnBeforeMeasurement := AEngine.ClearTransientCaches;
-end;
-
-function RunRegisteredBenchmarks(const AEngine: TGocciaEngine;
-  const ADeterministicProfile: Boolean): TGocciaObjectValue;
-var
-  Benchmark: TGocciaBenchmark;
-  Value: TGocciaValue;
-begin
-  Benchmark := RuntimeBenchmark(AEngine);
-  if not Assigned(Benchmark) then
-    Exit(nil);
-
-  Value := Benchmark.RunForHost(ADeterministicProfile);
-
-  if Value is TGocciaObjectValue then
-    Result := TGocciaObjectValue(Value)
+  if ASuite <> '' then
+    WriteProgressLine(Format('  [%d/%d] %s > %s', [AIndex, ATotal, UTF8Encode(ASuite), UTF8Encode(AName)]))
   else
-    Result := nil;
+    WriteProgressLine(Format('  [%d/%d] %s', [AIndex, ATotal, UTF8Encode(AName)]));
 end;
 
-procedure ClearRegisteredBenchmarks(const AEngine: TGocciaEngine);
+{ a file that did not load or run: one entry, "(fatal)", with why (GocciaBenchmarkRunner AssignErrorFileResult) }
+procedure AssignErrorFileResult(var AFileResult: TBenchmarkFileResult; const AFileName, AMessage: string);
+begin
+  AFileResult := Default(TBenchmarkFileResult);
+  AFileResult.FileName := AFileName;
+  SetLength(AFileResult.Entries, 1);
+  AFileResult.Entries[0].Suite := '';
+  AFileResult.Entries[0].Name := '(fatal)';
+  AFileResult.Entries[0].Error := AMessage;
+end;
+
+{ a benchmark directory's helpers/ folder holds modules the benchmarks import, not benchmarks }
+function IsBenchmarkHelperFile(const AFileName: string): Boolean;
+begin
+  Result := Pos('/helpers/', StringReplace(AFileName, PathDelim, '/', [rfReplaceAll])) > 0;
+end;
+
+procedure TGocciaBenchThread.Execute;
 var
-  Benchmark: TGocciaBenchmark;
+  OwnsJit: Boolean;
 begin
-  Benchmark := RuntimeBenchmark(AEngine);
-  if Assigned(Benchmark) then
-    Benchmark.ClearRegisteredBenchmarks;
-end;
-
-procedure TBenchmarkRunnerApp.RunBytecodeBenchmarkModule(
-  const AEngine: TGocciaEngine;
-  const AModule: TGocciaBytecodeModule; const AFileName: string);
-begin
-  AEngine.RunModuleForSourceType(AModule, AFileName);
-end;
-
-procedure TBenchmarkRunnerApp.CollectBenchmarkFileBytecode(
-  const AFileName: string; const AReporter: TBenchmarkReporter;
-  const AShowProgress: Boolean);
-var
-  Source: TStringList;
-  PipelineOptions: TGocciaSourcePipelineOptions;
-  SourcePipelineResult: TGocciaCLISourcePipelineResult;
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaBytecodeModule;
-  Engine: TGocciaEngine;
-  GC: TGarbageCollector;
-  FileResult: TBenchmarkFileResult;
-  ScriptResult: TGocciaObjectValue;
-  LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
-  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  ExpectedPrincipal: Int64;
-begin
-  Source := nil;
-  ExpectedPrincipal := 0;
-  SourcePipelineResult := nil;
   try
+    OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
-      Source := SourceRegistry.Load(AFileName);
-    except
-      on E: Exception do
-      begin
-        if not GIsWorkerThread then
-          WriteLn(ErrOutput, 'Error loading benchmark file: ', E.Message);
-        MakeErrorFileResult(AFileName, E.Message, AReporter);
-        Exit;
-      end;
-    end;
-
-    try
-      Engine := CreateEngine(AFileName, Source);
+      if OwnsJit then
+        JitTakeThread;
       try
-        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-        LexStart := GetNanoseconds;
-        PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-        PipelineOptions.Preprocessors := Engine.Preprocessors;
-        PipelineOptions.Compatibility := Engine.Compatibility;
-        PipelineOptions.LabelStatementsEnabled :=
-          Engine.LabelStatementsEnabled;
-        PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
-        PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-          Engine.ExperimentalJSModuleSourceEnabled;
-        PipelineOptions.WarningUnsupportedFeatures :=
-          Engine.WarningUnsupportedFeatures;
-        PipelineOptions.SourceType := Engine.SourceType;
-        ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-          PipelineOptions);
-        try
-          SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
-            PipelineOptions, True);
-          LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-          ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-          CompileStart := GetNanoseconds;
-          try
-            { The goal the parse settled for a detected entry (ADR 0140). }
-            Engine.SourceType := SourcePipelineResult.SourceType;
-            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-            CompileEnd := GetNanoseconds;
-          finally
-            SourcePipelineResult.Free;
-            SourcePipelineResult := nil;
-          end;
-
-          ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
-
-          StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
-          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-          try
-            RunBytecodeBenchmarkModule(Engine, Module, AFileName);
-            ExecEnd := GetNanoseconds;
-            if FProfileDeterministic.Present and
-               (TGocciaProfiler.Instance <> nil) then
-              TGocciaProfiler.Instance.ResetCounts;
-
-            FileResult.FileName := AFileName;
-            FileResult.DeterministicProfile := FProfileDeterministic.Present;
-            FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
-            FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
-            FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
-            BenchStart := GetNanoseconds;
-            ScriptResult := RunRegisteredBenchmarks(Engine,
-              FProfileDeterministic.Present);
-            FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
-              (GetNanoseconds - BenchStart);
-          finally
-            ClearExecutionTimeout;
-            ClearInstructionLimit;
-          end;
-        finally
-          ActiveOptionsScope.Free;
-        end;
-
-        GC := TGarbageCollector.Instance;
-        if Assigned(ScriptResult) and Assigned(GC) then
-          GC.AddTempRoot(ScriptResult);
-
-        try
-          PopulateFileResult(FileResult, ScriptResult, AReporter);
-        finally
-          ClearRegisteredBenchmarks(Engine);
-          if Assigned(ScriptResult) and Assigned(GC) then
-            GC.RemoveTempRoot(ScriptResult);
-        end;
+        FApp.RunBenchmarkFile(FIndex, FSource);
       finally
-        Engine.Free;
-      end;
-    except
-      on E: TGocciaError do
-      begin
-        if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
-        MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
-      end;
-      on E: TGocciaThrowValue do
-      begin
-        if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source,
-            IsColorTerminal, ExpectedPrincipal, E.Suggestion));
-        MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.Value, AFileName, Source, False,
-            ExpectedPrincipal, E.Suggestion), AReporter);
-      end;
-      on E: EGocciaBytecodeThrow do
-      begin
-        if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName,
-            Source, IsColorTerminal, ExpectedPrincipal, E.Suggestion));
-        MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.ThrownValue, AFileName, Source, False,
-            ExpectedPrincipal, E.Suggestion), AReporter);
-      end;
-      on E: Exception do
-        MakeErrorFileResult(AFileName, E.Message, AReporter);
-    end;
-  finally
-    SourcePipelineResult.Free;
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.Collect;
-    Source.Free;
-  end;
-end;
-
-procedure TBenchmarkRunnerApp.CollectBenchmarkSourceBytecode(
-  const ASource: TStringList; const AFileName: string;
-  const AReporter: TBenchmarkReporter; const AShowProgress: Boolean);
-var
-  PipelineOptions: TGocciaSourcePipelineOptions;
-  SourcePipelineResult: TGocciaCLISourcePipelineResult;
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaBytecodeModule;
-  Engine: TGocciaEngine;
-  GC: TGarbageCollector;
-  FileResult: TBenchmarkFileResult;
-  ScriptResult: TGocciaObjectValue;
-  LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
-  LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  ExpectedPrincipal: Int64;
-begin
-  SourcePipelineResult := nil;
-  ExpectedPrincipal := 0;
-  try
-    Engine := CreateEngine(AFileName, ASource);
-    try
-      ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-      LexStart := GetNanoseconds;
-      PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-      PipelineOptions.Preprocessors := Engine.Preprocessors;
-      PipelineOptions.Compatibility := Engine.Compatibility;
-      PipelineOptions.LabelStatementsEnabled := Engine.LabelStatementsEnabled;
-      PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
-      PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-        Engine.ExperimentalJSModuleSourceEnabled;
-      PipelineOptions.WarningUnsupportedFeatures :=
-        Engine.WarningUnsupportedFeatures;
-      PipelineOptions.SourceType := Engine.SourceType;
-      ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-        PipelineOptions);
-      try
-        SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(ASource, AFileName,
-          PipelineOptions, True);
-        LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-        ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-        CompileStart := GetNanoseconds;
-        try
-          { The goal the parse settled for a detected entry (ADR 0140). }
-          Engine.SourceType := SourcePipelineResult.SourceType;
-          Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-          CompileEnd := GetNanoseconds;
-        finally
-          SourcePipelineResult.Free;
-          SourcePipelineResult := nil;
-        end;
-
-        ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
-
-        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-        try
-          RunBytecodeBenchmarkModule(Engine, Module, AFileName);
-          ExecEnd := GetNanoseconds;
-          if FProfileDeterministic.Present and
-             (TGocciaProfiler.Instance <> nil) then
-            TGocciaProfiler.Instance.ResetCounts;
-
-          FileResult.FileName := AFileName;
-          FileResult.DeterministicProfile := FProfileDeterministic.Present;
-          FileResult.LexTimeNanoseconds := LexTimeNanoseconds;
-          FileResult.ParseTimeNanoseconds := ParseTimeNanoseconds;
-          FileResult.CompileTimeNanoseconds := CompileEnd - CompileStart;
-          BenchStart := GetNanoseconds;
-          ScriptResult := RunRegisteredBenchmarks(Engine,
-            FProfileDeterministic.Present);
-          FileResult.ExecuteTimeNanoseconds := ExecEnd - CompileEnd +
-            (GetNanoseconds - BenchStart);
-        finally
-          ClearExecutionTimeout;
-          ClearInstructionLimit;
-        end;
-      finally
-        ActiveOptionsScope.Free;
-      end;
-
-      GC := TGarbageCollector.Instance;
-      if Assigned(ScriptResult) and Assigned(GC) then
-        GC.AddTempRoot(ScriptResult);
-
-      try
-        PopulateFileResult(FileResult, ScriptResult, AReporter);
-      finally
-        ClearRegisteredBenchmarks(Engine);
-        if Assigned(ScriptResult) and Assigned(GC) then
-          GC.RemoveTempRoot(ScriptResult);
-      end;
-    finally
-      Engine.Free;
-    end;
-  except
-    on E: TGocciaError do
-    begin
-      if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
-      MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
-    end;
-    on E: TGocciaThrowValue do
-    begin
-      if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource,
-          IsColorTerminal, ExpectedPrincipal, E.Suggestion));
-      MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.Value, AFileName, ASource, False,
-          ExpectedPrincipal, E.Suggestion), AReporter);
-    end;
-    on E: EGocciaBytecodeThrow do
-    begin
-      if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName,
-          ASource, IsColorTerminal, ExpectedPrincipal, E.Suggestion));
-      MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False,
-          ExpectedPrincipal, E.Suggestion), AReporter);
-    end;
-    on E: Exception do
-      MakeErrorFileResult(AFileName, E.Message, AReporter);
-  end;
-end;
-
-{ Worker procedure executed on each thread for a single benchmark file.
-  Runs the benchmark, extracts the TBenchmarkFileResult into a pre-allocated
-  array, and frees all GC-managed objects before returning. }
-procedure TBenchmarkRunnerApp.BenchmarkWorkerProc(const AFileName: string;
-  const AIndex: Integer; out AConsoleOutput: string;
-  out AErrorMessage: string; AData: Pointer);
-var
-  WorkerReporter: TBenchmarkReporter;
-  WorkerResults: PBenchmarkFileResultPtrArray;
-  FileResult: PBenchmarkFileResult;
-begin
-  AConsoleOutput := '';
-  AErrorMessage := '';
-  WorkerResults := PBenchmarkFileResultPtrArray(AData);
-
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.Enabled := True;
-
-  WorkerReporter := TBenchmarkReporter.Create;
-  try
-    try
-      CollectBenchmarkFileBytecode(AFileName, WorkerReporter,
-        FWorkerProgressEnabled);
-      if WorkerReporter.FileCount > 0 then
-      begin
-        New(FileResult);
-        FileResult^ := WorkerReporter.Files[0];
-        WorkerResults^[AIndex] := FileResult;
+        if FOwnsSource then
+          FSource.Free;
+        if OwnsJit then
+          InterLockedExchange(JitOwned, 0);
       end;
     except
       on E: Exception do
       begin
-        AErrorMessage := E.Message;
-        New(FileResult);
-        AssignErrorFileResult(FileResult^, AFileName, E.Message);
-        WorkerResults^[AIndex] := FileResult;
+        FErrorClass := ExceptClass(E.ClassType);
+        FErrorMessage := E.Message;
       end;
     end;
   finally
-    WorkerReporter.Free;
+    { this thread's engine state: FPC does not finalize managed threadvars }
+    RunThreadvarCleanups;
   end;
 end;
 
-procedure TBenchmarkRunnerApp.RunBenchmarksFromStdin(
-  const AReports: array of TReportSpec; const AShowProgress: Boolean);
-var
-  Source, SectionSource, Names: TStringList;
-  Reporter: TBenchmarkReporter;
-  MemoryMeasurement: TCLIJSONMemoryMeasurement;
-  I, J: Integer;
-begin
-  { Source from stdin is governed by the working directory's config. }
-  ValidateFileConfig(STDIN_FILE_NAME);
-  Source := ReadSourceFromText(Input);
-  Reporter := TBenchmarkReporter.Create;
-  try
-    BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-    if MultifileEnabled then
-    begin
-      // Ownership of Source transfers to SplitStdinMultifile.
-      Names := SplitStdinMultifile(Source);
-      try
-        for I := 0 to Names.Count - 1 do
-        begin
-          SectionSource := SourceRegistry.Load(Names[I]);
-          try
-            CollectBenchmarkSourceBytecode(SectionSource, Names[I], Reporter,
-              AShowProgress);
-          finally
-            SectionSource.Free;
-          end;
-          // Match the per-file GC pass in CollectBenchmarkFileBytecode so
-          // GC-managed objects from one stdin section don't accumulate
-          // across the next one.
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.Collect;
-        end;
-      finally
-        Names.Free;
-      end;
-    end
-    else
-    begin
-      try
-        CollectBenchmarkSourceBytecode(Source, STDIN_FILE_NAME, Reporter,
-          AShowProgress);
-      finally
-        Source.Free;
-      end;
-    end;
-    Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-    for J := 0 to Length(AReports) - 1 do
-    begin
-      Reporter.Render(AReports[J].Format);
-      if AReports[J].OutputFile <> '' then
-        Reporter.WriteToFile(AReports[J].OutputFile)
-      else
-        Reporter.WriteToStdOut;
-    end;
+{ ---- options ---- }
 
-    if Reporter.HasFailures then
-      ExitCode := 1;
-  finally
-    Reporter.Free;
-  end;
+function TGocciaBenchmarkRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+begin
+  Result := ALL_CAPABILITIES;
 end;
 
-procedure TBenchmarkRunnerApp.RunBenchmarks(const APaths: TStringList;
-  const AReports: array of TReportSpec; const AShowProgress: Boolean);
-var
-  Files, RawFiles: TStringList;
-  I, J, P, JobCount: Integer;
-  DiscoveredFiles: TStringList;
-  Reporter: TBenchmarkReporter;
-  Pool: TGocciaThreadPool;
-  WorkerData: array of PBenchmarkFileResult;
-  WallClockStart: Int64;
-  MemoryMeasurement: TCLIJSONMemoryMeasurement;
-  MainMemoryStats: TCLIJSONMemoryStats;
-  WorkerMemoryStats: TCLIJSONMemoryStats;
-begin
-  WorkerMemoryStats := DefaultCLIJSONMemoryStats;
-  Files := nil;
-  Reporter := TBenchmarkReporter.Create;
-  try
-    RawFiles := TStringList.Create;
-    try
-      for P := 0 to APaths.Count - 1 do
-      begin
-        if DirectoryExists(APaths[P]) then
-        begin
-          DiscoveredFiles := FindAllFiles(APaths[P], ScriptExtensions);
-          try
-            for I := 0 to DiscoveredFiles.Count - 1 do
-              if not IsBenchmarkHelperFile(DiscoveredFiles[I]) then
-                RawFiles.Add(DiscoveredFiles[I]);
-          finally
-            DiscoveredFiles.Free;
-          end;
-        end
-        else if FileExists(APaths[P]) then
-          RawFiles.Add(APaths[P])
-        else
-        begin
-          WriteLn(ErrOutput, 'Error: Path not found: ', APaths[P]);
-          ExitCode := 1;
-          Exit;
-        end;
-      end;
-      Files := ExpandMultifileFiles(RawFiles);
-    finally
-      RawFiles.Free;
-    end;
-
-    JobCount := GetJobCount(Files.Count);
-    if ProfilingEnabled and (JobCount > 1) then
-      JobCount := 1;
-
-    if AShowProgress then
-    begin
-      if JobCount > 1 then
-        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files with %d workers',
-          [Files.Count, JobCount]))
-      else
-        TBenchmarkProgress.WriteLine(SysUtils.Format('Running %d files', [Files.Count]));
-    end;
-
-    if JobCount > 1 then
-    begin
-      { Parallel path: pre-allocate result array, run workers, then
-        add results to the reporter on the main thread in file order. }
-      SetLength(WorkerData, Files.Count);
-      for I := 0 to Files.Count - 1 do
-        WorkerData[I] := nil;
-
-      EnsureSharedPrototypesInitialized(WarmUpCapabilities(Files),
-        WarmUpRuntime);
-
-      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-      WallClockStart := GetNanoseconds;
-
-      Pool := TGocciaThreadPool.Create(JobCount);
-      try
-        if (TGarbageCollector.Instance <> nil) then
-          Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-        FWorkerProgressEnabled := AShowProgress;
-        try
-          Pool.RunAll(Files, BenchmarkWorkerProc, @WorkerData[0]);
-        finally
-          FWorkerProgressEnabled := False;
-        end;
-        WorkerMemoryStats := Pool.MemoryStats;
-      finally
-        Pool.Free;
-      end;
-
-      Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
-      Reporter.JobCount := JobCount;
-      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-      Reporter.MemoryStats := CombineCLIJSONMemoryStats(
-        MainMemoryStats, WorkerMemoryStats, True);
-
-      { Collect results on the main thread in original file order. }
-      try
-        for I := 0 to Files.Count - 1 do
-        begin
-          if AShowProgress then
-            TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
-              [I + 1, Files.Count, ExtractFileName(Files[I])]));
-          if Assigned(WorkerData[I]) then
-            Reporter.AddFileResult(WorkerData[I]^)
-          else
-            MakeErrorFileResult(Files[I], 'Benchmark worker produced no result',
-              Reporter);
-        end;
-      finally
-        for I := 0 to Length(WorkerData) - 1 do
-          if Assigned(WorkerData[I]) then
-          begin
-            Dispose(WorkerData[I]);
-            WorkerData[I] := nil;
-          end;
-      end;
-    end
-    else
-    begin
-      { Sequential path: run each file in order on the main thread. }
-      BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-      for I := 0 to Files.Count - 1 do
-      begin
-        if AShowProgress then
-          TBenchmarkProgress.WriteLine(SysUtils.Format('[%d/%d] %s',
-            [I + 1, Files.Count, ExtractFileName(Files[I])]));
-        CollectBenchmarkFileBytecode(Files[I], Reporter, AShowProgress);
-      end;
-      Reporter.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-    end;
-
-    if AShowProgress and (Files.Count > 0) then
-      TBenchmarkProgress.WriteLine('');
-
-    for J := 0 to Length(AReports) - 1 do
-    begin
-      Reporter.Render(AReports[J].Format);
-      if AReports[J].OutputFile <> '' then
-        Reporter.WriteToFile(AReports[J].OutputFile)
-      else
-        Reporter.WriteToStdOut;
-    end;
-
-    if Reporter.HasFailures then
-      ExitCode := 1;
-  finally
-    Reporter.Free;
-    Files.Free;
-  end;
-end;
-
-function TBenchmarkRunnerApp.UsageLine: string;
-begin
-  Result := '[path...|-] [options]';
-end;
-
-function TBenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
-begin
-  Result := suStdinDefault;
-end;
-
-procedure TBenchmarkRunnerApp.Configure;
+{ GocciaBenchmarkRunner.dpr TBenchmarkRunnerApp.Configure }
+procedure TGocciaBenchmarkRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddProfilerOptions;
@@ -870,119 +202,406 @@ begin
   FOutputFile.WritesHostFile := True;
 end;
 
-procedure TBenchmarkRunnerApp.Validate;
+{ --profile-format implies --profile=functions, --profile-deterministic --profile=all }
+procedure TGocciaBenchmarkRunnerApp.Validate;
 begin
   inherited Validate;
-
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
-
   if FProfileDeterministic.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('all');
-
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
-    raise TParseError.Create(
-      '--profile-output requires --profile=opcodes|functions|all|compile.');
-
-  if ProfilerOptions.Format.Matches(pfFlamegraph) and
-     not ProfilerOptions.OutputPath.Present then
-    raise TParseError.Create(
-      '--profile-format=flamegraph requires --profile-output=<path>.');
+    raise TParseError.Create('--profile-output requires --profile=opcodes|functions|all|compile.');
+  if ProfilerOptions.Format.Matches(pfFlamegraph) and not ProfilerOptions.OutputPath.Present then
+    raise TParseError.Create('--profile-format=flamegraph requires --profile-output=<path>.');
 end;
 
-procedure TBenchmarkRunnerApp.AfterExecute;
-var
-  ProfileOpcodes, ProfileFunctions, ProfileCompile: Boolean;
-  ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
+function TGocciaBenchmarkRunnerApp.UsageLine: string;
 begin
-  ProfileOpcodes := False;
-  ProfileFunctions := False;
-  ProfileCompile := False;
+  Result := '[path...|-] [options]';
+end;
 
-  if ProfilerOptions.Mode.Present then
+function TGocciaBenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
+end;
+
+function TGocciaBenchmarkRunnerApp.ProfilingEnabled: Boolean;
+begin
+  Result := ProfilerOptions.Mode.Present;
+end;
+
+{ ---- one file ---- }
+
+procedure TGocciaBenchmarkRunnerApp.RunBenchmarkFile(AIndex: Integer; ASource: TStringList);
+var
+  FileName, FileConfigPath, AliasBaseDirectory, SetupError: string;
+  FileConfig: TConfigEntryArray;
+  Verdict: TGocciaConfigTrustVerdict;
+  Capabilities: TGocciaCapabilities;
+  Grant: TGocciaImportGrant;
+  Resolver: TGocciaModuleResolver;
+  Engine: TGocciaEngine;
+  Capture: TGocciaConsoleCapture;
+  RunResult, HostError, Failure: TGocciaRunResult;
+  Err: UnicodeString;
+  Entries: TGocciaBenchEntries;
+  Total, I: Integer;
+  Duration, ExecStart, BenchStart: Int64;
+  Aborted: TGocciaAbort;
+  Res: TBenchmarkFileResult;
+  MemoryStart: TGocciaMemoryStats;
+  HeapStart: THeapStatus;
+  Deterministic: Boolean;
+
+  { a failure's report: on stderr as GocciaRunner prints it (a run one file at a time), and as the file's one entry,
+    code frame included (GocciaBenchmarkRunner's FormatThrowDetail) }
+  procedure Fail(const AResult: TGocciaRunResult);
   begin
-    ProfileMode := ProfilerOptions.Mode.Value;
-    ProfileOpcodes := (ProfileMode = Goccia.CLI.Options.pmOpcodes) or
-                      (ProfileMode = Goccia.CLI.Options.pmAll);
-    ProfileFunctions := (ProfileMode = Goccia.CLI.Options.pmFunctions) or
-                        (ProfileMode = Goccia.CLI.Options.pmAll);
-    ProfileCompile := ProfileMode = Goccia.CLI.Options.pmCompile;
+    if not FParallel then
+      WriteLn(ErrOutput, FailureText(FileName, AResult, ASource, Engine, '', nil, True, True, IsColorTerminal,
+        Engine.TimeoutMs, EngineOptions.MaxInstructions.ValueOr(0)));
+    AssignErrorFileResult(Res, FileName, FailureText(FileName, AResult, ASource, Engine, '', nil, True, True, False,
+      Engine.TimeoutMs, EngineOptions.MaxInstructions.ValueOr(0)));
   end;
 
-  if (ProfileOpcodes or ProfileFunctions or ProfileCompile) and
-     (TGocciaProfiler.Instance <> nil) then
-  begin
-    if FCanPrintProfile then
-    begin
-      if ProfileOpcodes then
+begin
+  FileName := FResults[AIndex].Result.FileName;
+  Res := Default(TBenchmarkFileResult);
+  Res.FileName := FileName;
+  Deterministic := FProfileDeterministic.Present;
+  Capture := TGocciaConsoleCapture.Create;
+  Capture.FileName := FileName;
+  Grant := nil;
+  Resolver := nil;
+  Engine := nil;
+  HeapStart := GetHeapStatus;
+  MemoryStart := Default(TGocciaMemoryStats);
+  try
+    FileConfigPath := DiscoverFileConfigPath(FileName);
+    if FileConfigPath <> '' then
+      FileConfig := LoadFileConfig(FileConfigPath)
+    else
+      SetLength(FileConfig, 0);
+    Verdict := FileConfigVerdict(FileConfigPath, FileName);
+    Capabilities := ResolveEngineCapabilities(FileConfigPath, FileName);
+    Grant := TGocciaImportGrant.Create(Capabilities);
+    Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(FileName)));
+    Grant.Resolver := Resolver;
+    Resolver.SetExtensions(ModuleImportExtensions);
+    Resolver.NodeModulesGrant := Grant.Grant;
+    Resolver.ProviderGrant := Grant.GrantProvider;
+    Resolver.ProviderAudit := Grant.AuditProvider;
+    Resolver.ProviderCachedOnly := ResolveFlagOption(EngineOptions.CachedOnly, FileConfig);
+    if EngineOptions.Aliases.FromCommandLine or (RootConfigPath = '') then
+      AliasBaseDirectory := GetCurrentDir
+    else
+      AliasBaseDirectory := ExtractFilePath(RootConfigPath);
+    ConfigureModuleResolver(Resolver, FileName, EngineOptions.ImportMap.ValueOr(''),
+      EngineOptions.Aliases.Values, AliasBaseDirectory);
+    Engine := TGocciaEngine.Create;
+    try
+      MemoryStart := Engine.Memory;
+      Engine.Capabilities := Capabilities;
+      Engine.ProjectRoot := DiscoverProjectRoot(FileName);
+      Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
+      { --profile: this thread records into the main thread's profilers }
+      if Assigned(FProfiler) then
       begin
-        PrintOpcodeProfile(TGocciaProfiler.Instance);
-        PrintOpcodePairProfile(TGocciaProfiler.Instance);
-        PrintScalarHitRate(TGocciaProfiler.Instance);
-        PrintShapeSaturation(TGocciaProfiler.Instance);
+        TGocciaProfiler.Adopt(FProfiler);
+        TGocciaCompileProfiler.Adopt(FCompileProfiler);
+        FProfiler.BeginEntry;
+        Engine.ProfileOpcodes := Goccia.Profiler.pmOpcodes in FProfiler.Mode;
+        Engine.ProfileFunctions := Goccia.Profiler.pmFunctions in FProfiler.Mode;
       end;
-      if ProfileFunctions then
-        PrintFunctionProfile(TGocciaProfiler.Instance);
-      if ProfileCompile then
-        PrintCompileProfile(TGocciaCompileProfiler.Instance);
-    end;
-
-    if ProfilerOptions.OutputPath.Present then
-    begin
-      if ProfilerOptions.Format.Matches(pfFlamegraph) then
-        WriteCollapsedStacks(TGocciaProfiler.Instance,
-          ProfilerOptions.OutputPath.Value)
+      Engine.Resolver := Resolver;
+      Engine.ModuleContentCheck := Grant.CheckContent;
+      Engine.ProviderGraph := Grant.ProviderGraph;
+      { GocciaBenchmarkRunner's runtime is the loader's: no timer globals }
+      Engine.ExposeTimers := False;
+      Engine.BenchMode := True;
+      Engine.FailOnUnhandledRejection := True;
+      if LogFileOpen then
+      begin
+        Capture.LogLine := HandleConsoleLog;
+        Engine.OnConsole := Capture.Emit;
+      end;
+      Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
+      if AuditLogOpen then
+      begin
+        Engine.AuditSink := HandleCapabilityAudit;
+        Grant.Engine := Engine;
+      end;
+      ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig, FileName, Verdict.AcceptedUnsafe));
+      if EngineOptions.Timeout.Present then
+        Engine.TimeoutMs := EngineOptions.Timeout.Value;
+      if EngineOptions.MaxInstructions.Present then
+        Engine.MaxInstructions := EngineOptions.MaxInstructions.Value;
+      if EngineOptions.MaxStack.Present then
+        Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
+      Err := '';
+      if FShowProgress then
+        BenchProgress := @BenchmarkProgress
       else
-        WriteProfileJSON(TGocciaProfiler.Instance,
-          ProfilerOptions.OutputPath.Value);
+        BenchProgress := nil;
+      if not Engine.PrepareHost(Err) then
+        raise Exception.Create('benchmark host setup failed: ' + UTF8Encode(Err));
+      { the file's virtual modules, before its code runs (a failure fails the file) }
+      if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) then
+      begin
+        { an error the host threw keeps its name (a refused read's PermissionDenied) }
+        if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
+          SetupError := UTF8Encode(HostError.ErrorName) + ': ' + UTF8Encode(HostError.ErrorText);
+        raise Exception.Create(SetupError);
+      end;
+      if not InstallBenchmarkAPI(Err) then
+        raise Exception.Create('benchmark host setup failed: ' + UTF8Encode(Err));
+      ExecStart := GetNanoseconds;
+      RunResult := Engine.Run(FileName, UTF8Decode(ASource.Text));
+      Res.CompileTimeNanoseconds := RunResult.CompileNanoseconds;
+      Res.DeterministicProfile := Deterministic;
+      if not RunResult.Ok then
+      begin
+        Engine.EndTests;
+        Fail(RunResult);
+      end
+      else
+      begin
+        { a deterministic profile counts the benchmarks' one run each, not the file's set-up }
+        if Deterministic and Assigned(FProfiler) then
+          FProfiler.ResetCounts;
+        BenchStart := GetNanoseconds;
+        if Engine.RunBenchmarks(Deterministic, Entries, Total, Duration, Err, Aborted) then
+        begin
+          Res.TotalBenchmarks := Total;
+          Res.DurationNanoseconds := Duration;
+          SetLength(Res.Entries, Length(Entries));
+          for I := 0 to High(Entries) do
+          begin
+            Res.Entries[I] := Default(TBenchmarkEntry);
+            Res.Entries[I].Suite := UTF8Encode(Entries[I].Suite);
+            Res.Entries[I].Name := UTF8Encode(Entries[I].Name);
+            Res.Entries[I].SummaryScope := Entries[I].SummaryScope;
+            Res.Entries[I].BoxplotScope := Entries[I].BoxplotScope;
+            if Entries[I].Failed then
+            begin
+              { what it threw, as GocciaBenchmarkRunner's BenchmarkExceptionMessage gives it: the error, where it
+                was made and the suggestion, without a code frame }
+              Failure := Default(TGocciaRunResult);
+              Failure.ErrorMessage := Entries[I].Error;
+              Failure.ErrorIsError := Entries[I].ErrorIsError;
+              Failure.ErrorName := Entries[I].ErrorName;
+              Failure.ErrorText := Entries[I].ErrorText;
+              Failure.ErrorFile := Entries[I].ErrorFile;
+              Failure.ErrorSuggestion := Entries[I].ErrorSuggestion;
+              Failure.ErrorLine := Entries[I].ErrorLine;
+              Failure.ErrorColumn := Entries[I].ErrorColumn;
+              Res.Entries[I].Error := FailureText(FileName, Failure, ASource, Engine, '', nil, False, True, False,
+                Engine.TimeoutMs, EngineOptions.MaxInstructions.ValueOr(0));
+            end
+            else
+            begin
+              Res.Entries[I].OpsPerSec := Entries[I].OpsPerSec;
+              Res.Entries[I].MeanMs := Entries[I].MeanMs;
+              Res.Entries[I].Iterations := Entries[I].Iterations;
+              Res.Entries[I].VariancePercentage := Entries[I].VariancePercentage;
+              Res.Entries[I].SetupMs := Entries[I].SetupMs;
+              Res.Entries[I].TeardownMs := Entries[I].TeardownMs;
+              Res.Entries[I].MinOpsPerSec := Entries[I].MinOpsPerSec;
+              Res.Entries[I].MaxOpsPerSec := Entries[I].MaxOpsPerSec;
+              Res.Entries[I].SampleCount := Entries[I].SampleCount;
+              Res.Entries[I].MinSampleMs := Entries[I].MinSampleMs;
+              Res.Entries[I].P25Ms := Entries[I].P25Ms;
+              Res.Entries[I].MedianMs := Entries[I].MedianMs;
+              Res.Entries[I].P75Ms := Entries[I].P75Ms;
+              Res.Entries[I].P99Ms := Entries[I].P99Ms;
+              Res.Entries[I].P999Ms := Entries[I].P999Ms;
+              Res.Entries[I].MaxSampleMs := Entries[I].MaxSampleMs;
+            end;
+          end;
+        end
+        else
+        begin
+          { a limit spent, or the run itself failed: the file's one error, as a failed file run reports it }
+          Failure := Default(TGocciaRunResult);
+          Failure.Aborted := Aborted;
+          if Err = '' then
+            Err := 'the benchmarks did not finish';
+          Failure.ErrorMessage := Err;
+          Fail(Failure);
+        end;
+        Res.ExecuteTimeNanoseconds := BenchStart - ExecStart - Res.CompileTimeNanoseconds +
+          (GetNanoseconds - BenchStart);
+      end;
+    finally
+      if Assigned(Engine) then
+        FResults[AIndex].Memory := FileMemoryStats(MemoryStart, Engine.Memory, HeapStart, GetHeapStatus);
+      BenchProgress := nil;
+      Engine.Free;
+      Engine := nil;
+      { a file's thread gives the main thread's profilers back (they are not its to free) }
+      if Assigned(FProfiler) and (GetCurrentThreadId <> MainThreadID) then
+      begin
+        TGocciaProfiler.Adopt(nil);
+        TGocciaCompileProfiler.Adopt(nil);
+      end;
     end;
+  except
+    on E: TCLIUsageError do
+      raise;
+    on E: Exception do
+    begin
+      { a file the host could not set up is one failed file (GocciaBenchmarkRunner's "Error loading") }
+      if not FParallel then
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+      AssignErrorFileResult(Res, FileName, E.Message);
+    end;
+  end;
+  Resolver.Free;
+  Grant.Free;
+  Capture.Free;
+  FResults[AIndex].Result := Res;
+end;
+
+{ ---- files ---- }
+
+{ each file on a thread of its own, at most the job count at once; results in file order }
+procedure TGocciaBenchmarkRunnerApp.RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
+var
+  I, Next, Oldest, Started, Running: Integer;
+  Workers: array of TGocciaBenchThread;
+  ErrorClass: ExceptClass;
+  ErrorMessage: string;
+
+  procedure Progress(AIndex: Integer);
+  begin
+    if FShowProgress and not FFromStdin then
+      WriteProgressLine(Format('[%d/%d] %s', [AIndex + 1, AFiles.Count, ExtractFileName(AFiles[AIndex])]));
+  end;
+
+begin
+  SetLength(FResults, AFiles.Count);
+  for I := 0 to AFiles.Count - 1 do
+  begin
+    FResults[I] := Default(TGocciaBenchFileResult);
+    FResults[I].Result.FileName := AFiles[I];
+  end;
+  SetLength(Workers, AFiles.Count);
+  ErrorClass := nil;
+  ErrorMessage := '';
+  Running := 0;
+  Oldest := 0;
+  Started := 0;
+  try
+    for Next := 0 to AFiles.Count - 1 do
+    begin
+      if Running = FJobCount then
+      begin
+        Workers[Oldest].WaitFor;
+        Dec(Running);
+        Inc(Oldest);
+      end;
+      { a sequential run prints each file's progress line before it runs, so its benchmarks' lines follow it }
+      if not FParallel then
+        Progress(Next);
+      Workers[Next] := TGocciaBenchThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next].FApp := Self;
+      Workers[Next].FIndex := Next;
+      if (Next = 0) and Assigned(AStdinSource) then
+        Workers[Next].FSource := AStdinSource
+      else
+      begin
+        Workers[Next].FSource := SourceRegistry.Load(AFiles[Next]);
+        Workers[Next].FOwnsSource := True;
+      end;
+      Workers[Next].Start;
+      Inc(Started);
+      Inc(Running);
+    end;
+  finally
+    for I := 0 to Started - 1 do
+    begin
+      if I >= Oldest then
+        Workers[I].WaitFor;
+      if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
+      begin
+        ErrorClass := Workers[I].FErrorClass;
+        ErrorMessage := Workers[I].FErrorMessage;
+      end;
+      Workers[I].Free;
+    end;
+  end;
+  if ErrorClass <> nil then
+    raise ErrorClass.Create(ErrorMessage);
+  { a parallel run prints the files' progress once they are done, in file order }
+  if FParallel then
+    for I := 0 to Started - 1 do
+      Progress(I);
+  if FShowProgress and not FFromStdin and (AFiles.Count > 0) then
+    WriteProgressLine('');
+end;
+
+procedure TGocciaBenchmarkRunnerApp.RunAndReport(const AFiles: TStringList; const AStdinSource: TStringList;
+  const AReports: array of TReportSpec);
+var
+  Reporter: TBenchmarkReporter;
+  FileMemory: array of TCLIJSONMemoryStats;
+  HeapStart: THeapStatus;
+  WallClockStart: Int64;
+  I: Integer;
+begin
+  FJobCount := GetJobCount(AFiles.Count);
+  if ProfilingEnabled or (FJobCount < 1) then
+    FJobCount := 1;
+  FParallel := (AFiles.Count > 1) and (FJobCount > 1);
+  if FShowProgress and not FFromStdin then
+  begin
+    if FJobCount > 1 then
+      WriteProgressLine(Format('Running %d files with %d workers', [AFiles.Count, FJobCount]))
+    else
+      WriteProgressLine(Format('Running %d files', [AFiles.Count]));
+  end;
+  Reporter := TBenchmarkReporter.Create;
+  try
+    HeapStart := GetHeapStatus;
+    WallClockStart := GetNanoseconds;
+    RunFiles(AFiles, AStdinSource);
+    if FParallel then
+    begin
+      Reporter.WallClockDurationNanoseconds := GetNanoseconds - WallClockStart;
+      Reporter.JobCount := FJobCount;
+    end;
+    { the files' engines ran on threads of their own: the report sums their memory }
+    SetLength(FileMemory, Length(FResults));
+    for I := 0 to High(FResults) do
+      FileMemory[I] := FResults[I].Memory;
+    Reporter.MemoryStats := AggregateMemoryStats(FileMemory, FParallel, HeapStart, GetHeapStatus, FJobCount);
+    for I := 0 to High(FResults) do
+      Reporter.AddFileResult(FResults[I].Result);
+    for I := 0 to Length(AReports) - 1 do
+    begin
+      Reporter.Render(AReports[I].Format);
+      if AReports[I].OutputFile <> '' then
+        Reporter.WriteToFile(AReports[I].OutputFile)
+      else
+        Reporter.WriteToStdOut;
+    end;
+    if Reporter.HasFailures then
+      ExitCode := 1;
+  finally
+    Reporter.Free;
   end;
 end;
 
-procedure TBenchmarkRunnerApp.ConfigureCreatedEngine(
-  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
-var
-  ConsoleExtension: TGocciaConsoleRuntimeExtension;
-  Runtime: TGocciaRuntimeCore;
-begin
-  InitializeRuntime(AEngine);
-  Runtime := GetRuntime(AEngine);
-  ConsoleExtension := TGocciaConsoleRuntimeExtension(
-    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
-  if LogFileOpen and Assigned(ConsoleExtension) and
-     Assigned(ConsoleExtension.BuiltinConsole) then
-    ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
-end;
-
-procedure TBenchmarkRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
-var
-  Runtime: TGocciaRuntimeCore;
-begin
-  Runtime := AttachRuntime(AEngine);
-  ApplyBenchmarkRunnerRuntimeProfile(Runtime);
-  InstallFFIIfGranted(Runtime);
-end;
-
-procedure TBenchmarkRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
-begin
-  InitializeRuntime(AEngine);
-  WarmUpSharedLazyGlobals(AEngine);
-end;
-
-function TBenchmarkRunnerApp.HonoredCapabilities:
-  TGocciaHonoredCapabilities;
-begin
-  Result := ALL_CAPABILITIES;
-end;
-
-procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TGocciaBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Reports: array of TReportSpec;
-  ReportCount, I: Integer;
-  ShowProgress: Boolean;
-  HasStructuredStdout, HasReadableStdout: Boolean;
+  ReportCount, I, P: Integer;
+  HasStructuredStdout, HasReadableStdout, UseStdin: Boolean;
+  Files, RawFiles, Discovered, StdinNames, Expanded: TStringList;
+  StdinSource: TStringList;
 begin
-  ShowProgress := not FNoProgress.Present;
+  FShowProgress := not FNoProgress.Present;
 
   ReportCount := FFormats.Values.Count;
   if ReportCount = 0 then
@@ -1003,8 +622,7 @@ begin
       Reports[ReportCount - 1].OutputFile := FOutputFile.Value;
   end;
 
-  // Reject when both structured (JSON/CSV) and human-readable (console/text)
-  // formats would write to stdout — the mixed output corrupts structured data.
+  { structured (JSON/CSV) and human-readable (console/text) formats both on stdout would corrupt the structured one }
   HasStructuredStdout := False;
   HasReadableStdout := False;
   FCanPrintProfile := True;
@@ -1024,46 +642,134 @@ begin
     ExitCode := 1;
     Exit;
   end;
+  { the progress lines stay out of a structured report on stdout }
+  if HasStructuredStdout then
+    FShowProgress := False;
 
-  // Suppress progress when structured output (JSON/CSV) goes to stdout so
-  // that human-readable status messages do not corrupt the output document.
-  if ShowProgress then
-    for I := 0 to Length(Reports) - 1 do
-      if (Reports[I].Format in [brfJSON, brfCompactJSON, brfCSV]) and (Reports[I].OutputFile = '') then
-      begin
-        ShowProgress := False;
-        Break;
-      end;
-
-  if APaths.Count = 0 then
-    RunBenchmarksFromStdin(Reports, ShowProgress)
-  else if (APaths.Count = 1) and IsStdinPath(APaths[0]) then
-    RunBenchmarksFromStdin(Reports, ShowProgress)
-  else
+  FProfiler := TGocciaProfiler.Instance;
+  FCompileProfiler := TGocciaCompileProfiler.Instance;
+  if FProfileDeterministic.Present then
   begin
-    { Reject mixing "-" with file paths so stdin cannot silently be
-      interleaved with on-disk files. Matches the rule enforced by
-      GocciaRunner and GocciaTestRunner. }
+    if Assigned(FProfiler) then
+      FProfiler.Deterministic := True;
+    if Assigned(FCompileProfiler) then
+      FCompileProfiler.Deterministic := True;
+  end;
+
+  { stdin when there are no paths or the only one is "-"; "-" among others is refused }
+  UseStdin := (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0]));
+  FFromStdin := UseStdin;
+  if not UseStdin then
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
       begin
-        WriteLn(ErrOutput,
-          'Error: stdin is supported only as the sole input.');
+        WriteLn(ErrOutput, 'Error: stdin is supported only as the sole input.');
         ExitCode := 1;
         Exit;
       end;
-    RunBenchmarks(APaths, Reports, ShowProgress);
+  Files := TStringList.Create;
+  StdinSource := nil;
+  try
+    if UseStdin then
+    begin
+      { source from stdin is governed by the working directory's config }
+      ValidateFileConfig(STDIN_FILE_NAME);
+      StdinSource := ReadSourceFromText(Input);
+      if MultifileEnabled then
+      begin
+        StdinNames := SplitStdinMultifile(StdinSource);
+        try
+          Files.AddStrings(StdinNames);
+        finally
+          StdinNames.Free;
+        end;
+        StdinSource := nil;
+      end
+      else
+        Files.Add(STDIN_FILE_NAME);
+    end
+    else
+    begin
+      RawFiles := TStringList.Create;
+      try
+        for P := 0 to APaths.Count - 1 do
+          if DirectoryExists(APaths[P]) then
+          begin
+            Discovered := FindAllFiles(APaths[P], ScriptExtensions);
+            try
+              for I := 0 to Discovered.Count - 1 do
+                if not IsBenchmarkHelperFile(Discovered[I]) then
+                  RawFiles.Add(Discovered[I]);
+            finally
+              Discovered.Free;
+            end;
+          end
+          else if FileExists(APaths[P]) then
+            RawFiles.Add(APaths[P])
+          else
+          begin
+            WriteLn(ErrOutput, 'Error: Path not found: ', APaths[P]);
+            ExitCode := 1;
+            Exit;
+          end;
+        Expanded := ExpandMultifileFiles(RawFiles);
+        Files.Free;
+        Files := Expanded;
+      finally
+        RawFiles.Free;
+      end;
+    end;
+    RunAndReport(Files, StdinSource, Reports);
+    StdinSource := nil;
+  finally
+    Files.Free;
+    StdinSource.Free;
+  end;
+end;
+
+{ the profile reports, as GocciaBenchmarkRunner prints and writes them }
+procedure TGocciaBenchmarkRunnerApp.AfterExecute;
+var
+  Mode: Goccia.CLI.Options.TGocciaProfileMode;
+  Opcodes, Functions, Compile: Boolean;
+begin
+  if not ProfilerOptions.Mode.Present or not Assigned(FProfiler) then
+    Exit;
+  Mode := ProfilerOptions.Mode.Value;
+  Opcodes := (Mode = Goccia.CLI.Options.pmOpcodes) or (Mode = Goccia.CLI.Options.pmAll);
+  Functions := (Mode = Goccia.CLI.Options.pmFunctions) or (Mode = Goccia.CLI.Options.pmAll);
+  Compile := Mode = Goccia.CLI.Options.pmCompile;
+  if FCanPrintProfile then
+  begin
+    if Opcodes then
+    begin
+      PrintOpcodeProfile(FProfiler);
+      PrintOpcodePairProfile(FProfiler);
+      PrintScalarHitRate(FProfiler);
+      PrintShapeSaturation(FProfiler);
+    end;
+    if Functions then
+      PrintFunctionProfile(FProfiler);
+    if Compile and Assigned(FCompileProfiler) then
+      PrintCompileProfile(FCompileProfiler);
+  end;
+  if ProfilerOptions.OutputPath.Present then
+  begin
+    if ProfilerOptions.Format.Matches(pfFlamegraph) then
+      WriteCollapsedStacks(FProfiler, ProfilerOptions.OutputPath.Value)
+    else
+      WriteProfileJSON(FProfiler, ProfilerOptions.OutputPath.Value);
   end;
 end;
 
 var
   RunResult: Integer;
 begin
-  CriticalSectionInit(BenchmarkProgressLock);
+  InitCriticalSection(ProgressLock);
   try
-    RunResult := TGocciaApplication.RunApplication(TBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
+    RunResult := TGocciaApplication.RunApplication(TGocciaBenchmarkRunnerApp, 'GocciaBenchmarkRunner');
   finally
-    CriticalSectionDone(BenchmarkProgressLock);
+    DoneCriticalSection(ProgressLock);
   end;
   if RunResult <> 0 then
     ExitCode := RunResult;

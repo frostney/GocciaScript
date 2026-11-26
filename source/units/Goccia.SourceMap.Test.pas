@@ -10,7 +10,6 @@ uses
   TestingPascalLibrary,
   TextSemantics,
 
-  Goccia.GarbageCollector,
   Goccia.SourceMap,
   Goccia.SourceMap.Consumer,
   Goccia.TestSetup;
@@ -535,12 +534,7 @@ begin
 end;
 
 begin
-  TGarbageCollector.Initialize;
-  try
-    TestRunnerProgram.AddSuite(TSourceMapTests.Create('SourceMap'));
-    RunGocciaTests;
-    ExitCode := TestResultToExitCode;
-  finally
-    TGarbageCollector.Shutdown;
-  end;
+  TestRunnerProgram.AddSuite(TSourceMapTests.Create('SourceMap'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
 end.

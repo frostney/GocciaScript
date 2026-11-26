@@ -11,7 +11,7 @@
 ## Executive Summary
 
 - **Self-hosted build** — `./build.pas` is a FreePascal script via `instantfpc`; no Make/CMake/npm required
-- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant and the `--layout-probe` production variant
+- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked)
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
 - **Automatic clean retry** — when FPC fails with a stale-state symptom, `build.pas` wipes that target's unit directory and retries it once; a failure that survives the retry is diagnosed from its output
@@ -26,13 +26,15 @@ See [Build from source](../README.md#build-from-source) in the README for FPC in
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas`, `format.pas` and `safeseh.pas` as scripts. instantfpc caches a compiled script under its file name, and its per-user default cache (`~/.cache/instantfpc`) would give every checkout's `build.pas` the same entry, so two runs from different worktrees would collide or run each other's script. Each shebang therefore passes `--set-cache` with the checkout's own `build/instantfpc cache` directory. The path is relative, like `-Fu./source/shared`, so run the scripts from the repository root. The space in the name makes instantfpc quote the path in the compiler command line, which keeps a checkout path containing an apostrophe working (one containing a double quote still fails to compile). The shebang is a single `env -S` word with `\_` for each separating space, because macOS splits a shebang line at its spaces before `env` reads it.
 
-Delphi 12 contributors build the Win32 and Win64 native application matrix from `source/app/GocciaScript.Delphi.groupproj`; see [Delphi Validation](contributing/delphi.md) for the complete IDE workflow and validation contract.
+- **FreePascal 3.3.1** from [fpc-toolchain](https://github.com/frostney/fpc-toolchain) (the build CI uses, `3.3.1+9`): the engine needs its native-TLS threadvars and code generator fixes. Select it with `eval "$(fpc-toolchain env 3.3.1+9)"`.
+
+The applications run on the engine, which builds with FreePascal only; Delphi support is planned for a later release ([ADR 0188](adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)).
 
 ## Build Commands
 
 ### Build Modes
 
-The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build). `--layout-probe` needs `--prod` and adds `-dGOCCIA_VM_LAYOUT_PROBE`: the same build with the VM's dispatch code a few hundred bytes further along, written to `build/layout-probe/` with units under `build/compiled/layout-probe/`, for measuring how much code placement alone moves a benchmark; see [Bytecode VM — Dispatch layout](bytecode-vm.md#dispatch-layout).
+The build script supports two modes via `--dev` (default) and `--prod` flags. The old engine's `--gc-stress` and `--layout-probe` builds are gone: the engine's binaries take `--gc-stress` and `--gc-verify` at run time, and `scripts/engine/gcstress.sh` runs them under small nurseries (see [Engine](engine/README.md)).
 
 ```bash
 ./build.pas runner              # Dev build (default)
@@ -43,7 +45,6 @@ The build script supports two modes via `--dev` (default) and `--prod` flags. `-
 ./build.pas --prod              # Production build of all components
 ./build.pas --clean --prod      # Clean, then production build of all components
 ./build.pas --prod runner repl  # Production build of specific components
-./build.pas --gc-stress testrunner  # GC-stress build, written to build/gc-stress/
 ```
 
 ### Build Everything
@@ -53,7 +54,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags. `-
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, wasmtestrunner, benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, benchmarkrunner, bundler, repl, and engine, the target for the engine's own command-line binary in `build/engine/goccia` (see [Engine](engine/README.md#build)). Each application embeds the engine's compiled JavaScript preludes: `build.pas` compiles it, runs it once to snapshot the preludes, and compiles it again when the snapshot changed. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -65,7 +66,6 @@ Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunn
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
 ./build.pas test262runner    # Native Test262 conformance runner
 ./build.pas tomlcompliancerunner # Native TOML compliance runner
-./build.pas wasmtestrunner   # Manifest-driven test runner for the Wasm/LAKON host
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
@@ -91,7 +91,7 @@ For `tests`, repeatable `--test=<substring>` filters select the union of matchin
 the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
 `GocciaSandboxRunner` into its [sandbox mode](#gocciarunner-sandbox-mode).
 
-Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean only the selected targets' unit caches before building them. For `tests`, filters also scope cleaning. Other targets, the other cache trees (ordinary, `--gc-stress` and `--layout-probe` each keep their own), executable files, and the legacy shared cache are preserved.
+Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean only the selected targets' unit caches before building them. For `tests`, filters also scope cleaning. Other targets, executable files, and the legacy shared cache are preserved.
 
 FPC 3.2.2 can report stale compiled state as misleading messages such as `Internal error`, `Compilation raised exception internally` or `Error while compiling resources`. When a target's compile fails with one of those, `build.pas` prints `FPC reported a stale-state error for <target>; retrying once from a clean unit directory`, wipes only that target's unit directory and compiles it once more. An ordinary compile error is not retried. If the retry also fails, `build.pas` reports its output and exits non-zero; the target was already rebuilt from an empty unit directory, so diagnose the reported source line.
 
@@ -242,7 +242,7 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 # Abort after a fixed number of bytecode instructions
 printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --max-instructions=1000000
 
-# Set call stack depth limit (default 2200; 0 = no depth limit, bytecode recursion then stops at --max-memory, ADR 0130)
+# Set call stack depth limit (default and 0: the engine's bound of 200,000 nested calls)
 ./build/GocciaRunner example.js --max-stack=5000
 ./build/GocciaRunner example.js --max-stack=0
 
@@ -307,7 +307,7 @@ The first file found is loaded and applied as the **root config**. When running 
 
 `GocciaTestRunner` keeps explicit multi-file test invocations isolated: when you pass more than one input path and do not pass `--config`, the first file's auto-discovered config is not promoted to a root config for the rest of the list. Each file still gets its nearest per-file config. Pass `--config=<path>` when you intentionally want one shared root config across an explicit test file list.
 
-**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaScriptLoaderBare`, `GocciaTest262Runner`, and `GocciaWasmTestRunner` do not take it.
+**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaScriptLoaderBare` and `GocciaTest262Runner` do not take it.
 
 The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
 
@@ -397,7 +397,7 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 ./build/GocciaTestRunner --ignore-config-permissions tests   # command-line grants only
 ```
 
-The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaWasmTestRunner` takes only `-P`, and `GocciaScriptLoaderBare` and `GocciaTest262Runner` read no config. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
+The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaScriptLoaderBare` and `GocciaTest262Runner` read no config. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
 
 TOML equivalent (`goccia.toml`):
 
@@ -490,7 +490,7 @@ In sandbox mode `GocciaRunner` runs one entry inside an isolated in-memory
 virtual filesystem instead of against the host. `--sandbox`, any `--copy` or
 `--copy-rw` input, or a trusted `sandbox` section in the root config turns it
 on. The guest sees only that filesystem and may import `"fs"` and `"goccia"`
-([Sandbox Modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)).
+([Sandbox Modules](built-ins.md#sandbox-modules)).
 [Permissions — Sandbox mode](permissions.md#sandbox-mode) specifies what it may
 reach, how inputs are copied in and written back, and the config section.
 
@@ -577,10 +577,9 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaTOMLComplianceRunner` | `source/app/compliance/GocciaTOMLComplianceRunner.dpr` | Native pinned `toml-test` runner |
 | `build/GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Crash harness that drives one input through the lexer, parser, compiler, and VM |
-| `build/GocciaWasmTestRunner` | `source/app/GocciaWasmTestRunner.dpr` | Single-threaded, manifest-driven test runner for the Wasm/LAKON host |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
-| `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
+| `build/HashMap.Test` | `*.Test.pas` | Pascal unit test binaries |
 
 Intermediate files (`.o`, `.or`, `.ppu`, generated resource lists) go to `build/compiled/` to keep the source tree clean. Each executable target compiles into an isolated `build/compiled/targets/<target>/` unit cache, and Pascal unit test programs compile into isolated `build/compiled/tests/<test-program>/` subdirectories so one program's FPC unit cache cannot poison the next.
 
@@ -605,19 +604,20 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 
 ### Build Mode Flags
 
-| Flag | Development (`--dev`) | Production (`--prod`) | GC stress (`--gc-stress`) |
-|------|----------------------|----------------------|---------------------------|
-| Optimization | `-O-` (disabled) | `-O4` (aggressive) | as `--dev` |
-| Debug info | `-gw -godwarfsets` (DWARF) | — (none) | as `--dev` |
-| Line info | `-gl` (debug line numbers) | — | as `--dev` |
-| Stack checking | `-Ct` | — | as `--dev` |
-| Range checking | `-Cr` | — | as `--dev` |
-| Assertions | `-Sa` | — | as `--dev` |
-| Strip symbols | — | `-Xs` | — |
-| Smart linking | — | `-CX -XX` | — |
-| Heap tracing | — | — | `-gh` (heaptrc) |
-| Define | — | `-dPRODUCTION` | `-dGOCCIA_GC_STRESS` |
-| Output | `build/` | `build/` | `build/gc-stress/`, units under `build/compiled/gc-stress/` |
+These are the flags of the Pascal test programs and the TOML compliance runner. The engine's applications take theirs from `build.pas`'s engine build (`GocciaArgs`): optimized and with `-dPRODUCTION` in both modes, at `-O4` (`-O1` for i386, where FPC 3.3.1 miscompiles at `-O2` and above); `--prod` strips them (`-Xs`) and `--dev` keeps line info (`-gl`).
+
+| Flag | Development (`--dev`) | Production (`--prod`) |
+|------|----------------------|----------------------|
+| Optimization | `-O-` (disabled) | `-O4` (aggressive) |
+| Debug info | `-gw -godwarfsets` (DWARF) | — (none) |
+| Line info | `-gl` (debug line numbers) | — |
+| Stack checking | `-Ct` | — |
+| Range checking | `-Cr` | — |
+| Assertions | `-Sa` | — |
+| Strip symbols | — | `-Xs` |
+| Smart linking | — | `-CX -XX` |
+| Define | — | `-dPRODUCTION` |
+| Output | `build/` | `build/` |
 
 ### `Shared.inc` and `Goccia.inc`
 
@@ -651,14 +651,14 @@ The build script is a FreePascal program that runs via the `instantfpc` shebang:
 It:
 
 1. Creates the `build/` directory if it doesn't exist.
-2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries, and `--layout-probe`, which does the same for the layout probe on a production build.
+2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`).
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and quiet output; Win32 retains the linked filename for its post-link step. Waits use `poRunIdle` to sleep when pipes have no output; `RunCommand` strips `poWaitOnExit`, so that option would not fix the wait.
 6. Applies `FPC_TARGET_CPU` and `FPC_TARGET_OS`, when set, as the compiler's `-P<cpu>` and `-T<os>` target overrides.
 7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), applying the selected filters, compiling concurrently with a separate `build/compiled/tests/<test-program>/` unit-output directory for each program, and optionally running the selected binaries.
 
-Every workflow that compiles installs FPC 3.2.4 with the [`frostney/fpc-toolchain`](https://github.com/frostney/fpc-toolchain) action, pinned by commit, which caches the toolchain between runs. CI is pinned to the build `3.2.4-rc2-b1`, which each of `ci.yml`, `pr.yml`, `fuzz.yml`, `gc-stress.yml` and `timezone-data-bump.yml` names once, in its `FPC_VERSION` variable; a version bump also requires the [Win32 manifest re-audit](contributing/win32-safeseh.md#re-auditing-a-toolchain-update). In `ci.yml` the `build` job asks the action for its matrix target: the Linux runner cross-compiles the Linux and Windows targets and the macOS runner the Darwin ones, with `fpc -P<cpu> -T<os>` picking the compiler and the toolchain's `fpc.cfg` supplying the units and binutils. FPC 3.2.4 builds no x86 cross compilers on arm64 hosts, so on Apple Silicon `x86_64-darwin` runs the toolchain's x86_64 macOS compiler under Rosetta 2. The Linux targets link against the pinned Ubuntu 22.04 (x86_64) and 18.04 (aarch64) glibc libraries that the job downloads and checks by SHA-256, not the runner's own, so a release needs glibc 2.34 on x86_64 and 2.17 on aarch64. The source builds on FPC 3.2.2 as well; `Shared.inc` defines the symbols that cover the three RTL interfaces 3.2.4 changed.
+Every workflow that compiles installs FPC 3.3.1 with the [`frostney/fpc-toolchain`](https://github.com/frostney/fpc-toolchain) action, pinned by commit, which caches the toolchain between runs. CI is pinned to the build `3.3.1-b9`, which each of `ci.yml`, `pr.yml`, `engine.yml`, `fuzz.yml`, `gc-stress.yml` and `timezone-data-bump.yml` names once, in its `FPC_VERSION` variable; a version bump also requires the [Win32 manifest re-audit](contributing/win32-safeseh.md#re-auditing-a-toolchain-update). In `ci.yml` the `build` job asks the action for its matrix target: the Linux runner cross-compiles the Linux and Windows targets and the macOS runner the Darwin ones, with `fpc -P<cpu> -T<os>` picking the compiler and the toolchain's `fpc.cfg` supplying the units and binutils. The toolchain's Apple Silicon build carries its own x86_64 cross compiler, so the macOS runner compiles `x86_64-darwin` without Rosetta 2. The Linux targets link against the pinned Ubuntu 22.04 (x86_64) and 18.04 (aarch64) glibc libraries that the job downloads and checks by SHA-256, not the runner's own, so a release needs glibc 2.34 on x86_64 and 2.17 on aarch64. The source outside `source/engine` builds on FPC 3.2.2 and 3.2.4 as well; `Shared.inc` defines the symbols that cover the three RTL interfaces 3.2.4 changed.
 
 ## Project Structure for Compilation
 
@@ -751,7 +751,7 @@ Runs on the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x64 (x86_64-win64), x86 (i386-win32) |
 
-**`build`** — Installs FPC 3.2.4 with its matrix target (see [How build.pas works](#how-buildpas-works)). `.github/scripts/compile-programs.py` builds every application, Pascal test and compliance runner with up to four compiler processes, limited to the runner's logical CPU count. Each gets its own temporary unit-output and working directory and keeps `-B` and all production flags; compiled units are never reused across programs or runs. It prints per-program times and compiler totals, saves diagnostics under `build/ci-logs/`, and prints them on failure. Any compiler failure fails the job after the other compilers finish. The staged binaries are uploaded as intermediate artifacts. A failed upload is retried once after ten seconds, replacing any artifact left by the first attempt; a second failure fails the job.
+**`build`** — Installs FPC 3.3.1 with its matrix target (see [How build.pas works](#how-buildpas-works)). `.github/scripts/compile-programs.py` builds every application, Pascal test and compliance runner with up to four compiler processes, limited to the runner's logical CPU count. Each gets its own temporary unit-output and working directory and keeps `-B` and all production flags; compiled units are never reused across programs or runs. It prints per-program times and compiler totals, saves diagnostics under `build/ci-logs/`, and prints them on failure. Any compiler failure fails the job after the other compilers finish. The staged binaries are uploaded as intermediate artifacts. A failed upload is retried once after ten seconds, replacing any artifact left by the first attempt; a second failure fails the job.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 

@@ -1,5 +1,16 @@
 program GocciaScriptLoaderBare;
 
+{ GocciaScriptLoaderBare: the core engine without a runtime, from a file
+  or stdin. The old loader's command line (compatibility flags, source type
+  and name, --print, the limits, --profile) over a TGocciaEngine whose host is the
+  bare one (TGocciaEngine.Bare): print and Goccia but no console, timers, web APIs
+  or host modules, and no module content provider, so an import that finds its
+  file fails with ERR_MODULE_LOADING_UNSUPPORTED as the old loader's does.
+
+  The frame bound is the engine's own unless --max-stack gives one: a bound keeps the
+  JIT off (Goccia.VM SetMaxFrames), and the engine refuses native recursion before the
+  native stack runs out whatever the bound. }
+
 {$I Goccia.inc}
 
 uses
@@ -13,46 +24,37 @@ uses
   CLI.Units,
   TextSemantics,
 
-  Goccia.Arguments.Collection,
-  Goccia.Builtins.GlobalShadowRealm,
+  Goccia.CLI.FileEngine,
   Goccia.CLI.Options,
   Goccia.CLI.Stdin,
-  Goccia.Engine,
-  Goccia.Error,
-  Goccia.Error.Detail,
   Goccia.FileExtensions,
-  Goccia.GarbageCollector,
-  Goccia.InstructionLimit,
   Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
-  Goccia.StackLimit,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
-  Goccia.Timeout,
-  Goccia.Values.Error,
-  Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives,
-  Goccia.VM.Exception;
+
+  Goccia.Core,
+  Goccia.Embed;
 
 const
-  BARE_PRINT_GLOBAL_NAME = 'print';
   BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
-  { Bare defaults its input to stdin like GocciaRunner, so it takes
-    the same no-argument rule; GocciaREPL is the right pointer for anyone
-    who typed the command expecting an interactive prompt. }
+  { Bare defaults its input to stdin like GocciaRunner, so it takes the same
+    no-argument rule; GocciaREPL is the right pointer for anyone who typed the
+    command expecting an interactive prompt. }
   BARE_STDIN_USAGE = suStdinDefaultWithREPL;
-  BARE_DEFAULT_MAX_STACK_DEPTH = 10000;
+  BARE_HONORED_SETTINGS: TGocciaHonoredSettings = [grsTimeout, grsMaxMemory,
+    grsMaxInstructions, grsMaxStack];
+  BARE_BOOLEAN_FLAGS: array[0..9] of string = ('--compat-label',
+    '--compat-for-in-loop', '--experimental-js-module-source',
+    '--warning-unsupported-features', '--strict-types',
+    '--unsafe-function-constructor', '--unsafe-shadowrealm', '--deterministic',
+    '--print', '--help');
+  FATAL_PREFIX = 'Fatal error: ';
 
 type
-  TBarePrintHost = class
-  public
-    function Print(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
-
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
     LabelStatementsEnabled: Boolean;
@@ -73,26 +75,29 @@ type
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
     StackSize: Integer;
+    StackSizeSet: Boolean;
     ProfileModePresent: Boolean;
     ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
     ProfileOutputPath: string;
   end;
 
-function TBarePrintHost.Print(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  I: Integer;
-  Line: string;
-begin
-  Line := '';
-  for I := 0 to AArgs.Length - 1 do
-  begin
-    if I > 0 then
-      Line := Line + ' ';
-    Line := Line + AArgs.GetElement(I).ToStringLiteral.Value;
+  { parse warnings (--warning-unsupported-features) on stderr, as the old
+    loader's source pipeline prints them }
+  TBareWarnings = class
+  public
+    FileName: string;
+    procedure Warn(const AMessage, ASuggestion: UnicodeString;
+      ALine, AColumn: Integer);
   end;
-  WriteLn(Line);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+procedure TBareWarnings.Warn(const AMessage, ASuggestion: UnicodeString;
+  ALine, AColumn: Integer);
+begin
+  WriteLn(ErrOutput, Format('Warning: %s', [UTF8Encode(AMessage)]));
+  if ASuggestion <> '' then
+    WriteLn(ErrOutput, Format('  Suggestion: %s',
+      [UTF8Encode(ASuggestion)]));
+  WriteLn(ErrOutput, Format('  --> %s:%d:%d', [FileName, ALine, AColumn]));
 end;
 
 procedure PrintUsage(var AOut: Text);
@@ -122,7 +127,7 @@ begin
   WriteLn(AOut, '  --timeout=DURATION            Per-file cooperative timeout: 500ms, 5s, 2m, or plain milliseconds');
   WriteLn(AOut, '  --max-memory=BYTES            GC heap limit: 64MiB, 1GiB, or plain bytes (RangeError on exceed)');
   WriteLn(AOut, '  --max-instructions=N          Maximum bytecode steps before aborting');
-  WriteLn(AOut, '  --max-stack=N                 Maximum call stack depth (default: 10000; 0 = no limit)');
+  WriteLn(AOut, '  --max-stack=N                 Maximum call stack depth (default: the engine''s; 0 = no limit)');
   WriteLn(AOut, '  --profile=opcodes|functions|all');
   WriteLn(AOut, '                                Enable bytecode VM profiling');
   WriteLn(AOut, '  --profile-output=PATH         Write profiler JSON to PATH');
@@ -186,6 +191,7 @@ begin
   if Count > High(Integer) then
     RaiseInvalidValue('max-stack', AValue, TOO_LARGE_ERROR);
   AOptions.StackSize := Integer(Count);
+  AOptions.StackSizeSet := True;
 end;
 
 procedure ParseProfileMode(const AValue: string; var AOptions: TBareOptions);
@@ -200,41 +206,6 @@ begin
     raise Exception.Create('Invalid --profile value: ' + AValue);
   AOptions.ProfileModePresent := True;
 end;
-
-procedure InitializeProfiler(const AOptions: TBareOptions);
-begin
-  if not AOptions.ProfileModePresent then
-    Exit;
-  TGocciaProfiler.Initialize;
-  TGocciaProfiler.Instance.Enabled := True;
-  case AOptions.ProfileMode of
-    Goccia.CLI.Options.pmOpcodes:
-      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes];
-    Goccia.CLI.Options.pmFunctions:
-      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmFunctions];
-    Goccia.CLI.Options.pmAll:
-      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
-        Goccia.Profiler.pmFunctions];
-  end;
-end;
-
-procedure WriteProfilerReport(const AOptions: TBareOptions);
-begin
-  if not AOptions.ProfileModePresent or
-     (AOptions.ProfileOutputPath = '') or
-     not Assigned(TGocciaProfiler.Instance) then
-    Exit;
-  WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
-end;
-
-const
-  BARE_HONORED_SETTINGS: TGocciaHonoredSettings = [grsTimeout, grsMaxMemory,
-    grsMaxInstructions, grsMaxStack];
-  BARE_BOOLEAN_FLAGS: array[0..9] of string = ('--compat-label',
-    '--compat-for-in-loop', '--experimental-js-module-source',
-    '--warning-unsupported-features', '--strict-types',
-    '--unsafe-function-constructor', '--unsafe-shadowrealm', '--deterministic',
-    '--print', '--help');
 
 { A boolean flag given a value (`--print=false`) is a usage error, as on the
   shared-application binaries. }
@@ -268,28 +239,10 @@ var
   Arguments: TCommandLineArguments;
   I: Integer;
 begin
-  AOptions.Compatibility := [];
-  AOptions.LabelStatementsEnabled := False;
-  AOptions.ForInLoopsEnabled := False;
-  AOptions.ExperimentalJSModuleSourceEnabled := False;
-  AOptions.WarningUnsupportedFeatures := False;
-  AOptions.StrictTypes := False;
-  AOptions.UnsafeFunctionConstructor := False;
-  AOptions.UnsafeShadowRealm := False;
-  AOptions.Deterministic := False;
-  AOptions.Print := False;
+  AOptions := Default(TBareOptions);
   AOptions.SourceType := stDetect;
-  AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;
-  AOptions.FileNameExplicit := False;
-  AOptions.SourceName := '';
-  AOptions.TimeoutMs := 0;
-  AOptions.MaxMemoryBytes := 0;
-  AOptions.MaxInstructions := 0;
-  AOptions.StackSize := BARE_DEFAULT_MAX_STACK_DEPTH;
-  AOptions.ProfileModePresent := False;
   AOptions.ProfileMode := Goccia.CLI.Options.pmAll;
-  AOptions.ProfileOutputPath := '';
 
   Arguments := GetCommandLineArguments;
   for I := 0 to High(Arguments) do
@@ -385,98 +338,143 @@ begin
     Result := CreateFileTextLines(ReadUTF8FileText(AFileName));
 end;
 
+{ the language profile the options select (GocciaScript's recommended one with
+  the compatibility flags and unsafe options turned on) }
+function BareProfile(const AOptions: TBareOptions): TLangProfile;
+begin
+  Result := RecommendedProfile;
+  Result.Asi := cfASI in AOptions.Compatibility;
+  Result.VarDecl := cfVar in AOptions.Compatibility;
+  Result.FuncDecl := cfFunction in AOptions.Compatibility;
+  Result.ForLoop := cfTraditionalFor in AOptions.Compatibility;
+  Result.WhileLoop := cfWhileLoops in AOptions.Compatibility;
+  Result.LooseEq := cfLooseEquality in AOptions.Compatibility;
+  Result.NonStrict := cfNonStrictMode in AOptions.Compatibility;
+  Result.ArgumentsObject := cfArgumentsObject in AOptions.Compatibility;
+  Result.Labels := AOptions.LabelStatementsEnabled;
+  Result.ForIn := AOptions.ForInLoopsEnabled;
+  Result.WarningUnsupported := AOptions.WarningUnsupportedFeatures;
+  Result.StrictTypes := AOptions.StrictTypes;
+  Result.FunctionCtor := AOptions.UnsafeFunctionConstructor;
+  Result.ShadowRealm := AOptions.UnsafeShadowRealm;
+end;
+
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
   const AOptions: TBareOptions);
 begin
-  if AOptions.Deterministic then
-    AEngine.HostEnvironment.UseDeterministicProfile;
-  AEngine.Compatibility := AOptions.Compatibility;
-  AEngine.LabelStatementsEnabled := AOptions.LabelStatementsEnabled;
-  AEngine.ForInLoopsEnabled := AOptions.ForInLoopsEnabled;
-  AEngine.ExperimentalJSModuleSourceEnabled :=
-    AOptions.ExperimentalJSModuleSourceEnabled;
-  AEngine.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
-  AEngine.StrictTypes := AOptions.StrictTypes;
-  AEngine.SourceType := AOptions.SourceType;
-  AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
-  if AOptions.UnsafeShadowRealm then
-    EnableShadowRealm(AEngine);
-  AEngine.GlobalBackedTopLevel := AOptions.SourceType <> stModule;
+  AEngine.Bare := True;
+  AEngine.ExposeTimers := False;
+  AEngine.Profile := BareProfile(AOptions);
+  case AOptions.SourceType of
+    stScript:
+      AEngine.SourceKind := gskScript;
+    stModule:
+      AEngine.SourceKind := gskModule;
+  else
+    AEngine.SourceKind := gskDetect;
+  end;
+  AEngine.JSModuleSources := AOptions.ExperimentalJSModuleSourceEnabled;
+  AEngine.Deterministic := AOptions.Deterministic;
+  AEngine.TimeoutMs := AOptions.TimeoutMs;
+  AEngine.MaxInstructions := AOptions.MaxInstructions;
+  AEngine.MaxMemory := AOptions.MaxMemoryBytes;
+  if AOptions.StackSizeSet then
+    AEngine.MaxFrames := AOptions.StackSize;
+  if AOptions.Print then
+    AEngine.ResultForm := grfString;
 end;
 
-procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
-  const APrintHost: TBarePrintHost);
+procedure InitializeProfiler(const AEngine: TGocciaEngine;
+  const AOptions: TBareOptions);
 begin
-  AEngine.RegisterGlobal(BARE_PRINT_GLOBAL_NAME,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(APrintHost.Print,
-      BARE_PRINT_GLOBAL_NAME, -1));
-  AEngine.RefreshGlobalThis;
+  if not AOptions.ProfileModePresent then
+    Exit;
+  TGocciaProfiler.Initialize;
+  TGocciaProfiler.Instance.Enabled := True;
+  case AOptions.ProfileMode of
+    Goccia.CLI.Options.pmOpcodes:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes];
+    Goccia.CLI.Options.pmFunctions:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmFunctions];
+    Goccia.CLI.Options.pmAll:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
+        Goccia.Profiler.pmFunctions];
+  end;
+  TGocciaProfiler.Instance.BeginEntry;
+  AEngine.ProfileOpcodes :=
+    Goccia.Profiler.pmOpcodes in TGocciaProfiler.Instance.Mode;
+  AEngine.ProfileFunctions :=
+    Goccia.Profiler.pmFunctions in TGocciaProfiler.Instance.Mode;
 end;
 
-procedure PrintResult(const AResult: TGocciaValue; const APrint: Boolean);
+procedure WriteProfilerReport(const AOptions: TBareOptions);
 begin
-  if APrint and Assigned(AResult) then
-    WriteLn(AResult.ToStringLiteral.Value);
+  if not AOptions.ProfileModePresent or
+     (AOptions.ProfileOutputPath = '') or
+     not Assigned(TGocciaProfiler.Instance) then
+    Exit;
+  WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
+end;
+
+{ a failed run on stderr: the error with its code frame, as GocciaRunner
+  words it; a spent limit as the old loader's "Error: ..." line }
+procedure ReportFailure(const ADisplayName: string;
+  const AResult: TGocciaRunResult; const ASource: TStringList;
+  const AEngine: TGocciaEngine; const AOptions: TBareOptions);
+var
+  Text: string;
+begin
+  Text := FailureText(ADisplayName, AResult, ASource, AEngine, '', nil, True,
+    True, IsColorTerminal, AOptions.TimeoutMs, AOptions.MaxInstructions);
+  if (AResult.Aborted <> gaNone) and StartsStr(FATAL_PREFIX, Text) then
+    Text := 'Error: ' + Copy(Text, Length(FATAL_PREFIX) + 1, MaxInt);
+  WriteLn(ErrOutput, TrimRight(Text));
 end;
 
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
-  GC: TGarbageCollector;
-  PrintHost: TBarePrintHost;
-  ScriptResult: TGocciaScriptResult;
+  Resolver: TGocciaModuleResolver;
+  RunResult: TGocciaRunResult;
   Source: TStringList;
+  Warnings: TBareWarnings;
 begin
   Result := 0;
   Source := ReadBareSource(AOptions.FileName);
+  Warnings := TBareWarnings.Create;
   try
-    InitializeProfiler(AOptions);
     if AOptions.SourceName <> '' then
       DisplayName := AOptions.SourceName
     else if IsStdinPath(AOptions.FileName) then
       DisplayName := STDIN_FILE_NAME
     else
       DisplayName := AOptions.FileName;
-
-    StartExecutionTimeout(AOptions.TimeoutMs);
-    StartInstructionLimit(AOptions.MaxInstructions);
-    SetMaxStackDepth(AOptions.StackSize);
-    PrintHost := TBarePrintHost.Create;
+    Warnings.FileName := DisplayName;
+    { the old engine's default resolution (relative and absolute paths; a bare
+      specifier is refused), against the entry's directory }
+    Resolver := TGocciaModuleResolver.Create(
+      ExtractFilePath(ExpandFileName(DisplayName)));
+    Engine := TGocciaEngine.Create;
     try
-      Engine := TGocciaEngine.Create(DisplayName, Source);
-      try
-        ConfigureEngine(Engine, AOptions);
-        GC := TGarbageCollector.Instance;
-        if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
-          GC.MaxBytes := AOptions.MaxMemoryBytes;
-        RegisterBareGlobals(Engine, PrintHost);
-        try
-          ScriptResult := Engine.Execute;
-          PrintResult(ScriptResult.Result, AOptions.Print);
-        except
-          on E: EGocciaBytecodeThrow do
-          begin
-            WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-              DisplayName, Source, IsColorTerminal,
-              Engine.ModuleLoader.DiagnosticScope.Principal,
-              E.Suggestion));
-            Result := 1;
-          end;
-          on E: TGocciaThrowValue do
-          begin
-            WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
-              Source, IsColorTerminal,
-              Engine.ModuleLoader.DiagnosticScope.Principal,
-              E.Suggestion));
-            Result := 1;
-          end;
-        end;
-      finally
-        Engine.Free;
+      ConfigureEngine(Engine, AOptions);
+      Engine.Resolver := Resolver;
+      Engine.OnWarning := Warnings.Warn;
+      InitializeProfiler(Engine, AOptions);
+      RunResult := Engine.Run(DisplayName, UTF8Decode(Source.Text));
+      if RunResult.Ok then
+      begin
+        if RunResult.HasResult then
+          WriteLn(UTF8Encode(RunResult.ResultText));
+      end
+      else
+      begin
+        ReportFailure(DisplayName, RunResult, Source, Engine, AOptions);
+        Result := 1;
       end;
     finally
-      PrintHost.Free;
+      Engine.Free;
+      Resolver.Free;
     end;
   finally
     try
@@ -484,6 +482,7 @@ begin
     finally
       if Assigned(TGocciaProfiler.Instance) then
         TGocciaProfiler.Shutdown;
+      Warnings.Free;
       Source.Free;
     end;
   end;
@@ -491,13 +490,29 @@ end;
 
 var
   Options: TBareOptions;
+  SetupError: UnicodeString;
+  SnapshotEngine: TGocciaEngine;
 begin
+  { the build's prelude snapshot stage (build.pas sets GOCCIA_SNAPSHOT_OUT): the
+    bare host's preludes compiled once and written for the embedding build }
+  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
+  begin
+    SetupError := '';
+    SnapshotEngine := TGocciaEngine.Create;
+    SnapshotEngine.Bare := True;
+    if not SnapshotEngine.PrepareHost(SetupError) then
+    begin
+      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SetupError));
+      Halt(1);
+    end;
+    Halt(0);
+  end;
   Options := Default(TBareOptions);
   try
     ParseOptions(Options);
-    { clig.dev no-argument rule — see Goccia.CLI.Stdin.  Bare has its
-      own argument parser, so the shared TGocciaCLIApplication gate
-      does not cover it and the same decision is applied here. }
+    { clig.dev no-argument rule — see Goccia.CLI.Stdin.  Bare has its own
+      argument parser, so the shared TGocciaCLIApplication gate does not
+      cover it and the same decision is applied here. }
     if DecideStdinInput(Options.FileNameExplicit,
       Options.FileNameExplicit and IsStdinPath(Options.FileName),
       IsInputTerminal) = sdShowUsage then
@@ -515,16 +530,6 @@ begin
     begin
       WriteLn(ErrOutput, 'Error: ', E.Message);
       ExitCode := EXIT_CODE_USAGE;
-    end;
-    on E: TGocciaTimeoutError do
-    begin
-      WriteLn(ErrOutput, 'Error: ', E.Message);
-      ExitCode := 1;
-    end;
-    on E: TGocciaError do
-    begin
-      WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
-      ExitCode := 1;
     end;
     on E: Exception do
     begin
