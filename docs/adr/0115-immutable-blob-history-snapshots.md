@@ -33,19 +33,14 @@ chunks of at most 128 pointers. The SHA-256 digest of each chunk's ordered
 ```
 
 Snapshots contain the fingerprint and the corresponding parsed pointer
-records. Older JetStream daily pointers embed a duplicate
-`reportJson` payload, because the publisher used to spread the whole publish
-entry into each pointer. The JetStream adapter drops it from snapshots and
-from raw reads alike, so a read returns the same runs with or without a
-snapshot; full reports and raw pointers remain unchanged. Their
+records. The JetStream adapter omits the duplicate `reportJson` payload that
+its daily pointers embed, because the publisher spreads the whole publish entry
+into each pointer; full reports and raw pointers remain unchanged. Their
 serialized content is deterministic and bounded to 1 MiB before compression.
 Readers check the version, fingerprint, exact descriptor sequence, and
 report-specific schemas, and bound gzip expansion. Missing, invalid, or
 unreadable snapshots fall back to raw pointers. Unknown historical path shapes,
-missing ETags, and weak ETags also use raw reads. `fetch` asks for compressed
-bodies by default, and the Blob CDN answers a compressed response with a weak
-ETag, so pointer reads ask for the identity encoding to get the strong ETag
-the listing reports. Malformed raw pointers remain
+missing ETags, and weak ETags also use raw reads. Malformed raw pointers remain
 excluded as before; transport failures on raw reads still propagate.
 
 Changes to projection semantics, including which raw records qualify, require
