@@ -12,7 +12,8 @@ uses
   SysUtils,
 
   ChildProcess,
-  TestingPascalLibrary;
+  TestingPascalLibrary,
+  TimingUtils;
 
 type
   TChildProcessTests = class(TTestSuite)
@@ -38,13 +39,32 @@ const
   // a file, once nothing else holds it.
   DEADLINE_MS = 2500;
 
+type
+  TChildProcessClass = class of TChildProcess;
+
+  { Closes descriptors one by one, as on macOS and the BSDs, where there is no
+    close_range. }
+  TOneByOneChildProcess = class(TChildProcess)
+  protected
+    function CloseDescriptorsFrom(const AFirst: LongInt): Boolean; override;
+  end;
+
+function TOneByOneChildProcess.CloseDescriptorsFrom(
+  const AFirst: LongInt): Boolean;
+begin
+  Result := False;
+end;
+
 function StartChild(const AExecutable: string;
-  const AArguments: array of string;
-  const AOptions: TProcessOptions): TChildProcess;
+  const AArguments: array of string; const AOptions: TProcessOptions;
+  const AClass: TChildProcessClass = nil): TChildProcess;
 var
   Argument: string;
 begin
-  Result := TChildProcess.Create(nil);
+  if Assigned(AClass) then
+    Result := AClass.Create(nil)
+  else
+    Result := TChildProcess.Create(nil);
   Result.Executable := AExecutable;
   for Argument in AArguments do
     Result.Parameters.Add(Argument);
@@ -54,9 +74,9 @@ end;
 
 { A cat reading a pipe the parent writes: it stays alive until the parent
   closes its input, so a test controls exactly how long it runs. }
-function StartHolder: TChildProcess;
+function StartHolder(const AClass: TChildProcessClass = nil): TChildProcess;
 begin
-  Result := StartChild('/bin/cat', [], [poUsePipes]);
+  Result := StartChild('/bin/cat', [], [poUsePipes], AClass);
 end;
 
 procedure StopHolder(var AHolder: TChildProcess);
@@ -70,12 +90,12 @@ end;
 
 { Waits until AProcess exits or the deadline passes, and whether it exited. }
 function ExitsWithin(const AProcess: TProcess;
-  const AMilliseconds: QWord): Boolean;
+  const AMilliseconds: Int64): Boolean;
 var
-  Started: QWord;
+  Started: Int64;
 begin
-  Started := GetTickCount64;
-  while AProcess.Running and (GetTickCount64 - Started < AMilliseconds) do
+  Started := GetMilliseconds;
+  while AProcess.Running and (GetMilliseconds - Started < AMilliseconds) do
     Sleep(5);
   Result := not AProcess.Running;
 end;
@@ -85,13 +105,13 @@ function ReachesEndOfFile(const ADescriptor: cint;
   const AMilliseconds: clong): Boolean;
 var
   Poll: TPollFd;
-  Byte_: Byte;
+  ReadByte: Byte;
 begin
   Poll.fd := ADescriptor;
   Poll.events := POLLIN;
   Poll.revents := 0;
   Result := (FpPoll(@Poll, 1, AMilliseconds) = 1) and
-    (FpRead(ADescriptor, Byte_, 1) = 0);
+    (FpRead(ADescriptor, ReadByte, 1) = 0);
 end;
 {$ENDIF}
 
@@ -142,7 +162,7 @@ const
 var
   Held: TFileStream;
   Holder: TChildProcess;
-  Started: QWord;
+  Started: Int64;
   Reopened: Boolean;
 begin
   Holder := nil;
@@ -153,7 +173,7 @@ begin
     finally
       Held.Free;
     end;
-    Started := GetTickCount64;
+    Started := GetMilliseconds;
     repeat
       try
         TFileStream.Create(FPath, fmCreate).Free;
@@ -165,7 +185,7 @@ begin
           Sleep(RETRY_INTERVAL_MS);
         end;
       end;
-    until Reopened or (GetTickCount64 - Started > DEADLINE_MS);
+    until Reopened or (GetMilliseconds - Started > DEADLINE_MS);
     Expect<Boolean>(Reopened).ToBe(True);
     Expect<Boolean>(Holder.Running).ToBe(True);
   finally
@@ -199,7 +219,8 @@ begin
   end;
 end;
 
-{ /dev/fd/<n> exists in a process exactly while its descriptor n is open. }
+{ A shell can redirect to descriptor n (`true >&n`) exactly while it has n
+  open. }
 procedure TChildProcessTests.TestARunCommandChildDoesNotSeeAParentDescriptor;
 var
   Held: TFileStream;
@@ -211,8 +232,9 @@ begin
     Descriptor := Held.Handle;
     Expect<Boolean>(Descriptor > 2).ToBe(True);
     Expect<Boolean>(RunCommand('/bin/sh', ['-c',
-      Format('for n in 1 %d; do if [ -e /dev/fd/$n ]; then echo "$n open"; ' +
-        'else echo "$n closed"; fi; done', [Descriptor])], Output)).ToBe(True);
+      Format('for n in 1 %d; do if { true >&$n; } 2>/dev/null; then ' +
+        'echo "$n open"; else echo "$n closed"; fi; done', [Descriptor])],
+      Output)).ToBe(True);
   finally
     Held.Free;
   end;
@@ -230,7 +252,6 @@ const
 var
   Ends: TFilDes;
   Saved, Lowered: TRLimit;
-  SavedCloseFrom: TChildProcessCloseFrom;
   Holder: TChildProcess;
 begin
   Holder := nil;
@@ -238,14 +259,12 @@ begin
   Expect<Integer>(FpDup2(Ends[1], HIGH_DESCRIPTOR)).ToBe(HIGH_DESCRIPTOR);
   FpClose(Ends[1]);
   Expect<Integer>(FpGetRLimit(RLIMIT_NOFILE, @Saved)).ToBe(0);
-  SavedCloseFrom := ChildProcessCloseFrom;
-  ChildProcessCloseFrom := nil;
   try
     Lowered := Saved;
     Lowered.rlim_cur := LOWERED_LIMIT;
     Expect<Integer>(FpSetRLimit(RLIMIT_NOFILE, @Lowered)).ToBe(0);
     try
-      Holder := StartHolder;
+      Holder := StartHolder(TOneByOneChildProcess);
     finally
       FpSetRLimit(RLIMIT_NOFILE, @Saved);
     end;
@@ -253,7 +272,6 @@ begin
     Expect<Boolean>(ReachesEndOfFile(Ends[0], DEADLINE_MS)).ToBe(True);
     Expect<Boolean>(Holder.Running).ToBe(True);
   finally
-    ChildProcessCloseFrom := SavedCloseFrom;
     StopHolder(Holder);
     FpClose(HIGH_DESCRIPTOR);
     FpClose(Ends[0]);
