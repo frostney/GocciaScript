@@ -1,4 +1,4 @@
-// Blob (File API), Headers and Response (Fetch Standard) for the CLI host on G2. The engine has no ReadableStream,
+// Blob (File API), Headers and Response (Fetch Standard) for the CLI host. The engine has no ReadableStream,
 // so a body is bytes held whole. Called once per realm with the global object, the host's natives (n) and the
 // preludes' shared internals; installs the globals and sets shared.Blob, shared.Headers and shared.Response for
 // fetch.

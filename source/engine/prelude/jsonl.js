@@ -1,4 +1,4 @@
-// goccia:jsonl (parse, parseChunk) and .jsonl module imports for the CLI host on G2, as Goccia.JSONL defines them:
+// goccia:jsonl (parse, parseChunk) and .jsonl module imports for the CLI host, as Goccia.JSONL defines them:
 // each non-empty line is one JSON text; a string's offsets are code units, a Uint8Array's bytes (decoded as UTF-8,
 // a leading BOM skipped). parseChunk stops before an incomplete final record and reports where it got to. Called
 // once per realm with the global object, the host's natives (n) and the preludes' shared internals; registers the

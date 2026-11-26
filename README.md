@@ -542,12 +542,12 @@ Embedding is covered under [Embed it](#embed-it) and in
 
 ## Architecture
 
-GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, G2's compiler (`Goccia.Compiler`) turns it into register bytecode, and G2's VM (`Goccia.VM`) runs it:
+GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, the engine's compiler (`Goccia.Compiler`) turns it into register bytecode, and its VM (`Goccia.VM`) runs it:
 
 ```mermaid
 flowchart LR
     Source["Source Code"] --> Preprocessors["Preprocessors"] --> Lexer --> Parser --> AST
-    AST --> Compiler["Bytecode Compiler"] --> VM["G2 VM"] --> Result["Result"]
+    AST --> Compiler["Bytecode Compiler"] --> VM["VM"] --> Result["Result"]
 ```
 
 Every value is one NaN-boxed 64-bit `TValue`: numbers never allocate, and strings, objects and the other heap things are cells in a generational heap with a moving nursery and a mark-and-sweep old space (`Goccia.Core`). Objects keep their properties in shapes shared through a transition tree, which inline caches key on. The VM interprets the bytecode (`Execute`, with `FastLoop` for the hot instructions); on Linux x86-64 a baseline JIT and an optimizing tier compile hot functions. Hosts drive the engine through `TGocciaEngine` (`Goccia.Embed`), one engine per thread. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).

@@ -1,9 +1,9 @@
 unit Goccia.Test262;
-{ test262's host on G2, under GocciaScript's grading contract 4 (docs/test262.md): the hidden GocciaHost object that
+{ test262's host, under GocciaScript's grading contract 4 (docs/test262.md): the hidden GocciaHost object that
   $262.js (source/engine/prelude/test262host.js, compiled in) turns into $262 (evalScript, gc, detachArrayBuffer, createRealm, IsHTMLDDA,
   AbstractModuleSource, the agent API), and one test run in this process. Each harness file runs as its own
   non-strict global Script in one realm, then the test file: a Script, prefixed with '"use strict";' and a newline
-  in a strict run, or a module. GocciaTest262Runner (G2) forks a process per run and calls RunTest262Case in it;
+  in a strict run, or a module. GocciaTest262Runner forks a process per run and calls RunTest262Case in it;
   `goccia --test262` runs one and prints its outcome. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
@@ -14,7 +14,7 @@ type
   { how a run ended. Kind: ok; parse (the parser or the module linker rejected the test before evaluation: an
     early error, Name its constructor's name); throw (a value escaped evaluation, Name its constructor's name read
     from data properties only, so no getter runs); harness (a harness file could not be read, compiled or run:
-    FileName names it); compile (G2's compiler refused the parsed test); crash (a Pascal exception in the engine,
+    FileName names it); compile (the engine's compiler refused the parsed test); crash (a Pascal exception in the engine,
     Name its class) }
   TGocciaT262Outcome = record
     Kind, Name, Message, FileName: UnicodeString;
@@ -171,7 +171,7 @@ begin
   if not ParseAndCompile(StrToUnicode(StrOf(S)), '<evalScript>', True, T, Err, 1) then
   begin
     if CompileFailKind = 1 then Exit(ThrowError(ParseErrorName, Err));
-    Exit(ThrowError('SyntaxError', 'G2 compile: ' + Err));
+    Exit(ThrowError('SyntaxError', Err));
   end;
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, GlobalObj, nil, 0, Res);
@@ -327,7 +327,7 @@ begin
   begin
     if DataProp(E, AtomConstructor, C) and IsObject(C) then
     begin
-      { G2 keeps a function's own name outside its shape (read through GetV, no getter involved) }
+      { The engine keeps a function's own name outside its shape (read through GetV, no getter involved) }
       if IsCallable(C) and (ShapeLookup(ObjOf(C)^.Shape, AtomName) < 0) then
       begin
         if GetV(C, AtomName, N) and IsString(N) then Name := StrToUnicode(StrOf(N));

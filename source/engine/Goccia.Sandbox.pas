@@ -1,5 +1,5 @@
 unit Goccia.Sandbox;
-{ GocciaRunner's sandbox mode on G2 (ADR 0122): the host side of prelude/sandbox.js, whose fs, goccia and
+{ GocciaRunner's sandbox mode (ADR 0122): the host side of prelude/sandbox.js, whose fs, goccia and
   goccia:search modules work on this thread's sandbox context (Goccia.Sandbox.Context). The natives here do the
   file system, glob, search, shell and nested-run work; the prelude validates the arguments, defers the callback
   and promise forms, and shapes the results as GocciaRunner's sandbox extension

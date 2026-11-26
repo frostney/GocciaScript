@@ -589,7 +589,7 @@ function G_Eval(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PFuncTemplate; Err, Src: UnicodeString; Clo: TValue; Goal, P: Integer;
 begin
   { indirect eval, and direct eval at a non-strict Script's top level, declare globals (goal 2); other direct
-    evals keep their declarations to themselves until G2 gives them their caller's scope }
+    evals keep their declarations to themselves until the engine gives them their caller's scope }
   Goal := TakeEvalHint;
   { the host audits the call, direct (a hint from its call site) or indirect }
   if Goal < 0 then

@@ -1,5 +1,5 @@
 unit Goccia.FFI;
-{ The FFI global on G2 (docs/built-ins-ffi.md): FFI.open, FFILibrary (bind, symbol, close, path, closed), FFIPointer,
+{ The FFI global (docs/built-ins-ffi.md): FFI.open, FFILibrary (bind, symbol, close, path, closed), FFIPointer,
   FFI.nullptr and FFI.suffix. The native calls go through Goccia's engine-independent FFI units: the descriptors and
   their layout (Goccia.FFI.Types), the compiled call plans (Goccia.FFI.ABI, Goccia.FFI.Call) and the library guard
   (Goccia.FFI.LibraryGuard). This unit is their JS face, as Goccia.Builtins.GlobalFFI and Goccia.Values.FFILibrary /
@@ -1863,7 +1863,7 @@ end;
 
 { the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
-procedure G2FFIThreadvarCleanup;
+procedure GocciaFFIThreadvarCleanup;
 begin
   Caps := Default(TGocciaCapabilities);
   Libs := nil;
@@ -1877,5 +1877,5 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@G2FFIThreadvarCleanup);
+  RegisterThreadvarCleanup(@GocciaFFIThreadvarCleanup);
 end.

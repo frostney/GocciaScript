@@ -10,7 +10,7 @@
 - **Builder pattern** — each built-in unit has an Init procedure that makes its prototypes and constructors with `NewPlainObject`, `DefineNative`, `DefineOwn` and friends, and registers its per-realm threadvars with `RealmVals`
 - **Define vs Assign** — `Define` creates a property or binding (`DefineOwn`, `opDefField`, `opMakeGLex`); `Assign` changes an existing one through `[[Set]]` or the binding's checks (`SetV`, `opSetProp`, `opSetGLex`) — distinct operations throughout the codebase
 
-For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For **execution**, see [Bytecode VM](bytecode-vm.md). For G2's own design notes and working rules, see [G2](engine/README.md) and [G2 design](engine/design.md).
+For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For **execution**, see [Bytecode VM](bytecode-vm.md). For the engine's own design notes and working rules, see [Engine](engine/README.md) and [Engine design](engine/design.md).
 
 ## Recurring implementation patterns
 
@@ -18,7 +18,7 @@ These patterns show up across layers (values, heap, natives, built-ins, parser).
 
 ### Rooting values across allocation
 
-G2's nursery is a copying collector: a minor collection moves every live young cell, so any allocation can move what a Pascal local points at. A `TValue` held in a local is therefore stale after anything that may allocate (and every helper that can run JavaScript may allocate). Natives keep such values on the thread's temp root stack and read them back from it:
+The engine's nursery is a copying collector: a minor collection moves every live young cell, so any allocation can move what a Pascal local points at. A `TValue` held in a local is therefore stale after anything that may allocate (and every helper that can run JavaScript may allocate). Natives keep such values on the thread's temp root stack and read them back from it:
 
 ```pascal
 { Goccia.Builtins }
@@ -37,7 +37,7 @@ end;
 - Atoms (interned property keys), shapes and function templates live outside the collected heap and do not move.
 - Storing a young value into an old cell goes through the write barrier (`WriteBarrier`, `ValueArrayStore`, `SetSlot`), which remembers the old cell for the next minor collection.
 
-`scripts/engine/gcstress.sh` and `scripts/engine/gcstress-tests.py` run the bundles and `tests/` with a tiny nursery and `--gc-verify`, which finds a missed root as a crash or a wrong value ([G2 § Gate](engine/README.md#gate)).
+`scripts/engine/gcstress.sh` and `scripts/engine/gcstress-tests.py` run the bundles and `tests/` with a tiny nursery and `--gc-verify`, which finds a missed root as a crash or a wrong value ([Engine § Gate](engine/README.md#gate)).
 
 ### Native functions
 
@@ -112,7 +112,7 @@ Levels that need extra checks keep them inline. `Equality`, for example, accepts
 
 ### Shared prototypes
 
-Every instance of a built-in type has the same `[[Prototype]]`, as ECMA-262 lays it out: all `Set` instances share the one `Set.prototype` of their realm. In G2 that is structural. The prototype is an ordinary object held in a per-realm threadvar (`SetProtoObj`, `ArrayProto`, `PromiseProto`, ...), and an object's shape names its prototype: `NewPlainObject(Proto, ...)` starts the object at `RootShapeFor(Proto)`, so every object made from one prototype starts from one root shape, and the inline caches that recorded it hit for all of them.
+Every instance of a built-in type has the same `[[Prototype]]`, as ECMA-262 lays it out: all `Set` instances share the one `Set.prototype` of their realm. In the engine that is structural. The prototype is an ordinary object held in a per-realm threadvar (`SetProtoObj`, `ArrayProto`, `PromiseProto`, ...), and an object's shape names its prototype: `NewPlainObject(Proto, ...)` starts the object at `RootShapeFor(Proto)`, so every object made from one prototype starts from one root shape, and the inline caches that recorded it hit for all of them.
 
 A native constructor called with `new.target` takes its instance's prototype from it, as ES2026 §10.1.14 GetPrototypeFromConstructor requires, through `ProtoFromNewTarget(Default, P)`: when `new.target.prototype` is not an object, the default becomes the same intrinsic of the constructor's realm (`GetPrototypeFromConstructor`, `MapIntrinsic`), not of the running realm. A prelude class marks itself with `markIntrinsic` (`MarkIntrinsicClass`) to get the same fallback.
 
@@ -173,7 +173,7 @@ This distinction is critical in the codebase. Defining creates a property or bin
 
 ### NaN-boxed Values and Kind Dispatch
 
-A value is a `TValue`, a NaN-boxed `QWord` ([G2 design](engine/design.md)): a double is stored as itself below `$FFF9 0000 0000 0000` (NaN canonicalized), and above it the top 16 bits tag an Int32 (`$FFF9`), a special value (`$FFFA`: `undefined`, `null`, `false`, `true`, the hole) or a heap cell pointer (`$FFFB`). `MkNumber` stores an integral Number in Int32 range, other than `-0`, as an Int32. The inline helpers of `Goccia.Core` test and build values: `IsInt`, `IsDouble`, `IsNumber`, `IsString`, `IsObject`, `IsCallable`, `ObjOf`, `StrOf`, `MkInt`, `MkDouble`, `MkNumber`, `MkPtr`.
+A value is a `TValue`, a NaN-boxed `QWord` ([Engine design](engine/design.md)): a double is stored as itself below `$FFF9 0000 0000 0000` (NaN canonicalized), and above it the top 16 bits tag an Int32 (`$FFF9`), a special value (`$FFFA`: `undefined`, `null`, `false`, `true`, the hole) or a heap cell pointer (`$FFFB`). `MkNumber` stores an integral Number in Int32 range, other than `-0`, as an Int32. The inline helpers of `Goccia.Core` test and build values: `IsInt`, `IsDouble`, `IsNumber`, `IsString`, `IsObject`, `IsCallable`, `ObjOf`, `StrOf`, `MkInt`, `MkDouble`, `MkNumber`, `MkPtr`.
 
 Every heap thing is a cell with an 8-byte header (`TCellHeader`: size, kind, flags). The cell kind tells strings, symbols, BigInts, value arrays, upvalues, accessors and objects apart, and an object's kind (`TObj.OKind`: `okPlain`, `okArray`, `okFunction`, `okNative`, `okBound`, `okProxy`, `okPromise`, `okTypedArray`, ...) selects its exotic behaviour. Code dispatches with a `case` on the kind, or a set test as `IsCallable` does:
 
@@ -227,19 +227,19 @@ const
 
 ### Inlining Hot-Path Routines
 
-G2's units compile with `{$INLINE ON}`, and the small routines every instruction or native uses are `inline`: the value helpers of `Goccia.Core`, `PushRoot` / `RootAt` / `PopRoots`, `WriteBarrier`, the per-unit `Arg`, and the VM's frame-bound check (`FramesFull`). Routines on cold paths are marked `noinline` so they stay out of their callers: the abort of a spent limit (`XAbort`), the refusal of a memory limit (`DeliverMemoryRefusal`), a bad operand in code read from a file (`XBadOperand`).
+The engine's units compile with `{$INLINE ON}`, and the small routines every instruction or native uses are `inline`: the value helpers of `Goccia.Core`, `PushRoot` / `RootAt` / `PopRoots`, `WriteBarrier`, the per-unit `Arg`, and the VM's frame-bound check (`FramesFull`). Routines on cold paths are marked `noinline` so they stay out of their callers: the abort of a spent limit (`XAbort`), the refusal of a memory limit (`DeliverMemoryRefusal`), a bad operand in code read from a file (`XBadOperand`).
 
 **Why selective inlining?**
 
 - **Only small leaves** — an inlined body that calls out or holds managed values brings its frame into the caller (see [Managed Locals on Hot Paths](#managed-locals-on-hot-paths)).
-- **Not into `Execute`** — `Execute` handles the whole instruction set, so FPC keeps its dispatch variables (PC, the registers' base, the code) in memory. The hot instructions also run in `FastLoop`, a small function that makes no calls and allocates nothing, so its loop variables stay in machine registers; `Execute` enters it and takes back whatever it does not handle ([G2 design](engine/design.md)). Measure before adding a body to either.
+- **Not into `Execute`** — `Execute` handles the whole instruction set, so FPC keeps its dispatch variables (PC, the registers' base, the code) in memory. The hot instructions also run in `FastLoop`, a small function that makes no calls and allocates nothing, so its loop variables stay in machine registers; `Execute` enters it and takes back whatever it does not handle ([Engine design](engine/design.md)). Measure before adding a body to either.
 - **Threadvar access across units is not inlined** — see [Thread Variables on Hot Paths](#thread-variables-on-hot-paths).
 
 ### Managed Locals on Hot Paths
 
 A procedure that declares a managed local — a `string`, a dynamic array, an interface, or a record holding one — pays for it on every call, whether or not the path taken uses it: FPC initializes the local on entry, installs an implicit exception frame (`fpc_pushexceptaddr`, `fpc_setjmp`), and finalizes it on exit. The same applies to a managed temporary the compiler creates for an expression such as `IntToStr(N)` or a string concatenation, and to a function that returns a managed value.
 
-The rules for G2 ([G2 § Working rules](engine/README.md#working-rules)):
+The engine's rules ([Engine § Working rules](engine/README.md#working-rules)):
 
 - Keep strings, dynamic arrays and other managed temporaries out of hot functions and out of `Execute` and `FastLoop`. Put the cold path, which builds the error message, in a `noinline` helper, and check the hot function's disassembly for `fpc_pushexceptaddr`.
 - The dispatch loop has no Pascal `try`: JavaScript exceptions unwind through the VM's own handler records, and natives report failure through their Boolean result and `Pending`, never by raising.
@@ -248,15 +248,15 @@ The rules for G2 ([G2 § Working rules](engine/README.md#working-rules)):
 
 ### Thread Variables on Hot Paths
 
-Every piece of engine state is a threadvar ([Architecture § Evaluation Context](architecture.md#evaluation-context)), so threadvar access is on every hot path. G2 builds with FPC 3.3.1 from fpc-toolchain with native TLS threadvars, under which a threadvar costs about what a global does: `Goccia.Engine` records that single-thread runs execute 0 to 0.7% more instructions than with globals. The baseline JIT reads threadvars `%fs`-relative, as FPC's own code does.
+Every piece of engine state is a threadvar ([Architecture § Evaluation Context](architecture.md#evaluation-context)), so threadvar access is on every hot path. The engine builds with FPC 3.3.1 from fpc-toolchain with native TLS threadvars, under which a threadvar costs about what a global does: `Goccia.Engine` records that single-thread runs execute 0 to 0.7% more instructions than with globals. The baseline JIT reads threadvars `%fs`-relative, as FPC's own code does.
 
-Native TLS has had code-generation bugs, and these rules keep G2 clear of them:
+Native TLS has had code-generation bugs, and these rules keep the engine clear of them:
 
 - A threadvar that another unit reads goes through a `noinline` routine of the unit that declares it (`ActiveProfile`, `FirstInEngine`, `GCEpochNow`, `GCIsYoung`): an inline threadvar access in another unit can get an absolute relocation instead of a TLS offset.
 - Each threadvar read in a statement of its own, where an expression would read two.
 - For a threadvar array, pass the address of element 0 (`AddRootRange(@A[0], N)`), never `@A[K]` with a constant `K <> 0`.
 
-On Linux x86-64 the `goccia` build fails when `scripts/engine/tlsscan.py` finds a threadvar address with an absolute relocation ([G2 § Build](engine/README.md#build)).
+On Linux x86-64 the `goccia` build fails when `scripts/engine/tlsscan.py` finds a threadvar address with an absolute relocation ([Engine § Build](engine/README.md#build)).
 
 Other threads reach an engine only through what it hands them. The limit timer (`TLimitTimer` in `Goccia.VM`) holds pointers to its engine thread's `Interrupt` and `FrameLimit`: when the deadline passes it sets `Interrupt` and drops the frame bound to 0, so the frame check every call already makes, and the `Interrupt` poll at every back edge, end the run with no extra cost per call. State that every thread reads cheaply and few write is a process-wide `var`: `MultiRealmAny` tells `FastLoop` that some thread has a second realm, where the threadvar `MultiRealm` would cost a lookup.
 
@@ -318,7 +318,7 @@ Built-ins whose specification steps matter more than their speed are written in 
 
 - **Capture intrinsics at the top.** A prelude reads `Reflect.apply`, `Object.defineProperty` and the like once, so a script that replaces the globals later does not change the built-in's behaviour.
 - **Snapshot.** The build compiles the preludes with the freshly built program and embeds their bytecode in the binary (`Goccia.Snapshot`); at start-up a snapshot entry is used only when the prelude's source still hashes to the stored value, and a nested function's body is read on its first call. The host preludes in `Goccia.HostAPI` (`console.js`, `timers.js`, `fetch.js`, `testing.js`, ...) take `(G, n, shared)`: the global object, the host's natives and an object of internals they share.
-- **Native fast paths.** A hot API backed by a prelude, such as RegExp, keeps a native fast path guarded on the objects involved being unmodified ([G2 design § Built-ins](engine/design.md#built-ins)).
+- **Native fast paths.** A hot API backed by a prelude, such as RegExp, keeps a native fast path guarded on the objects involved being unmodified ([Engine design § Built-ins](engine/design.md#built-ins)).
 - **Built-in classes.** A prelude marks its classes with `markIntrinsic`, so a construction whose `new.target` has no object `prototype` falls back to the class's own prototype in the constructor's realm, as a built-in constructor's does.
 - **Host code is not the script's.** Host prelude sources are named like `<goccia:console>`; the compile profile leaves them out (`ExcludeHostSource`), and the runtime profile charges their time and allocations to the caller.
 
@@ -326,9 +326,9 @@ The legacy globals (`parseInt`, `parseFloat`, `isNaN`, `isFinite`) are natives o
 
 ### String Interning — Attempted and Rejected
 
-What was rejected is interning every string value: the old engine cached string values in a dictionary keyed by content and measured a net regression, because hashing a string costs more than allocating a short-lived one and most strings computed at run time are unique ([ADR 0013](adr/0013-reject-string-interning.md)). G2 does not intern string values either. A concatenation, a substring or a number's string form is a new `ckString` cell, and two strings compare by content (`StrEquals`, `StrCompare`). Long concatenations build growable views over a shared buffer (`ckStrBuf`), and a long substring shares its parent's characters (`cfSlice`), which cuts copying rather than allocation.
+What was rejected is interning every string value: the old engine cached string values in a dictionary keyed by content and measured a net regression, because hashing a string costs more than allocating a short-lived one and most strings computed at run time are unique ([ADR 0013](adr/0013-reject-string-interning.md)). The engine does not intern string values either. A concatenation, a substring or a number's string form is a new `ckString` cell, and two strings compare by content (`StrEquals`, `StrCompare`). Long concatenations build growable views over a shared buffer (`ckStrBuf`), and a long substring shares its parent's characters (`cfSlice`), which cuts copying rather than allocation.
 
-What G2 interns is property keys. An atom is the one string for a given text (`Atomize`, `AtomOf`, `AtomOfChars`, `IntAtom` for an integer's decimal text), kept outside the collected heap; shapes and inline caches compare keys by atom pointer. The scanner interns identifiers straight from the source (`AtomOfChars`), and a string cell caches its hash (`TStr.Hash`) and, once it is known, its atom (`TStr.Atom`). Symbols and private names are key atoms no source text can name (`NewKeyAtom` with `kfSymbol` or `kfPrivate`).
+What the engine interns is property keys. An atom is the one string for a given text (`Atomize`, `AtomOf`, `AtomOfChars`, `IntAtom` for an integer's decimal text), kept outside the collected heap; shapes and inline caches compare keys by atom pointer. The scanner interns identifiers straight from the source (`AtomOfChars`), and a string cell caches its hash (`TStr.Hash`) and, once it is known, its atom (`TStr.Atom`). Symbols and private names are key atoms no source text can name (`NewKeyAtom` with `kfSymbol` or `kfPrivate`).
 
 Numbers need no cache at all: they are stored in the value. [ADR 0081](adr/0081-reject-value-caches-for-allocation-reduction.md) records the old engine's measurements of value caches.
 
@@ -338,5 +338,5 @@ Numbers need no cache at all: they are stored in the value. [ADR 0081](adr/0081-
 - [Bytecode VM](bytecode-vm.md) — Register VM and bytecode format
 - [Value system](value-system.md) — Values and property access
 - [Garbage collector](garbage-collector.md) — The heap and collection
-- [G2](engine/README.md) and [G2 design](engine/design.md) — The engine's status, build, hosts and design
+- [Engine](engine/README.md) and [Engine design](engine/design.md) — The engine's status, build, hosts and design
 - [Contributing](../CONTRIBUTING.md) — Workflow and Pascal code style when you modify the repository

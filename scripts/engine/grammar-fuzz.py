@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A campaign of generated programs on G2's fuzz harness, without AFL.
+"""A campaign of generated programs on the engine's fuzz harness, without AFL.
 
 Each case is random bytes that GocciaFuzzHarness --grammar turns into a program
 (source/app/Goccia.Fuzz.Generator.pas) and runs in the interpreter and with the
@@ -14,14 +14,14 @@ after which the harness still reports the same kind of finding.
 Prints how the runs ended (from the harness's --verbose lines) and each finding.
 Exits 1 when there was a finding.
 
-Usage: grammar-fuzz.py <G2 GocciaFuzzHarness> <cases> [--jobs N] [--seed S]
+Usage: grammar-fuzz.py <GocciaFuzzHarness> <cases> [--jobs N] [--seed S]
          [--findings DIR] [--size BYTES]
-       grammar-fuzz.py <G2 GocciaFuzzHarness> --reduce <input> [--findings DIR]"""
+       grammar-fuzz.py <GocciaFuzzHarness> --reduce <input> [--findings DIR]"""
 import argparse, collections, concurrent.futures, os, random, re, subprocess, sys, tempfile
 
 # a run ends within about 2 s (each executor's 1 s deadline): past this the harness hung
 TIMEOUT = 20
-# the address space a run may map: as the other G2 harness scripts cap it
+# the address space a run may map: as the other engine harness scripts cap it
 ULIMIT_KB = 4000000
 
 

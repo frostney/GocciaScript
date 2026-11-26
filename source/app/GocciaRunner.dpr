@@ -4,14 +4,14 @@ program GocciaRunner;
   base class), each entry file run by a TGocciaEngine (Goccia.Embed).
   `./build.pas runner` builds it as build/GocciaRunner.
 
-  Sandbox mode runs each program on a G2 engine over the virtual filesystem
+  Sandbox mode runs each program on an engine over the virtual filesystem
   (Goccia.CLI.SandboxHost).
 
   Install mode (--add, --remove, --install, --update) is the old runner's
   (Goccia.Packages.Install); provider imports resolve through the shared
   resolver, granted, audited and checked against their pins here.
 
-  Bytecode files are G2's own (Goccia.Artifact, from GocciaBundler on G2). }
+  Bytecode files are the engine's own (Goccia.Artifact, from GocciaBundler). }
 
 {$I Goccia.inc}
 
@@ -109,7 +109,7 @@ type
     FCoverageMain: TGocciaCoverageTracker;
     FCoverageLock: TRTLCriticalSection;
     FCoveragePaths: TStringList;
-    { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones G2
+    { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones the engine
       does not act on yet are listed in the header }
     FOutputPath: TStringOption;
     FSilent: TFlagOption;
@@ -199,7 +199,7 @@ type
   end;
 
 type
-  { One entry file on a thread of its own: a G2 engine's state is its thread's (Goccia.Engine), so each file gets a
+  { One entry file on a thread of its own: an engine's state is its thread's (Goccia.Engine), so each file gets a
     fresh engine there and nothing of the previous one survives. The thread compiles with the JIT. }
   TGocciaFileThread = class(TThread)
   private
@@ -764,7 +764,7 @@ begin
 end;
 
 { one engine's memory.gc, from its heap when made (AStart) and after its run (AEnd), with its thread's memory
-  manager over the same span (memory.heap); G2 does not count objects, so their counts stay 0 }
+  manager over the same span (memory.heap); the engine does not count objects, so their counts stay 0 }
 function AggregateMemoryStats(const AReports: array of TGocciaFileReport; AParallel: Boolean;
   const AHeapStart, AHeapEnd: THeapStatus; AWorkers: Integer): TCLIJSONMemoryStats;
 var
@@ -1113,7 +1113,7 @@ begin
         Engine.TimeoutMs := EngineOptions.Timeout.Value;
       if EngineOptions.MaxInstructions.Present then
         Engine.MaxInstructions := EngineOptions.MaxInstructions.Value;
-      { G2's own frame bound unless one is given: a bound keeps compiled code
+      { The engine's own frame bound unless one is given: a bound keeps compiled code
         out (Goccia.VM SetMaxFrames) }
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);

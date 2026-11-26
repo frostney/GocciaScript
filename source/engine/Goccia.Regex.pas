@@ -1,8 +1,8 @@
 unit Goccia.Regex;
-{ G2's regex matcher. It runs the bytecode of Goccia's regex compiler (Goccia.RegExp.Compiler, unchanged)
-  with the semantics of Goccia's VM (Goccia.RegExp.VM), restructured for G2:
+{ The engine's regex matcher. It runs the bytecode of Goccia's regex compiler (Goccia.RegExp.Compiler, unchanged)
+  with the semantics of Goccia's VM (Goccia.RegExp.VM), restructured for the engine:
 
-  - it reads G2's UTF-16 string characters in place: no copy of the subject, no UTF-8 round trip;
+  - it reads the engine's UTF-16 string characters in place: no copy of the subject, no UTF-8 round trip;
   - a match attempt allocates nothing: each lookaround depth has a context whose backtrack stack is one
     flat Integer array (frames hold the capture slots and repeat stack inline) and whose memo is reset in
     O(1) by a generation number, so trying the next start position costs a few stores;
@@ -13,7 +13,7 @@ unit Goccia.Regex;
     start position inside the loop;
   - character classes test Latin-1 code points with a bitmap.
 
-  The subject pointer is only used while Exec runs, which allocates nothing on the G2 heap, so a moving
+  The subject pointer is only used while Exec runs, which allocates nothing on the engine's heap, so a moving
   collection cannot invalidate it. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
@@ -57,7 +57,7 @@ type
   TRegexMatcher = class
   private
     FProg: TRegExpProgram;
-    FCodeArr: array of UInt32;       { the program after G2's peephole passes }
+    FCodeArr: array of UInt32;       { the program after the peephole passes }
     FCode: PUInt32;
     FCodeLen: Integer;
     FUnicode: Boolean;
@@ -500,7 +500,7 @@ begin
   end;
 end;
 
-{ G2's peephole passes over the compiled program. They keep its results and change how many steps they take:
+{ The peephole passes over the compiled program. They keep its results and change how many steps they take:
   R1 folds an alternation of single-character instructions ((a|b), (?:x|[0-9]|y)) into one class: one
      instruction and no backtrack frame instead of a split per alternative. Two alternatives that both match
      a character continue from the same state, so trying the second after the first cannot change a result.

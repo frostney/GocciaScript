@@ -918,11 +918,11 @@ end;
 
 { the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
-procedure G2JSONThreadvarCleanup;
+procedure GocciaJSONThreadvarCleanup;
 begin
   JSrc := '';
 end;
 
 initialization
-  RegisterThreadvarCleanup(@G2JSONThreadvarCleanup);
+  RegisterThreadvarCleanup(@GocciaJSONThreadvarCleanup);
 end.

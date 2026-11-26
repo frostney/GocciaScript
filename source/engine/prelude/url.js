@@ -1,4 +1,4 @@
-// URL and URLSearchParams (WHATWG URL Standard) for the CLI host on G2. The parser, serializers and
+// URL and URLSearchParams (WHATWG URL Standard) for the CLI host. The parser, serializers and
 // percent-encoders are Goccia.URL.Parser's, reached through Goccia.HostAPI's natives (n): urlParse(input, base)
 // returns the URL record as an array, null for a failure, or -1 for an invalid base; urlOrigin, urlEncode(kind,
 // input, special) with kind 0 userinfo, 1 query, 2 fragment; formParse (names and values interleaved) and

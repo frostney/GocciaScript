@@ -1,6 +1,6 @@
 unit Goccia.PreParse;
 
-{ G2's pre-parser for the single-pass front end: it reads a Script or Module with Goccia.Scan and checks the whole
+{ The engine's pre-parser for the single-pass front end: it reads a Script or Module with Goccia.Scan and checks the whole
   ES2026 syntactic grammar and every early error (§5.2.4, the Static Semantics: Early Errors clauses), without
   building a tree or emitting code.
   Along the way it resolves names: each scope's declarations, each reference to the scope that declares it,

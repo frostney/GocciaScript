@@ -53,7 +53,7 @@ type
   THostModuleHook = function(const Key: UnicodeString; var Exp: TValue): Integer;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
-    an absolute path), 0 to resolve it as G2 does, -1 with Resolved the message of the error it fails with }
+    an absolute path), 0 to resolve it as the engine does, -1 with Resolved the message of the error it fails with }
   THostResolveHook = function(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
 
 { this thread's host module hook (nil: none) }
@@ -1999,7 +1999,7 @@ begin
 end;
 
 { 28.1.3.1 get %AbstractModuleSource%.prototype [ @@toStringTag ]: the [[ModuleSourceClassName]] of a module
-  source, else undefined (G2 has no module source objects) }
+  source, else undefined (the engine has no module source objects) }
 function AMS_ToStringTag(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Mark: TValue;
 begin

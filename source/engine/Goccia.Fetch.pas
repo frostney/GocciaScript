@@ -1,5 +1,5 @@
 unit Goccia.Fetch;
-{ fetch() on G2 (docs/built-ins-fetch.md): the host side of prelude/fetch.js's fetch. fetchCheck judges a URL's
+{ fetch() (docs/built-ins-fetch.md): the host side of prelude/fetch.js's fetch. fetchCheck judges a URL's
   host by the engine's net capability before anything else, synchronously; fetchStart hands the request to a worker
   thread, which performs it with HTTPClient (the shared network client), checking the net capability on every hop,
   before the name is looked up and again against the address it resolved to; the event loop (Goccia.HostAPI) settles

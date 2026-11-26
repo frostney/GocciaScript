@@ -37,7 +37,7 @@ uses
 
 procedure EngineInit(NurseryBytes: SizeInt);
 begin
-  { the shared parsers' nesting guard refuses with a plain exception on this thread, which G2 throws }
+  { the shared parsers' nesting guard refuses with a plain exception on this thread, which the engine throws }
   NativeErrorsPlain := True;
   { JS arithmetic produces NaN and Infinity instead of trapping; the masks are per thread, and a new thread
     starts with the exceptions enabled }

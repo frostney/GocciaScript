@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/apply-test262-patches.sh SUITE_DIR: applies scripts/test262-patches/*.patch to a test262 checkout at the
 # pinned SHA (scripts/test262-suite-sha.txt). Each patch is an upstream tc39/test262 pull request, named after it,
-# that corrects a test the pinned suite still has wrong against the current specification; G2 is held to the
+# that corrects a test the pinned suite still has wrong against the current specification; GocciaScript is held to the
 # corrected test. Once the pin moves past the pull request's merge, the patch no longer applies and this script
 # fails, naming it: delete the patch then.
 set -euo pipefail

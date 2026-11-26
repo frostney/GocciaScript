@@ -3,7 +3,7 @@ program scancmp;
 { Differential check of Goccia.Scan against Goccia's lexer: both scan each file with the same lexical goals (chosen
   from the previous token, with a stack for template substitutions) and every token's kind, start and value are
   compared; one failing where the other does not is a mismatch too. Usage: scancmp [--module] FILE... (a
-  development tool, not part of the G2 build). Prints one line per mismatching file and a summary. }
+  development tool, not part of the engine build). Prints one line per mismatching file and a summary. }
 
 {$mode objfpc}{$H+}
 
@@ -175,7 +175,7 @@ begin
       if (MyErr <> '') or (GErr <> '') then
       begin
         if (MyErr = '') or (GErr = '') then
-          Mismatch(Format('error differs: g2 "%s" goccia "%s"', [MyErr, GErr]));
+          Mismatch(Format('error differs: scan "%s" goccia "%s"', [MyErr, GErr]));
         Break;
       end;
       Inc(Tokens);
@@ -189,7 +189,7 @@ begin
         end;
         if StrToUnicode(S.Atom) <> T^.Lexeme then
         begin
-          Mismatch(Format('private name g2 %s goccia %s', [string(StrToUnicode(S.Atom)), string(T^.Lexeme)]));
+          Mismatch(Format('private name scan %s goccia %s', [string(StrToUnicode(S.Atom)), string(T^.Lexeme)]));
           Break;
         end;
         Prev := S.Kind;
@@ -197,13 +197,13 @@ begin
       end;
       if T^.TokenType <> ExpectedGoccia(S) then
       begin
-        Mismatch(Format('kind g2 %s (%s) goccia %d (%s)', [TokName(S.Kind), string(S.TokText), Ord(T^.TokenType),
+        Mismatch(Format('kind scan %s (%s) goccia %d (%s)', [TokName(S.Kind), string(S.TokText), Ord(T^.TokenType),
           string(T^.Lexeme)]));
         Break;
       end;
       if not (S.Kind in [tkEOF, tkTemplateMiddle, tkTemplateTail]) and ((T^.StartLine <> S.TokLine) or (T^.Column <> S.TokCol)) then
       begin
-        Mismatch(Format('position g2 %d:%d goccia %d:%d (%s)', [S.TokLine, S.TokCol, T^.StartLine, T^.Column,
+        Mismatch(Format('position scan %d:%d goccia %d:%d (%s)', [S.TokLine, S.TokCol, T^.StartLine, T^.Column,
           string(S.TokText)]));
         Break;
       end;
@@ -212,7 +212,7 @@ begin
         tkIdent, tkPrivateName:
           if StrToUnicode(S.Atom) <> T^.Lexeme then
           begin
-            Mismatch(Format('name g2 %s goccia %s', [string(StrToUnicode(S.Atom)), string(T^.Lexeme)]));
+            Mismatch(Format('name scan %s goccia %s', [string(StrToUnicode(S.Atom)), string(T^.Lexeme)]));
             Break;
           end;
         tkString:
@@ -235,7 +235,7 @@ begin
           if (S.CookedValid <> T^.TemplateValue.CookedValid) or
              (S.CookedValid and (S.BufText <> GText)) or (S.TemplateRaw <> MText) then
           begin
-            Mismatch(Format('template value differs (%s): g2 valid %s cooked [%s] raw [%s]; goccia valid %s cooked [%s] raw [%s]',
+            Mismatch(Format('template value differs (%s): scan valid %s cooked [%s] raw [%s]; goccia valid %s cooked [%s] raw [%s]',
               [string(S.TokText), BoolToStr(S.CookedValid, True), string(S.BufText), string(S.TemplateRaw),
                BoolToStr(T^.TemplateValue.CookedValid, True), string(T^.TemplateValue.Cooked), string(T^.TemplateValue.Raw)]));
             Break;
@@ -252,7 +252,7 @@ begin
             GText := T^.Lexeme;
             if MText <> GText then
             begin
-              Mismatch(Format('regexp g2 %s goccia %s', [string(MText), string(GText)]));
+              Mismatch(Format('regexp scan %s goccia %s', [string(MText), string(GText)]));
               Break;
             end;
           end;
@@ -287,11 +287,11 @@ end;
 
 { --bench FILE: each scanner alone over the file, 5 times (goals as in CheckFile, without the comparison) }
 procedure Bench(const FN: string);
-var Src: UnicodeString; S: TScanner; L: TGocciaLexer; R, N, Q, SP: Integer; T0, TG2, TGoccia: QWord; Prev: TTok;
+var Src: UnicodeString; S: TScanner; L: TGocciaLexer; R, N, Q, SP: Integer; T0, TScan, TLexer: QWord; Prev: TTok;
   T: TGocciaToken; Stack: array of Integer; G: TScanGoal; GG: TGocciaLexicalGoal; Goals: array of TScanGoal;
 begin
   Src := ReadFileText(FN);
-  { the goals, from one G2 scan with the substitution stack; then both scanners replay them }
+  { the goals, from one Goccia.Scan scan with the substitution stack; then both scanners replay them }
   S := TScanner.Create(PWideChar(Src), Length(Src));
   Prev := tkEOF; SP := 0; SetLength(Stack, 0); N := 0; SetLength(Goals, 0);
   repeat
@@ -315,15 +315,15 @@ begin
     Prev := S.Kind;
   until S.Kind = tkEOF;
   S.Free;
-  TG2 := 0;
-  TGoccia := 0;
+  TScan := 0;
+  TLexer := 0;
   for R := 1 to 5 do
   begin
     T0 := GetTickCount64;
     S := TScanner.Create(PWideChar(Src), Length(Src));
     for Q := 0 to N - 1 do S.Next(Goals[Q]);
     S.Free;
-    Inc(TG2, GetTickCount64 - T0);
+    Inc(TScan, GetTickCount64 - T0);
     T0 := GetTickCount64;
     L := TGocciaLexer.Create(Src, FN);
     L.HTMLComments := True;
@@ -339,10 +339,10 @@ begin
       if T^.TokenType = gttHash then L.ScanNextToken(glgInputElementDiv);
     end;
     L.Free;
-    Inc(TGoccia, GetTickCount64 - T0);
+    Inc(TLexer, GetTickCount64 - T0);
   end;
   WriteLn(Format('%s: %d tokens, %d chars; Goccia.Scan %.1f ms, Goccia lexer %.1f ms (mean of 5), %.2fx',
-    [ExtractFileName(FN), N, Length(Src), TG2 / 5, TGoccia / 5, TGoccia / Max(1, TG2)]));
+    [ExtractFileName(FN), N, Length(Src), TScan / 5, TLexer / 5, TLexer / Max(1, TScan)]));
 end;
 
 var I: Integer; Module, DoBench: Boolean; Start: QWord;

@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/engine/gate.sh NAME [BASE]: the G2 gate. Runs test262 (contract 4: every category, both modes where the
+# scripts/engine/gate.sh NAME [BASE]: the engine gate. Runs test262 (contract 4: every category, both modes where the
 # test needs them) with build/engine/goccia into build/engine/gate/NAME.json, compares it with build/engine/gate/BASE.json when
 # given, and checks the Web Tooling digests against scripts/engine/digests.txt.
 #   GOCCIA_TEST262  a test262 checkout (pinned 91c70759)
@@ -11,7 +11,7 @@ cd "$ROOT"
 N=$1; B=${2:-}
 OUT=build/engine/gate
 mkdir -p "$OUT"
-BIN=$OUT/g2-$N
+BIN=$OUT/goccia-$N
 cp build/engine/goccia "$BIN"
 python3 scripts/engine/run262.py "$GOCCIA_TEST262" "$BIN" "$OUT/$N.json" "${GOCCIA_JOBS:-16}" > "$OUT/$N-summary.txt" 2> "$OUT/$N.err"
 tail -1 "$OUT/$N-summary.txt"

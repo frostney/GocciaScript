@@ -1,5 +1,5 @@
 unit Goccia.HeapSnapshot;
-{ Heap snapshots on G2 (docs/heap-snapshots.md): what a value reaches, written so that a fresh engine of the
+{ Heap snapshots (docs/heap-snapshots.md): what a value reaches, written so that a fresh engine of the
   same build, set up the same way, restores it.
 
   The writer copies cells as they are: a string as its text, a BigInt as its limbs, a symbol as its description

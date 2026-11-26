@@ -1,11 +1,11 @@
 #!/bin/bash
-# scripts/engine/limits-test.sh [G2]: the execution limits of the G2 host (--timeout, --max-instructions, --max-stack,
+# scripts/engine/limits-test.sh [GOCCIA]: the execution limits of the engine host (--timeout, --max-instructions, --max-stack,
 # --max-memory).
 # A spent limit aborts the run whatever the script catches: no catch or finally runs, a promise's rejection
 # handler does not run, and the host reports it as GocciaRunner does. Prints one line per failing case and exits 1
 # when any fails.
 set -u
-G2=${1:-build/engine/goccia}
+ENGINE=${1:-build/engine/goccia}
 D=$(mktemp -d)
 trap 'rm -rf "$D"' EXIT
 fails=0
@@ -15,7 +15,7 @@ fails=0
 check() {
   local name=$1 flags=$2 want=$3 src=$4 got rc want_rc=0
   printf '%s\n' "$src" > "$D/$name.js"
-  got=$(timeout 20 "$G2" $flags "$D/$name.js" 2>&1); rc=$?
+  got=$(timeout 20 "$ENGINE" $flags "$D/$name.js" 2>&1); rc=$?
   case $want in "Fatal error"*) want_rc=1 ;; esac
   if [ "$got" != "$want" ] || [ $rc -ne $want_rc ]; then
     echo "FAIL $name ($flags): exit $rc, output: $got (want exit $want_rc: $want)"
@@ -40,7 +40,7 @@ check getter --timeout=200 "$T" 'try { JSON.stringify({ get x() { for (;;) {} } 
 # the timer's interrupt against a call in flight, many times at once: a run that sees the frame bound drop before
 # Interrupt is set throws a catchable RangeError, the promise job swallows it and the run exits 0
 printf '%s\n' 'const f = () => Promise.resolve().then(f); f();' > "$D/race.js"
-race=$(seq 1 200 | xargs -P 16 -I{} sh -c "timeout 20 \"$G2\" --timeout=50 \"$D/race.js\" > /dev/null 2>&1; echo \$?" | grep -cv '^1$')
+race=$(seq 1 200 | xargs -P 16 -I{} sh -c "timeout 20 \"$ENGINE\" --timeout=50 \"$D/race.js\" > /dev/null 2>&1; echo \$?" | grep -cv '^1$')
 [ "$race" -eq 0 ] || { echo "FAIL timeout-race: $race of 200 runs did not abort"; fails=$((fails + 1)); }
 # BigInt work whose time grows faster than its operands stops at the deadline: multiplication, division and radix
 # conversion of a value of a few million bits, and parsing a long digit string
@@ -61,10 +61,10 @@ check instr-under --max-instructions=100000 '4950' 'let s = 0; for (let i = 0; i
 SUM='let s = 0; for (let i = 0; i < 100; i++) s += i; console.log(s);'
 printf '%s\n' "$SUM" > "$D/sum.js"
 lo=1; hi=100000
-while [ $((hi - lo)) -gt 1 ]; do m=$(((lo + hi) / 2)); if "$G2" --max-instructions=$m "$D/sum.js" > /dev/null 2>&1; then hi=$m; else lo=$m; fi; done
+while [ $((hi - lo)) -gt 1 ]; do m=$(((lo + hi) / 2)); if "$ENGINE" --max-instructions=$m "$D/sum.js" > /dev/null 2>&1; then hi=$m; else lo=$m; fi; done
 for k in 1 2 3; do
-  "$G2" --max-instructions=$hi "$D/sum.js" > /dev/null 2>&1 || { echo "FAIL instr-exact: $hi passed once, then failed"; fails=$((fails + 1)); break; }
-  "$G2" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
+  "$ENGINE" --max-instructions=$hi "$D/sum.js" > /dev/null 2>&1 || { echo "FAIL instr-exact: $hi passed once, then failed"; fails=$((fails + 1)); break; }
+  "$ENGINE" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
 done
 
 # --max-memory (ADR 0185): a full collection that leaves more live than the limit refuses at the next back edge or
@@ -75,7 +75,7 @@ F='Fatal error: Live heap of [0-9]* bytes exceeds the memory limit of 33554432 b
 checkm() {
   local name=$1 want=$2 wantrc=$3 src=$4 got rc
   printf '%s\n' "$src" > "$D/$name.js"
-  got=$(timeout 60 "$G2" --max-memory=32MiB "$D/$name.js" 2>&1); rc=$?
+  got=$(timeout 60 "$ENGINE" --max-memory=32MiB "$D/$name.js" 2>&1); rc=$?
   if ! printf '%s\n' "$got" | grep -qx "$want" || [ $rc -ne "$wantrc" ]; then
     echo "FAIL $name (--max-memory=32MiB): exit $rc, output: $got (want exit $wantrc: $want)"
     fails=$((fails + 1))

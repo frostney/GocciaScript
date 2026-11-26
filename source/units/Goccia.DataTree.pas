@@ -1,9 +1,8 @@
 unit Goccia.DataTree;
 
 { The tree the data-format parsers (Goccia.YAML, Goccia.TOML) produce, free of
-  any engine's values so every engine builds its own from the same parse: the
-  old engine through Goccia.DataTree.Values, G2 through DataTreeToJSON and its
-  prelude.
+  the engine's values: the engine builds its own from the parse through
+  DataTreeToJSON and its prelude.
 
   A tree owns its nodes as an arena. A node may be referenced from more than
   one place, and from inside itself: a YAML alias names the anchored node, not

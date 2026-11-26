@@ -1,5 +1,5 @@
 unit Goccia.Compiler;
-{ Goccia AST -> G2 register bytecode. Lua-style: locals in registers, captured locals reached by closures
+{ Goccia AST -> register bytecode. Lua-style: locals in registers, captured locals reached by closures
   through upvalues that are closed when their scope ends. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
@@ -1631,7 +1631,7 @@ begin
       if U >= 0 then begin Emit(Ins(opGetUpv, Dest, U, 0)); Exit; end;
     end;
     { a Script's or global eval code's top level has no arguments binding; isolated code (goal 0, including a
-      direct eval inside a function until G2 gives it its caller's scope) keeps an arguments object of its own }
+      direct eval inside a function until the engine gives it its caller's scope) keeps an arguments object of its own }
     if (F <> nil) and ((F.Parent <> nil) or (Goal = 0)) then
     begin
       F.ArgsUsed := True;

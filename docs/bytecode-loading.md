@@ -17,7 +17,7 @@
 
 GocciaBundler writes `library.gbc` beside the source. Each input file is compiled on a thread of its own by a fresh engine (`TGocciaEngine.CompileArtifact`) under that file's settings; `--jobs` bounds how many run at once. Every function is compiled with its code, not lazily, and nothing runs. A `.gbc` input is refused (`Cannot compile bytecode file`). The bundler grants no capabilities: a config's `permissions` block is validated and any grant it requests reported as ignored. `--source-map` writes the JSX transform's map beside the bytecode file.
 
-GocciaRunner runs a `.gbc` entry through `TGocciaEngine.RunArtifact`. The entry takes the goal recorded in the file; an explicit `--source-type` that names the other goal is rejected. A Module entry links its imports as a source module would. A Script entry keeps GocciaScript's acceptance of import declarations: the file holds their text, which runs as a module of its own before the Script ([G2 README § Script entries with imports](engine/README.md#script-entries-with-imports)).
+GocciaRunner runs a `.gbc` entry through `TGocciaEngine.RunArtifact`. The entry takes the goal recorded in the file; an explicit `--source-type` that names the other goal is rejected. A Module entry links its imports as a source module would. A Script entry keeps GocciaScript's acceptance of import declarations: the file holds their text, which runs as a module of its own before the Script ([Engine README § Script entries with imports](engine/README.md#script-entries-with-imports)).
 
 `--prefer-bytecode`, or the `prefer-bytecode` config key, makes an import of `library.mjs` select `library.gbc` when that file exists, even if the source has been removed. Extensionless and directory-index imports find companions the same way. Without the option, imports select source; an explicit `.gbc` import loads bytecode either way. A source-phase import (`import source x`) never takes a companion, since it needs the source text.
 
@@ -59,7 +59,7 @@ Imports of `.gbc` files go through the module loader (`Goccia.Modules`): an expl
 
 Lower down, `Goccia.Artifact` provides `SaveArtifact` (a compiled Script or Module to bytes; it raises `EGocciaArtifact` for a template the format cannot hold, such as a lazy function not compiled yet) and `LoadArtifact` (read and verify; the templates join the calling thread's engine and live as long as it). One engine runs per thread, so load and run bytecode on the engine's own thread.
 
-Not supported on G2 yet: `.gbc` test files in GocciaTestRunner and `.gbc` benchmark files in GocciaBenchmarkRunner.
+Not supported yet: `.gbc` test files in GocciaTestRunner and `.gbc` benchmark files in GocciaBenchmarkRunner.
 
 ## Output layout and collision checks
 
@@ -99,4 +99,4 @@ application suite (`scripts/test-cli-apps.ts`) runs it in PR and platform CI.
 `GOCCIA_ARTIFACT_ROUNDTRIP=1` sends every compiled Script and module through a
 bytecode file before it runs, and `scripts/engine/artifact-roundtrip-tests.py` and
 `scripts/engine/artifact-tamper-tests.py` run the test suite that way and against
-tampered files ([G2 README § Bytecode files](engine/README.md#bytecode-files)).
+tampered files ([Engine README § Bytecode files](engine/README.md#bytecode-files)).

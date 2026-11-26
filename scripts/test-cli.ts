@@ -2548,12 +2548,12 @@ console.log("--max-memory (builtin result builders survive mid-build collections
           "",
         ].join("\n");
 
-      // A sweep of ceilings across the parse. On G2 the limit refuses at the
+      // A sweep of ceilings across the parse. The limit refuses at the
       // next back edge or call after a full collection leaves the heap over it
       // (ADR 0185), so each run either completes, and every value has to read
       // back exactly, or ends in that RangeError; never a crash, a use after
       // free or an empty message. The old collector's parked-heap windows
-      // measured its pressure reserve, which G2 does not have; G2's rooting
+      // measured its pressure reserve, which the engine does not have; its rooting
       // under collection is checked by GC stress (gc-stress.yml: every test
       // file with a 16 KB nursery and the heap verified after each collection).
       for (const maxMemory of [4_194_304, 6_291_456, 8_388_608, 12_582_912]) {
@@ -2597,7 +2597,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
   }
 }
 
-// On G2 a refused allocation is a catchable RangeError at the next back edge
+// A refused allocation is a catchable RangeError at the next back edge
 // or call (ADR 0185), so a script can drop what it holds and go on. A ceiling
 // the guest can catch must still not be one it can ignore in a loop: a script
 // that catches every refusal and keeps what it allocated ends, after eight
@@ -2696,7 +2696,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       ].join("\n");
       const srcPath = join(ceilingTmp, `parse-ceiling-${label.replace(".", "-")}.mjs`);
       writeFileSync(srcPath, src);
-      // A sweep of ceilings: on G2 the refusal lands at the next back edge or
+      // A sweep of ceilings: the refusal lands at the next back edge or
       // call (ADR 0185), so it may be caught around the parse, reach the host
       // after the parse finished, or not come at all; at no ceiling may it be a
       // SyntaxError or lose its message.

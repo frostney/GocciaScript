@@ -75,7 +75,7 @@ behavior described below.
 
 ### Opcode Histogram (`--profile=opcodes`)
 
-Counts how many times each bytecode opcode executes, under G2's own opcode names (`TOp` in `Goccia.Instructions` without its `op` prefix). Sorted by frequency descending. The examples in this section come from this script:
+Counts how many times each bytecode opcode executes, under the engine's own opcode names (`TOp` in `Goccia.Instructions` without its `op` prefix). Sorted by frequency descending. The examples in this section come from this script:
 
 ```js
 const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2);
@@ -128,13 +128,13 @@ Scalar Fast-Path:
 
 ### Shape Saturation (`--profile=opcodes`)
 
-The report keeps a section for object layouts that could not be fully interned in a shape system, headed `Shape Saturation (degraded property-read caching):` and printed only when one of its counts is non-zero. G2 records no such event: an object past 64 properties gets a private dictionary shape instead ([G2 design — Objects](engine/design.md#objects)). The section is not printed, and the JSON export's `shapeSaturation` counts are 0.
+The report keeps a section for object layouts that could not be fully interned in a shape system, headed `Shape Saturation (degraded property-read caching):` and printed only when one of its counts is non-zero. The engine records no such event: an object past 64 properties gets a private dictionary shape instead ([Engine design — Objects](engine/design.md#objects)). The section is not printed, and the JSON export's `shapeSaturation` counts are 0.
 
 ### Function Profile (`--profile=functions`)
 
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive — time in the function and its callees), call count, and allocation count (the objects made during that function's execution, counted by `NewObject` in `Goccia.Core`; strings and other cells are not counted).
 
-Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every function frame, including each resumption of a generator or async function after a `yield` or `await`; a call that only creates a generator is not one, and its first resumption is its first call. A module top level counts once per evaluation, even when top-level `await` suspends and resumes it. Its timing includes each active segment; promise jobs that run while it is suspended are outside its total. A frame ends when a later push reuses its slot or an instruction runs in a frame below it, so a throw that unwinds several frames ends them all. A tail call that replaces its caller's frame (past 1,024 frames, see [G2 — Proper tail calls](engine/README.md#proper-tail-calls)) ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
+Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every function frame, including each resumption of a generator or async function after a `yield` or `await`; a call that only creates a generator is not one, and its first resumption is its first call. A module top level counts once per evaluation, even when top-level `await` suspends and resumes it. Its timing includes each active segment; promise jobs that run while it is suspended are outside its total. A frame ends when a later push reuses its slot or an instruction runs in a frame below it, so a throw that unwinds several frames ends them all. A tail call that replaces its caller's frame (past 1,024 frames, see [Engine — Proper tail calls](engine/README.md#proper-tail-calls)) ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
 
 Function timing excludes the measured time spent registering templates and
 maintaining the profiling stack, including flame-path interning. Returns update
@@ -336,7 +336,7 @@ Look at `sample`'s "Sort by top of stack" section. Typical categories:
 | `Execute` | Every other instruction, and every instruction under a profile, coverage or an instruction limit (`Goccia.VM`) |
 | `CollectMinor`, `CollectMajor` | Minor (copying) and major (mark and sweep) collections (`Goccia.Core`) |
 | `NewObject` | Object allocation (`Goccia.Core`) |
-| `fpc_pushexceptaddr`, `fpc_popaddrstack` | An exception frame in a routine with managed locals; see G2's [working rules](engine/README.md#working-rules) |
+| `fpc_pushexceptaddr`, `fpc_popaddrstack` | An exception frame in a routine with managed locals; see the engine's [working rules](engine/README.md#working-rules) |
 | `SysGetMem`, `SysFreeMem` | FPC's heap: Pascal strings and dynamic arrays, not engine cells |
 
 The profiler's allocation count per function tells you *which JS function* makes the objects behind the collections `sample` reports. The opcode histogram tells you *which operations* run inside the time `sample` attributes to `Execute` and `FastLoop`.
@@ -345,7 +345,7 @@ The profiler's allocation count per function tells you *which JS function* makes
 
 | Unit | Role |
 |------|------|
-| `Goccia.Profile` | Feeds the profiler from G2's interpreter: the push hook times frames and charges objects made, the step hook counts opcodes, pairs and the scalar fast path, and `GocciaOpcodeName` names G2's opcodes |
+| `Goccia.Profile` | Feeds the profiler from the engine's interpreter: the push hook times frames and charges objects made, the step hook counts opcodes, pairs and the scalar fast path, and `GocciaOpcodeName` names the engine's opcodes |
 | `Goccia.Profiler.pas` | Per-thread tracker: opcode counts, pair matrix, scalar hit/miss, function profiles with timing stack |
 | `Goccia.Profiler.Report.pas` | Console output, JSON export, and collapsed stack export |
 | `Goccia.Profiler.Compile.pas` | The compile profile: per-function records, counters, nodes by kind, and its console output and JSON section; `Goccia.Compiler`, `Goccia.Eval` and `Goccia.Parser` feed it |

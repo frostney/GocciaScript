@@ -1,4 +1,4 @@
-// goccia:semver for the CLI host on G2: node-semver's main export over Goccia.Semver (SemVer 2.0.0), as
+// goccia:semver for the CLI host: node-semver's main export over Goccia.Semver (SemVer 2.0.0), as
 // Goccia.Builtins.Semver binds it. The parsing and comparing are the core's, reached through Goccia.HostAPI's
 // n.semver(op, ...) dispatcher, which answers in JSON (a parse error throws: a TypeError or an Error, as the core
 // raises it). Called once per realm with the global object, the host's natives (n) and the preludes' shared

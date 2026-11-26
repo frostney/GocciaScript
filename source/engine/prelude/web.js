@@ -1,4 +1,4 @@
-// Web platform globals for the CLI host on G2: DOMException (Web IDL), atob and btoa (HTML forgiving-base64),
+// Web platform globals for the CLI host: DOMException (Web IDL), atob and btoa (HTML forgiving-base64),
 // and structuredClone (HTML StructuredSerialize / StructuredDeserialize within one realm). Called once per realm
 // with the global object, the host's natives (n) and the preludes' shared internals; installs the globals and sets
 // shared.DOMException for the other host preludes.

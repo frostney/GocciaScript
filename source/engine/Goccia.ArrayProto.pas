@@ -905,7 +905,7 @@ begin
   begin
     Len := ObjOf(Args[0])^.Elements^.Len;
     if Len + Argc > 64 * 1024 * 1024 then
-      Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
+      Exit(ThrowError('RangeError', 'Array length beyond the engine''s dense arrays (no sparse arrays yet)'));
     if Argc > 0 then
     begin
       EnsureElementsCap(ObjOf(Args[0]), Len + Argc);

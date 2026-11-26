@@ -8006,7 +8006,7 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
       }
     }
 
-    // (b) A test that trips --max-memory once: on G2 the refusal is a
+    // (b) A test that trips --max-memory once: the refusal is a
     // catchable RangeError at the next back edge or call (ADR 0185), an
     // ordinary failure of the test, so afterEach still runs.
     console.log("TestRunner: afterEach runs after a memory refusal fails the test...");
@@ -15070,7 +15070,7 @@ await section("Memory budget: a large allocation is refused, close to the ceilin
     const refused = await runWithPeakRss([BARE, "--max-memory=67108864", file]);
     if (refused.exitCode === 0)
       throw new Error(`Allocation past the budget was permitted:\n${refused.output}`);
-    // G2 refuses at the next back edge or call after the collection that left
+    // The engine refuses at the next back edge or call after the collection that left
     // the heap over the ceiling (ADR 0185): the allocation that crossed it has
     // happened, so resident memory ends near the ceiling plus that allocation.
     if (!/exceeds the configured memory limit/i.test(refused.output))
@@ -15329,7 +15329,7 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     if (!unstarted || Number(unstarted[1]) < 2000 * 48)
       throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
 
-    // G2 does not charge its stacks or exception handlers to the ceiling: they
+    // The engine does not charge its stacks or exception handlers to the ceiling: they
     // are fixed per engine, outside the collected heap the limit bounds
     // (docs/garbage-collector.md, "What the ceiling does not bound"; ADR 0185),
     // so the old engine's per-handler charge (ADR 0132) has nothing to measure.

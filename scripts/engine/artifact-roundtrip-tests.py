@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bytecode files round trip over GocciaScript's own test suite on G2.
+"""Bytecode files round trip over GocciaScript's own test suite.
 
 Every test file under the given paths (GocciaTestRunner's discovery: the script extensions, node_modules skipped;
 a path may also name one file) runs through `goccia --test` twice: as is, and with GOCCIA_ARTIFACT_ROUNDTRIP=1, which
@@ -16,7 +16,7 @@ Usage: artifact-roundtrip-tests.py <goccia binary> [jobs] [path ...]   (default 
 import json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
-G2 = sys.argv[1]
+ENGINE = sys.argv[1]
 JOBS = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 PATHS = sys.argv[3:] or ['tests']
 EXTS = ('.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts')
@@ -44,7 +44,7 @@ def run(path, roundtrip):
     if roundtrip:
         env['GOCCIA_ARTIFACT_ROUNDTRIP'] = '1'
     try:
-        p = subprocess.run(['bash', '-c', 'ulimit -v %d; exec "$@"' % MEM_KB, 'goccia', G2, '--test', path], env=env,
+        p = subprocess.run(['bash', '-c', 'ulimit -v %d; exec "$@"' % MEM_KB, 'goccia', ENGINE, '--test', path], env=env,
                            capture_output=True, timeout=TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return {'status': 'timeout'}

@@ -1,6 +1,6 @@
 unit Goccia.Profile;
-{ GocciaScript's runtime profile (--profile, docs/profiling.md) on G2: the thread's TGocciaProfiler (Goccia.Profiler)
-  fed from G2's interpreter. Under profiling every instruction runs through Execute's counted loop (no fast loop, no
+{ GocciaScript's runtime profile (--profile, docs/profiling.md): the thread's TGocciaProfiler (Goccia.Profiler)
+  fed from the engine's interpreter. Under profiling every instruction runs through Execute's counted loop (no fast loop, no
   compiled code), so the step hook sees each one: its opcode (and the pair it makes with the one before), and for a
   binary arithmetic or comparison instruction whether both operands are Numbers (the scalar fast path's hit or miss).
 
@@ -21,7 +21,7 @@ interface
 procedure ProfileStart(Opcodes, Functions: Boolean);
 { the run ended: every function still open ends, and the hooks stop }
 procedure ProfileStop;
-{ the name of a G2 opcode, for the profiler's reports }
+{ the name of an engine opcode, for the profiler's reports }
 function GocciaOpcodeName(Op: Byte): string;
 
 implementation

@@ -1,12 +1,11 @@
 unit Goccia.CLI.SandboxHost;
 
-{ GocciaRunner's sandbox mode on G2 (ADR 0122), as Goccia.CLI.SandboxHost runs
-  it on the old engine: owns the top-level sandbox context, runs each program
+{ GocciaRunner's sandbox mode (ADR 0122): owns the top-level sandbox context, runs each program
   over a context (the root, and every runScript or goccia child) on a thread
-  of its own with a fresh G2 engine, nests the children, classifies how a run
+  of its own with a fresh engine, nests the children, classifies how a run
   ended, and renders the filesystem diff.
 
-  A G2 engine's state is its thread's, so a nested run cannot share its
+  An engine's state is its thread's, so a nested run cannot share its
   caller's thread: the caller's thread waits in the runScript native while
   the child runs on a new one, and the child's completion value comes back
   as text (Goccia.Sandbox EncodeSandboxValue) that the caller decodes.
@@ -36,7 +35,7 @@ const
   { Each nesting level holds an engine, a thread and a virtual filesystem, so
     the depth a guest may ask for is a resource ceiling, as on the old
     engine. }
-  MAX_G2_RUN_SCRIPT_DEPTH = 32;
+  MAX_RUN_SCRIPT_DEPTH = 32;
 
 type
   TGocciaSandboxHost = class;
@@ -690,7 +689,7 @@ var
   RemainingNodes: Integer;
 begin
   Parent := CurrentRun;
-  if (Parent <> nil) and (Parent.Depth >= MAX_G2_RUN_SCRIPT_DEPTH) then
+  if (Parent <> nil) and (Parent.Depth >= MAX_RUN_SCRIPT_DEPTH) then
     raise EGocciaSandboxNestingLimitExceeded.Create(
       'sandbox runScript nesting limit exceeded');
   if not AOptions.Isolated then

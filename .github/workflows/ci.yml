@@ -13,7 +13,7 @@ permissions:
 
 env:
   # The frostney/fpc-toolchain release every job installs, pinned to one build:
-  # FPC 3.3.1, which G2 (source/engine) needs. pr.yml, engine.yml, fuzz.yml,
+  # FPC 3.3.1, which the engine (source/engine) needs. pr.yml, engine.yml, fuzz.yml,
   # gc-stress.yml and timezone-data-bump.yml name the same one; moving to
   # another build changes this line in each, and the Win32 SafeSEH manifest
   # (config/win32-safeseh) is audited again for it.

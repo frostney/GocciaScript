@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GC stress over GocciaScript's own test suite on G2.
+"""GC stress over GocciaScript's own test suite.
 
 Every test file under the given directories (GocciaTestRunner's discovery: the script extensions, node_modules
 skipped) runs through `goccia --test` twice: as is, and with a small nursery (GOCCIA_NURSERY_KB, default 16) and
@@ -14,7 +14,7 @@ Usage: gcstress-tests.py <goccia binary> [jobs] [dir ...]   (default dir: tests)
 import json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
-G2 = sys.argv[1]
+ENGINE = sys.argv[1]
 JOBS = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 DIRS = sys.argv[3:] or ['tests']
 KB = os.environ.get('GOCCIA_NURSERY_KB', '16')
@@ -34,10 +34,10 @@ def discover(root):
 def run(path, stress):
     env = dict(os.environ)
     env.pop('GOCCIA_NURSERY_KB', None)
-    args = [G2, '--test', path]
+    args = [ENGINE, '--test', path]
     if stress:
         env['GOCCIA_NURSERY_KB'] = KB
-        args = [G2, '--gc-verify', '--test', path]
+        args = [ENGINE, '--gc-verify', '--test', path]
     try:
         p = subprocess.run(['bash', '-c', 'ulimit -v %d; exec "$@"' % MEM_KB, 'goccia'] + args, env=env,
                            capture_output=True, timeout=TIMEOUT_S)

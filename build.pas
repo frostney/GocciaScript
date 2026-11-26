@@ -25,7 +25,7 @@ const
     'test262runner', 'tomlcompliancerunner',
     'benchmarkrunner', 'bundler', 'repl', 'engine');
 
-  { G2: the JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
+  { The JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
   GOCCIA_PRELUDES: array[0..23, 0..2] of string = (
     ('builtins5.js', 'Goccia.Builtins5.inc', 'Builtins5Src'),
     ('disposal.js', 'Goccia.Disposal.inc', 'DisposalSrc'),
@@ -602,7 +602,7 @@ begin
   Halt(1);
 end;
 
-{ ---- G2 ---- }
+{ ---- Engine ---- }
 
 function GocciaGeneratedDirectory: string;
 begin
@@ -684,7 +684,7 @@ begin
   end;
 end;
 
-{ Each G2 program's own prelude snapshot: a program that installs the host's preludes (the apps) compiles more of
+{ Each engine program's own prelude snapshot: a program that installs the host's preludes (the apps) compiles more of
   them than the bare engine (goccia), so they cannot share one }
 function GocciaSnapshotDirectory(const ATarget: string): string;
 begin
@@ -701,10 +701,10 @@ begin
       '  GocciaPreludeSnapshot: array[0..0] of Byte = (0);' + LineEnding);
 end;
 
-{ The compiler arguments of a G2 program. G2 always compiles optimized: its code
+{ The compiler arguments of an engine program. The engine always compiles optimized: its code
   is not written for the dev build's range, overflow and assertion checks. A
   dev build keeps line information instead of stripping it. }
-{ FPC_TARGET_CPU and FPC_TARGET_OS name another platform than the one build.pas runs on: a G2 program is then
+{ FPC_TARGET_CPU and FPC_TARGET_OS name another platform than the one build.pas runs on: an engine program is then
   built for the host first, to make its prelude snapshot (which does not depend on the platform), then for the
   target with it }
 function GocciaCrossBuild: Boolean;
@@ -830,7 +830,7 @@ begin
   end;
 end;
 
-{ As CompileWithStaleRetry, with G2's arguments }
+{ As CompileWithStaleRetry, with an engine program's arguments }
 function CompileEngineProgram(const ASource, AUnitDirectory, AOutput, ALabel: string;
   out AOutputText: string; AHost: Boolean = False): Boolean;
 begin
@@ -886,7 +886,7 @@ begin
     Proc.Execute;
     if Proc.ExitStatus <> 0 then
     begin
-      WriteLn('The G2 prelude snapshot run failed (exit ', Proc.ExitStatus, ')');
+      WriteLn('The prelude snapshot run failed (exit ', Proc.ExitStatus, ')');
       Halt(1);
     end;
   finally
@@ -959,7 +959,7 @@ begin
   {$ENDIF}
 end;
 
-{ Builds ASource as a G2 program: the preludes generated, stage 1 compiled, its compiled preludes snapshot, and
+{ Builds ASource as an engine program: the preludes generated, stage 1 compiled, its compiled preludes snapshot, and
   the program compiled again when the snapshot changed. A cross build (GocciaCrossBuild) makes the snapshot with a
   host build of the program (build/engine/host), then compiles the target once with it. }
 { GOCCIA_VARIANT names a variant build of a program, such as fuzz.yml's AFL-instrumented or heaptrc harness: it goes
@@ -972,10 +972,10 @@ begin
   Variant := GetEnvironmentVariable('GOCCIA_VARIANT');
   Program_ := AOutput + Variant;
   WriteLn('');
-  WriteLn('Building ', Program_, ' (G2)...');
+  WriteLn('Building ', Program_, '...');
   GenerateEnginePreludes;
   EnsureEngineSnapshot(ATarget);
-  { its own unit cache per mode: G2 builds incrementally (no -B), and FPC does not recompile a unit for new options }
+  { its own unit cache per mode: an engine program builds incrementally (no -B), and FPC does not recompile a unit for new options }
   UnitDir := TargetUnitOutputDirectory(ATarget);
   if BuildMode <> bmProd then
     UnitDir := UnitDir + '-dev';
@@ -1013,14 +1013,14 @@ begin
   WriteLn(Program_, ' built successfully');
 end;
 
-{ native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
+{ native-TLS threadvars and the code generator fixes the engine needs are in fpc-toolchain's 3.3.1 builds }
 procedure CheckEngineCompiler;
 var
   Version: string;
 begin
   if not RunCommand('fpc', ['-iV'], Version) or (CompareStr(Trim(Version), '3.3.1') < 0) then
   begin
-    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later; CI uses 3.3.1+9); found ', Trim(Version));
+    WriteLn('The engine needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later; CI uses 3.3.1+9); found ', Trim(Version));
     WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+9)"');
     Halt(1);
   end;
@@ -1340,9 +1340,9 @@ begin
       BuildMode := bmProd
     else if (ParamStr(I) = '--gc-stress') or (ParamStr(I) = '--layout-probe') then
     begin
-      { G2 has no stress build: its binaries take --gc-stress and --gc-verify, and the GOCCIA_NURSERY_KB
+      { The engine has no stress build: its binaries take --gc-stress and --gc-verify, and the GOCCIA_NURSERY_KB
         environment variable shrinks the nursery (scripts/engine/gcstress.sh) }
-      WriteLn(ParamStr(I), ' built the old engine, which is gone; G2''s binaries take --gc-stress and ',
+      WriteLn(ParamStr(I), ' built the old engine, which is gone; the engine''s binaries take --gc-stress and ',
         '--gc-verify at run time (scripts/engine/gcstress.sh)');
       Halt(1);
     end

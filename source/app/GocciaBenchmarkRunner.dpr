@@ -1,14 +1,13 @@
 program GocciaBenchmarkRunner;
 
-{ GocciaBenchmarkRunner on the G2 engine, while the apps move from the old
-  engine to G2: the same command line, configs, trust and capability policy
+{ GocciaBenchmarkRunner: the command line, configs, trust and capability policy
   (the base class), each benchmark file run by a TGocciaEngine in benchmark mode
   (Goccia.Embed BenchMode, goccia:microbench from prelude/microbench.js) on a
   thread of its own, its benchmarks measured by Goccia.HostAPI
   RunBenchmarkSuites and reported by Goccia.Benchmark.Reporter.
   `./build.pas benchmarkrunner` builds it as build/GocciaBenchmarkRunner.
 
-  Not yet on G2: bytecode files. }
+  Not yet supported: bytecode files. }
 
 {$I Goccia.inc}
 
@@ -96,7 +95,7 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
-  { one benchmark file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh
+  { one benchmark file on a thread of its own: an engine's state is its thread's, so each file gets a fresh
     engine }
   TGocciaBenchThread = class(TThread)
   private

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build every full-CI program with bounded concurrency and isolated FPC units.
 
-The applications (source/app/*.dpr) run on G2, whose engine embeds its compiled
+The applications (source/app/*.dpr) run on the engine, which embeds its compiled
 preludes: only build.pas builds them, all in one serial run (they share the
 generated prelude sources), alongside the compiler pool that builds the Pascal
 tests and compliance runners."""

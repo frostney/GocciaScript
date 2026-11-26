@@ -5,9 +5,8 @@ unit Goccia.AST.Report;
 { The engine-independent half of `goccia:ast` (ADR 0117, 0161-0163, 0168,
   0172): the parse tree flattened into node records, the committed token
   stream as typed ranges, and the whole result as JSON text. Nothing here
-  makes an engine value, so every engine builds the JavaScript-visible result
-  from the same records: Goccia.Builtins.AST materializes them as values, and
-  G2 parses the JSON. }
+  makes an engine value: the engine builds the JavaScript-visible result by
+  parsing the JSON. }
 
 interface
 

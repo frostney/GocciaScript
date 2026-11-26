@@ -1,4 +1,4 @@
-// goccia:csv and goccia:tsv (parse, parseChunk, stringify) and .csv / .tsv module imports for the CLI host on G2, as
+// goccia:csv and goccia:tsv (parse, parseChunk, stringify) and .csv / .tsv module imports for the CLI host, as
 // Goccia.CSV and Goccia.TSV define them: CSV by RFC 4180 (comma-delimited by default, double-quote escaping), TSV by
 // IANA text/tab-separated-values (tab-delimited, backslash escaping); both read a header row by default, keep every
 // value a string, and pad short rows. Called once per realm with the global object, the host's natives (n) and the

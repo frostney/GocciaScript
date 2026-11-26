@@ -1,4 +1,4 @@
-// GocciaRunner's sandbox mode for G2 (ADR 0122): the fs, goccia and goccia:search host modules over the thread's
+// GocciaRunner's sandbox mode (ADR 0122): the fs, goccia and goccia:search host modules over the thread's
 // sandbox virtual file system, as GocciaRunner's sandbox extension (Goccia.RuntimeExtensions.Sandbox) has them.
 // Goccia.Sandbox's natives (n.sb*) do the work; this validates the arguments with that extension's messages, defers
 // the callback and promise forms to a microtask, and shapes the results. Installed only in sandbox mode, with the

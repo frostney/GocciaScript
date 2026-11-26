@@ -1,6 +1,6 @@
 # Garbage Collector
 
-*G2's generational collector: a moving nursery and a mark-and-sweep old generation, one heap per engine thread.*
+*The engine's generational collector: a moving nursery and a mark-and-sweep old generation, one heap per engine thread.*
 
 ## Executive Summary
 
@@ -16,7 +16,7 @@
 Every heap thing is a **cell** with an 8-byte header (`TCellHeader`): its size in bytes (a multiple of 8), its kind
 (string, object, value array, upvalue, accessor, symbol, BigInt, bytes and so on), its flags and 16 bits of
 kind-specific data. A `TValue` is NaN-boxed: numbers, `undefined`, `null`, the booleans and the array hole are
-immediates, and only a value tagged as a pointer refers to a cell ([G2 design — Values](engine/design.md#values)).
+immediates, and only a value tagged as a pointer refers to a cell ([Engine design — Values](engine/design.md#values)).
 
 | Region | What lives there | How it is collected |
 |---|---|---|
@@ -86,7 +86,7 @@ retires the shapes whose prototype nothing reached (`RetireDeadShapes`): their p
 equals, `GCShapeSweepHook` clears the inline caches, constructor caches and compiled code caches that name them, and
 their records are freed, except those that machine code compares with. Because shape records are not heap bytes,
 old-space growth alone would not start a major collection however many dead prototypes' shapes pile up; the shape
-count trigger above covers that. [G2 design — Heap and GC](engine/design.md#heap-and-gc) has the full rules.
+count trigger above covers that. [Engine design — Heap and GC](engine/design.md#heap-and-gc) has the full rules.
 
 ### Weak References and Finalization
 
@@ -159,7 +159,7 @@ the ceiling.
 
 ### Refusal at the next safe point
 
-G2's allocator cannot fail: every native and VM operation that allocates assumes it succeeds. The limit therefore
+The engine's allocator cannot fail: every native and VM operation that allocates assumes it succeeds. The limit therefore
 refuses at the next safe point, not at the allocation
 ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)):
 
@@ -184,10 +184,10 @@ refusal the run never reached a safe point for.
 
 ### Gated growth points
 
-G2 has no growth gate. Array elements, overflow property slots and string buffers are ordinary heap cells, counted
+The engine has no growth gate. Array elements, overflow property slots and string buffers are ordinary heap cells, counted
 and collected like any other, and the [refusal above](#refusal-at-the-next-safe-point) is what stops them.
 
-What G2 has instead are **explicit reservations**: before an allocation whose size the script chose and that the
+What the engine has instead are **explicit reservations**: before an allocation whose size the script chose and that the
 engine can refuse cleanly, a native calls `HeapReserve(Bytes)`. It succeeds when the bytes fit under the ceiling;
 otherwise it runs a full collection and tests again. A reservation that still does not fit is a catchable
 `RangeError` at once. The callers are `ArrayBuffer` and typed array construction (the bytes, or a resizable buffer's
@@ -210,7 +210,7 @@ the same, nor anything [outside the heap](#heap-layout).
 `TGocciaEngine.Memory` reports the same figures to a host (`TGocciaMemoryStats`): `LiveBytes` (`HeapUsedBytes`),
 `PeakLiveBytes` (the most the heap held at a collection or a direct old-space allocation, `HeapPeakBytes`),
 `AllocatedBytes` (every byte allocated since the engine was made, `HeapAllocatedBytes`), `LimitBytes` and
-`Collections`. A CLI's JSON report shows them under `memory.gc` ([G2 README](engine/README.md)).
+`Collections`. A CLI's JSON report shows them under `memory.gc` ([Engine README](engine/README.md)).
 
 ### Teardown
 
@@ -222,7 +222,7 @@ thread's next `EngineInit` builds a new heap (`FirstInEngine` tells once-per-eng
 ### Threading model
 
 Every piece of engine state, the heap included, is a threadvar, so a thread that calls `EngineInit` has an engine and
-a heap of its own, and values never cross threads ([G2 README](engine/README.md)). Each thread has its own `HeapCeiling`:
+a heap of its own, and values never cross threads ([Engine README](engine/README.md)). Each thread has its own `HeapCeiling`:
 GocciaTestRunner's workers each set the limit for the file they run, and an agent thread (`Goccia.Agent`) takes its
 starter's. The limit is per thread, so N workers may hold up to N times it.
 
@@ -241,13 +241,13 @@ test counts every thread's external bytes.
 
 The functions come from `Goccia.HostAPI`'s natives and the getters from the host prelude (`source/engine/prelude/host.js`).
 The ceiling changes only from the host: `--max-memory`, `goccia.json` or `TGocciaEngine.MaxMemory`.
-`Goccia.build.gcStress` stays `false`: G2 has no stress build, and `./build.pas --gc-stress` now stops with a pointer to
+`Goccia.build.gcStress` stays `false`: the engine has no stress build, and `./build.pas --gc-stress` now stops with a pointer to
 the run-time flags below.
 
 ## GC Stress and Verification
 
 A rooting bug shows only when a collection lands between the allocation and the stale read, which an 8 MiB nursery
-makes rare. G2's binaries make it certain at run time instead of in a separate build. The flags belong to the `goccia`
+makes rare. The engine's binaries make it certain at run time instead of in a separate build. The flags belong to the `goccia`
 command-line host (`source/engine/goccia.dpr`, built by `./build.pas engine` into `build/engine/goccia`); GocciaRunner and the other
 applications do not take them.
 
@@ -279,12 +279,12 @@ GOCCIA_HOST=1 GOCCIA_NURSERY_KB=16 ./build/engine/goccia --gc-verify scripts/eng
 GOCCIA_NURSERY_KB=16 ./build/engine/goccia --gc-verify --test tests/built-ins/Goccia/gc/deep-object-chains.js
 ```
 
-The gate that runs this, and when to run it, is described in [G2 README — Gate](engine/README.md#gate).
+The gate that runs this, and when to run it, is described in [Engine README — Gate](engine/README.md#gate).
 
 ## Related Documents
 
-- [G2 design](engine/design.md) — values, cells, the heap and shapes
-- [G2 README](engine/README.md) — limits, reports and the gate
+- [Engine design](engine/design.md) — values, cells, the heap and shapes
+- [Engine README](engine/README.md) — limits, reports and the gate
 - [ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md) — the memory limit's refusal at the next safe point
 - [Heap Snapshots](heap-snapshots.md) — writing what a value reaches and restoring it in a fresh engine
 - [Embedding](embedding.md) — `TGocciaEngine` and its limits

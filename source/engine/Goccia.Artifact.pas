@@ -1,5 +1,5 @@
 unit Goccia.Artifact;
-{ Bytecode files (.gbc) on G2: a compiled Script or Module written to bytes and read back.
+{ Bytecode files (.gbc): a compiled Script or Module written to bytes and read back.
 
   Unlike the prelude snapshot (Goccia.Snapshot), a bytecode file comes from disk and is untrusted input
   (docs/bytecode-vm.md, Binary loading is a validation boundary): the reader checks every length against what
@@ -10,7 +10,7 @@ unit Goccia.Artifact;
     header   magic 'GBC'#0, u16 format version (200; the old engine's files are version 100), the runtime tag
              'goccia-engine', u64 engine fingerprint (the instruction set: a build whose opcodes differ rejects
              the file), source path (its extension gives the module's logical address), the compile profile
-             (Goccia.Bytecode.Profile's wire fields, then G2's unrestricted flag), u8 kind (0 Script,
+             (Goccia.Bytecode.Profile's wire fields, then the engine's unrestricted flag), u8 kind (0 Script,
              1 Module)
     sources  the source texts the templates' Function.prototype.toString ranges point into (usually one)
     module   a Module's record (TModuleInfo); a Script's import text (ScriptImportSource, an explicit Script's

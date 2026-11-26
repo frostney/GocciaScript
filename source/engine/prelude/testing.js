@@ -1,4 +1,4 @@
-// The test framework API (docs/testing-api.md) for G2: describe / test / expect, hooks, mocks and runTests, as the
+// The test framework API (docs/testing-api.md): describe / test / expect, hooks, mocks and runTests, as the
 // GocciaTestRunner injects them. Written in JavaScript so it runs on any engine. The matchers, the asymmetric matchers
 // and their equality follow GocciaScript's own testing library (Goccia.Builtins.TestingLibrary,
 // Goccia.Builtins.Testing.DeepEquality, Goccia.Values.AsymmetricMatcher), messages included, so a suite reports the

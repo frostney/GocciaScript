@@ -5,7 +5,7 @@ unit Goccia.Atomics;
   BufferData and BufferLen (Goccia.Typed) read through it, so typed arrays and DataViews over one need nothing
   else. A block reaches another engine through Goccia.Agent, which wraps it in a new object there.
 
-  BigInt64Array and BigUint64Array do not exist in G2 yet, so the BigInt forms of Atomics are absent. }
+  BigInt64Array and BigUint64Array do not exist in the engine yet, so the BigInt forms of Atomics are absent. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}
@@ -36,7 +36,7 @@ function IsSharedBuffer(V: TValue): Boolean;
 function SharedBlockOf(V: TValue): PSharedBlock;
 
 threadvar
-  { False in an agent that may not block (25.4.3.14 AgentCanSuspend); the main agent and G2's agents can }
+  { False in an agent that may not block (25.4.3.14 AgentCanSuspend); the main agent and the engine's agents can }
   AgentCannotSuspend: Boolean;
 
 implementation

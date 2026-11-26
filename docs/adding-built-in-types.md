@@ -10,13 +10,13 @@
 - **Tests** — JavaScript tests under `tests/built-ins/<Type>/`, run with `GocciaTestRunner`; a GC stress run for native code that allocates; test262 for spec built-ins.
 - **Checklist included** — Complete checklist at the end of the document for verification
 
-This guide walks through adding a built-in type such as `Map`, `Date` or `WeakRef` to G2, the engine under `source/engine`. Read [Value System](value-system.md) first: it describes `TValue`, objects, shapes and the rooting rules the code below follows.
+This guide walks through adding a built-in type such as `Map`, `Date` or `WeakRef` to the engine under `source/engine`. Read [Value System](value-system.md) first: it describes `TValue`, objects, shapes and the rooting rules the code below follows.
 
 ## Overview
 
 ### Native or prelude
 
-| | Native (`G2.<Unit>`) | Prelude (`source/engine/prelude/*.js`) |
+| | Native (`Goccia.<Unit>`) | Prelude (`source/engine/prelude/*.js`) |
 |---|---|---|
 | Written in | Pascal against `Goccia.Core` and `Goccia.VM` | JavaScript, by the spec's steps |
 | Internal slots | the object's `OKind`, `Aux1`, `Aux2`, `Pad` | private fields of a class (`#slot`) |
@@ -24,7 +24,7 @@ This guide walks through adding a built-in type such as `Map`, `Date` or `WeakRe
 | Speed | as fast as the engine | as fast as compiled JavaScript |
 | Examples | `Goccia.Date`, `Goccia.Promise`, `Goccia.TypedArrays`, `Goccia.JSON` | `builtins5.js` (WeakMap, WeakRef, FinalizationRegistry), `temporal.js`, `intl.js`, `iterhelpers.js` |
 
-The two mix: a prelude can receive natives for what JavaScript cannot do (`Goccia.Weak`'s ephemeron tables for WeakMap, `Goccia.Temporal`'s time zone reader, `Goccia.Intl`'s `intlOp`), and a native fast path can stand in for a prelude while the objects involved are unmodified (RegExp, `String.prototype.replace`; see [G2 design § Built-ins](engine/design.md#built-ins)).
+The two mix: a prelude can receive natives for what JavaScript cannot do (`Goccia.Weak`'s ephemeron tables for WeakMap, `Goccia.Temporal`'s time zone reader, `Goccia.Intl`'s `intlOp`), and a native fast path can stand in for a prelude while the objects involved are unmodified (RegExp, `String.prototype.replace`; see [Engine design § Built-ins](engine/design.md#built-ins)).
 
 ### Engine built-in or host API
 
@@ -40,7 +40,7 @@ The two mix: a prelude can receive natives for what JavaScript cannot do (`Gocci
 
 | Step | File(s) | Purpose |
 |------|---------|---------|
-| 1 | `source/engine/G2.<Unit>.pas` or `source/engine/prelude/<name>.js` | The type |
+| 1 | `source/engine/Goccia.<Unit>.pas` or `source/engine/prelude/<name>.js` | The type |
 | 2 | `source/engine/Goccia.Engine.pas` or `source/engine/Goccia.HostAPI.pas` | Registration |
 | 3 | `build.pas` (`GOCCIA_PRELUDES`) | A new prelude file only |
 | 4 | `source/engine/prelude/web.js`, `source/engine/Goccia.HeapSnapshot.pas` | structuredClone and heap snapshots, if they apply |
@@ -196,7 +196,7 @@ def(G, "WeakMap", WeakMap);
 1. Create `source/engine/prelude/<name>.js` holding one parenthesized function expression. The file compiles as an expression; its value is the function the installer calls:
 
    ```javascript
-   // Foo for G2: what it implements and which natives it is called with.
+   // Foo: what it implements and which natives it is called with.
    (function (G, n, shared) {
      'use strict';
      // ...
@@ -209,7 +209,7 @@ def(G, "WeakMap", WeakMap);
    ('foo.js', 'Goccia.FooPrelude.inc', 'FooSrc'),
    ```
 
-   `GenerateEnginePreludes` writes `build/engine/gen/Goccia.FooPrelude.inc` on every G2 build, with the source as the constant `FooSrc`.
+   `GenerateEnginePreludes` writes `build/engine/gen/Goccia.FooPrelude.inc` on every engine build, with the source as the constant `FooSrc`.
 
 3. Include it in the implementation section of the unit that installs it: `{$I Goccia.FooPrelude.inc}`.
 
@@ -388,4 +388,4 @@ Use this checklist when adding a new built-in type:
 5. **Calling through replaceable globals in a prelude** — `Array.prototype.push` or `Object.defineProperty` read at call time observe a script's changes. Capture them when the prelude runs.
 6. **Forgetting `markIntrinsic`** — Without it, `Reflect.construct(PreludeClass, [], newTargetWithoutPrototype)` gets `Object.prototype` instead of the class's prototype.
 7. **Exceptions for JavaScript errors** — A native signals a throw by returning `False` with `Pending` set, never by raising a Pascal exception.
-8. **Formatting** — G2's Pascal is outside `./format.pas`; follow the style of the surrounding unit.
+8. **Formatting** — The engine's Pascal is outside `./format.pas`; follow the style of the surrounding unit.

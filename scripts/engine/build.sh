@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/engine/build.sh: builds the G2 engine into build/engine/goccia with `./build.pas --prod engine`, under fpc-toolchain's
+# scripts/engine/build.sh: builds the engine into build/engine/goccia with `./build.pas --prod engine`, under fpc-toolchain's
 # FPC 3.3.1+9 (3.3.1-b9), the build CI uses. GOCCIA_FPC_ENV overrides the command that selects the toolchain.
 set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)

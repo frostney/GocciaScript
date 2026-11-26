@@ -1,4 +1,4 @@
-// The CLI host's globals for G2 (docs/built-ins.md): the Goccia object, and the global object as the CLIs leave it.
+// The CLI host's globals (docs/built-ins.md): the Goccia object, and the global object as the CLIs leave it.
 // Goccia.HostAPI calls this function once per realm with the global object, the host's natives (n), the preludes'
 // shared internals, the build facts as JSON, and whether the host runs tests and allows ShadowRealm; it returns the Goccia object, which the host binds as
 // the const Goccia.

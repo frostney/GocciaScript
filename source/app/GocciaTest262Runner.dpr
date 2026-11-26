@@ -2,8 +2,8 @@ program GocciaTest262Runner;
 
 {$I Goccia.inc}
 
-{ GocciaTest262Runner on G2: the old runner's command line, discovery, sharding, grading contract 4 and JSON
-  report, with each run in a forked process on G2's test262 host (Goccia.Test262). Linux on x86-64 only, as G2. }
+{ GocciaTest262Runner: the command line, discovery, sharding, grading contract 4 and JSON
+  report, with each run in a forked process on the engine's test262 host (Goccia.Test262). Linux on x86-64 only. }
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
@@ -957,7 +957,7 @@ begin
   Result := True;
 end;
 
-{ $262.js is G2's host object, compiled into the test262 host (Goccia.Test262 takes it by name); the rest are the
+{ $262.js is the engine's host object, compiled into the test262 host (Goccia.Test262 takes it by name); the rest are the
   suite's }
 function TTest262App.HarnessFilePath(const AName: string): string;
 begin
@@ -1054,7 +1054,7 @@ begin
   Result := Result + '.profile.json';
 end;
 
-{ Grades a run's outcome under contract 4, as scripts/engine/run262.py does for the G2 gate. A parse, early or
+{ Grades a run's outcome under contract 4, as scripts/engine/run262.py does for the engine's gate. A parse, early or
   resolution negative passes only when the test is rejected before evaluation (outcome parse) with the expected
   constructor; a runtime negative only when evaluation throws (outcome throw) the expected constructor. A harness
   file that failed is WRAPPER_INFRA (the test never ran). }
@@ -1154,7 +1154,7 @@ begin
   AStatus := toPass;
 end;
 
-{ One run, in the forked process ExecuteAll made for it: G2's engine, its test262 host and the harness, then the
+{ One run, in the forked process ExecuteAll made for it: the engine, its test262 host and the harness, then the
   test. The process ends after it, so nothing here is torn down. }
 procedure TTest262App.ExecuteOne(const ACase: TTest262Case;
   out AResult: TTest262Result);
@@ -1940,7 +1940,7 @@ var
   SnapshotEngine: TGocciaEngine;
   SnapshotErr: UnicodeString;
 begin
-  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other G2 apps
+  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
     take them }
   if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin

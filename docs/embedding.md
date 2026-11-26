@@ -10,14 +10,14 @@
 - **Globals and modules** — Inject globals from JSON, data files or Pascal natives; resolve imports through a `TGocciaModuleResolver` with aliases and import maps; define virtual modules; receive parse warnings through `OnWarning` and `OnModuleWarning`
 - **One engine per thread** — Every piece of engine state is a threadvar (`Goccia.Engine`), so engines on different threads run side by side and share nothing
 
-Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). The engine is G2 ([G2 overview](engine/README.md), [design](engine/design.md)): `Goccia.Compiler` compiles the front end's syntax tree (`Goccia.Parser`, `Goccia.SourcePipeline`) to register bytecode, `Goccia.VM` runs it in an interpreter, and on Linux x86-64 a baseline JIT and an optimizing tier compile hot code. `TGocciaEngine` in `Goccia.Embed` is the API the applications in `source/app` build on, and the one this page describes.
+Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). The engine ([overview](engine/README.md), [design](engine/design.md)): `Goccia.Compiler` compiles the front end's syntax tree (`Goccia.Parser`, `Goccia.SourcePipeline`) to register bytecode, `Goccia.VM` runs it in an interpreter, and on Linux x86-64 a baseline JIT and an optimizing tier compile hot code. `TGocciaEngine` in `Goccia.Embed` is the API the applications in `source/app` build on, and the one this page describes.
 
 ## Building an Embedding
 
-G2 needs FPC 3.3.1 from fpc-toolchain; `build.pas` refuses an older compiler. A program that embeds the engine compiles with the paths `build.pas` passes for its own G2 programs (`GocciaArgs`):
+The engine needs FPC 3.3.1 from fpc-toolchain; `build.pas` refuses an older compiler. A program that embeds the engine compiles with the paths `build.pas` passes for its own engine programs (`GocciaArgs`):
 
 - units from `source/engine`, `source/units`, `source/shared` and `source/generated` (and `source/app` for `Goccia.CLI.*` helpers such as `TGocciaSandboxHost`);
-- includes from the same directories, plus `build/engine/gen`, where `build.pas` writes each JS prelude of `source/engine/prelude` as a Pascal constant when it builds any G2 program, and a directory holding `Goccia.PreludeSnapshot.inc`;
+- includes from the same directories, plus `build/engine/gen`, where `build.pas` writes each JS prelude of `source/engine/prelude` as a Pascal constant when it builds any engine program, and a directory holding `Goccia.PreludeSnapshot.inc`;
 - the compiled resources of `source/generated` (`*.res`) in the unit output directory.
 
 `Goccia.PreludeSnapshot.inc` holds the preludes compiled ahead of time (`Goccia.Snapshot`). `build.pas` makes it per program: it compiles the program, runs it once with `GOCCIA_SNAPSHOT_OUT` set, writes what the run recorded as the include and compiles again. A program compiled with an empty snapshot (`GocciaPreludeSnapshotSize = 0` and a one-byte `GocciaPreludeSnapshot`) also works and compiles its preludes each time an engine is created.
@@ -184,7 +184,7 @@ Engine.Profile := Profile;
 | `FunctionCtor` | The `Function` constructor | `--unsafe-function-constructor` |
 | `ShadowRealm` | The `ShadowRealm` global (read when the host is installed) | `--unsafe-shadowrealm` |
 
-With `Restricted` False every compatibility switch reads as on (`Goccia.Core` `ProfileNonStrict` and the rest); the CLI hosts keep it set. `JSModuleSources` turns on GocciaScript's experimental JavaScript module source objects (`--experimental-js-module-source`). JSX, TypeScript-style type annotations and the rest of the front end's preprocessing apply as the [Language](language.md) page describes; G2 uses the shared front end (`Goccia.SourcePipeline`) with these options.
+With `Restricted` False every compatibility switch reads as on (`Goccia.Core` `ProfileNonStrict` and the rest); the CLI hosts keep it set. `JSModuleSources` turns on GocciaScript's experimental JavaScript module source objects (`--experimental-js-module-source`). JSX, TypeScript-style type annotations and the rest of the front end's preprocessing apply as the [Language](language.md) page describes; the engine uses the shared front end (`Goccia.SourcePipeline`) with these options.
 
 ## Changing the Defaults
 
@@ -200,7 +200,7 @@ A `TGocciaEngine` host has no global `eval`: the host deletes it from every real
 
 ## Runtime Extensions
 
-G2 has no runtime extension classes. Its host surface is a set of JS preludes (`source/engine/prelude`) that `PrepareHost` installs with the natives they need (`Goccia.HostAPI` `InstallHostGlobals`):
+The engine has no runtime extension classes. Its host surface is a set of JS preludes (`source/engine/prelude`) that `PrepareHost` installs with the natives they need (`Goccia.HostAPI` `InstallHostGlobals`):
 
 - **Globals**: `console`, `performance`, the timer functions, `queueMicrotask`, `URL` and `URLSearchParams`, `fetch` with `Headers` and `Response`, `AbortController`, `structuredClone`, `TextEncoder` and `TextDecoder`, `atob` and `btoa`, `DOMException`, `PermissionDenied`, and the `Goccia` object.
 - **Modules**: `goccia:csv`, `goccia:tsv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:yaml`, `goccia:semver`, `goccia:timers` and `node:async_hooks`; `goccia:ast` when `ConfigJson` sets `"experimental-ast": "true"`.
@@ -381,7 +381,7 @@ A definition is `address=source` or `address=` followed by a JSON descriptor; re
 
 ### Bytecode Files
 
-`CompileArtifact(FileName, Source, Bytes, R)` compiles a source as `Run` would and writes it as a G2 bytecode file (`Goccia.Artifact`) without running it; `RunArtifact(FileName, Bytes)` runs such a file as the entry after checking its recorded profile against the engine's settings. `GocciaBundler` and `GocciaRunner` use them; see [Precompiled bytecode modules](bytecode-loading.md).
+`CompileArtifact(FileName, Source, Bytes, R)` compiles a source as `Run` would and writes it as a bytecode file (`Goccia.Artifact`) without running it; `RunArtifact(FileName, Bytes)` runs such a file as the entry after checking its recorded profile against the engine's settings. `GocciaBundler` and `GocciaRunner` use them; see [Precompiled bytecode modules](bytecode-loading.md).
 
 ## Capabilities and Audit
 
@@ -493,7 +493,7 @@ Each engine has a generational heap (`Goccia.Core`): a nursery of 8 MiB by defau
 
 ## Existing Embeddings
 
-Every application in `source/app` embeds the engine through `TGocciaEngine`, except `GocciaTest262Runner`, which runs each test in a forked process on G2's conformance host (`Goccia.Test262`):
+Every application in `source/app` embeds the engine through `TGocciaEngine`, except `GocciaTest262Runner`, which runs each test in a forked process on the engine's conformance host (`Goccia.Test262`):
 
 | Program | File | How it embeds |
 |---------|------|---------------|
@@ -505,7 +505,7 @@ Every application in `source/app` embeds the engine through `TGocciaEngine`, exc
 | `GocciaBundler` | `source/app/GocciaBundler.dpr` | `CompileArtifact` on a thread per file, nothing run |
 | `GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Two fresh engines per input, one under every limit and one with the JIT |
 
-`Goccia.CLI.FileEngine` holds what the file-running hosts share (settings, globals, virtual modules, console capture, the import grant, failure text), and `source/engine/goccia.dpr` is G2's own development and conformance CLI.
+`Goccia.CLI.FileEngine` holds what the file-running hosts share (settings, globals, virtual modules, console capture, the import grant, failure text), and `source/engine/goccia.dpr` is the engine's own development and conformance CLI.
 
 ## Application Base Class
 

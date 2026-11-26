@@ -329,7 +329,7 @@ Benchmark Summary
   Total duration: 10.04s
 ```
 
-The excerpt predates G2. On G2 the phase line also shows `Compile:`, a figure
+The excerpt comes from the old engine. The phase line now also shows `Compile:`, a figure
 that includes lexing and parsing, and its `Lex:` and `Parse:` figures are zero.
 
 Phase durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5µs display as `ns`, values below 0.5ms as `µs`, values below 10s as `ms` with two decimal places, and larger values as `s`.

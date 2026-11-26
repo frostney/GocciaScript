@@ -1,4 +1,4 @@
-// The benchmark API (goccia:microbench) for G2: bench, group, run, summary and boxplot, as GocciaBenchmarkRunner
+// The benchmark API (goccia:microbench): bench, group, run, summary and boxplot, as GocciaBenchmarkRunner
 // gives them (Goccia.Builtins.Benchmark). The warm-up, calibration, measurement rounds, outlier filter and
 // percentiles are the same steps in the same order, so a file reports comparable numbers on both engines.
 // Goccia.HostAPI calls this function with the global object, the preludes' shared internals and the natives (n): now()

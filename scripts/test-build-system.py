@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
     assert not selected.exists()
     assert all((root / "build/compiled" / folder / "keep.ppu").exists() for folder in sentinels)
     # The TOML compliance runner is the one application build.pas compiles as
-    # a plain FPC program; the G2 apps need the engine's preludes and snapshot.
+    # a plain FPC program; the other apps need the engine's preludes and snapshot.
     compliance = root / "source/app/compliance/GocciaTOMLComplianceRunner.dpr"
     compliance.parent.mkdir(parents=True, exist_ok=True)
     compliance.write_text("program App; begin end.\n")

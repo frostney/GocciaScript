@@ -1,9 +1,9 @@
 unit Goccia.CLI.FileEngine;
 
-{ What the CLIs that run files on G2 (GocciaRunner, GocciaTestRunner) share for one file's engine: the console
+{ What the CLIs that run files (GocciaRunner, GocciaTestRunner) share for one file's engine: the console
   capture, the file's settings and host config, the file thread's stack, and the import capability over the file's
-  module resolution (the node_modules and provider package grants TGocciaEngine makes on the old engine, their
-  audit, and the provider package checks the read policy and the module loader ask for, ADR 0122). }
+  module resolution (the node_modules and provider package grants, their audit, and the provider package checks the
+  read policy and the module loader ask for, ADR 0122). }
 
 {$I Goccia.inc}
 
@@ -428,7 +428,7 @@ begin
 end;
 
 { GocciaRunner's globals (ApplyDataGlobalsToEngine): the root config's globals files, then the command line's, then
-  each --global name=value. Globals modules (a .js file's exports) are not on G2 yet. }
+  each --global name=value. Globals modules (a .js file's exports) are not supported yet. }
 function InjectGlobals(const AEngine: TGocciaEngine; const AConfigEntries: TConfigEntryArray;
   const AGlobalFiles, AInlineGlobals: TRepeatableOption; out AError: string): Boolean;
 var
@@ -503,7 +503,7 @@ end;
 
 { GocciaRunner's virtual modules (ApplyConfiguredVirtualModules): the root config's, the file's own config's when
   it has another, then the command line's --modules manifests and --module definitions. JavaScript and TypeScript
-  manifests are not on G2 yet. }
+  manifests are not supported yet. }
 function DefineVirtualModules(const AEngine: TGocciaEngine; const ARootConfigPath, AFileConfigPath: string;
   const AEngineOptions: TGocciaEngineOptions; out AError: string): Boolean;
 var

@@ -1,6 +1,6 @@
-name: G2
+name: Engine
 
-# The G2 engine (source/engine, docs/engine/README.md) and the apps built on it.
+# The engine (source/engine, docs/engine/README.md) and the apps built on it.
 #
 # On Linux x86-64 each job builds the targets it runs, so the three run side
 # by side. The JS suite and test262 must pass in full.
@@ -32,7 +32,7 @@ env:
 
 jobs:
   suite:
-    name: JavaScript suite on G2
+    name: JavaScript suite
     runs-on: ubuntu-latest
     timeout-minutes: 75
     defaults:
@@ -48,7 +48,7 @@ jobs:
         with:
           version: ${{ env.FPC_VERSION }}
 
-      - name: Build GocciaTestRunner on G2
+      - name: Build GocciaTestRunner
         run: ./build.pas --prod testrunner
 
       - name: Build FFI fixture library
@@ -79,7 +79,7 @@ jobs:
             engine-heap-snapshots.log
 
   test262:
-    name: test262 on G2
+    name: test262
     runs-on: ubuntu-latest
     timeout-minutes: 75
     defaults:
@@ -95,7 +95,7 @@ jobs:
         with:
           version: ${{ env.FPC_VERSION }}
 
-      - name: Build GocciaTest262Runner on G2
+      - name: Build GocciaTest262Runner
         run: ./build.pas --prod test262runner
 
       - name: Read test262 pin
@@ -141,7 +141,7 @@ jobs:
           path: engine-test262-results.json
 
   engine:
-    name: Limits, bytecode files and generated programs on G2
+    name: Limits, bytecode files and generated programs
     runs-on: ubuntu-latest
     timeout-minutes: 75
     defaults:
@@ -157,7 +157,7 @@ jobs:
         with:
           version: ${{ env.FPC_VERSION }}
 
-      - name: Build G2, GocciaRunner, GocciaBundler and GocciaFuzzHarness on G2
+      - name: Build the engine, GocciaRunner, GocciaBundler and GocciaFuzzHarness
         run: ./build.pas --prod engine runner bundler fuzzharness
 
       - name: Execution limits
@@ -186,7 +186,7 @@ jobs:
           path: engine-grammar-findings/
 
   platform-build:
-    name: G2 build (${{ matrix.target }})
+    name: Engine build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     # Each Darwin target builds on a runner of its own architecture, where it
@@ -250,7 +250,7 @@ jobs:
           mkdir -p link-libs
           unzip -qo "$RUNNER_TEMP/link-libs.zip" -d link-libs
 
-      - name: Build GocciaTestRunner on G2
+      - name: Build GocciaTestRunner
         # build.pas builds a cross target twice: for the host, to make the
         # prelude snapshot, then for the target with it.
         env:
@@ -279,7 +279,7 @@ jobs:
           path: build/GocciaTestRunner*
 
   platform-test:
-    name: JavaScript suite on G2 (${{ matrix.target }})
+    name: JavaScript suite (${{ matrix.target }})
     needs: platform-build
     timeout-minutes: 75
     strategy:

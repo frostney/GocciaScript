@@ -1,6 +1,6 @@
 program GocciaFuzzHarness;
 
-{ GocciaFuzzHarness on G2: a coverage-blind crash harness for G2's parser,
+{ GocciaFuzzHarness: a coverage-blind crash harness for the engine's parser,
   compiler, bytecode tiers and JIT, and for its heap snapshot reader.
 
   Reads one source input from a file argument or stdin and runs it twice,
@@ -23,7 +23,7 @@ program GocciaFuzzHarness;
   A module import never reaches the host's files: the run's resolver refuses
   every specifier before it probes a path, the run's file reader (Goccia.Modules
   SetFileReadHook) refuses every path as well, and a run that asked for
-  either reports module-denied. Without capabilities G2 also refuses fetch()
+  either reports module-denied. Without capabilities the engine also refuses fetch()
   and leaves FFI out.
 
   With --grammar the input is not source text but the choices of a program
@@ -51,10 +51,10 @@ program GocciaFuzzHarness;
   one program (HEAP_SNAPSHOT_PROGRAM): in a seed run it hands each seed
   graph to capture(i, v), which writes it; in a restore run restored()
   reads the input, and the program then uses what restored, calling its
-  functions. G2's writer has no codec for a generator's frame, a Map's
+  functions. The engine's writer has no codec for a generator's frame, a Map's
   table or a buffer's bytes (Goccia.HeapSnapshot), so the seeds hold data
   graphs, closures, bound functions, errors and wrapper objects. Linux on
-  x86-64 only, as G2. }
+  x86-64 only, as the engine. }
 
 {$I Goccia.inc}
 
@@ -200,7 +200,7 @@ type
   end;
 
   { Refuses every import before any path is probed, so an input learns
-    nothing about the host's files, not even whether one exists. G2 turns
+    nothing about the host's files, not even whether one exists. The engine turns
     the exception into the error the import fails with. }
   TFuzzDeniedResolver = class(TModuleResolver)
   public
@@ -753,7 +753,7 @@ begin
   WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
     ' [--verbose] --grammar [--print-program] <file>|-');
   WriteLn(ErrOutput);
-  WriteLn(ErrOutput, 'Runs one input on G2 under its limits, then with ' +
+  WriteLn(ErrOutput, 'Runs one input under the engine''s limits, then with ' +
     'the JIT on, each on an engine of its own.');
   WriteLn(ErrOutput, 'Exits 0 for every engine-modelled outcome; nonzero ' +
     'only for an unexpected fault.');
@@ -1082,7 +1082,7 @@ end;
 
 begin
   { build.pas snapshots the compiled preludes from a run with
-    GOCCIA_SNAPSHOT_OUT set: a host's, as the other G2 apps take them }
+    GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps take them }
   if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
     GSetupError := '';

@@ -10,7 +10,7 @@
 - **Spec operations as routines** — Property access (`GetV`, `SetV`, `GetFromObject`), conversions (`ToPrimitiveHint`, `ToNumberV`, `ToStringV`, `ToPropKey`) and the descriptor-level internal methods (`Goccia.ObjModel`) are plain functions that return `False` with the exception in `Pending`.
 - **Per-realm intrinsics** — Built-in prototypes are threadvars of the running realm (`ObjectProto`, `ArrayProto`, ...), swapped by `SwitchRealm`; one engine per thread owns them.
 
-The value system is the foundation of GocciaScript's runtime. [G2 design](engine/design.md) gives the short version; this page is the contributor's reference for how values, objects and conversions work in `source/engine`.
+The value system is the foundation of GocciaScript's runtime. [Engine design](engine/design.md) gives the short version; this page is the contributor's reference for how values, objects and conversions work in `source/engine`.
 
 ## Value Representation
 
@@ -77,7 +77,7 @@ Every heap value starts with a `TCellHeader`: size, kind, flags and a kind-speci
 | `ckBigInt` | `TBigCell` | BigInts (`Goccia.BigIntV`) |
 | `ckBytes` | `TBytesCell` | an ArrayBuffer's bytes (`Goccia.Typed`) |
 
-How cells are allocated, moved and freed is in [Garbage Collector](garbage-collector.md) and [G2 design § Heap and GC](engine/design.md#heap-and-gc). The rules that matter to code that handles values are in [GC Integration](#gc-integration).
+How cells are allocated, moved and freed is in [Garbage Collector](garbage-collector.md) and [Engine design § Heap and GC](engine/design.md#heap-and-gc). The rules that matter to code that handles values are in [GC Integration](#gc-integration).
 
 ## Objects
 
@@ -160,11 +160,11 @@ The prototype is part of the shape: `ProtoOf` reads `Shape^.Proto`, and `SetProt
 4. answers the virtual properties (`length` of arrays, arguments objects and String objects, String indices) and dense elements;
 5. continues at `Shape^.Proto`.
 
-`GetV` adds the primitive receivers: a string answers `length` and indices itself, and every primitive continues at its wrapper prototype without allocating a wrapper. `GetElemV`, `SetV`, `SetElemV` and the strict forms (`SetVS`, `SetVT`) are the computed-key and `[[Set]]` counterparts; `HasPropertyV` is `[[HasProperty]]`. Compiled code reaches the same semantics through inline caches that record (shape, slot) for own properties and (receiver shape, holder, holder shape) for prototype hits ([G2 design § Objects](engine/design.md#objects)).
+`GetV` adds the primitive receivers: a string answers `length` and indices itself, and every primitive continues at its wrapper prototype without allocating a wrapper. `GetElemV`, `SetV`, `SetElemV` and the strict forms (`SetVS`, `SetVT`) are the computed-key and `[[Set]]` counterparts; `HasPropertyV` is `[[HasProperty]]`. Compiled code reaches the same semantics through inline caches that record (shape, slot) for own properties and (receiver shape, holder, holder shape) for prototype hits ([Engine design § Objects](engine/design.md#objects)).
 
 ### Property Descriptors
 
-`Goccia.ObjModel` implements the descriptor-level internal methods for ordinary objects and the exotic objects G2 models (arrays, String objects, typed arrays, proxies through their traps):
+`Goccia.ObjModel` implements the descriptor-level internal methods for ordinary objects and the exotic objects the engine models (arrays, String objects, typed arrays, proxies through their traps):
 
 | Routine | Spec |
 |---------|------|

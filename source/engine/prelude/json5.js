@@ -1,4 +1,4 @@
-// goccia:json5 (parse, stringify) and .json5 module imports for the CLI host on G2: the JSON5 data interchange
+// goccia:json5 (parse, stringify) and .json5 module imports for the CLI host: the JSON5 data interchange
 // format (json5.org), with the reference library's stringify (quote choice, identifier keys, a trailing comma when
 // pretty-printing) and JSON.parse's reviver protocol, its context carrying a primitive's source text. Called once
 // per realm with the global object, the host's natives (n) and the preludes' shared internals; registers the module

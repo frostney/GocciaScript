@@ -1,13 +1,12 @@
 program GocciaTestRunner;
 
-{ GocciaTestRunner on the G2 engine, while the apps move from the old engine
-  to G2: the same command line, configs, trust and capability policy (the base
+{ GocciaTestRunner: the command line, configs, trust and capability policy (the base
   class), each test file run by a TGocciaEngine in test mode (Goccia.Embed TestMode,
   the testing API of prelude/testing.js) on a thread of its own, its suites
   reported by Goccia.HostAPI RunTestSuites. `./build.pas testrunner` builds it
   as build/GocciaTestRunner.
 
-  Not yet on G2: snapshots, heap snapshots, coverage, --globals and --global,
+  Not yet supported: snapshots, heap snapshots, coverage, --globals and --global,
   --test-timeout and --describe-timeout, and bytecode files. }
 
 {$I Goccia.inc}
@@ -147,7 +146,7 @@ type
     procedure Validate; override;
   end;
 
-  { one test file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh engine }
+  { one test file on a thread of its own: an engine's state is its thread's, so each file gets a fresh engine }
   TGocciaTestThread = class(TThread)
   private
     FApp: TGocciaTestRunnerApp;

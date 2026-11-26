@@ -1,5 +1,5 @@
 unit Goccia.HostSemver;
-{ goccia:semver's native half for the CLI host on G2: one dispatcher, semver(op, ...), over Goccia.Semver (the
+{ goccia:semver's native half for the CLI host: one dispatcher, semver(op, ...), over Goccia.Semver (the
   engine-independent SemVer 2.0.0 core). Its answer is JSON text, which prelude/semver.js parses; a version or
   range the core refuses throws its TypeError or Error. Options travel as a bit set: 1 loose, 2 includePrerelease,
   4 rtl. }

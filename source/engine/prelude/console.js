@@ -1,4 +1,4 @@
-// console for the CLI host on G2, as Goccia.Builtins.Console has it: every method writes one line to standard output
+// console for the CLI host, as Goccia.Builtins.Console has it: every method writes one line to standard output
 // (warn, error, info and debug behind a "Warning: ", "Error: ", "Info: " or "Debug: " prefix), indented two spaces
 // per open group, its values rendered by Goccia.Values.Formatting's console form (util.inspect's shapes to a depth of
 // 5: strings quoted when nested, -0 kept, functions, classes and errors in brackets). Called once per realm with the

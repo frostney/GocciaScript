@@ -4,8 +4,8 @@ pre-commit:
   commands:
     format-pascal:
       glob: "**/*.{pas,dpr}"
-      # G2 is outside ./format.pas's own scope (source/app, units, shared): its parameter renaming breaks
-      # G2's nested routines and with-blocks
+      # The engine is outside ./format.pas's own scope (source/app, units, shared): its parameter renaming breaks
+      # the engine's nested routines and with-blocks
       exclude:
         - "source/engine/**"
       run: ./format.pas {staged_files}

@@ -1,11 +1,11 @@
 # Heap Snapshots
 
-*Writing what a value reaches and restoring it in a fresh engine of the same build; on G2 a test-runner round trip and a fuzz target.*
+*Writing what a value reaches and restoring it in a fresh engine of the same build; a test-runner round trip and a fuzz target.*
 
 ## Executive Summary
 
 - **A small writer and reader** — `Goccia.HeapSnapshot` writes what one root value reaches (`SnapshotWrite`) and restores it in a fresh engine set up the same way (`SnapshotRestore`)
-- **Where it is used** — GocciaTestRunner's `--heap-snapshots` round-trips every object `expect()` is given ([below](#round-tripping-the-javascript-suite)), and GocciaFuzzHarness fuzzes the reader with real snapshots. `TGocciaEngine` exposes only that round trip; G2 has no embedder session or pause checkpoint
+- **Where it is used** — GocciaTestRunner's `--heap-snapshots` round-trips every object `expect()` is given ([below](#round-tripping-the-javascript-suite)), and GocciaFuzzHarness fuzzes the reader with real snapshots. `TGocciaEngine` exposes only that round trip; the engine has no embedder session or pause checkpoint
 - **Refusal is normal** — A value whose state lives outside the cells the writer copies (a Map's table, a buffer's bytes, a promise's reactions, a generator's frame, a Proxy, a Date, a RegExp) refuses the snapshot with a reason
 - **Built-ins are named, not written** — What `globalThis` reaches before the run's code is named by its path; a built-in is written as that name and a fingerprint of its state, and a restore refuses a built-in the run changed
 - **Functions are named by their code's place** — A closure is written with its bindings, and its code as a path in the entry's or a module's function tree; the restoring engine compiles that code without running it
@@ -13,7 +13,7 @@
 
 ## Scope
 
-G2's heap snapshots copy cells as they are. The writer handles these kinds:
+The engine's heap snapshots copy cells as they are. The writer handles these kinds:
 
 | Cell | Written as |
 |---|---|
@@ -32,7 +32,7 @@ a `DataView`, a promise, a RegExp, a Date, a Proxy, a generator, an async genera
 iterator, a mapped arguments object and a native function the engine did not have before the run. The refusal names
 the kind as the old engine's class name, so refusal reports stay comparable.
 
-What the old engine's heap snapshots also had and G2 does not: the embedder session and restore classes, the pause
+What the old engine's heap snapshots also had and the engine does not: the embedder session and restore classes, the pause
 checkpoint, built-in differences (a changed built-in refuses instead), module records (a restored engine that imports
 a module evaluates it again), configurable reader limits, the accounting check, and a format version or build
 identity in the header.
@@ -122,8 +122,8 @@ accept one from a script or a user.
 
 ## Testing
 
-GocciaScript's own suite exercises the round trip ([below](#round-tripping-the-javascript-suite)): PR CI and the G2
-workflow (`.github/workflows/engine.yml`) run `tests/` with `--heap-snapshots`, and the G2 workflow fails when any
+GocciaScript's own suite exercises the round trip ([below](#round-tripping-the-javascript-suite)): PR CI and the Engine
+workflow (`.github/workflows/engine.yml`) run `tests/` with `--heap-snapshots`, and the Engine workflow fails when any
 round trip fails.
 
 GocciaFuzzHarness restores one input as a snapshot with `--heap-snapshot <file>` and writes its own seed snapshots

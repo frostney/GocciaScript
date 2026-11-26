@@ -1,4 +1,4 @@
-// node:async_hooks for the CLI host on G2: AsyncLocalStorage and AsyncResource over the engine's async context
+// node:async_hooks for the CLI host: AsyncLocalStorage and AsyncResource over the engine's async context
 // (Goccia.Promise: a promise reaction made by then or await runs in the context current when it was made; a timer runs
 // in the one current when it was scheduled). A context is an immutable Map from AsyncLocalStorage instances to
 // their stores, replaced, never changed, so a continuation keeps the one it captured. Called once per realm with

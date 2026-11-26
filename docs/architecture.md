@@ -1,10 +1,10 @@
 # Architecture
 
-*How source flows through the engine: the shared front end, G2's compiler and VM, the host layer the CLI tools run on, and the main Pascal layers.*
+*How source flows through the engine: the shared front end, the compiler and VM, the host layer the CLI tools run on, and the main Pascal layers.*
 
 ## Executive Summary
 
-- **One engine, G2** — GocciaScript runs on G2 (`source/engine`): its own compiler, register bytecode, interpreter, baseline JIT and optimizing tier (Linux x86-64), object model, generational GC and built-ins. Goccia's lexer, parser and AST (`source/units`) are its front end
+- **One engine** — GocciaScript runs on one engine (`source/engine`): its own compiler, register bytecode, interpreter, baseline JIT and optimizing tier (Linux x86-64), object model, generational GC and built-ins. Goccia's lexer, parser and AST (`source/units`) are its front end
 - **Embedding API** — `TGocciaEngine` (`Goccia.Embed`) is what hosts build on: it makes the thread's engine, takes the run's settings, and `Run` compiles and runs one entry as a Script or a module, then its event loop, and reports how the run ended in a `TGocciaRunResult`
 - **One engine per thread** — every piece of engine state (heap, atoms, shapes, stacks, built-ins, job queue) is a threadvar, so a thread has at most one engine and values never cross threads; the CLI tools run each file on a thread of its own
 - **Source pipeline** — `TGocciaSourcePipeline` (preprocessors, compatibility flags, warnings, source type) parses entries and modules under a restricted language profile; the whole-language profile parses with the lexer and parser directly and compiles functions lazily
@@ -13,18 +13,18 @@
 
 ## Overview
 
-GocciaScript executes source one way: the front end parses it into Goccia's AST, `Goccia.Compiler` compiles the AST to G2's register bytecode, and `Goccia.VM` runs it. G2 replaced the old engine, and every application in `source/app` (GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner, GocciaBundler, GocciaREPL, GocciaTest262Runner, GocciaScriptLoaderBare, GocciaFuzzHarness) runs on it ([ADR 0188](adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)). G2 builds with FreePascal 3.3.1 only, because it relies on native-TLS threadvars; [G2](engine/README.md) and [G2 design](engine/design.md) describe the engine in more depth.
+GocciaScript executes source one way: the front end parses it into Goccia's AST, `Goccia.Compiler` compiles the AST to register bytecode, and `Goccia.VM` runs it. The engine replaced the old engine, and every application in `source/app` (GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner, GocciaBundler, GocciaREPL, GocciaTest262Runner, GocciaScriptLoaderBare, GocciaFuzzHarness) runs on it ([ADR 0188](adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)). It builds with FreePascal 3.3.1 only, because it relies on native-TLS threadvars; [Engine](engine/README.md) and [Engine design](engine/design.md) describe the engine in more depth.
 
-The source pipeline public API is `TGocciaSourcePipeline` in `Goccia.SourcePipeline`. `Parse` accepts source text plus `TGocciaSourcePipelineOptions` (preprocessors, compatibility flag set, unsupported-feature warning policy, and source type) and returns an owning `TGocciaSourcePipelineResult` containing the AST, generated-source lines, source map, timings, and warnings as data. G2 parses through it whenever the language profile is restricted, as the CLI tools' profile is (`HostCompileEntry` and `ParseAndCompileModule` in `Goccia.Eval`, which turn the profile into pipeline options): the JSX preprocessor runs, the profile's compatibility flags become the pipeline's, and its warnings reach the host (`TGocciaEngine.OnWarning`, `OnModuleWarning`). Each AST node reports the nodes beneath it, in source order, through `TGocciaASTNode.ForEachChild`; `Goccia.Compiler`'s and `Goccia.Eval`'s AST scans and the `goccia:ast` module's report (`Goccia.AST.Report`) walk that instead of keeping their own `case` over the node classes ([ADR 0162](adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)).
+The source pipeline public API is `TGocciaSourcePipeline` in `Goccia.SourcePipeline`. `Parse` accepts source text plus `TGocciaSourcePipelineOptions` (preprocessors, compatibility flag set, unsupported-feature warning policy, and source type) and returns an owning `TGocciaSourcePipelineResult` containing the AST, generated-source lines, source map, timings, and warnings as data. The engine parses through it whenever the language profile is restricted, as the CLI tools' profile is (`HostCompileEntry` and `ParseAndCompileModule` in `Goccia.Eval`, which turn the profile into pipeline options): the JSX preprocessor runs, the profile's compatibility flags become the pipeline's, and its warnings reach the host (`TGocciaEngine.OnWarning`, `OnModuleWarning`). Each AST node reports the nodes beneath it, in source order, through `TGocciaASTNode.ForEachChild`; `Goccia.Compiler`'s and `Goccia.Eval`'s AST scans and the `goccia:ast` module's report (`Goccia.AST.Report`) walk that instead of keeping their own `case` over the node classes ([ADR 0162](adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)).
 
 The parser owns ECMAScript lexical-goal choices. `TGocciaLexer.ScanNextToken` scans one token at a time with an explicit `TGocciaLexicalGoal` such as `InputElementRegExp` or `InputElementDiv`; parser lookahead requests the goal required by the syntactic context before ambiguous input is classified. This follows the ES2026 lexical grammar split (ES2026 §12) between `InputElementDiv`, `InputElementRegExp`, `InputElementRegExpOrTemplateTail`, `InputElementTemplateTail`, and `InputElementHashbangOrRegExp`. Template literals use the same model: the lexer emits `TemplateHead`, `TemplateMiddle`, and `TemplateTail` span tokens, while `${...}` expressions are parsed in the main parser stream before the parser requests the next template-tail span.
 
-Under the unrestricted profile, the whole language as the conformance host and the preludes run it, G2 compiles lazily (`Goccia.Lazy`; `GOCCIA_LAZY=0` turns it off). `Goccia.PreParse` reads the source with G2's own scanner (`Goccia.Scan`) and checks the whole syntactic grammar and every early error without building a tree, recording each function's source range and free names. Goccia's parser then builds the AST with the eligible function bodies skipped, and `Goccia.Compiler` makes each skipped function a stub template whose first call parses and compiles its own source range. Lazy compilation is off under a restricted profile, because the pre-parser does not apply a restricted profile's early errors to the bodies it skips.
+Under the unrestricted profile, the whole language as the conformance host and the preludes run it, the engine compiles lazily (`Goccia.Lazy`; `GOCCIA_LAZY=0` turns it off). `Goccia.PreParse` reads the source with the engine's own scanner (`Goccia.Scan`) and checks the whole syntactic grammar and every early error without building a tree, recording each function's source range and free names. Goccia's parser then builds the AST with the eligible function bodies skipped, and `Goccia.Compiler` makes each skipped function a stub template whose first call parses and compiles its own source range. Lazy compilation is off under a restricted profile, because the pre-parser does not apply a restricted profile's early errors to the bodies it skips.
 
 ## Pipeline
 
 ```text
-Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Goccia.Compiler -> G2 bytecode
+Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Goccia.Compiler -> bytecode
        -> Goccia.VM: Execute / FastLoop -> baseline JIT -> optimizing tier (Linux x86-64) -> TValue
 ```
 
@@ -37,7 +37,7 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Goccia.Compil
 | CLI applications | `source/app` (`Goccia.CLI.Application`, `Goccia.CLI.FileEngine`, `Goccia.CLI.SandboxHost`, the `.dpr` programs) | Options, configuration and trust, file discovery, worker threads, reports |
 | Front end (shared) | `Goccia.SourcePipeline`, `Goccia.JSX.Transformer`, `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source text to AST, parser policy, preprocessor dispatch, source maps, warnings |
 | Lazy front end | `Goccia.Scan`, `Goccia.PreParse`, `Goccia.Lazy`, `Goccia.Eval` | Pre-parsing and early errors for lazy compilation; `Goccia.Eval` is the entry to parsing and compiling at run time (entries, modules, `eval`, the `Function` constructor) |
-| Compiler | `Goccia.Compiler` | Goccia AST to G2 register bytecode, one walk per function |
+| Compiler | `Goccia.Compiler` | Goccia AST to register bytecode, one walk per function |
 | Bytecode | `Goccia.Instructions`, `Goccia.Artifact`, `Goccia.Snapshot` | Instruction format and function templates; `.gbc` files (untrusted input, verified); the build's prelude snapshot |
 | VM | `Goccia.VM` (with `Goccia.Jit.inc` and `Goccia.Opt.inc`) | Frames on one value stack, upvalues, exception handlers, inline caches, realms, execution limits; `Execute`, `FastLoop`, the baseline JIT and the optimizing tier |
 | Values and heap | `Goccia.Core` | NaN-boxed `TValue`, cells, strings and atoms, shapes, objects, the generational GC and the memory limit |
@@ -50,16 +50,16 @@ For **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **canonical t
 
 The engine also owns what source may reach outside the process: the `TGocciaCapabilities` set a host gives `TGocciaEngine.Capabilities` before the host is prepared (none when it gives none). `fetch` judges every destination by it (`Goccia.Fetch`, whose worker threads carry the set with each request), the read policy judges module reads by it (`Goccia.HostAPI`), and the `FFI` global is installed only when it grants `ffi`; see [Permissions](permissions.md).
 
-Source type belongs to `TGocciaEngine.SourceKind`: `gskScript`, `gskModule`, or `gskDetect`, the default, under which a `.mjs` file is a module and otherwise the source pipeline applies the [entry source type policy](language.md#modules) ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). An explicit Script entry may still contain import declarations: G2 runs them as a module of their own and binds each imported name as a const global lexical binding before the Script runs ([G2](engine/README.md)).
+Source type belongs to `TGocciaEngine.SourceKind`: `gskScript`, `gskModule`, or `gskDetect`, the default, under which a `.mjs` file is a module and otherwise the source pipeline applies the [entry source type policy](language.md#modules) ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). An explicit Script entry may still contain import declarations: the engine runs them as a module of their own and binds each imported name as a const global lexical binding before the Script runs ([Engine](engine/README.md)).
 
 ## Design Direction
 
-- Bytecode and its VM are G2-specific, not a generic VM layer: 64-bit instructions (op 8 bits, A 16, B 16, C 24) over a register frame, with inline caches keyed by shape.
+- Bytecode and its VM are specific to the engine, not a generic VM layer: 64-bit instructions (op 8 bits, A 16, B 16, C 24) over a register frame, with inline caches keyed by shape.
 - `TValue` is a NaN-boxed `QWord`: doubles stand for themselves, and tags mark an Int32, a special value (`undefined`, `null`, `false`, `true`, the array hole) or a heap cell pointer. Numbers never allocate, in registers or anywhere else.
 - Arrays, objects, functions and promises are `ckObject` cells whose object kind (`TObj.OKind`) selects their behaviour; property storage is a shape plus slots.
 - Sparse arrays use the hole value `VHole`, a special value no script can produce.
 - Hot paths run in tiers: `Execute` handles every instruction, `FastLoop` the hot ones with its loop variables in machine registers, and on Linux x86-64 the baseline JIT and the optimizing tier compile hot code. Every tier stops and hands an instruction back to a slower one when its fast path does not apply.
-- Precompiled bytecode uses G2's `.gbc` format (`Goccia.Artifact`); see [Bytecode VM](bytecode-vm.md).
+- Precompiled bytecode uses the engine's `.gbc` format (`Goccia.Artifact`); see [Bytecode VM](bytecode-vm.md).
 
 ## CLI Library
 
@@ -103,7 +103,7 @@ GocciaTest262Runner, GocciaScriptLoaderBare and GocciaFuzzHarness are plain prog
 
 `GocciaRunner` has a host mode and a [sandbox mode](permissions.md). In sandbox mode `Goccia.CLI.SandboxHost` copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline, then runs the program on a thread of its own with a fresh engine whose thread is given the sandbox context (`Goccia.Sandbox`): its modules and data files are read from the virtual file system, and `prelude/sandbox.js` installs the `"fs"`, `"goccia"` and `"goccia:search"` modules.
 
-A nested run (`runScript`, or the shell's `goccia`) gets a `TGocciaSandboxContext` of its own and runs on a new thread with a new engine, while its caller's thread waits in the native: a G2 engine's state is its thread's, so the child cannot share the caller's thread. The child inherits its caller's capability set, and its completion value comes back encoded as text (primitives, arrays and own data properties, cycles cut) that the caller decodes in its own realm.
+A nested run (`runScript`, or the shell's `goccia`) gets a `TGocciaSandboxContext` of its own and runs on a new thread with a new engine, while its caller's thread waits in the native: an engine's state is its thread's, so the child cannot share the caller's thread. The child inherits its caller's capability set, and its completion value comes back encoded as text (primitives, arrays and own data properties, cycles cut) that the caller decodes in its own realm.
 
 ## Execution Architecture
 
@@ -126,7 +126,7 @@ Settings that shape compilation are engine properties, read when the run starts:
 
 ### Evaluation Context
 
-G2 has no evaluation-context record. What the old engine passed between engine, module loader and scopes is the engine thread's own state in G2: the VM's frames, handler stack and value stack, the pending exception (`Pending`), the running realm (`CurRealm`), the global lexical bindings, the module records of `Goccia.Modules`, the job queue of `Goccia.Promise`, and the hooks a host sets for its thread (`SetHostResolveHook`, `SetHostModuleHook`, `SetFileReadHook`, `SetModuleContentCheck`). Because each of these is a threadvar, two engines on two threads share none of it, and a native needs no context parameter to reach its engine.
+The engine has no evaluation-context record. What the old engine passed between engine, module loader and scopes is the engine thread's own state: the VM's frames, handler stack and value stack, the pending exception (`Pending`), the running realm (`CurRealm`), the global lexical bindings, the module records of `Goccia.Modules`, the job queue of `Goccia.Promise`, and the hooks a host sets for its thread (`SetHostResolveHook`, `SetHostModuleHook`, `SetFileReadHook`, `SetModuleContentCheck`). Because each of these is a threadvar, two engines on two threads share none of it, and a native needs no context parameter to reach its engine.
 
 What relative imports resolve against is the importing module record's path: each record is keyed by its absolute path (a host module by its specifier, such as `goccia:csv`), and `import()` passes the referrer's source name to `Goccia.Modules` (`ImportHook`).
 
@@ -149,7 +149,7 @@ Rules that come with it:
 
 ### Modules and Data Formats
 
-- **Module path resolution** — G2 asks the host's resolution hook first. The CLI host resolves its own modules (`goccia:*`, virtual modules, `vi.mock` mocks) by their keys and anything else through the run's `TGocciaModuleResolver` (`TGocciaEngine.Resolver`): import-map aliases (exact match for keys without `/`, prefix match for keys with `/`, longest matching key wins), `./` and `../` relative to the importing file, the extensions of `ModuleImportExtensions` in order for an extensionless path (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`, `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, `.tsv`, `.txt`, `.md`), and bare specifiers through `node_modules` and provider packages. `TGocciaModuleResolver.LoadImportMap` resolves import-map values relative to the map file and `DiscoverProjectConfig` walks parent directories looking for `goccia.json`. CLI applications also discover a project-level `goccia.toml`, `goccia.json5`, or `goccia.json` (in that priority order) via `CLI.ConfigFile.DiscoverConfigFile`; config keys mirror CLI option names and CLI options override them. See [Module Resolution](module-resolution.md).
+- **Module path resolution** — The engine asks the host's resolution hook first. The CLI host resolves its own modules (`goccia:*`, virtual modules, `vi.mock` mocks) by their keys and anything else through the run's `TGocciaModuleResolver` (`TGocciaEngine.Resolver`): import-map aliases (exact match for keys without `/`, prefix match for keys with `/`, longest matching key wins), `./` and `../` relative to the importing file, the extensions of `ModuleImportExtensions` in order for an extensionless path (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`, `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, `.tsv`, `.txt`, `.md`), and bare specifiers through `node_modules` and provider packages. `TGocciaModuleResolver.LoadImportMap` resolves import-map values relative to the map file and `DiscoverProjectConfig` walks parent directories looking for `goccia.json`. CLI applications also discover a project-level `goccia.toml`, `goccia.json5`, or `goccia.json` (in that priority order) via `CLI.ConfigFile.DiscoverConfigFile`; config keys mirror CLI option names and CLI options override them. See [Module Resolution](module-resolution.md).
 - **Linking and evaluation** — `Goccia.Modules` implements Source Text Module Records (ES2026 §16.2.1.6 Cyclic Module Records). Calling a module's compiled function is its environment's initialization (function declarations made, exported bindings published as cells); resuming it runs the body. Linking runs every module's start first, then fills the import slots, so modules in a cycle see each other's functions. A module with top-level `await` compiles to an async generator, and its evaluation waits for it, a simplification of the specification's asynchronous evaluation order.
 - **Live import bindings** — an import is the exporter's own cell, so every read observes the binding's current value, and a read before the exporter initialized it throws a `ReferenceError` through `opModGet`.
 - **Namespace imports** — `import * as ns` binds a module namespace object (`okModuleNS`, ES2026 §10.4.6 Module Namespace Exotic Objects) holding its exports' keys and cells sorted by key.
@@ -229,7 +229,7 @@ The front end, the compiler and the VM are separate layers with separate represe
 
 - **Beneficial separation** — Different layers solving different problems: Goccia's parser (which builds the AST) and `Goccia.PreParse` (which checks the grammar and early errors without one, for lazy compilation); `Goccia.Compiler` and `Goccia.VM`; engine-independent format parsers (`Goccia.YAML`, `Goccia.TOML`) and the thin host modules over them; a built-in's spec steps in a prelude and its native fast path, which runs only while the objects involved are unmodified. The execution tiers are the same kind of separation: `Execute`, `FastLoop`, the baseline JIT and the optimizing tier each implement fast paths of the same instruction, and each hands back to `Execute` whatever its fast path does not cover.
 
-- **Harmful duplication** — The **same rule** maintained twice without a seam, so that it can drift: a check that one tier makes and another omits, or an early error the pre-parser and the parser judge differently. Keep such a rule in one routine the tiers share, or make the slower tier the only one that decides it. GocciaFuzzHarness's `--grammar` mode compares a run without compiled code against a run with the JIT for exactly this kind of drift, and a field definition's receiver check is made in every tier for the same reason ([G2 § Bytecode files](engine/README.md#bytecode-files)).
+- **Harmful duplication** — The **same rule** maintained twice without a seam, so that it can drift: a check that one tier makes and another omits, or an early error the pre-parser and the parser judge differently. Keep such a rule in one routine the tiers share, or make the slower tier the only one that decides it. GocciaFuzzHarness's `--grammar` mode compares a run without compiled code against a run with the JIT for exactly this kind of drift, and a field definition's receiver check is made in every tier for the same reason ([Engine § Bytecode files](engine/README.md#bytecode-files)).
 
 When in doubt: preserve pipeline separation; consolidate **policy and mechanical helpers**.
 
@@ -237,7 +237,7 @@ When in doubt: preserve pipeline separation; consolidate **policy and mechanical
 
 - [Bytecode VM](bytecode-vm.md) — Compiler, instructions, register VM
 - [Core patterns](core-patterns.md) — Recurring implementation patterns
-- [G2](engine/README.md) and [G2 design](engine/design.md) — The engine's status, build, hosts and design
+- [Engine](engine/README.md) and [Engine design](engine/design.md) — The engine's status, build, hosts and design
 - [GocciaScript Context](../CONTEXT.md) — Canonical project terminology
 - [Build System](build-system.md)
 - [Architecture Decision Records](adr/)

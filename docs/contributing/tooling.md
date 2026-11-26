@@ -8,7 +8,7 @@
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
 - **Platform pitfalls** — the engine builds with FPC 3.3.1 while the code outside `source/engine` also builds on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
-- **GC stress** — G2's binaries take `--gc-stress` and `--gc-verify` at run time and `GOCCIA_NURSERY_KB` shrinks the nursery; `scripts/engine/gcstress.sh` runs the stress sweep
+- **GC stress** — The engine's binaries take `--gc-stress` and `--gc-verify` at run time and `GOCCIA_NURSERY_KB` shrinks the nursery; `scripts/engine/gcstress.sh` runs the stress sweep
 
 ## Auto-Formatting
 
@@ -335,7 +335,7 @@ Read from stdin with `-`. `--verbose` prints each run's classification;
 without it the harness is silent and communicates only through its exit code,
 which is what `afl-fuzz` needs. `--grammar` reads the input's bytes as the
 choices of a program generator (`Goccia.Fuzz.Generator`) and compares the two
-runs' output; see [G2 — GocciaFuzzHarness](../engine/README.md#gocciafuzzharness) for that mode and
+runs' output; see [Engine — GocciaFuzzHarness](../engine/README.md#gocciafuzzharness) for that mode and
 `scripts/engine/grammar-fuzz.py`.
 
 ### Seed corpus
@@ -411,7 +411,7 @@ a fresh output directory, stops it after the given seconds of fuzzing (1 to
 it saved.
 
 This command line, like the scheduled workflow's, compiles with `config.cfg`
-alone. The G2 applications build with the unit and include paths `build.pas`
+alone. The applications build with the unit and include paths `build.pas`
 adds (`GocciaArgs`: `source/engine`, the generated prelude includes and their
 snapshot), which `config.cfg` does not name, so a direct `fpc` build of the
 harness or the test runner needs those paths too; extra options for a
@@ -468,7 +468,7 @@ afl-fuzz -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
 
 The eight seeds hold primitives, sparse arrays, shared and cyclic graphs,
 symbols and built-ins, descriptors and integrity levels, closures with
-accessors and bound functions, and errors with wrapper objects. G2's writer
+accessors and bound functions, and errors with wrapper objects. The engine's writer
 has no codec for a generator's frame, a Map's table or a buffer's bytes
 (`Goccia.HeapSnapshot`), so no seed holds one. A snapshot names the code its
 closures were compiled from, so the seeds and the restore run one program:
@@ -489,7 +489,7 @@ JavaScript suite under two tools that answer different questions:
 
 | Tool | Catches | Invocation |
 |------|---------|-----------|
-| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr`, with G2's paths added ([Fuzzing locally](#fuzzing-locally)) |
+| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr`, with the engine's paths added ([Fuzzing locally](#fuzzing-locally)) |
 | **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `bash scripts/valgrind/strip-debug-symbols.sh build/GocciaTestRunner`, then `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
@@ -526,7 +526,7 @@ per character or per digit is slow under it; see
 [`WideChar in [set]` Allocates](#widechar-in-set-allocates).
 
 Both run on Linux only, and neither runs per-PR. Findings upload as artifacts
-with a 30-day retention. Neither looks inside G2's own heap: G2 allocates its
+with a 30-day retention. Neither looks inside the engine's own heap: the engine allocates its
 cells in its nursery and old-space pages (`Goccia.Core`), so a read of a moved or
 freed cell reads memory those pages still own, and a missing root is a
 [GC stress](#gc-stress) finding instead.
@@ -534,9 +534,9 @@ freed cell reads memory those pages still own, and a missing root is a
 ### GC stress
 
 A missing GC root is a `TValue` that only a Pascal local holds across an
-allocation. G2's collector moves young cells, so the local then points at a
+allocation. The engine's collector moves young cells, so the local then points at a
 moved or freed cell, but only if a collection falls inside that window, and
-with the default 8 MB nursery it usually does not. G2 has no separate stress
+with the default 8 MB nursery it usually does not. The engine has no separate stress
 build: its binaries make the window certain at run time.
 
 | Switch | Effect |
@@ -572,13 +572,13 @@ It prints the number of `OK` lines and every `BAD` and `TIMEOUT` line. A
 `TIMEOUT` is not a failure: verifying a large heap at every collection is slow,
 and the deep-chain tests under `tests/built-ins/Goccia/gc` take longest. Run it
 for any change near allocation or rooting, as part of the
-[G2 gate](../engine/README.md#gate); CI does not run it.
+[engine gate](../engine/README.md#gate); CI does not run it.
 
 Each collection under stress costs time proportional to the live heap, so a
 test that builds N objects costs time proportional to N times the heap. A test
 with a large N may read `Goccia.build.gcStress` to shrink N, or to skip a case
 whose point is a size past an engine bound
-([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)). G2 sets
+([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)). The engine sets
 it from the build define `GOCCIA_GC_STRESS`, which no build defines, so it is
 `false` in every build, including a run with `--gc-stress`:
 
@@ -622,7 +622,7 @@ bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17
 ```
 
-G2's production and development builds differ only in debug information
+The engine's production and development builds differ only in debug information
 (`GocciaArgs` in `build.pas` gives both `-dPRODUCTION`), and the engine's units
 compile without FPC's stack checking in both. The engine guards the native
 stack itself: a call that native code makes once that stack runs low

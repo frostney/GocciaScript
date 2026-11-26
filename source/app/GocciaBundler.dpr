@@ -1,9 +1,8 @@
 program GocciaBundler;
-{ GocciaBundler on the G2 engine, while the apps move from the old engine to
-  G2: the same command line, configs, output plan and collision checks (the
+{ GocciaBundler: the command line, configs, output plan and collision checks (the
   base class and GocciaBundler.dpr's planning), each file compiled by a
-  TGocciaEngine on a thread of its own (Goccia.Embed CompileArtifact) into a G2
-  bytecode file (Goccia.Artifact), which GocciaRunner on G2 runs as an entry or
+  TGocciaEngine on a thread of its own (Goccia.Embed CompileArtifact) into a
+  bytecode file (Goccia.Artifact), which GocciaRunner runs as an entry or
   imports with --prefer-bytecode. `./build.pas bundler` builds it as
   build/GocciaBundler. }
 
@@ -78,7 +77,7 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
-  { one file compiled on a thread of its own: a G2 engine's state is its thread's }
+  { one file compiled on a thread of its own: an engine's state is its thread's }
   TBundleThread = class(TThread)
   private
     FApp: TBundlerApp;
@@ -215,7 +214,7 @@ begin
   Engine := TGocciaEngine.Create;
   try
     { build.pas snapshots the compiled preludes from a run of an empty file with GOCCIA_SNAPSHOT_OUT set: the host's
-      are compiled too, so the snapshot holds what the other G2 apps' have }
+      are compiled too, so the snapshot holds what the other apps' have }
     if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
       Engine.PrepareHost(SnapshotErr);
     ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig, AOutput.InputFile, NoUnsafe));

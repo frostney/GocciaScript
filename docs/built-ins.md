@@ -335,7 +335,7 @@ Current default shims:
 | `os` | `string` | Operating system: `"darwin"`, `"linux"`, `"windows"`, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"android"`, `"aix"`, `"solaris"`, or `"unknown"` |
 | `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
-| `gcStress` | `boolean` | `true` only in a binary compiled with `GOCCIA_GC_STRESS` defined. `build.pas` no longer makes such a build: G2's GC stress testing uses run-time options instead ([Tooling](contributing/tooling.md)), so it is `false` in every build the project produces. Tests still read it to shrink or skip cases whose cost grows with the live heap times the instruction count |
+| `gcStress` | `boolean` | `true` only in a binary compiled with `GOCCIA_GC_STRESS` defined. `build.pas` no longer makes such a build: the engine's GC stress testing uses run-time options instead ([Tooling](contributing/tooling.md)), so it is `false` in every build the project produces. Tests still read it to shrink or skip cases whose cost grows with the live heap times the instruction count |
 
 **`goccia:semver` module**
 

@@ -1,14 +1,14 @@
 program GocciaScriptLoaderBare;
 
-{ GocciaScriptLoaderBare on G2: the core engine without a runtime, from a file
+{ GocciaScriptLoaderBare: the core engine without a runtime, from a file
   or stdin. The old loader's command line (compatibility flags, source type
   and name, --print, the limits, --profile) over a TGocciaEngine whose host is the
   bare one (TGocciaEngine.Bare): print and Goccia but no console, timers, web APIs
   or host modules, and no module content provider, so an import that finds its
   file fails with ERR_MODULE_LOADING_UNSUPPORTED as the old loader's does.
 
-  The frame bound is G2's own unless --max-stack gives one: a bound keeps the
-  JIT off (Goccia.VM SetMaxFrames), and G2 refuses native recursion before the
+  The frame bound is the engine's own unless --max-stack gives one: a bound keeps the
+  JIT off (Goccia.VM SetMaxFrames), and the engine refuses native recursion before the
   native stack runs out whatever the bound. }
 
 {$I Goccia.inc}
@@ -416,7 +416,7 @@ begin
   WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
 end;
 
-{ a failed run on stderr: the error with its code frame, as GocciaRunner on G2
+{ a failed run on stderr: the error with its code frame, as GocciaRunner
   words it; a spent limit as the old loader's "Error: ..." line }
 procedure ReportFailure(const ADisplayName: string;
   const AResult: TGocciaRunResult; const ASource: TStringList;

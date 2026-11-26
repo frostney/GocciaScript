@@ -40,7 +40,7 @@ threadvar
   { the entry module's path while it runs: its warnings went to the host from HostCompileEntry already }
   ModuleWarningEntry: UnicodeString;
   { why the last ParseAndCompile failed: 1 the parser rejected the source (an early error; ParseErrorName is
-    the ECMAScript error it stands for), 2 G2's compiler does not support a construct }
+    the ECMAScript error it stands for), 2 the engine's compiler does not support a construct }
   CompileFailKind: Integer;
   ParseErrorName: UnicodeString;
   { where HostCompileEntry's source was rejected (0 when the error has no position) and the fix the parser

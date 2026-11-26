@@ -1646,7 +1646,7 @@ begin
 end;
 
 { get Error.prototype.stack (error stack accessor): an implementation-defined string for an object with
-  [[ErrorData]] (G2 keeps no trace: empty), undefined for any other object }
+  [[ErrorData]] (the engine keeps no trace: empty), undefined for any other object }
 function Err_StackGet(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   if not IsObject(Args[0]) then Exit(ThrowTypeError('Error.prototype.stack getter called on a non-object'));

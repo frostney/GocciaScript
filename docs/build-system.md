@@ -28,13 +28,13 @@ See [Build from source](../README.md#build-from-source) in the README for FPC in
 
 - **FreePascal 3.3.1** from [fpc-toolchain](https://github.com/frostney/fpc-toolchain) (the build CI uses, `3.3.1+9`): the engine needs its native-TLS threadvars and code generator fixes. Select it with `eval "$(fpc-toolchain env 3.3.1+9)"`.
 
-The applications run on the G2 engine, which builds with FreePascal only; Delphi support is planned for a later release ([ADR 0188](adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)).
+The applications run on the engine, which builds with FreePascal only; Delphi support is planned for a later release ([ADR 0188](adr/0188-the-delphi-projects-and-the-wasm-test-runner-leave-with-the-old-engine.md)).
 
 ## Build Commands
 
 ### Build Modes
 
-The build script supports two modes via `--dev` (default) and `--prod` flags. The old engine's `--gc-stress` and `--layout-probe` builds are gone: G2's binaries take `--gc-stress` and `--gc-verify` at run time, and `scripts/engine/gcstress.sh` runs them under small nurseries (see [G2](engine/README.md)).
+The build script supports two modes via `--dev` (default) and `--prod` flags. The old engine's `--gc-stress` and `--layout-probe` builds are gone: the engine's binaries take `--gc-stress` and `--gc-verify` at run time, and `scripts/engine/gcstress.sh` runs them under small nurseries (see [Engine](engine/README.md)).
 
 ```bash
 ./build.pas runner              # Dev build (default)
@@ -54,7 +54,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags. Th
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, benchmarkrunner, bundler, repl, and g2, the engine's own command-line binary in `build/engine/goccia` (see [G2](engine/README.md#build)). Each application embeds the engine's compiled JavaScript preludes: `build.pas` compiles it, runs it once to snapshot the preludes, and compiles it again when the snapshot changed. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, benchmarkrunner, bundler, repl, and engine, the target for the engine's own command-line binary in `build/engine/goccia` (see [Engine](engine/README.md#build)). Each application embeds the engine's compiled JavaScript preludes: `build.pas` compiles it, runs it once to snapshot the preludes, and compiles it again when the snapshot changed. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -604,7 +604,7 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 
 ### Build Mode Flags
 
-These are the flags of the Pascal test programs and the TOML compliance runner. The engine's applications take theirs from `build.pas`'s G2 build (`GocciaArgs`): optimized and with `-dPRODUCTION` in both modes, at `-O4` (`-O1` for i386, where FPC 3.3.1 miscompiles at `-O2` and above); `--prod` strips them (`-Xs`) and `--dev` keeps line info (`-gl`).
+These are the flags of the Pascal test programs and the TOML compliance runner. The engine's applications take theirs from `build.pas`'s engine build (`GocciaArgs`): optimized and with `-dPRODUCTION` in both modes, at `-O4` (`-O1` for i386, where FPC 3.3.1 miscompiles at `-O2` and above); `--prod` strips them (`-Xs`) and `--dev` keeps line info (`-gl`).
 
 | Flag | Development (`--dev`) | Production (`--prod`) |
 |------|----------------------|----------------------|

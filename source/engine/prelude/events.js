@@ -1,4 +1,4 @@
-// Event, EventTarget, AbortController and AbortSignal (DOM Standard) for the CLI host on G2, as GocciaScript has
+// Event, EventTarget, AbortController and AbortSignal (DOM Standard) for the CLI host, as GocciaScript has
 // them: accessors are not enumerable (ADR 0104), and an exception a listener throws propagates out of
 // dispatchEvent. Called once per realm with the global object, the host's natives (n) and the preludes' shared
 // internals (DOMException, timers).

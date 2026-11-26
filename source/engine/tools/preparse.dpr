@@ -1,6 +1,6 @@
 program preparse;
 
-{ Checks Goccia.PreParse (a development tool, not part of the G2 build).
+{ Checks Goccia.PreParse (a development tool, not part of the engine build).
     preparse --t262 DIR [PREFIX...]   every test262 test under DIR/test: rejected exactly when its front matter
                                       says negative phase parse; modes as scripts/engine/run262.py (a strict run
                                       puts "use strict"; and a newline in front)

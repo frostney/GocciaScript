@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """gen_suggestions.py OUT.inc: GocciaScript's runtime suggestions as a table of (message template, suggestion), for
-the G2 GocciaRunner, whose engine throws the same messages without them.
+GocciaRunner, whose engine throws the same messages without them.
 
 GocciaScript's engine passes a suggestion at each throw site (ThrowTypeError(SErrorX, SSuggestY)). A message is in
 the table only when every site that throws it passes the same suggestion, so a message thrown with different

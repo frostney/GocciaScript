@@ -453,7 +453,7 @@ function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
 function ArgsMapGet(U: PUpval): TValue;
 procedure ArgsMapSet(U: PUpval; V: TValue);
 procedure ArgsUnmap(O: PObj; Idx: Int64);
-{ [[Delete]] on an ordinary object (and the exotic ones G2 models in it): False for a non-configurable property }
+{ [[Delete]] on an ordinary object (and the exotic ones the engine models in it): False for a non-configurable property }
 function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
 function ProxyDelete(PV: TValue; Key: PStr; var Ok: Boolean): Boolean;
 function ArrayIterationIntact: Boolean;
@@ -10858,7 +10858,7 @@ end;
 
 { the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
-procedure G2VMThreadvarCleanup;
+procedure GocciaVMThreadvarCleanup;
 begin
   Frames := nil;
   Handlers := nil;
@@ -10882,7 +10882,7 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@G2VMThreadvarCleanup);
+  RegisterThreadvarCleanup(@GocciaVMThreadvarCleanup);
   BigIntegerAbortCheck := @BigAbortCheck;
   FreeJitStateHook := @FreeTemplateJitState;
   GCShapeSweepHook := @ForgetRetiredShapesVM;

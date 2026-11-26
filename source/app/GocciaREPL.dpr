@@ -1,7 +1,7 @@
 program GocciaREPL;
 
-{ GocciaREPL on the G2 engine, while the apps move from the old engine to G2: the same options and config, one
-  G2 engine for the session on a thread of its own (a G2 engine's state is its thread's), each input run on it as a
+{ GocciaREPL: the options and config, one
+  engine for the session on a thread of its own (an engine's state is its thread's), each input run on it as a
   Script, so its declarations and imports stay for the next one. `./build.pas repl` builds it as
   build/GocciaREPL. }
 

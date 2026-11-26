@@ -1,6 +1,6 @@
 unit Goccia.RegExpV;
-{ RegExp objects: patterns compile with Goccia's RegExp compiler (Goccia.RegExp.Compiler) and run on G2's matcher
-  (Goccia.Regex), which reads G2 strings in place. }
+{ RegExp objects: patterns compile with Goccia's RegExp compiler (Goccia.RegExp.Compiler) and run on the engine's matcher
+  (Goccia.Regex), which reads the engine's strings in place. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}

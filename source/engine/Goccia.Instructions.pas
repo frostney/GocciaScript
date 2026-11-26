@@ -80,7 +80,7 @@ type
                                returned to the caller (15.5.4, 27.6.3.2 order) }
     opIterCloseThrow,        { IteratorClose(R[A]) for a throw completion: return() runs, its errors are ignored }
     opEvalHint               { the next instruction is a direct eval call; A: 2 its var declarations are global
-                               (non-strict code at a Script's top level), 0 they stay its own (until G2 has
+                               (non-strict code at a Script's top level), 0 they stay its own (until the engine has
                                direct eval's caller scope) }
     ,opSetProtoLit           { 13.2.5.5 __proto__: v in an object literal: R[A]'s prototype becomes R[B] if an object or null }
     ,opMakeModCell           { module: R[B] (the cell table)[C] := the cell of this frame's register A }

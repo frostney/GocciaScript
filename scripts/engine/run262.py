@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""test262 on G2 under GocciaScript's grading contract 4 (docs/test262.md at GocciaScript ef669e85).
+"""test262 on the engine under GocciaScript's grading contract 4 (docs/test262.md at GocciaScript ef669e85).
 
 - Every top-level category runs; no eligibility filter.
 - Runs per file: module -> once (strict); raw -> once (non-strict, file as written, no harness);
   onlyStrict -> once (strict); noStrict -> once (non-strict); otherwise twice (non-strict, then strict).
 - Harness files are separate non-strict global Scripts evaluated in one realm before the test:
-  $262.js (G2's host object), assert.js, sta.js, doneprintHandle.js for async tests, then the includes.
+  $262.js (the engine's host object), assert.js, sta.js, doneprintHandle.js for async tests, then the includes.
   A strict run puts '"use strict";\\n' in front of the test file only.
 - The host (`goccia --test262`) prints one outcome line, "\\x1eEngineT262 <json>", with kind
   ok | parse | throw | harness | compile | unsupported, the escaped value's constructor name read from data
@@ -18,14 +18,14 @@
 Usage: run262.py <test262 dir> <goccia binary> <out.json> [jobs] [path prefix ...]"""
 import json, multiprocessing, os, re, resource, signal, subprocess, sys, time
 
-T262, G2, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
+T262, ENGINE, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 JOBS = int(sys.argv[4]) if len(sys.argv) > 4 else 12
 PREFIXES = sys.argv[5:]
 TEST = os.path.join(T262, 'test')
 HARNESS = os.path.join(T262, 'harness')
-HOST262 = '$262.js'   # G2's host object, compiled into goccia (source/engine/prelude/test262host.js): passed by name
+HOST262 = '$262.js'   # the engine's host object, compiled into goccia (source/engine/prelude/test262host.js): passed by name
 TIMEOUT_S = 20
-MEM_BYTES = 3 << 30   # address-space cap; G2 maps its stacks lazily, so this is above upstream's 2 GiB heap limit
+MEM_BYTES = 3 << 30   # address-space cap; the engine maps its stacks lazily, so this is above upstream's 2 GiB heap limit
 MARK = '\x1eEngineT262 '
 
 
@@ -69,7 +69,7 @@ def run_one(job):
     try:
         src = open(path, encoding='utf-8').read()
         includes, flags, neg = frontmatter(src)
-        cmd = [G2, '--test262']
+        cmd = [ENGINE, '--test262']
         if mode == 'strict' and 'module' not in flags: cmd.append('--strict')
         if 'module' in flags: cmd.append('--module')
         if 'raw' not in flags:
@@ -163,7 +163,7 @@ if __name__ == '__main__':
     sha = subprocess.run(['git', '-C', T262, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     s = summarize(files, results, time.time() - t0)
     json.dump({'summary': s, 'results': results,
-               'run': {'suiteDir': T262, 'test262Sha': sha, 'engine': os.path.abspath(G2), 'jobs': JOBS,
+               'run': {'suiteDir': T262, 'test262Sha': sha, 'engine': os.path.abspath(ENGINE), 'jobs': JOBS,
                        'timeoutMs': TIMEOUT_S * 1000, 'maxAddressSpaceBytes': MEM_BYTES, 'gradingContract': 4}},
               open(OUT, 'w'))
     print(f"{'category':10s} {'passed':>7s} / {'runs':>7s}")

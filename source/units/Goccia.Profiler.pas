@@ -96,8 +96,8 @@ type
     class procedure Initialize;
     class procedure Shutdown;
     // Makes AInstance this thread's profiler without owning it (nil gives
-    // the thread none): an engine that runs each file on a thread of its own
-    // (G2) records into the reporting thread's profiler.
+    // the thread none): the engine runs each file on a thread of its own
+    // and records into the reporting thread's profiler.
     class procedure Adopt(const AInstance: TGocciaProfiler);
 
     constructor Create;

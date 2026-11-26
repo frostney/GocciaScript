@@ -1,5 +1,5 @@
-// goccia:yaml (parse, parseDocuments), goccia:toml (parse) and .yaml, .yml and .toml module imports for the CLI host
-// on G2. Goccia.YAML and Goccia.TOML parse in the host (n.dataParse) into Goccia.DataTree's JSON: an entry list in
+// goccia:yaml (parse, parseDocuments), goccia:toml (parse) and .yaml, .yml and .toml module imports for the CLI host.
+// Goccia.YAML and Goccia.TOML parse in the host (n.dataParse) into Goccia.DataTree's JSON: an entry list in
 // which a container names its children by index, so a node a YAML alias shares is one value here, cycles included.
 // Objects have no prototype and a YAML tag outside the core schema keeps its tagName, as in the CLIs. Called once
 // per realm with the global object, the host's natives (n) and the preludes' shared internals; registers the modules

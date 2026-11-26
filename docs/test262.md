@@ -29,7 +29,7 @@ replacement is recorded in
   mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
   checkout's `harness/` directory. The runner bundles one file, `$262.js`,
-  the host-provided hook object: G2's version is
+  the host-provided hook object: the engine's version is
   `source/engine/prelude/test262host.js`, compiled into the binary.
 - `Goccia.Test262` installs the host hooks only in engines owned by the
   Test262 runner.
@@ -152,7 +152,7 @@ GocciaTest262Runner
   → on POSIX, fork one short-lived child per run without starting a new binary;
     without fork (Windows), run each on a thread of its own
   → for each run in its owning worker:
-      → create one G2 engine (InitTest262Engine in Goccia.Test262): heap and realm
+      → create one engine (InitTest262Engine in Goccia.Test262): heap and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
       → install the Test262-only host, evaluate each harness file as its
         own Script, then evaluate the test file (prefixed with "use strict";
@@ -305,7 +305,7 @@ is the same grading the test262 interpretation rules and other runners apply.
 | Body leaves a promise rejected with no handler        | none: the test262 host does not track unhandled rejections | not a failure |
 | Run exceeds `--timeout`                               | POSIX: the runner kills the worker; without fork: the engine's deadline | timeout |
 | Pascal-side exception during engine execution         | `crash` outcome naming the exception class | conformance fail |
-| G2's compiler refuses the parsed test                 | `compile` outcome                         | conformance fail   |
+| The compiler refuses the parsed test                  | `compile` outcome                         | conformance fail   |
 | Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |
 | A harness Script fails to parse or throws             | `harness include <name> failed`           | wrapper infra      |
 
@@ -382,7 +382,7 @@ in the current realm and returns its completion value. `createRealm` creates
 a new realm in the same engine, installs the host hooks and `$262.js` in it,
 and returns that realm's `$262`.
 
-`eval` is part of G2's core realm. The CLI hosts remove it from the global
+`eval` is part of the engine's core realm. The CLI hosts remove it from the global
 object (`Goccia.HostAPI`); the Test262 engine installs no CLI host and keeps it.
 A direct `eval` call sees the caller's realm and lexical bindings, while a
 shadowed or indirect call is an indirect eval.
@@ -434,7 +434,7 @@ rather than a regression. A strict run's profile is written to
 `per-test/<id>.profile.json`.
 
 The test262 engine compiles every test, harness Script and `--eval-host`
-probe under G2's unrestricted language profile (`TLangProfile` with
+probe under the engine's unrestricted language profile (`TLangProfile` with
 `Restricted` off): the whole language, including everything the CLIs'
 compatibility flags enable — ASI, `var`, function declarations, traditional
 `for`, `while`/`do...while`, loose equality, labels, `for...in`, the
@@ -450,7 +450,7 @@ while the harness Scripts stay non-strict.
 ## Source-phase import feature flags
 
 The runner does not map `features` frontmatter to engine options: every test
-runs on the same engine. G2's experimental JavaScript `ModuleSource` objects
+runs on the same engine. The engine's experimental JavaScript `ModuleSource` objects
 (`TGocciaEngine.JSModuleSources`, the ESM Phase Imports proposal) stay off in the
 test262 engine, so `source-phase-imports-module-source` tests run without them
 and fail where they need them. This is not an eligibility filter: every

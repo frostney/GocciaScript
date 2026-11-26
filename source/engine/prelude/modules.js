@@ -1,4 +1,4 @@
-// The CLI host's modules for G2: goccia:* and the other host specifiers, as the preludes register them in
+// The CLI host's modules: goccia:* and the other host specifiers, as the preludes register them in
 // shared.hostModules (key -> a function returning the module's exports object, or its JavaScript source text).
 // Goccia.Modules asks Goccia.HostAPI's hook, which calls shared.loadHostModule(key): undefined for no host module, the
 // source text, or the export names and values interleaved. Called first, with the global object, the host's natives

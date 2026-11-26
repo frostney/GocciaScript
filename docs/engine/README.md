@@ -1,10 +1,10 @@
-# G2: GocciaScript's engine
+# Engine
 
-G2 is GocciaScript's engine. It keeps Goccia's lexer, parser and RegExp compiler (`source/units`) and
+This is GocciaScript's engine. It keeps Goccia's lexer, parser and RegExp compiler (`source/units`) and
 provides everything after the AST: compiler, register bytecode, VM, object model, GC and built-ins
 (`source/engine`). It began as a spike to find out whether an FPC engine built for speed could match or beat
 QuickJS while passing test262; it replaced the old engine, whose units are gone, and every application in
-`source/app` runs on it. The name G2 goes when the units are renamed to Goccia.
+`source/app` runs on it.
 
 ## Status
 
@@ -28,7 +28,7 @@ the Web Tooling Benchmark.
 
 ## Build
 
-G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
+The engine builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
 later; CI and `scripts/engine/build.sh` use 3.3.1+9 (release `3.3.1-b9`), selected by `fpc-toolchain env 3.3.1+9` or
 any command given in `GOCCIA_FPC_ENV`. Builds before 3.3.1+4 hang in the DFA pass on some units and drop the `@tpoff`
 relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs` prefix of a threadvar the peephole optimizer folds
@@ -50,10 +50,10 @@ an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard a
 skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) includes `goccia` and
 every application, each built the same way.
 
-G2 builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
+The engine builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
 i386. Only Linux x86-64 has the JIT (`GOCCIA_JIT` in `Goccia.Checks.inc`): it emits code for the System V calling convention
 and reads threadvars `%fs`-relative. The other targets run the interpreter. With `FPC_TARGET_CPU` and
-`FPC_TARGET_OS` naming another platform, `build.pas` builds a G2 program for the host first (`build/engine/host`) to
+`FPC_TARGET_OS` naming another platform, `build.pas` builds a program for the host first (`build/engine/host`) to
 make its prelude snapshot, which holds the same bytes on every platform, then builds the target once with it;
 `GOCCIA_FPC_FLAGS` adds the target's library options. aarch64 needs 3.3.1+7: earlier builds form a `tbz` or `tbnz`
 past its 32 KiB reach (patches 0131 to 0134). Without `fork` (Windows),
@@ -118,7 +118,7 @@ Whatever the frame bound, a call that native code makes (a getter, a `toString`,
 ### Script entries with imports
 
 An explicit `--source-type=script` entry keeps GocciaScript's acceptance of import and export declarations
-([language.md](../language.md#modules)). G2 takes the entry's import declarations and re-exports out of the
+([language.md](../language.md#modules)). The engine takes the entry's import declarations and re-exports out of the
 Script and runs them, each at its own line and column, as a module of their own keyed by the entry's path plus
 `#script-imports`, so its requests resolve as the entry's would. That module's graph links as one, so a missing
 export fails before any module evaluates. It then evaluates, through the event loop when a top-level await
@@ -129,7 +129,7 @@ as a separate module.
 
 ### Host environment
 
-GocciaRunner on G2 takes `--host-environment=<module>` and the config key `host-environment`, as
+GocciaRunner takes `--host-environment=<module>` and the config key `host-environment`, as
 [Host Environment](../host-environment.md) describes. The module is evaluated before the entry. Its clocks reach
 `Date`, `Temporal.Now` and `performance`, and its `random(streamId)` reaches `Math.random` (stream `0n` for the
 first realm, a derived stream for each other realm). The time zone is read once, when the module loads, where
@@ -143,10 +143,10 @@ the module is located there, without its source.
 An uncaught value is reported from its string data properties only (`name`, `message`, `Symbol.toStringTag`): a
 getter or Proxy trap does not run, and an object without them reads as `[object Tag]`, as GocciaRunner reports it.
 
-A JSON report's `memory.gc` comes from G2's heap: `liveBytes` is the old space and the nursery's used part,
+A JSON report's `memory.gc` comes from the engine's heap: `liveBytes` is the old space and the nursery's used part,
 garbage included until a collection frees it; `peakLiveBytes` is the most the heap held at a collection or a
 direct old-space allocation; `allocatedDuringRunBytes` counts every byte allocated after the engine was made.
-G2 does not count objects, so `startObjectCount`, `endObjectCount` and `collectedObjects` stay 0. One file reports
+The engine does not count objects, so `startObjectCount`, `endObjectCount` and `collectedObjects` stay 0. One file reports
 its memory at the top level. Files run at once report each file's memory and their sum, and files run one after
 another report only the sum.
 
@@ -160,14 +160,14 @@ be written ends the run past every handler with `Fatal error: capability audit d
 
 ### FFI
 
-With the `ffi` capability (`--allow-ffi`, or a trusted config's `allow-ffi`), G2 installs the `FFI` global that
+With the `ffi` capability (`--allow-ffi`, or a trusted config's `allow-ffi`), the engine installs the `FFI` global that
 [FFI Built-ins](../built-ins-ffi.md) describes, through `Goccia.FFI`. The call plans, layouts, callback trampolines and
 library guard are GocciaScript's own units; `Goccia.FFI` is their JS face. FFI objects are ordinary objects with
 internal slots, so nothing is finalized by the collector: libraries, signatures and callback slots are released
 when the engine is torn down, and a closed library is unloaded no earlier than that. An aggregate's fields are its
 own accessor properties.
 
-G2's collector moves young objects, so a buffer's address is taken only after every argument conversion has run.
+The engine's collector moves young objects, so a buffer's address is taken only after every argument conversion has run.
 A call that can enter script through a callback runs a minor collection first, which moves the buffers it passes
 into the old space, where nothing moves. `goccia --test` grants the permissions of the test file's `goccia.json`, as
 `GocciaTestRunner -P` accepts them.
@@ -178,7 +178,7 @@ into the old space, where nothing moves. `goccia --test` grants the permissions 
 returns, as [Fetch Runtime APIs](../built-ins-fetch.md) describes, and each request runs on a worker thread through
 the shared HTTP client, which checks the capability again on every hop and against every resolved address. Those
 hop decisions are audited when the request settles, at its `fetch()` call. The event loop settles finished requests
-before anything else, and while a request is in flight it waits for it before firing timers: G2's timers do not
+before anything else, and while a request is in flight it waits for it before firing timers: the engine's timers do not
 keep real time, so an `AbortSignal.timeout` timer would otherwise abort the request as soon as the loop went idle.
 The wait wakes at a signal's deadline and at the run's timeout. A timer that is due while a request is in flight
 fires after the request settles.
@@ -222,7 +222,7 @@ compiled are the bytes hashed. Sandbox mode refuses every provider package. Inst
 `--profile` reports through GocciaScript's profilers and writers (`Goccia.Profiler`, `Goccia.Profiler.Compile`,
 `Goccia.Profiler.Report`). Profiled files run one at a time; each file's thread records into the main thread's
 profilers (`Adopt`). Under the runtime profile (`Goccia.Profile`) every instruction runs through the interpreter's
-counted loop, as under coverage: it counts each opcode (G2's own names), each pair of consecutive ones, and for a
+counted loop, as under coverage: it counts each opcode (the engine's own names), each pair of consecutive ones, and for a
 binary arithmetic or comparison instruction whether both operands are Numbers (the scalar fast path). A function
 is timed from its frame's push to the push that reuses its slot or the next instruction in a frame below it, so an
 unwinding throw needs no hook. A resumed generator or async function counts as a call; a call that only creates a
@@ -234,8 +234,8 @@ reported, so `--output` and `--print` do not change the code profiled.
 The compile profile's parse side is the shared parser's. `Goccia.Compiler` reports each function's compile at the
 position the parser recorded it at, and counts its own work under the old compiler's counter names:
 
-| Counter | What G2 counts |
-|---------|----------------|
+| Counter | What the engine counts |
+|---------|------------------------|
 | `nodesCompiled` (and nodes by kind) | each statement and expression compiled |
 | `constantEmitAttempts` | each expression's literal check |
 | `constantEvaluationVisits` | each binary operator's right operand checked for an immediate |
@@ -251,12 +251,12 @@ position the parser recorded it at, and counts its own work under the old compil
 
 The binding-name and type-argument counters are the shared parser's. A `Function` constructor's source is a unit
 of its own, and its parameters and body are parsed on their own as units too, as GocciaScript validates them;
-under the compile profile G2 parses them for that, ignoring the results.
+under the compile profile the engine parses them for that, ignoring the results.
 
 ### Sandbox mode
 
 GocciaRunner's sandbox mode ([ADR 0068](../adr/0068-goccia-sandbox-runner.md),
-[ADR 0122](../adr/0122-unified-capability-model.md)) runs on G2 through `Goccia.CLI.SandboxHost`, with the same
+[ADR 0122](../adr/0122-unified-capability-model.md)) runs through `Goccia.CLI.SandboxHost`, with the same
 options, config section, copied inputs, diff and write-back as the old engine's (the shared `Goccia.Sandbox.*` and
 `Sandbox*` units). A program runs on a thread of its own with a fresh
 engine whose thread is given the sandbox context (`Goccia.Sandbox`): its modules and data files are read from the
@@ -264,13 +264,13 @@ virtual filesystem (`Goccia.Modules` `SetFileReadHook`), and `prelude/sandbox.js
 `goccia:search` modules over `Goccia.Sandbox`'s natives.
 
 A nested run (`runScript`, or the shell's `goccia`) runs on a new thread while its caller's thread waits in the
-native: a G2 engine's state is its thread's. The child inherits its caller's capabilities, at most the time its
+native: an engine's state is its thread's. The child inherits its caller's capabilities, at most the time its
 caller has left, and under `--deterministic` a random stream forked from its caller's. Its completion value comes
 back encoded as text (primitives, arrays and own data properties, cycles cut) and is decoded in the caller's realm.
 A child's error reaches its caller with the location only: no code frame and none of the host's suggestions.
 
 The child has its own heap, so a collection in it frees nothing of its caller's. When its event loop runs out of
-work while a `FinalizationRegistry` cell still waits on its target, G2 collects once, so a caller's cleanup that
+work while a `FinalizationRegistry` cell still waits on its target, the engine collects once, so a caller's cleanup that
 came due during a nested run still runs.
 
 ### Module reload
@@ -304,7 +304,7 @@ and jobs it left, and work left after the last test still runs. `--describe-time
 through the same native. The console report's per-test lines (`❌`, `⏸️`, `📝`) and each failure's wording follow
 the old library; a test function's frames count from its own frame for `--max-stack` (`Goccia.VM` `CallRebased`), and a
 test's `import()` resolves through its file's resolver. Globals and virtual modules apply as in GocciaRunner
-(`Goccia.CLI.FileEngine`). Not yet on G2: `.gbc` test files.
+(`Goccia.CLI.FileEngine`). Not yet supported: `.gbc` test files.
 
 ### Heap snapshots
 
@@ -331,13 +331,13 @@ descriptors, prototypes, extensibility; built-ins by name). Once the file's engi
 restored in a fresh engine on the same thread, set up as the file's was (`TGocciaEngine.HeapSnapshotVerify`), written
 again and described again: different bytes or a different description fail the file. The report on stderr is GocciaTestRunner's
 (`Heap snapshots: observations=N objects=N passed=N refused=N failed=N`, then each refusal reason with its count).
-Over `tests/` no round trip fails. Not yet on G2: module records restored whole
+Over `tests/` no round trip fails. Not yet supported: module records restored whole
 ([ADR 0150](../adr/0150-heap-snapshots-restore-module-records-whole.md)), the codecs that refuse today, the
 embedder's session and restore API and the pause checkpoint.
 
 ### GocciaREPL
 
-`./build.pas repl` builds `build/GocciaREPL` from `source/app/GocciaREPL.dpr`: one G2 engine for the session
+`./build.pas repl` builds `build/GocciaREPL` from `source/app/GocciaREPL.dpr`: one engine for the session
 on a thread of its own, each input run on it as a Script (`TGocciaEngine.Run` again), so declarations and imports stay
 for the next input. Values print by the old REPL's rules (`host.js` `replFormat`, the `grfREPL` result form); each
 run's Script imports are a module of their own, and a rejection an input leaves goes with it.
@@ -353,17 +353,17 @@ mode (`BenchMode`): the file's limits stay armed while `TGocciaEngine.RunBenchma
 `Goccia.Builtins.Benchmark` does: the same warm-up, calibration, rounds, interquartile outlier filter and
 percentiles, the same `GOCCIA_BENCH_*` settings, a body's promise or thenable awaited, a generator function's code
 before its first `yield` as setup and after it as teardown, and the body's error kept when the teardown throws too.
-Its clock is a native in nanoseconds; the old runner turns its collector off while it measures, where G2's nursery
+Its clock is a native in nanoseconds; the old runner turns its collector off while it measures, where the engine's nursery
 collects as the body allocates. A benchmark's error reads as an uncaught error does in GocciaRunner, with its
-location and suggestion. Not yet on G2: `.gbc` benchmark files.
+location and suggestion. Not yet supported: `.gbc` benchmark files.
 
 ### Bytecode files
 
-G2 has its own `.gbc` format (`Goccia.Artifact`), read as untrusted input as the old engine's is
+The engine has its own `.gbc` format (`Goccia.Artifact`), read as untrusted input as the old engine's is
 ([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). The header carries format version 200, so
 each engine refuses the other's files, the runtime tag `goccia-engine`, a fingerprint of the instruction set
 (a build with other opcodes refuses the file), the source path and the compile profile (the old wire fields
-and G2's unrestricted flag). The body holds the module record or a Script's imports, the source text once,
+and the engine's unrestricted flag). The body holds the module record or a Script's imports, the source text once,
 and every function compiled eagerly. Constants carry explicit kinds, so a file cannot forge a pointer. The
 reader bounds every length and count (64 MiB, 256 nested functions). The verifier (`Goccia.ArtifactVerify.inc`)
 checks every operand of every instruction, the jump targets, a terminator at the end, the exception handler
@@ -398,21 +398,21 @@ keeps only the registers live across a `yield` or `await`, and a file's suspensi
 `./build.pas bundler` builds `build/GocciaBundler` from `source/app/GocciaBundler.dpr`: the old Bundler's
 options, configs, output plan and collision checks, stdin, `--multifile`, `--jobs` and `--source-map` (the JSX
 transform's map). Each file compiles on a thread of its own with a fresh engine (`TGocciaEngine.CompileArtifact`),
-under its file settings. GocciaRunner on G2 runs a `.gbc` entry (`TGocciaEngine.RunArtifact`) and, with
+under its file settings. GocciaRunner runs a `.gbc` entry (`TGocciaEngine.RunArtifact`) and, with
 `--prefer-bytecode` or the config key, takes a `.gbc` companion for an import in host and sandbox mode, held to
 the source's package policy (a CommonJS file's companion is refused). `scripts/test-cli-aot.ts` and the Bundler
-sections of `scripts/test-cli-apps.ts` pass against the G2 runner and bundler.
+sections of `scripts/test-cli-apps.ts` pass against the runner and bundler.
 
 ### GocciaTest262Runner
 
 `./build.pas test262runner` builds `build/GocciaTest262Runner` from `source/app/GocciaTest262Runner.dpr`:
 the old runner's options, discovery, sharding, run modes, JSON report and per-test profiles (`--profile-dir`), on
-G2's test262 host (`Goccia.Test262`, which `goccia --test262` also runs). `$262.js`, the host object, is compiled in
-(`source/engine/prelude/test262host.js`), so the runner works from any directory. Each run is a forked process with a fresh engine, killed at `--timeout` (G2's
+the engine's test262 host (`Goccia.Test262`, which `goccia --test262` also runs). `$262.js`, the host object, is compiled in
+(`source/engine/prelude/test262host.js`), so the runner works from any directory. Each run is a forked process with a fresh engine, killed at `--timeout` (the engine's
 test262 host has no cooperative timeout) and graded as `scripts/engine/run262.py` grades it; `--max-memory` is the
 child's heap limit. Its statuses match `run262.py`'s for every run of the suite. `--eval-host` runs stdin after
 `$262.js`, so a probe reaches the hooks as `$262`; the old runner's probes read its own `Goccia.test262` object,
-which G2 does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`).
+which the engine does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`).
 
 ### GocciaScriptLoaderBare
 
@@ -423,16 +423,16 @@ the old loader's command line (compatibility flags, `--source-type`, `--source-n
 `performance`, timers, web APIs or `goccia:` modules. It has no module content provider: an import resolves as
 GocciaScript's default resolver resolves it and, once it finds its file, fails with `Error: Cannot load module: no
 module content provider is configured` (`code` `ERR_MODULE_LOADING_UNSUPPORTED`). Without `--max-stack` the frame
-bound is G2's own, not the old loader's 10,000, since a bound keeps the JIT off. Against it, the Bare Loader sections
+bound is the engine's own, not the old loader's 10,000, since a bound keeps the JIT off. Against it, the Bare Loader sections
 of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass except
-two. The two memory-budget sections test the old collector's allocation gate: G2 refuses at the next safe point
+two. The two memory-budget sections test the old collector's allocation gate: the engine refuses at the next safe point
 ([ADR 0185](../adr/0185-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
-nothing on G2.
+nothing.
 
 ### GocciaFuzzHarness
 
 `./build.pas fuzzharness` builds `build/GocciaFuzzHarness` from `source/app/GocciaFuzzHarness.dpr`, the old
-harness's contract on G2: exit 0 for every outcome the engine models (completed, script-throw, parse-error,
+harness's contract: exit 0 for every outcome the engine models (completed, script-throw, parse-error,
 timeout, instruction-limit, memory-limit, module-denied, input-rejected, snapshot-refused) and exit 1 with a
 backtrace for anything else. Each input runs twice, on a fresh engine with the fuzz profile (the compatibility
 flags on). `[bytecode]` runs under a 1 s timeout, 5,000,000 instructions, 256 frames and a 256 MB heap, which keeps
@@ -473,7 +473,7 @@ for anything near allocation or rooting, a GC stress run:
 ```sh
 GOCCIA_TEST262=/path/to/test262 GOCCIA_WT_DIR=/path/to/wt-verify sh scripts/engine/gate.sh NEW BASE
 GOCCIA_WT_DIR=... GOCCIA_JS_DIR=/path/to/jetstream scripts/engine/gcstress.sh
-GOCCIA_QJS=/path/to/qjs GOCCIA_WT_DIR=... GOCCIA_JS_DIR=... scripts/engine/wallclock.sh build/engine/goccia [other-g2]
+GOCCIA_QJS=/path/to/qjs GOCCIA_WT_DIR=... GOCCIA_JS_DIR=... scripts/engine/wallclock.sh build/engine/goccia [other-goccia]
 ```
 
 `gate.sh` writes `build/engine/gate/NEW.json` and compares it with `BASE.json`; `gcstress.sh` runs every bundle
@@ -496,7 +496,7 @@ and the benchmarks stay with the local gate, which needs the bundles under `GOCC
 
 ## Changes to Goccia's front end
 
-G2 parses with `source/units`. The G2 work changed it in three ways, each checked against Goccia's tests and
+The engine parses with `source/units`. Building the engine changed it in three ways, each checked against Goccia's tests and
 its Pascal unit tests:
 
 - Speed. Parsing and compiling the typescript bundle took about half the instructions afterwards (6.5 G to
@@ -515,7 +515,7 @@ its Pascal unit tests:
   - `Goccia.ClassMask` replaces chains of `is` tests with one cached bit mask per class.
 - `Goccia.Lexer`: `#` must be followed directly by an identifier name (`# x` is a SyntaxError).
 
-Goccia's RegExp compiler rejects a repetition count too large to copy; G2 treats that as a limit of the
+Goccia's RegExp compiler rejects a repetition count too large to copy; the engine treats that as a limit of the
 implementation rather than an early error, so such a literal throws when it is evaluated instead of when the
 script is parsed.
 
@@ -526,8 +526,8 @@ script is parsed.
 - Keep strings, dynamic arrays and other managed temporaries out of hot functions and out of `Execute`:
   FPC gives such a function an exception frame and initialize / finalize calls on every call. Put the cold
   path in a `noinline` helper, and check hot functions' disassembly for `fpc_pushexceptaddr`.
-- G2's Pascal is outside `./format.pas` (which covers `source/app`, `source/units` and `source/shared`), and
-  the pre-commit format hook skips `source/engine`: the formatter's parameter renaming does not follow G2's nested
+- The engine's Pascal is outside `./format.pas` (which covers `source/app`, `source/units` and `source/shared`), and
+  the pre-commit format hook skips `source/engine`: the formatter's parameter renaming does not follow the engine's nested
   routines and `with` blocks.
 - Write a built-in in a prelude when its spec steps are what matter and its speed does not; keep a native fast
   path, guarded on the objects involved being unmodified, where it does.

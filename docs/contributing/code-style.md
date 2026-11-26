@@ -69,7 +69,7 @@ Source files live in five directories under `source/`, each with different namin
 
 | Directory | Purpose | Unit prefix | Include file | Example |
 |-----------|---------|-------------|-------------|---------|
-| `source/engine/` | The engine: compiler, bytecode, VM, object model, collector and built-ins, plus its JavaScript preludes in `source/engine/prelude/` | `G2.*` | `{$I Goccia.Checks.inc}` after the unit's own mode directives | `Goccia.VM.pas` |
+| `source/engine/` | The engine: compiler, bytecode, VM, object model, collector and built-ins, plus its JavaScript preludes in `source/engine/prelude/` | `Goccia.*` | `{$I Goccia.Checks.inc}` after the unit's own mode directives | `Goccia.VM.pas` |
 | `source/units/` | GocciaScript-specific units the engine and the applications share: lexer, parser and AST, the RegExp compiler, modules and packages, coverage and profiling, error text | `Goccia.*` | `{$I Goccia.inc}` | `Goccia.Parser.pas` |
 | `source/shared/` | Reusable infrastructure — not GocciaScript-specific | No prefix | `{$I Shared.inc}` | `HashMap.pas`, `StringBuffer.pas`, `CLI.Options.pas` |
 | `source/generated/` | Generated source and resources consumed by the runtime; do not edit by hand | No required prefix | Generator-defined | `Generated.TimeZoneData.pas`, `Generated.TimeZoneData.res` |
@@ -77,9 +77,9 @@ Source files live in five directories under `source/`, each with different namin
 
 Generated units should contain generated data, generated resource links, and the minimum schema needed to describe that data. Hand-authored lookup, decoding, validation, and other behavior belongs in `source/units/` or `source/shared/`, depending on ownership.
 
-**When to use `Goccia.*`:** Any GocciaScript-specific unit outside the engine (parser, modules, CLI wiring, reports, etc.). The engine's own units live in `source/engine/` and use `G2.*`.
+**When to use `Goccia.*`:** Any GocciaScript-specific unit (parser, modules, CLI wiring, reports, etc.). The engine's own units live in `source/engine/` and use `Goccia.*` too.
 
-**`source/engine/` is outside these Pascal rules.** `./format.pas` covers `source/app`, `source/units` and `source/shared`, and the pre-commit format hook skips `source/engine`. G2's units keep their own style (parameters without the `A` prefix, short type names such as `TValue` and `PObj`, threadvars for engine state) and follow G2's own [working rules](../engine/README.md#working-rules).
+**`source/engine/` is outside these Pascal rules.** `./format.pas` covers `source/app`, `source/units` and `source/shared`, and the pre-commit format hook skips `source/engine`. The engine's units keep their own style (parameters without the `A` prefix, short type names such as `TValue` and `PObj`, threadvars for engine state) and follow the engine's own [working rules](../engine/README.md#working-rules).
 
 **When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
 
@@ -159,7 +159,7 @@ begin
 end;
 ```
 
-This is `Goccia.NumberConversion`. G2's units in `source/engine` usually cite the clause number in a brace comment instead (`{ 20.2.1.1.1 CreateDynamicFunction: ... }`).
+This is `Goccia.NumberConversion`. The engine's units in `source/engine` usually cite the clause number in a brace comment instead (`{ 20.2.1.1.1 CreateDynamicFunction: ... }`).
 
 **Format:** `// ESYYYY §X.Y.Z SpecMethodName(specParams)`
 
@@ -394,7 +394,7 @@ Units are organized by category using dot-separated names:
 | `Goccia.Profiler.*` | Profile reports | `Compile`, `Report` |
 | `Goccia.Temporal.*` | Temporal calendar and time zone data | `Calendar`, `TimeZone`, `TimeZoneData`, `Utils` |
 
-The engine's units in `source/engine/` take a flat `G2.<Name>` instead (`Goccia.Core`, `Goccia.Compiler`, `Goccia.VM`, `Goccia.ObjModel`).
+The engine's units in `source/engine/` take a flat `Goccia.<Name>` instead (`Goccia.Core`, `Goccia.Compiler`, `Goccia.VM`, `Goccia.ObjModel`).
 
 ### Collection Return Types
 

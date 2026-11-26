@@ -118,7 +118,7 @@ def main():
     except Infrastructure as e:
         errors.append(str(e))
 
-    lines = ["## GC stress on G2", ""]
+    lines = ["## GC stress", ""]
     if findings:
         lines += ["Tests that pass plainly but fail under GC stress:", ""] + ["- `%s`" % f for f in findings]
     else:

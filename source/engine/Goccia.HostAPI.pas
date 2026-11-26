@@ -1,5 +1,5 @@
 unit Goccia.HostAPI;
-{ The CLI host on G2: what GocciaRunner and GocciaTestRunner give a script beyond the language. The API surfaces
+{ The CLI host: what GocciaRunner and GocciaTestRunner give a script beyond the language. The API surfaces
   are JS preludes (prelude/host.js, prelude/testing.js) called with the natives they need from here; this unit
   installs them on the thread's realm, keeps what the host reads back, and reports a test file's results.
 

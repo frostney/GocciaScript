@@ -1,10 +1,10 @@
 unit Goccia.Scan;
 
-{ G2's scanner (ES2026 §12 ECMAScript Language: Lexical Grammar) for the single-pass front end: it reads UTF-16
+{ The engine's scanner (ES2026 §12 ECMAScript Language: Lexical Grammar) for the single-pass front end: it reads UTF-16
   source in place and produces one token at a time on the parser's request, the parser naming the lexical goal
   (a slash starts a RegularExpressionLiteral or is division; a right brace continues a template or is
   punctuation).
-  Identifiers are G2 atoms interned straight from the source; a string's or template's cooked text is in Buf
+  Identifiers are the engine's atoms interned straight from the source; a string's or template's cooked text is in Buf
   until the next token. Nothing per token is allocated on the heap. }
 
 {$mode objfpc}{$H+}{$modeswitch advancedrecords}

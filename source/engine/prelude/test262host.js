@@ -1,4 +1,4 @@
-// test262 $262 host hooks: G2's adaptation of GocciaScript's scripts/test262_harness/$262.js.
+// test262 $262 host hooks: the engine's adaptation of GocciaScript's scripts/test262_harness/$262.js.
 //
 // `goccia --test262` installs the hidden GocciaHost object with the hooks the engine implements, then evaluates this
 // file as the first harness Script. $262 is the only global binding it creates, so a test may declare any

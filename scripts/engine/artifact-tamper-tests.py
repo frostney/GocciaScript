@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A class field's definition in a tampered bytecode file, in every tier of G2.
+"""A class field's definition in a tampered bytecode file, in every tier of the engine.
 
 opDefField trusts its receiver register to hold an object, and in code read from a file (Goccia.Artifact) every
 tier checks that instead of handing the instruction to Execute: Execute, FastLoop, the baseline JIT (inline and
@@ -11,7 +11,7 @@ bytecode: ...") at that point, not a crash or a write through a number.
 
 Prints "OK <case>" or "BAD <case>: <what>" per case and exits 1 when one is BAD.
 
-Usage: artifact-tamper-tests.py <G2 GocciaBundler> <G2 GocciaRunner>   (run from the repository root)"""
+Usage: artifact-tamper-tests.py <GocciaBundler> <GocciaRunner>   (run from the repository root)"""
 import os, re, struct, subprocess, sys, tempfile
 
 BUNDLER, RUNNER = sys.argv[1], sys.argv[2]

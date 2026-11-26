@@ -34,7 +34,7 @@ procedure CheckStringResultBytes(const ABytes: Int64);
 procedure ChargeJoinBytes(const ABytes: Int64);
 
 type
-  { Another engine's ledger for native bytes (G2): AReserve charges ABytes,
+  { The engine's ledger for native bytes: AReserve charges ABytes,
     False refusing them; otherwise it releases them. While a thread has
     one, a refusal raises ENativeMemoryLimit for that engine to throw. }
   TNativeBytesHook = function(const ABytes: Int64;
@@ -65,7 +65,7 @@ var
 
 threadvar
   NativeBytesHook: TNativeBytesHook;
-  { Another engine (G2) runs on this thread: EnterNativeDataDepth refuses
+  { The engine runs on this thread: EnterNativeDataDepth refuses
     with ENativeDepthLimit, not with this runtime's RangeError value. }
   NativeErrorsPlain: Boolean;
 
