@@ -97,6 +97,28 @@ begin
   if K <= High(Int32) then Result := MkInt(K) else Result := MkNumber(K);
 end;
 
+{ whether no object on O's prototype chain can have the integer key K without its atom existing: each keeps its
+  keys in its shape (no dense elements, no exotic index handling), and shapes hold atoms only. A lookup of an
+  index no atom names then finds nothing, and no atom is made for it: an array-like with a huge length would
+  otherwise intern one permanent atom per index it visits }
+function IdxAbsent(O: TValue; K: Int64): Boolean;
+var P: PObj; Depth: Integer;
+begin
+  Result := False;
+  if IntAtomIfExists(K) <> nil then Exit;
+  Depth := 0;
+  while IsObject(O) do
+  begin
+    P := ObjOf(O);
+    if (P^.Elements <> nil) or not (P^.OKind in [0, okFunction, okNative, okBound, okError, okBoolean, okNumber,
+       okMap, okSet, okIterator, okGenerator]) or ((P^.Hdr.Flags and cfEmulatesUndefined) <> 0) then Exit;
+    Inc(Depth);
+    if Depth > 64 then Exit;
+    O := P^.Shape^.Proto;
+  end;
+  Result := True;
+end;
+
 { 7.3.12 HasProperty(O, ToString(K)) }
 function HasIdx(O: TValue; K: Int64; var Has: Boolean): Boolean;
 var E: PValueArray;
@@ -108,6 +130,7 @@ begin
     Has := (K < E^.Len) and (E^.Data[K] <> VHole);
     Exit(True);
   end;
+  if IdxAbsent(O, K) then begin Has := False; Exit(True); end;
   Result := HasPropertyV(O, IdxKey(K), Has);
 end;
 
@@ -123,6 +146,7 @@ begin
     if V = VHole then V := VUndefined;
     Exit(True);
   end;
+  if IdxAbsent(O, K) then begin V := VUndefined; Exit(True); end;
   Result := GetV(O, IdxKey(K), V);
 end;
 

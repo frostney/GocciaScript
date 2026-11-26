@@ -553,6 +553,8 @@ type
   { waits until the deadline, then interrupts the engine thread through its Interrupt and FrameLimit }
   TLimitTimer = class(TThread)
     Deadline: QWord;
+    { the deadline it last fired at: it then waits for a new one (LimitsSetDeadline) rather than exit }
+    Fired: QWord;
     PInterrupt: PLongInt;
     PFrameLimit: PInteger;
     Wake: PRTLEvent;
@@ -616,20 +618,28 @@ begin
 end;
 
 procedure TLimitTimer.Execute;
-var Now: QWord;
+var Now, D: QWord;
 begin
   while not Terminated do
   begin
     Now := GetTickCount64;
-    if Now >= Deadline then
+    D := Deadline;
+    if D = Fired then
+    begin
+      { fired: asleep until a later deadline or the stop }
+      RTLEventWaitFor(Wake);
+      Continue;
+    end;
+    if Now >= D then
     begin
       { Interrupt first (a full barrier): a call that sees the frame bound at 0 must see Interrupt set, or it
         throws an ordinary RangeError that the script can catch }
       InterLockedExchange(PInterrupt^, 1);
       PFrameLimit^ := 0;
-      Exit;
+      Fired := D;
+      Continue;
     end;
-    RTLEventWaitFor(Wake, Deadline - Now);
+    RTLEventWaitFor(Wake, D - Now);
   end;
 end;
 
@@ -4024,9 +4034,22 @@ begin
       { a Map or Set iterator (Goccia.Builtins): the next live entry of the map's entry list (Aux1 [k0, v0, k1, ...]),
         undefined once done }
       if Src = VUndefined then begin Done := True; Exit(True); end;
+      { a clear since the last step emptied the list: the entries added after it start at 0 (24.1.3.1) }
+      if O^.Pad <> ObjOf(Src)^.Pad then
+      begin
+        I := 0;
+        O^.Pad := ObjOf(Src)^.Pad;
+      end;
       E := PValueArray(PtrOf(ObjOf(Src)^.Aux1));
       while (I < Integer(E^.Len)) and (E^.Data[I] = VHole) do Inc(I, 2);
-      if I >= Integer(E^.Len) then begin O^.Aux1 := VUndefined; Done := True; Exit(True); end;
+      if I >= Integer(E^.Len) then
+      begin
+        { done: the map may compact again (Goccia.Builtins MapCompactIfIdle) }
+        if PtrUInt(ObjOf(Src)^.Native) > 0 then ObjOf(Src)^.Native := Pointer(PtrUInt(ObjOf(Src)^.Native) - 1);
+        O^.Aux1 := VUndefined;
+        Done := True;
+        Exit(True);
+      end;
       O^.Aux2 := MkInt(I + 2);
       Done := False;
       case O^.OFlags of
@@ -9774,7 +9797,14 @@ LReload:
       opObjSpread, opCopyDataProps:
         begin
           Fr^.PC := PC;
-          if Tpl^.Loaded and not (((I shr 40) = 0) or OpdArray(R[(I shr 40) - 1])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
+          { code read from a file: the target the copy writes into must be an object (the compiler's is the
+            literal or rest object it just made), and an object rest's excluded keys an array }
+          if Tpl^.Loaded and (not IsObject(R[A]) or not (((I shr 40) = 0) or OpdArray(R[(I shr 40) - 1]))) then
+          begin
+            Fr^.PC := PC;
+            XBadOperand;
+            goto LThrow;
+          end;
           if (I shr 40) <> 0 then
           begin
             { an object rest: the keys in the array R[C - 1] excluded }
@@ -10003,6 +10033,8 @@ LReload:
           if Tpl^.Loaded and not (OpdClosure(R[A]) and OpdClosure(R[(I shr 24) and $FFFF])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           V := R[(I shr 24) and $FFFF];
           ObjOf(V)^.Aux1 := ObjOf(R[A])^.Aux1;
+          { the initializer may be in old space and the class's home object in the nursery }
+          WriteBarrier(@ObjOf(V)^.Hdr, ObjOf(V)^.Aux1);
           DefineOwn(R[A], AtomFieldInit, V, 0);
         end;
 

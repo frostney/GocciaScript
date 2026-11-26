@@ -102,6 +102,8 @@ end;
 function BigInt_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V, P: TValue; D: Double;
 begin
+  { step 1: If NewTarget is not undefined, throw a TypeError exception }
+  if CurNewTarget <> VUndefined then Exit(ThrowTypeError('BigInt is not a constructor'));
   V := Arg(Args, Argc, 1);
   if IsBigInt(V) then begin Res := V; Exit(True); end;
   if IsObject(V) then

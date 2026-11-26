@@ -370,7 +370,8 @@ depth at each instruction, the prologue and direct eval descriptions. It refuses
 emits, and makes every suspension keep all its registers. What the code cannot show, a register holding the
 array, object, closure, private name or module cell table an instruction trusts it to hold, is checked at run
 time in code read from a file (`TFuncTemplate.Loaded`): `Execute` checks it, FastLoop and the baseline JIT hand
-those instructions to `Execute`, and the optimizing tier leaves such templates alone. A class field's definition
+those instructions to `Execute`, and the optimizing tier leaves such templates alone. An async function's
+promise register is checked each time the function resumes, and a function whose promise is gone is not resumed. A class field's definition
 (`opDefField`) is checked in every tier instead: FastLoop and the baseline JIT test that the receiver is an object
 inline (the JIT's slow path in `JH_DefField`), and the optimizing tier's receiver guard deoptimizes, so field
 initializers keep the fast tiers and the inliner. The compiler's own code keeps its fast paths.

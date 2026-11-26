@@ -82,3 +82,9 @@ test("BigInt.asIntN/asUintN with invalid bits throws RangeError", () => {
   expect(() => { BigInt.asIntN(Infinity, 0n); }).toThrow();
   expect(() => { BigInt.asUintN(-1, 0n); }).toThrow();
 });
+
+test("BigInt is not a constructor (21.2.1.1 step 1)", () => {
+  expect(() => new BigInt(1)).toThrow(TypeError);
+  expect(() => Reflect.construct(BigInt, [1], Object)).toThrow(TypeError);
+  expect(BigInt(1)).toBe(1n);
+});

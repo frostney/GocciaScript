@@ -697,7 +697,7 @@ supersede → build → test             → artifacts (main), release (tags)
 docs, test-structure (no build)
 ```
 
-**`build`** — Installs FPC 3.2.4 through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`build`** — Installs FPC 3.3.1 (the pinned build `FPC_VERSION`, `3.3.1-b9`) through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
@@ -719,7 +719,7 @@ docs, test-structure (no build)
 
 **`nightly`** (`.github/workflows/nightly.yml`) — Runs on a schedule, every three hours. It takes the newest `CI` run that succeeded for a push to `main` and publishes that run's builds as the `nightly` prerelease when its commit is ahead of the one the last nightly was built from, or has diverged from it after a rewritten `main`; when nothing new has passed, or the run's one-day build artifacts have expired, it publishes nothing. "Run workflow" on `main` publishes the newest passing build at once. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
-**`gc-stress`** (`.github/workflows/gc-stress.yml`) — Runs every Sunday and on demand. It was written to run the whole `tests/` tree and the GC-sensitive test262 directories under a GC-stress build and an ordinary build of the same commit, failing only on tests that pass in the ordinary build but fail under stress, and to open or update one tracking issue for a failing scheduled or `main` run. Its stress build step, `./build.pas --gc-stress`, built the old engine and now stops with an error; the engine has no stress build, and its stress checks run from the command line (`--gc-stress`, `--gc-verify`, `GOCCIA_NURSERY_KB`) and `scripts/engine/gcstress.sh`. See [Tooling — GC stress](contributing/tooling.md#gc-stress).
+**`gc-stress`** (`.github/workflows/gc-stress.yml`) — Runs every Sunday and on demand. `scripts/engine/gc-stress-ci.py` runs GocciaScript's tests, the GC regression scripts and the GC-sensitive part of test262 with a 16 KB nursery and `--gc-verify`, so the collector runs every few kilobytes and checks the heap after each collection, and runs the same tests plainly with the same `--prod` binaries. Only tests that pass plainly but fail under stress fail the job. A failing scheduled or `main` run opens or updates one tracking issue; a run on any other branch only prints what it would file. See [Tooling — GC stress](contributing/tooling.md#gc-stress).
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 

@@ -408,13 +408,13 @@
         var d = apply(charCodeAt, string, [i + 1]);
         if (d >= 0xDC00 && d <= 0xDFFF) { escaped += string[i] + string[i + 1]; i++; continue; }
       }
-      if ("^$\\.*+?()[]{}|/".indexOf(string[i]) !== -1) { escaped += "\\" + string[i]; continue; }
+      if (apply(strIndexOf, "^$\\.*+?()[]{}|/", [string[i]]) !== -1) { escaped += "\\" + string[i]; continue; }
       if (c === 0x09) { escaped += "\\t"; continue; }
       if (c === 0x0A) { escaped += "\\n"; continue; }
       if (c === 0x0B) { escaped += "\\v"; continue; }
       if (c === 0x0C) { escaped += "\\f"; continue; }
       if (c === 0x0D) { escaped += "\\r"; continue; }
-      if (",-=<>#&!%:;@~'`\"".indexOf(string[i]) !== -1 || isWhiteOrLT(c) || (c >= 0xD800 && c <= 0xDFFF)) {
+      if (apply(strIndexOf, ",-=<>#&!%:;@~'`\"", [string[i]]) !== -1 || isWhiteOrLT(c) || (c >= 0xD800 && c <= 0xDFFF)) {
         escaped += c <= 0xFF ? "\\x" + hex2(c) : uEscape(c);
         continue;
       }

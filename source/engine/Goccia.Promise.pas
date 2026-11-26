@@ -596,6 +596,10 @@ var T: PFuncTemplate; P, Res, Aw: TValue; Done, Ok: Boolean;
 begin
   T := PFuncTemplate(ObjOf(ObjOf(G)^.Aux1)^.Native);
   P := VA(ObjOf(G)^.Aux2)^.Data[T^.AsyncReg];
+  { the compiler never writes the promise's register, but a bytecode file's code can (the verifier checks operands,
+    not which register an instruction writes): a function whose promise is gone is not resumed, since settling
+    something else would corrupt it }
+  if not IsPromise(P) then Exit;
   PushRoot(G); PushRoot(P);
   Ok := GeneratorResume(G, V, Mode, Res, Done);
   if not Ok then RejectPromise(RootAt(TempTop - 1), TakePending)

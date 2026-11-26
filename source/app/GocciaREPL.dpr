@@ -86,7 +86,8 @@ end;
 
 procedure TGocciaREPLApp.Configure;
 begin
-  AddEngineOptions;
+  { an input is not an entry file, so its goal is not detected (ADR 0140) }
+  AddEngineOptions.SourceType.HelpText := 'Source loading kind (default: script)';
   FTiming := AddFlag('timing', 'Show per-line timing');
 end;
 

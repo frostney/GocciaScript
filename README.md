@@ -350,8 +350,9 @@ embedded data otherwise.
 Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`)
 3.3.1 from [fpc-toolchain](https://github.com/frostney/fpc-toolchain), build
 `3.3.1-b5` or later: the engine ([docs/engine](docs/engine/README.md)) relies on its
-native thread-local variables and code generator fixes, and `build.pas` stops
-with a message on an older compiler. The FPC 3.2.2 that package managers
+native thread-local variables and code generator fixes. `build.pas` stops
+with a message on a compiler older than 3.3.1; it cannot tell the builds of
+3.3.1 apart, so an earlier one fails later, while compiling. The FPC 3.2.2 that package managers
 install builds only the code outside `source/engine`.
 
 A 32-bit x86 build, such as `i386-win32`, does its `Double` arithmetic in

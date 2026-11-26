@@ -1878,14 +1878,16 @@ var S, F: PStr; N: Int64; I: SizeInt; T, Fill, P: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
+  T := StrToUnicode(StrOf(Args[0]));
+  { 22.1.3.17.1 StringPaddingBuiltinsImpl steps 4-5: nothing to pad returns S before fillString is coerced }
+  if N <= Length(T) then begin Res := Args[0]; Exit(True); end;
   if (Argc >= 2) and (Args[2] <> VUndefined) then
   begin
     if not StrArg(Args, Argc, 2, F) then Exit(False);
     Fill := StrToUnicode(F);
   end
   else Fill := ' ';
-  T := StrToUnicode(StrOf(Args[0]));
-  if (N <= Length(T)) or (Fill = '') then begin Res := Args[0]; Exit(True); end;
+  if Fill = '' then begin Res := Args[0]; Exit(True); end;
   if N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
   { the filler repeated and truncated to N - Length(T) code units }
   SetLength(P, N - Length(T));
@@ -2858,6 +2860,32 @@ begin
   WriteBarrier(@ObjOf(M)^.Hdr, MkPtr(Ix));
 end;
 
+{ more holes than live entries in a list long enough to matter, and no iterator part-way through it (the map's Native
+  counts the ones not done: a position in the list must keep its meaning for them): the live entries move down
+  over the holes and the index is built again, so a map that keeps adding and deleting does not grow without
+  bound (an iterator left unfinished keeps the holes, as before) }
+procedure MapCompactIfIdle(M: TValue);
+var E: PValueArray; I, J, N: Integer;
+begin
+  E := MapEntries(M);
+  N := Integer(E^.Len) div 2;
+  if (N < 64) or (N - MapCount(M) <= MapCount(M)) or (PtrUInt(ObjOf(M)^.Native) <> 0) then Exit;
+  J := 0;
+  for I := 0 to N - 1 do
+    if E^.Data[I * 2] <> VHole then
+    begin
+      if J <> I then
+      begin
+        E^.Data[J * 2] := E^.Data[I * 2];
+        E^.Data[J * 2 + 1] := E^.Data[I * 2 + 1];
+      end;
+      Inc(J);
+    end;
+  for I := J * 2 to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
+  E^.Len := J * 2;
+  MapRebuild(M, J);
+end;
+
 { called by the natives before they read their arguments: it may allocate }
 procedure MapEnsureIndex(M: TValue);
 begin
@@ -3063,6 +3091,7 @@ begin
   E^.Data[I] := VHole;   { the index keeps pointing here: probes skip the hole }
   E^.Data[I + 1] := VUndefined;
   SetMapCount(Args[0], MapCount(Args[0]) - 1);
+  MapCompactIfIdle(Args[0]);
   Res := VTrue;
   Result := True;
 end;
@@ -3074,6 +3103,9 @@ begin
   E := MapEntries(Args[0]);
   for I := 0 to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
   E^.Len := 0;
+  { 24.1.3.1: the entries are emptied, and the ones added later follow them: an iterator part-way through sees
+    those (Goccia.VM IntrinsicIteratorStep starts it over once the map's clear count moved past its own) }
+  Inc(ObjOf(Args[0])^.Pad);
   SetMapCount(Args[0], 0);
   MapRebuild(Args[0], 4);
   Res := VUndefined;
@@ -3100,21 +3132,33 @@ begin
 end;
 
 function MapProto_ForEach(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var I: Integer; E: PValueArray; CallArgs: array[0..2] of TValue; R: TValue;
+var I: Integer; E: PValueArray; CallArgs: array[0..2] of TValue; R: TValue; Clears: UInt32;
 begin
   if not MapLikeThis(Args) then Exit(False);
   if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('forEach callback is not a function'));
   I := 0;
-  while True do
-  begin
-    E := MapEntries(Args[0]);
-    if I >= Integer(E^.Len) then Break;
-    if E^.Data[I] <> VHole then
+  { as an iterator: no compaction while the walk is part-way through, and a clear starts it over }
+  Clears := ObjOf(Args[0])^.Pad;
+  ObjOf(Args[0])^.Native := Pointer(PtrUInt(ObjOf(Args[0])^.Native) + 1);
+  try
+    while True do
     begin
-      CallArgs[0] := E^.Data[I + 1]; CallArgs[1] := E^.Data[I]; CallArgs[2] := Args[0];
-      if not CallValue(Arg(Args, Argc, 1), Arg(Args, Argc, 2), @CallArgs[0], 3, R) then Exit(False);
+      if ObjOf(Args[0])^.Pad <> Clears then
+      begin
+        I := 0;
+        Clears := ObjOf(Args[0])^.Pad;
+      end;
+      E := MapEntries(Args[0]);
+      if I >= Integer(E^.Len) then Break;
+      if E^.Data[I] <> VHole then
+      begin
+        CallArgs[0] := E^.Data[I + 1]; CallArgs[1] := E^.Data[I]; CallArgs[2] := Args[0];
+        if not CallValue(Arg(Args, Argc, 1), Arg(Args, Argc, 2), @CallArgs[0], 3, R) then Exit(False);
+      end;
+      Inc(I, 2);
     end;
-    Inc(I, 2);
+  finally
+    if PtrUInt(ObjOf(Args[0])^.Native) > 0 then ObjOf(Args[0])^.Native := Pointer(PtrUInt(ObjOf(Args[0])^.Native) - 1);
   end;
   Res := VUndefined;
   Result := True;
@@ -3135,6 +3179,9 @@ begin
   else O := NewObject(RootShapeFor(MapIterProto), 0, okIterator);
   O^.Aux1 := Args[0];
   O^.Aux2 := MkInt(0);
+  { the map's clear count as the iterator last saw it, and one more iterator the map must not compact under }
+  O^.Pad := ObjOf(Args[0])^.Pad;
+  ObjOf(Args[0])^.Native := Pointer(PtrUInt(ObjOf(Args[0])^.Native) + 1);
   if IsSet then begin if Kind = 2 then O^.OFlags := 9 else O^.OFlags := 8; end
   else O^.OFlags := 5 + Kind;
   Res := MkPtr(O);

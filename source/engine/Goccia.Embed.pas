@@ -354,6 +354,21 @@ begin
   Result := Result + '"';
 end;
 
+{ the JSON report's text of a completion value JSON leaves out: String(value) (22.1.1.1), so a symbol is its
+  SymbolDescriptiveString (20.4.3.4.1) where ToString would throw, and the report's result is always there }
+function CompletionString(V: TValue; var S: TValue): Boolean;
+var D: TValue;
+begin
+  if IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol) then
+  begin
+    D := SymbolDescription(V);
+    if D = VUndefined then S := StrFromUnicode('Symbol()')
+    else S := StrFromUnicode('Symbol(' + StrToUnicode(StrOf(D)) + ')');
+    Exit(True);
+  end;
+  Result := ToStringV(V, S);
+end;
+
 { the report forms of the value at the top of the root stack; False with an exception pending when a conversion threw }
 function ResultText(Form: TGocciaResultForm; var Text: UnicodeString): Boolean;
 var V, S: TValue;
@@ -361,6 +376,7 @@ begin
   V := RootAt(TempTop - 1);
   if Form = grfString then
   begin
+    { ToString: a Symbol, which has no string form, throws its TypeError (docs/build-system.md, --print) }
     Result := ToStringV(V, S) and IsString(S);
     if Result then Text := StrToUnicode(StrOf(S));
     Exit;
@@ -383,7 +399,7 @@ begin
     end;
   end;
   V := RootAt(TempTop - 1);
-  Result := ToStringV(V, S) and IsString(S);
+  Result := CompletionString(V, S) and IsString(S);
   if Result then Text := JSONQuoted(StrToUnicode(StrOf(S)));
 end;
 
@@ -938,7 +954,14 @@ end;
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
-  Result := HostReady(Err) and Goccia.HostAPI.InjectModuleGlobals(Path, Err);
+  if not HostReady(Err) then Exit(False);
+  { a globals module's code runs under the run's limits, as the entry's does }
+  LimitsArm(FTimeoutMs, FMaxInstructions);
+  try
+    Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
+  finally
+    LimitsDisarm;
+  end;
 end;
 
 function TGocciaEngine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
@@ -1109,7 +1132,7 @@ function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString):
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean;
+  Compiled: Boolean; EnvAbort: Integer;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1143,7 +1166,18 @@ begin
   { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
   if FHostEnvironmentGuest then SetGuestLoads(True);
   try
-    if (FHostEnvironment <> '') and not FEnvLoaded then Compiled := LoadHostEnvironment
+    EnvAbort := 0;
+    if (FHostEnvironment <> '') and not FEnvLoaded then
+    begin
+      { the provider module's code runs under the run's limits, as the entry's does }
+      LimitsArm(FTimeoutMs, FMaxInstructions);
+      try
+        Compiled := LoadHostEnvironment;
+      finally
+        EnvAbort := AbortKind;
+        LimitsDisarm;
+      end;
+    end
     else Compiled := True;
   finally
     SetGuestLoads(False);
@@ -1156,6 +1190,12 @@ begin
     Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
     if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
     Pending := VUndefined;
+    case EnvAbort of
+      1: Result.Aborted := gaTimeout;
+      2: Result.Aborted := gaInstructionLimit;
+      3: Result.Aborted := gaMemoryLimit;
+      4: Result.Aborted := gaHostAbort;
+    end;
     DescribeThrown(RootAt(TempTop - 1), Result);
     PopRoots(1);
     Pending := VUndefined;

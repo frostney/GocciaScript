@@ -23,3 +23,13 @@ describe('String.prototype.padStart', () => {
     expect('abc'.padStart(6, '')).toBe('abc');
   });
 });
+
+test("padStart does not coerce the filler when there is nothing to pad (22.1.3.17.1)", () => {
+  let calls = 0;
+  const fill = { toString() { calls++; return "x"; } };
+  expect("abc".padStart(2, fill)).toBe("abc");
+  expect("abc".padEnd(3, fill)).toBe("abc");
+  expect(calls).toBe(0);
+  expect("abc".padStart(5, fill)).toBe("xxabc");
+  expect(calls).toBe(1);
+});

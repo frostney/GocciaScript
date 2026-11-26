@@ -231,7 +231,7 @@
   // [singular, plural, nanoseconds (BigInt, 0n for calendar units), category]
   var UNITS = ["year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"];
   var UNIT_NS = [0n, 0n, 0n, nsPerDay, 3600000000000n, 60000000000n, 1000000000n, 1000000n, 1000n, 1n];
-  function unitIndex(u) { return UNITS.indexOf(u); }
+  function unitIndex(u) { for (var i = 0; i < UNITS.length; i++) if (UNITS[i] === u) return i; return -1; }
   function unitNs(u) { return UNIT_NS[unitIndex(u)]; }
   function LargerOfTwoTemporalUnits(a, b) { return unitIndex(a) <= unitIndex(b) ? a : b; }
   function IsCalendarUnit(u) { return u === "year" || u === "month" || u === "week"; }

@@ -2010,7 +2010,9 @@ begin
     if not IsJsonOutput then
     begin
       PrintCoverageSummary(FCoverageMain);
-      if (FCoveragePaths.Count = 1) and FileExists(FCoveragePaths[0]) then
+      { the line listing reads the entry as source text: a bytecode file is not }
+      if (FCoveragePaths.Count = 1) and FileExists(FCoveragePaths[0]) and
+         not SameText(ExtractFileExt(FCoveragePaths[0]), EXT_GBC) then
         PrintCoverageDetail(FCoverageMain, FCoveragePaths[0]);
     end;
     if CoverageOptions.Format.Matches(cfLcov) and (CoverageOptions.OutputPath.ValueOr('') <> '') then

@@ -104,7 +104,7 @@
   }
   function DefaultLocale() { return intlOp(3); }
   // (a NUL would end the tag at the native boundary)
-  function IsStructurallyValidLanguageTag(t) { return t.indexOf("\0") < 0 && intlOp(0, t); }
+  function IsStructurallyValidLanguageTag(t) { for (var i = 0; i < t.length; i++) if (t[i] === "\0") return false; return intlOp(0, t); }
   function CanonicalizeUnicodeLocaleId(t) {
     var c = intlOp(1, t);
     if (c === null) throw rangeError("Incorrect locale information provided: " + t);

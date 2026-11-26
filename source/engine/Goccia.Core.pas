@@ -364,6 +364,8 @@ function AtomOfChars(P: PWideChar; Len: Integer): PStr;
 function AtomOfCharsHashed(P: PWideChar; Len: Integer; H: UInt32): PStr;
 { the atom of an integer's decimal text (ToString of an integral Number), without an RTL string }
 function IntAtom(I: Int64): PStr;
+{ IntAtom's atom when the text is interned already, else nil (no atom is made: no shape can hold the key) }
+function IntAtomIfExists(I: Int64): PStr;
 { Key atoms no source text can name: kept out of the atom table, told apart by Hdr.Extra (kfSymbol: a
   Symbol's key, its Symbol in the payload; kfPrivate: a class's private name; kfInternal: an engine slot).
   Text is only a description. Ordinary keys (atoms) have Extra 0. }
@@ -1863,6 +1865,23 @@ begin
   Result := AtomFind(@Buf[P], N, H);
   if Result = nil then Result := AtomInsert(@Buf[P], N, H);
   if Small then SmallIntAtoms^[I] := Result;
+end;
+
+function IntAtomIfExists(I: Int64): PStr;
+var Buf: array[0..23] of WideChar; P, N: Integer; U: QWord;
+begin
+  if (I >= 0) and (I <= High(TIntAtoms)) and (SmallIntAtoms <> nil) and (SmallIntAtoms^[I] <> nil) then
+    Exit(SmallIntAtoms^[I]);
+  P := Length(Buf);
+  if I < 0 then U := QWord(0) - QWord(I) else U := QWord(I);
+  repeat
+    Dec(P);
+    Buf[P] := WideChar(48 + U mod 10);
+    U := U div 10;
+  until U = 0;
+  if I < 0 then begin Dec(P); Buf[P] := '-'; end;
+  N := Length(Buf) - P;
+  Result := AtomFind(@Buf[P], N, HashChars(@Buf[P], N));
 end;
 
 { concatenation of 256+ chars builds a view on a growable buffer: appending to the newest view of a buffer

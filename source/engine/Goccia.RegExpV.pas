@@ -175,14 +175,14 @@ begin
   Legacy := nil;
 end;
 
-{ a match that failed: the run's abort when a spent deadline interrupted it, else the matcher's limit as a
-  SyntaxError }
+{ a match that failed: the run's abort when a spent deadline interrupted it, else the matcher's limit as an
+  Error (ADR 0128: the step and backtrack limits are the engine's, not the pattern's) }
 function MatchFailed(Sc: TRegexMatcher): Boolean;
 begin
   if Sc.Interrupted then Exit(AbortInterrupted);
   { out of native stack: the RangeError a too-deep recursion is }
   if Sc.StackExhausted then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  Result := ThrowError('SyntaxError', Sc.ErrorMessage);
+  Result := ThrowError('Error', Sc.ErrorMessage);
 end;
 
 { UpdateLegacyRegExpStaticProperties / InvalidateLegacyRegExpStaticProperties after a successful match }
@@ -686,6 +686,9 @@ begin
   end;
   CA[0] := P; CA[1] := F; CA[2] := CurNewTarget;
   Result := CallJS(JSF_Construct, VUndefined, @CA[0], 3, Res);
+  { the prelude read new.target's prototype at its step (10.1.13 reads it once), after the pattern's own reads; a
+    construct inside it cleared the flag }
+  ConstructProtoTaken := True;
 end;
 
 { ---- the prelude's natives ---- }

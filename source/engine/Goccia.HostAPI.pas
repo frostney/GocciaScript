@@ -2187,6 +2187,7 @@ function RunEventLoopIn(Intervals: Boolean): Boolean; forward;
   ['timeout'] once the deadline ended it. A file deadline sooner than ms stays the one in force, and ends the run. }
 function Test_CallWithin(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Ms, Outer, Elapsed: Int64; NoOuter, Binding, Ok: Boolean; Start: QWord; R, E: TValue; Status: UnicodeString;
+  Mark: Integer;
 begin
   if (Argc < 1) or not IsCallable(Args[1]) then Exit(ThrowTypeError('callWithin needs a function'));
   Ms := 0;
@@ -2195,6 +2196,7 @@ begin
   NoOuter := Outer = 0;
   Binding := (Ms > 0) and (NoOuter or (Ms < Outer));
   if Binding then LimitsSetDeadline(Ms);
+  Mark := FetchMark;
   Start := GetTickCount64;
   R := VUndefined;
   Ok := CallValue(Args[1], VUndefined, nil, 0, R);
@@ -2206,6 +2208,8 @@ begin
   begin
     ClearTimeoutAbort;
     Pending := VUndefined;
+    { the requests the body started are not waited for after it: their promises stay pending }
+    FetchCancelFrom(Mark);
     Status := 'timeout';
   end
   else if not Ok then

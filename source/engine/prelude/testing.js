@@ -1668,7 +1668,9 @@
           const left = work.unhandled(work.take(testMark));
           const jobErrors = work.jobErrors();
           const hadFailure = detail !== null;
-          if (left[0]) {
+          // a test that timed out already failed: its body's promise, rejected by the expired deadline, is not
+          // a second failure
+          if (left[0] && !timedOut) {
             const reason = describeRejection(left[1]);
             fail('Unhandled promise rejection: ' + reason, 'unhandled promise rejection: ' + reason);
           } else if (jobErrors.length > 0)

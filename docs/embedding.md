@@ -112,8 +112,8 @@ Values live on the engine's thread and never leave it. A host reads the entry's 
 | `ResultForm` | `TGocciaRunResult.ResultText` |
 |--------------|---------------------------|
 | `grfNone` (default) | Nothing; `HasResult` stays False |
-| `grfString` | `String(value)`, as `--print` shows it |
-| `grfJSON` | `JSON.stringify(value)` by the built-in `JSON.stringify` taken when the host was installed; `undefined` and what JSON leaves out read `null`, a function its quoted `String` form |
+| `grfString` | `ToString(value)`, as `--print` shows it; a Symbol, which has no string form, fails the run with a `TypeError` |
+| `grfJSON` | `JSON.stringify(value)` by the built-in `JSON.stringify` taken when the host was installed; `undefined` reads `null`, and a function or Symbol, which JSON leaves out, its quoted `String(value)` form |
 | `grfREPL`, `grfREPLColor` | The REPL's display of the value, without or with ANSI colors |
 | `grfSandbox` | An encoding another engine decodes (`Goccia.Sandbox` `EncodeSandboxValue`), for a nested sandbox run |
 

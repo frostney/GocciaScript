@@ -493,17 +493,15 @@ JavaScript suite under two tools that answer different questions:
 
 | Tool | Catches | Invocation |
 |------|---------|-----------|
-| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr`, with the engine's paths added ([Fuzzing locally](#fuzzing-locally)) |
+| **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `GOCCIA_VARIANT=Heaptrc GOCCIA_FPC_FLAGS="-gh -gl" ./build.pas testrunner`, which writes `build/GocciaTestRunnerHeaptrc`, then `HEAPTRC=log=build/heaptrc.log ./build/GocciaTestRunnerHeaptrc -P tests` |
 | **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `bash scripts/valgrind/strip-debug-symbols.sh build/GocciaTestRunner`, then `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
-`DIR` is a unit-output directory of your own (CI uses
-`build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
-unit-output directory per the
-[per-program `-FU` rule](#shared--fu-directories-across-programs--internal-error-200611011) —
-and create the directory first, because `fpc` writes into a `-FU` directory but
-will not create one; against a missing directory it fails with
-`Can't create object file: … (error code: 2)` (on external-assembler targets
-such as macOS the message is `Can't create assembler file: …` instead).
+`GOCCIA_VARIANT` gives the build a unit-output directory of its own
+(`build/compiled/targets/testrunner-dev-heaptrc`, or `testrunner-heaptrc` with `--prod`), since FPC does not
+recompile a unit for new options, and `GOCCIA_FPC_FLAGS` comes after
+`build.pas`'s own options, so its flags win. `HEAPTRC=log=FILE` matters: FPC
+3.3.1's heaptrc leaves its report unflushed when stderr is a regular file, so
+`2> FILE` can capture nothing.
 
 `scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
 Pascal runtime's `IndexByte` and `IndexWord`, and on FPC 3.3.1 also

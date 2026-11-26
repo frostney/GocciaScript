@@ -23,6 +23,11 @@ procedure SetFetchPolicy(const Caps: TGocciaCapabilities; MaxResponseBytes: Inte
 procedure DefineFetchNatives(N: TValue);
 { whether a request of this engine is in flight }
 function FetchPending: Boolean;
+{ the id the next request gets: FetchCancelFrom(FetchMark) later cancels every request started since }
+function FetchMark: Integer;
+{ the requests started since Mark stop being waited for, as their signals' aborts stop them (fetchCancel): a test
+  that timed out leaves no request for the next one to wait on }
+procedure FetchCancelFrom(Mark: Integer);
 { settles the requests that finished; with Block, first waits for one to finish, for a request's signal deadline
   (whose signals are then observed), for the run's interrupt, or until the tick Until_ (0: none). False when script
   failed or the run ended }
@@ -384,6 +389,28 @@ begin
   { the slot stays taken until the worker finishes (FetchPump drops its answer and the entry then) }
   Pendings[I].Cancelled := True;
   Pendings[I].Deadline := 0;
+end;
+
+function FetchMark: Integer;
+begin
+  Result := NextId;
+end;
+
+procedure FetchCancelFrom(Mark: Integer);
+var I: Integer;
+begin
+  for I := 0 to High(Pendings) do
+    if (Pendings[I].Id >= Mark) and not Pendings[I].Cancelled then
+    begin
+      EnterCriticalSection(Owner.Lock);
+      try
+        Pendings[I].Worker.Cancelled := True;
+      finally
+        LeaveCriticalSection(Owner.Lock);
+      end;
+      Pendings[I].Cancelled := True;
+      Pendings[I].Deadline := 0;
+    end;
 end;
 
 { fetchRegister(settle): the prelude's settle function, called as settle(id, kind, ...): kind 0 a response

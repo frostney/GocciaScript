@@ -5,6 +5,11 @@
   // steps; the intrinsics used are captured here, so later changes to the globals are not observed.
   var apply = Reflect.apply, construct = Reflect.construct, defineProperty = Object.defineProperty;
   var create = Object.create, isArray = Array.isArray;
+  // the intrinsics the code below calls, captured now: a script that replaces Array.prototype.push or a string
+  // method later does not reach into these built-ins (nor see their internal records)
+  var strIndexOf = String.prototype.indexOf, strCharAt = String.prototype.charAt;
+  var strSlice = String.prototype.slice;
+  function push(a) { var n = arguments.length; for (var i = 1; i < n; i++) defineProperty(a, a.length, { value: arguments[i], writable: true, enumerable: true, configurable: true }); return a.length; }
   var SymIterator = Symbol.iterator, SymAsyncIterator = Symbol.asyncIterator;
   var TypeErr = TypeError, PromiseCtor = Promise;
   var MapCtor = Map, MP = Map.prototype, mapHas = MP.has, mapGet = MP.get, mapSet = MP.set;
@@ -508,10 +513,10 @@
       var n = c.length;
       var v = (c[0] << 18) | (c[1] << 12) | ((n > 2 ? c[2] : 0) << 6) | (n > 3 ? c[3] : 0);
       var b0 = (v >> 16) & 255, b1 = (v >> 8) & 255, b2 = v & 255;
-      if (n === 4) { bytes.push(b0, b1, b2); return true; }
-      if (n === 2) { if (throwOnExtraBits && b1 !== 0) return false; bytes.push(b0); return true; }
+      if (n === 4) { push(bytes, b0, b1, b2); return true; }
+      if (n === 2) { if (throwOnExtraBits && b1 !== 0) return false; push(bytes, b0); return true; }
       if (throwOnExtraBits && b2 !== 0) return false;
-      bytes.push(b0, b1);
+      push(bytes, b0, b1);
       return true;
     }
     for (;;) {
@@ -553,7 +558,7 @@
       var remaining = maxLength - bytes.length;
       if ((remaining === 1 && chunk.length === 2) || (remaining === 2 && chunk.length === 3))
         return { read: read, bytes: bytes, error: null };
-      chunk.push(v);
+      push(chunk, v);
       if (chunk.length === 4) {
         decodeChunk(chunk, false);
         chunk = [];
@@ -577,7 +582,7 @@
       var h = hexVal(string.charCodeAt(read)), l = hexVal(string.charCodeAt(read + 1));
       if (h < 0 || l < 0) return { read: read, bytes: bytes, error: new SyntaxErr("invalid hex digit") };
       read += 2;
-      bytes.push(h * 16 + l);
+      push(bytes, h * 16 + l);
     }
     return { read: read, bytes: bytes, error: null };
   }
@@ -759,11 +764,11 @@
       this.#cells = [];
       if (registries.length >= registriesAtSweep) {
         var live = [];
-        for (var i = 0; i < registries.length; i++) if (weakGet(registries[i]) !== undefined) live.push(registries[i]);
+        for (var i = 0; i < registries.length; i++) if (weakGet(registries[i]) !== undefined) push(live, registries[i]);
         registries = live;
         registriesAtSweep = live.length * 2 + 16;
       }
-      registries.push(weakBox(this, false));
+      push(registries, weakBox(this, false));
     }
     register(target, heldValue, unregisterToken = undefined) {
       var cells = this.#cells;
@@ -773,7 +778,7 @@
         if (unregisterToken !== undefined) throw new TypeErr("register: invalid unregister token");
         unregisterToken = undefined;
       }
-      cells.push({
+      push(cells, {
         box: weakBox(target, true),
         held: heldValue,
         token: unregisterToken === undefined ? undefined : weakBox(unregisterToken, false),
@@ -806,15 +811,15 @@
         for (var i = 0; i < registries.length; i++) {
           var reg = weakGet(registries[i]);
           if (reg === undefined) continue;
-          live.push(registries[i]);
+          push(live, registries[i]);
           var cells = reg.#cells, keep = [];
-          for (var j = 0; j < cells.length; j++) if (!cells[j].done) keep.push(cells[j]);
+          for (var j = 0; j < cells.length; j++) if (!cells[j].done) push(keep, cells[j]);
           reg.#cells = keep;
           for (var k = keep.length - 1; k >= 0; k--) {
             var c = keep[k];
             if (!c.queued && weakGet(c.box) === undefined) {
               c.queued = true;
-              cleanupQueue.push({ registry: reg, cell: c });
+              push(cleanupQueue, { registry: reg, cell: c });
             }
           }
         }
@@ -848,7 +853,7 @@
       var s = toStr(string), r = "";
       for (var i = 0; i < s.length; i++) {
         var c = s.charCodeAt(i);
-        if (escapeOk.indexOf(s.charAt(i)) >= 0) r += s.charAt(i);
+        if (apply(strIndexOf, escapeOk, [apply(strCharAt, s, [i])]) >= 0) r += apply(strCharAt, s, [i]);
         else if (c < 256) r += "%" + hexDigits.charAt(c >> 4) + hexDigits.charAt(c & 15);
         else r += "%u" + hexDigits.charAt(c >> 12) + hexDigits.charAt((c >> 8) & 15) + hexDigits.charAt((c >> 4) & 15) + hexDigits.charAt(c & 15);
       }
@@ -1007,7 +1012,7 @@
             x = hi;
           }
           partials.length = used;
-          if (x !== 0) partials.push(x);
+          if (x !== 0) push(partials, x);
         }
       }
       if (state === 4) return NaN;
@@ -1060,7 +1065,7 @@
       if (t !== "number" && t !== "string" && t !== "symbol")
         throw new TypeErr("Enum member '" + k + "' must be a number, string, or symbol");
       defineProperty(e, k, { value: v, writable: false, enumerable: true, configurable: false });
-      entries.push([k, v]);
+      push(entries, [k, v]);
     }
     var iterate = { "[Symbol.iterator]"() { return apply(ArrayValues, entries, []); } }["[Symbol.iterator]"];
     defineProperty(e, SymIterator, { value: iterate, writable: false, enumerable: false, configurable: false });
@@ -1088,7 +1093,7 @@
     if (!isCallable(f) || !isConstructor(f)) return false;
     var src;
     try { src = apply(fnToString, f, []); } catch (e) { return false; }
-    return src.slice(0, 5) === "class" || src.slice(-15) === "[native code] }";
+    return apply(strSlice, src, [0, 5]) === "class" || apply(strSlice, src, [-15]) === "[native code] }";
   }
   // the built-in constructors whose patterns test a value's type: 0 when m is none of them
   function typeMatch(m, v) {
@@ -1128,7 +1133,7 @@
       var r = apply(next, it, []);
       if (!isObject(r)) throw new TypeErr("Iterator result is not an object");
       if (r.done) return out;
-      out.push(r.value);
+      push(out, r.value);
     }
   }
   function matchExtract(subject, m) {
@@ -1184,7 +1189,7 @@
       addInitializer(fn) {
         if (state.done) throw new TypeErr("Cannot add initializers after decoration has completed");
         if (!isCallable(fn)) throw new TypeErr("Initializer must be a function");
-        list.push(fn);
+        push(list, fn);
       }
     }.addInitializer;
   }
@@ -1231,7 +1236,7 @@
       if (st !== undefined && !isCallable(st)) throw new TypeErr("Accessor decorator set must be a function");
       if (init !== undefined) {
         if (!isCallable(init)) throw new TypeErr("Accessor decorator init must be a function");
-        listAt(sess.fieldInits, idx).push(init);
+        push(listAt(sess.fieldInits, idx), init);
       }
       var nv = { get: g !== undefined ? g : value.get, set: st !== undefined ? st : value.set };
       if (!isPrivate) defineProperty(target, key, { get: nv.get, set: nv.set, enumerable: true, configurable: true });
@@ -1239,7 +1244,7 @@
     }
     if (r === undefined) return value;
     if (!isCallable(r)) throw new TypeErr(RETURN_MESSAGES[kind]);
-    if (kind === "field") { listAt(sess.fieldInits, idx).push(r); return undefined; }
+    if (kind === "field") { push(listAt(sess.fieldInits, idx), r); return undefined; }
     if (!isPrivate) {
       if (kind === "method") defineProperty(target, key, { value: r, writable: true, enumerable: false, configurable: true });
       else {

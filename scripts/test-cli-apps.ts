@@ -9754,7 +9754,7 @@ await section("Runner: a virtual module's imports are held to the read policy, a
         "",
       ].join("\n"),
     );
-    const proc = Bun.spawnSync([RUNNER, join(proj, "main.js")], { cwd: proj, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync([resolve(RUNNER), join(proj, "main.js")], { cwd: proj, stdout: "pipe", stderr: "pipe" });
     const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 2);
     const expected = ["dynamic PermissionDenied", "static PermissionDenied"];
     if (JSON.stringify(lines) !== JSON.stringify(expected))
@@ -16737,6 +16737,79 @@ await section("Loader: --output=json and --silent mute the goccia:test reporter.
       if (sandboxSilent.stdout.includes(marker))
         throw new Error(`--sandbox --silent should mute the goccia:test reporter (${marker}), got:\n${sandboxSilent.stdout}`);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: a Symbol completion value is a JSON string, and --print still fails on it...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "symbol.js"), 'Symbol("x");\n');
+    const json = Bun.spawnSync([resolve(RUNNER), "symbol.js", "--output=json"], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    const report = JSON.parse(json.stdout.toString());
+    if (json.exitCode !== 0 || report.ok !== true || report.files?.[0]?.result !== "Symbol(x)")
+      throw new Error(`--output=json of a Symbol should report result "Symbol(x)", got (exit ${json.exitCode}):\n${json.stdout}${json.stderr}`);
+    const print = Bun.spawnSync([resolve(RUNNER), "symbol.js", "--print"], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    if (print.exitCode !== 1 || !(print.stdout.toString() + print.stderr.toString()).includes("TypeError: Cannot convert a Symbol value to a string"))
+      throw new Error(`--print of a Symbol should fail with the TypeError, got (exit ${print.exitCode}):\n${print.stdout}${print.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: a globals module and a host-environment provider run under the run's limits...", async () => {
+  const tmp = makeTmp();
+  try {
+    const spin = "const it = { [Symbol.iterator]() { return { next: () => ({ done: false }) }; } };\nfor (const _ of it) {}\n";
+    writeFileSync(join(tmp, "globals.js"), spin + "export const a = 1;\n");
+    writeFileSync(join(tmp, "env.js"), spin + [
+      "export const epochNanoseconds = () => 0n;",
+      "export const monotonicNanoseconds = () => 0n;",
+      'export const timeZoneIdentifier = () => "UTC";',
+      "export const random = () => 0.5;",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "main.js"), "console.log(1);\n");
+    const cases: Array<[string, string[], string]> = [
+      ["--globals under --timeout", ["--globals=globals.js", "--timeout=300"], "timed out"],
+      ["--globals under --max-instructions", ["--globals=globals.js", "--max-instructions=100000"], "instruction limit"],
+      ["--host-environment under --timeout", ["--host-environment=env.js", "--timeout=300"], "timed out"],
+    ];
+    for (const [label, args, expected] of cases) {
+      const started = Date.now();
+      const run = Bun.spawnSync([resolve(RUNNER), "main.js", ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 30000 });
+      const out = run.stdout.toString() + run.stderr.toString();
+      if (run.exitCode !== 1 || !out.includes(expected) || out.includes("\n1\n") || Date.now() - started > 20000)
+        throw new Error(`${label} should stop the set-up module with "${expected}", got (exit ${run.exitCode}):\n${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("TestRunner: --test-timeout stops every test that runs past it, not only the first...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "rearm.test.js");
+    writeFileSync(file, [
+      "const spin = () => { const it = { [Symbol.iterator]() { return { next: () => ({ done: false }) }; } }; for (const _ of it) {} };",
+      'test("first spins", () => { spin(); });',
+      'test("second spins", () => { spin(); });',
+      'test("third passes", () => { expect(1).toBe(1); });',
+      "",
+    ].join("\n"));
+    const reportPath = join(tmp, "rearm.json");
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), file, "-P", "--test-timeout=300", "--no-progress", `--output=${reportPath}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 30000 },
+    );
+    const json = JSON.parse(readFileSync(reportPath, "utf-8"));
+    const failures: string[] = json.files?.[0]?.failedTests ?? [];
+    if (json.passed !== 1 || json.failed !== 2 || failures.filter((f) => f.includes("TIMEOUT")).length !== 2)
+      throw new Error(`expected both spinning tests to time out and the third to pass, got ${json.passed}/${json.failed}: ${failures.join(", ")}\n${proc.stdout}`);
+    if (proc.stdout.toString().includes("Unhandled promise rejection"))
+      throw new Error(`a timed-out test should fail once, not again as an unhandled rejection:\n${proc.stdout}`);
   } finally {
     clean(tmp);
   }
