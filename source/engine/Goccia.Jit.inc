@@ -905,7 +905,7 @@ begin
     begin
       V := SuspendNewGenerator;
       StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
-      V := AsyncStartHook(V);
+      V := CallAsyncStartHook(V);
     end;
     VStack[Base - 1] := V;
     StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
@@ -2186,7 +2186,7 @@ begin
     opRegExp:
       begin
         if not Assigned(RegExpCreateHook) then Exit(ThrowError('SyntaxError', 'RegExp is not available'));
-        if not RegExpCreateHook(PStr(PtrOf(Fr^.Tpl^.Consts[B])), PStr(PtrOf(Fr^.Tpl^.Consts[C])), V) then Exit(False);
+        if not CallRegExpCreateHook(PStr(PtrOf(Fr^.Tpl^.Consts[B])), PStr(PtrOf(Fr^.Tpl^.Consts[C])), V) then Exit(False);
         VStack[Fr^.Base + A] := V;
       end;
     opGetPriv:

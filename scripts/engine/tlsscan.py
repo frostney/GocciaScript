@@ -8,11 +8,17 @@
 import subprocess, sys, re, glob, collections
 TLS_OK = {'R_X86_64_TPOFF32', 'R_X86_64_TPOFF64', 'R_X86_64_GOTTPOFF', 'R_X86_64_TLSGD', 'R_X86_64_TLSLD',
           'R_X86_64_DTPOFF32', 'R_X86_64_DTPOFF64', 'R_X86_64_DTPMOD64', 'R_X86_64_GOTPC32_TLSDESC', 'R_X86_64_TLSDESC_CALL'}
+# Also lists a call or jump whose target is a threadvar (a procedural threadvar called as a function: FPC 3.3.1's
+# GNU assembler output writes `call U_$...` for `call *%fs:U_$...@tpoff`, so with -Aas the call jumps into the
+# thread's data). The TLS symbols are gathered across every object first: a reference from another unit is not
+# marked TLS in the object that makes it.
 bad = collections.Counter(); where = collections.defaultdict(set)
+tls = set()
 for o in sys.argv[1:]:
     syms = subprocess.run(['readelf', '-sW', o], capture_output=True, text=True).stdout
-    tls = set(l.split()[-1] for l in syms.split('\n') if ' TLS ' in l)
-    if not tls: continue
+    tls |= set(l.split()[-1] for l in syms.split('\n') if ' TLS ' in l)
+for o in sys.argv[1:]:
+    if not tls: break
     dis = subprocess.run(['objdump', '-dr', '--no-show-raw-insn', o], capture_output=True, text=True).stdout
     fn = '?'
     insn = ''

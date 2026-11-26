@@ -8219,7 +8219,7 @@ begin
     { 13.2.7.2: the pattern and flags are early errors }
     if Assigned(RegExpValidateHook) then
     begin
-      Msg := RegExpValidateHook(TGocciaRegexLiteralExpression(E).Pattern, TGocciaRegexLiteralExpression(E).Flags);
+      Msg := CallRegExpValidateHook(TGocciaRegexLiteralExpression(E).Pattern, TGocciaRegexLiteralExpression(E).Flags);
       if Msg <> '' then raise EEarlySyntaxError.Create(Msg);
     end;
     Emit(Ins(opRegExp, Dest, AtomConst(TGocciaRegexLiteralExpression(E).Pattern),

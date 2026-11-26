@@ -54,6 +54,16 @@ uses
   Goccia.InstructionLimit,
   Goccia.Timeout;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallNativeBytesHook(const ABytes: Int64; const AReserve: Boolean): Boolean;
+var H: TNativeBytesHook;
+begin
+  H := NativeBytesHook;
+  Result := H(ABytes, AReserve);
+end;
+
+
 threadvar
   GNativeDataDepth: Integer;
 
@@ -101,14 +111,14 @@ procedure ReserveNativeBytes(const ABytes: Int64);
 begin
   if ABytes <= 0 then
     Exit;
-  if Assigned(NativeBytesHook) and not NativeBytesHook(ABytes, True) then
+  if Assigned(NativeBytesHook) and not CallNativeBytesHook(ABytes, True) then
     raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
 end;
 
 procedure ReleaseNativeBytes(const ABytes: Int64);
 begin
   if Assigned(NativeBytesHook) and (ABytes > 0) then
-    NativeBytesHook(ABytes, False);
+    CallNativeBytesHook(ABytes, False);
 end;
 
 procedure CheckStringResultBytes(const ABytes: Int64);

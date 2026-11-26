@@ -29,6 +29,16 @@ implementation
 uses
   NumericText, Goccia.ObjModel, BigInteger, Goccia.BigIntV, TextSemantics, UnicodeNormalization;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+procedure CallConsoleSink(const Line: UnicodeString);
+var H: procedure(const Line: UnicodeString);
+begin
+  H := ConsoleSink;
+  H(Line);
+end;
+
+
 type
   TArgs = PValue;
 
@@ -223,7 +233,7 @@ begin
     if not ToStringV(Args[I], S) then Exit(False);
     Line := Line + StrToUnicode(StrOf(S));
   end;
-  if Assigned(ConsoleSink) then ConsoleSink(Line) else WriteLn(UTF8Encode(Line));
+  if Assigned(ConsoleSink) then CallConsoleSink(Line) else WriteLn(UTF8Encode(Line));
   Res := VUndefined;
   Result := True;
 end;

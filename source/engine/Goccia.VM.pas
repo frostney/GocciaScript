@@ -541,11 +541,67 @@ function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean
 function InlinedFrameCount(I: Integer): Integer;
 procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplate; out Base, Argc: Integer);
 
+{ calls of this unit's procedural threadvars through a local copy (see the implementation's note) }
+function CallLazyCompileHook(T: PFuncTemplate): Boolean;
+function CallRegExpValidateHook(const Pattern, Flags: UnicodeString): UnicodeString;
+
 implementation
 
 uses
   {$IFDEF LINUX}Syscall, {$ENDIF}Classes, NumericText, NativeStackBounds, Goccia.Coverage, Goccia.Error.Messages,
   Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry;
+
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallLazyCompileHook(T: PFuncTemplate): Boolean;
+var H: function(T: PFuncTemplate): Boolean;
+begin
+  H := LazyCompileHook;
+  Result := H(T);
+end;
+
+function CallRegExpValidateHook(const Pattern, Flags: UnicodeString): UnicodeString;
+var H: function(const Pattern, Flags: UnicodeString): UnicodeString;
+begin
+  H := RegExpValidateHook;
+  Result := H(Pattern, Flags);
+end;
+
+function CallRegExpCreateHook(Pattern, Flags: PStr; var Res: TValue): Boolean;
+var H: function(Pattern, Flags: PStr; var Res: TValue): Boolean;
+begin
+  H := RegExpCreateHook;
+  Result := H(Pattern, Flags, Res);
+end;
+
+function CallAsyncStartHook(G: TValue): TValue;
+var H: function(G: TValue): TValue;
+begin
+  H := AsyncStartHook;
+  Result := H(G);
+end;
+
+function CallAsyncGenStartHook(G: TValue): TValue;
+var H: function(G: TValue): TValue;
+begin
+  H := AsyncGenStartHook;
+  Result := H(G);
+end;
+
+function CallAsyncFromSyncHook(It, NextM: TValue; var Res: TValue): Boolean;
+var H: function(It, NextM: TValue; var Res: TValue): Boolean;
+begin
+  H := AsyncFromSyncHook;
+  Result := H(It, NextM, Res);
+end;
+
+procedure CallRealmHostInit;
+var H: procedure;
+begin
+  H := RealmHostInit;
+  H;
+end;
+
 
 { ---------------- execution limits ---------------- }
 
@@ -1195,7 +1251,7 @@ begin
     try
       RealmInitProc;
       RealmInit := False;
-      if Assigned(RealmHostInit) then RealmHostInit;
+      if Assigned(RealmHostInit) then CallRealmHostInit;
     except
       on E: Exception do
       begin
@@ -4553,7 +4609,7 @@ begin
       begin
         Res := SuspendNewGenerator;
         StackTop := SavedTop;
-        Res := AsyncStartHook(Res);
+        Res := CallAsyncStartHook(Res);
         Result := True;
       end
       else
@@ -4750,7 +4806,7 @@ begin
   if MultiRealmAny and (FnRealm(FObj) <> CurRealm) then
     Exit(PushBytecodeFrameInRealm(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
   T := PFuncTemplate(FObj^.Native);
-  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
+  if (T^.Lazy <> nil) and not CallLazyCompileHook(T) then Exit(False);
   Base := (Args - VStack) - 1;
   if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then
     Exit(XFrameOverflow);
@@ -4912,7 +4968,7 @@ begin
   if PtrUInt(@Marker) < ReentryBackstop then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   T := PFuncTemplate(FObj^.Native);
-  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
+  if (T^.Lazy <> nil) and not CallLazyCompileHook(T) then Exit(False);
   { a non-strict function's undefined or null this is the global object (OrdinaryCallBindThis) }
   if not T^.IsStrict and not T^.IsArrow and ((This = VUndefined) or (This = VNull)) and not MultiRealmAny then
     This := GlobalObj;
@@ -4978,7 +5034,7 @@ begin
   Base := Fr^.Base;
   T := PFuncTemplate(ObjOf(VStack[Base + A])^.Native);
   { a lazy callee is compiled while this frame still holds it (a collection in its compile moves it) }
-  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
+  if (T^.Lazy <> nil) and not CallLazyCompileHook(T) then Exit(False);
   FV := VStack[Base + A];
   CloseUpvals(Base);
   while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
@@ -9625,7 +9681,7 @@ LReload:
             begin
               V := SuspendNewGenerator;
               StackTop := Fr^.Base + Tpl^.MaxRegs;
-              V := AsyncStartHook(V);
+              V := CallAsyncStartHook(V);
               R[A] := V;
               Continue;
             end;
@@ -10248,7 +10304,7 @@ LReload:
             { 7.4.2 step 1.b: the sync iterator, wrapped by CreateAsyncFromSyncIterator }
             if not GetIteratorRec(R[(I shr 24) and $FFFF], VA, V) then goto LThrow;
             R[A] := VA; R[A + 1] := V;
-            if not AsyncFromSyncHook(R[A], R[A + 1], V) then goto LThrow;
+            if not CallAsyncFromSyncHook(R[A], R[A + 1], V) then goto LThrow;
           end
           else
           begin
@@ -10551,7 +10607,7 @@ LReload:
         begin
           Fr^.PC := PC;
           if not Assigned(RegExpCreateHook) then begin ThrowError('SyntaxError', 'RegExp is not available'); goto LThrow; end;
-          if not RegExpCreateHook(PStr(PtrOf(K[(I shr 24) and $FFFF])), PStr(PtrOf(K[I shr 40])), V) then goto LThrow;
+          if not CallRegExpCreateHook(PStr(PtrOf(K[(I shr 24) and $FFFF])), PStr(PtrOf(K[I shr 40])), V) then goto LThrow;
           R[A] := V;
         end;
       opYield, opAwait:
@@ -10602,7 +10658,7 @@ LReload:
           GenYielded := False;
           V := Fr^.NewTarget;
           ObjOf(V)^.OFlags := 0;   { suspended start }
-          if Tpl^.IsAsync then V := AsyncGenStartHook(V);
+          if Tpl^.IsAsync then V := CallAsyncGenStartHook(V);
           if FrameTop = StopFrame then
           begin
             Res := V;

@@ -46,8 +46,12 @@ the first binary compiles the preludes and writes their bytecode, the second emb
 optimized (`-O4`); `--prod` strips the binary and a dev build keeps line information, in its own unit cache.
 On Linux x86-64 it fails when `scripts/engine/tlsscan.py` finds a native-TLS miscompile (a threadvar address with
 an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard against a toolchain that regresses, and is
-skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) includes `goccia` and
-every application, each built the same way.
+skipped when python3 or binutils is missing. It also fails on a call whose target is a threadvar: FPC 3.3.1's GNU
+assembler output (`-Aas`, the AFL fuzz build) writes a call of a procedural threadvar as a direct call of the variable
+(`call U_$...` for `call *%fs:...@tpoff`), which jumps into the thread's data, and ld refuses it from another unit as
+a TLS mismatch. The engine calls each of its hook threadvars through a local copy (`CallLazyCompileHook` and the
+others), which FPC calls through a register; a new hook called directly fails the AFL build's check. The full build
+(`./build.pas` without targets) includes `goccia` and every application, each built the same way.
 
 The engine builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
 i386. Only Linux x86-64 has the JIT (`GOCCIA_JIT` in `Goccia.Checks.inc`): it emits code for the System V calling convention

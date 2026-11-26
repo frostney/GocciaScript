@@ -328,6 +328,16 @@ implementation
 uses
   Goccia.RegExp.Engine;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallPreParseRegExpCheck(const Pattern, Flags: UnicodeString): UnicodeString;
+var H: function(const Pattern, Flags: UnicodeString): UnicodeString;
+begin
+  H := PreParseRegExpCheck;
+  Result := H(Pattern, Flags);
+end;
+
+
 const
   { expression flags }
   afNoIn = 1;
@@ -1475,7 +1485,7 @@ var Pat, Fl, Msg: UnicodeString;
 begin
   SetString(Pat, S.Src + S.RegexBodyStart, S.RegexBodyLen);
   SetString(Fl, S.Src + S.RegexFlagsStart, S.RegexFlagsLen);
-  if Assigned(PreParseRegExpCheck) then Msg := PreParseRegExpCheck(Pat, Fl)
+  if Assigned(PreParseRegExpCheck) then Msg := CallPreParseRegExpCheck(Pat, Fl)
   else
     { before the engine exists: Goccia's RegExp compiler, as Goccia.RegExpV's literal check uses it }
     try

@@ -783,7 +783,7 @@ begin
   for I := 0 to High(Path) do
   begin
     if Result = nil then Exit(nil);
-    if (Result^.Lazy <> nil) and not LazyCompileHook(Result) then
+    if (Result^.Lazy <> nil) and not CallLazyCompileHook(Result) then
     begin
       Pending := VUndefined;
       Exit(nil);

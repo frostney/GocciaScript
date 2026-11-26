@@ -66,6 +66,16 @@ uses
   Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.Scan,
   Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+procedure CallModuleWarningHook(const FileName, Message, Suggestion: UnicodeString; Line, Column: Integer);
+var H: TModuleWarningHook;
+begin
+  H := ModuleWarningHook;
+  H(FileName, Message, Suggestion, Line, Column);
+end;
+
+
 { the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
 procedure ExcludeHostSource(const FileName: UnicodeString);
 var P: TGocciaCompileProfiler;
@@ -804,7 +814,7 @@ var I: Integer;
 begin
   if Assigned(ModuleWarningHook) and (FileName <> ModuleWarningEntry) then
     for I := 0 to EntryWarningCount - 1 do
-      ModuleWarningHook(FileName, EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I],
+      CallModuleWarningHook(FileName, EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I],
         EntryWarningColumns[I]);
 end;
 

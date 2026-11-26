@@ -176,6 +176,23 @@ uses
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
   Goccia.Fetch, Goccia.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry, ConsoleStreams;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+procedure CallBenchProgress(const Suite, Name: UnicodeString; Index, Total: Integer);
+var H: TGocciaBenchProgress;
+begin
+  H := BenchProgress;
+  H(Suite, Name, Index, Total);
+end;
+
+procedure CallBenchDescribeThrown(V: TValue; var E: TGocciaBenchEntry);
+var H: procedure(V: TValue; var E: TGocciaBenchEntry);
+begin
+  H := BenchDescribeThrown;
+  H(V, E);
+end;
+
+
 {$I Goccia.Testing.inc}
 {$I Goccia.Microbench.inc}
 {$I Goccia.HostPrelude.inc}
@@ -1218,6 +1235,14 @@ threadvar
   GuestLoads: Boolean;
   ProviderGraph: TProviderGraphCheck;
 
+{ called through a local copy, as the other procedural threadvars (see CallBenchProgress) }
+function CallProviderGraph(const Path, ImportingFile, PackageRoot: string): Boolean;
+var H: TProviderGraphCheck;
+begin
+  H := ProviderGraph;
+  Result := H(Path, ImportingFile, PackageRoot);
+end;
+
 procedure SetProviderGraphCheck(Check: TProviderGraphCheck);
 begin
   ProviderGraph := Check;
@@ -1293,7 +1318,7 @@ begin
   Canonical := CanonicalCapabilityPath(ACandidatePath);
   { a provider package's own file: confined and verified, the import grant covers it }
   if Assigned(ProviderGraph) and Assigned(Resolver) and
-     ProviderGraph(ACandidatePath, Importer, Resolver.ProbePackageDirectory) and
+     CallProviderGraph(ACandidatePath, Importer, Resolver.ProbePackageDirectory) and
      not Caps.DeniesPath(gcRead, Canonical) then Exit;
   if Verdict(Canonical, Literal, Denial) then Exit;
   E := EReadRefused.Create(Spec);
@@ -1422,7 +1447,7 @@ begin
     if SameText(ExtractFileExt(UTF8Encode(Resolved)), '.gbc') and (Resolver.LastCompanionSourcePath <> '') then
       Resolver.ValidateCompanionSourcePath(Resolver.LastCompanionSourcePath);
     if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) and
-       not (Assigned(ProviderGraph) and ProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
+       not (Assigned(ProviderGraph) and CallProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
          not Policy.Caps.DeniesPath(gcRead, CanonicalCapabilityPath(UTF8Encode(Resolved)))) then
     begin
       Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
@@ -2565,7 +2590,7 @@ end;
 function Bench_Progress(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   if Assigned(BenchProgress) then
-    BenchProgress(ArgStr(Args, Argc, 1), ArgStr(Args, Argc, 2), Trunc(ArgNum(Args, Argc, 3)),
+    CallBenchProgress(ArgStr(Args, Argc, 1), ArgStr(Args, Argc, 2), Trunc(ArgNum(Args, Argc, 3)),
       Trunc(ArgNum(Args, Argc, 4)));
   Res := VUndefined;
   Result := True;
@@ -2586,7 +2611,7 @@ begin
   if E.Failed then
   begin
     if (Argc >= 6) and Assigned(BenchDescribeThrown) then
-      BenchDescribeThrown(Args[6], E);
+      CallBenchDescribeThrown(Args[6], E);
     if E.Error = '' then
       E.Error := 'benchmark failed';
   end

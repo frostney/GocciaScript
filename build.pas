@@ -1035,7 +1035,11 @@ begin
     Exit;
   end;
   if not CompileEngineProgram(ASource, UnitDir, Program_, ATarget, Output) then
+  begin
+    { a broken threadvar reference can be why the link failed (ld refuses a TLS mismatch): named first }
+    CheckEngineThreadVarRelocations(UnitDir);
     PrintBuildFailureAndExit(Output, Program_ + ' build failed');
+  end;
   CheckEngineThreadVarRelocations(UnitDir);
   if SnapshotEnginePreludes(Program_, ATarget) then
   begin
@@ -1043,7 +1047,10 @@ begin
     DeleteFile(UnitDir + DirectorySeparator + 'Goccia.Snapshot.ppu');
     DeleteFile(UnitDir + DirectorySeparator + 'Goccia.Snapshot.o');
     if not CompileEngineProgram(ASource, UnitDir, Program_, ATarget, Output) then
+    begin
+      CheckEngineThreadVarRelocations(UnitDir);
       PrintBuildFailureAndExit(Output, Program_ + ' build failed');
+    end;
     CheckEngineThreadVarRelocations(UnitDir);
   end;
   WriteLn(Program_, ' built successfully');

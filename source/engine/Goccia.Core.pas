@@ -566,6 +566,16 @@ implementation
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+procedure CallGCRootScanner;
+var H: procedure;
+begin
+  H := GCRootScanner;
+  H;
+end;
+
+
 {$IFDEF MSWINDOWS}
 { (declared here: the Windows unit's names would hide SysUtils' in this unit) }
 const
@@ -1423,7 +1433,7 @@ begin
   if GCVerify then VerifyHeap('barrier');   { every old cell pointing into the nursery is remembered }
   InMinor := True;
   GrayTop := 0;
-  if Assigned(GCRootScanner) then GCRootScanner;
+  if Assigned(GCRootScanner) then CallGCRootScanner;
   for I := 0 to TempTop - 1 do GCVisit(TempRoots[I]);
   ScanShapesForGC;
   { old cells that point into the nursery }
@@ -1565,7 +1575,7 @@ begin
   Inc(GCEpoch);
   InMinor := False;
   GrayTop := 0;
-  if Assigned(GCRootScanner) then GCRootScanner;
+  if Assigned(GCRootScanner) then CallGCRootScanner;
   for I := 0 to TempTop - 1 do GCVisit(TempRoots[I]);
   ScanShapesForGC;
   DrainGray;

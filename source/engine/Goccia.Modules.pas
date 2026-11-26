@@ -151,6 +151,7 @@ uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.VM,
   Goccia.Compiler, Goccia.Eval, Goccia.Promise, Goccia.ThreadCleanupRegistry;
 
+
 const
   { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
   HostSourceSpecifier = '<module source>';
@@ -275,6 +276,36 @@ threadvar
   FileRead: TFileReadHook;
   FileTime: TFileTimeHook;
 
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallHostModules(const Key: UnicodeString; var Exp: TValue): Integer;
+var H: THostModuleHook;
+begin
+  H := HostModules;
+  Result := H(Key, Exp);
+end;
+
+function CallHostResolve(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+var H: THostResolveHook;
+begin
+  H := HostResolve;
+  Result := H(Spec, Referrer, Resolved);
+end;
+
+function CallFileRead(const Path: UnicodeString; var B: RawByteString): Boolean;
+var H: TFileReadHook;
+begin
+  H := FileRead;
+  Result := H(Path, B);
+end;
+
+function CallFileTime(const Path: UnicodeString; out Modified: TDateTime): Boolean;
+var H: TFileTimeHook;
+begin
+  H := FileTime;
+  Result := H(Path, Modified);
+end;
+
 procedure SetFileTimeHook(Hook: TFileTimeHook);
 begin
   FileTime := Hook;
@@ -285,7 +316,7 @@ function FileModified(const Path: UnicodeString; out Modified: TDateTime): Boole
 var Age: LongInt;
 begin
   Modified := 0;
-  if Assigned(FileTime) then Exit(FileTime(Path, Modified));
+  if Assigned(FileTime) then Exit(CallFileTime(Path, Modified));
   Age := FileAge(string(Path));
   Result := Age <> -1;
   if Result then Modified := FileDateToDateTime(Age);
@@ -310,6 +341,15 @@ threadvar
   ContentCheck: TModuleContentCheck;
   { the last module read failed its content check, whose error is pending }
   ContentRefused: Boolean;
+
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+procedure CallContentCheck(const Path: UnicodeString; const B: RawByteString);
+var H: TModuleContentCheck;
+begin
+  H := ContentCheck;
+  H(Path, B);
+end;
 
 threadvar
   LoadingUnsupported: Boolean;
@@ -351,7 +391,7 @@ begin
   end;
   if not Result or not Assigned(ContentCheck) then Exit;
   try
-    ContentCheck(Path, B);
+    CallContentCheck(Path, B);
   except
     on E: Exception do
     begin
@@ -378,7 +418,7 @@ function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean
 var F: TFileStream;
 begin
   B := '';
-  if Assigned(FileRead) then Exit(FileRead(Path, B));
+  if Assigned(FileRead) then Exit(CallFileRead(Path, B));
   Result := False;
   if (Path = '') or not FileExists(string(Path)) then Exit;
   try
@@ -429,7 +469,7 @@ function ResolvePath(const Spec, Referrer: UnicodeString): UnicodeString;
 var Base: UnicodeString;
 begin
   if Assigned(HostResolve) then
-    case HostResolve(Spec, Referrer, Result) of
+    case CallHostResolve(Spec, Referrer, Result) of
       1: Exit;
       -1: Exit(#0 + Result);
       { the error the host made (ResolveError), not a message }
@@ -584,7 +624,7 @@ begin
   Virtual := False;
   if Assigned(HostModules) and (Path <> '') and not IsAbsoluteFilePath(Path) then
   begin
-    K := HostModules(Path, V);
+    K := CallHostModules(Path, V);
     if K = -1 then Exit(False);
     if K = 2 then
     begin
@@ -683,6 +723,15 @@ threadvar
   ArtifactCheck: TArtifactCheck;
   ProvidedArtifactPath: UnicodeString;
   ProvidedArtifactBytes: RawByteString;
+
+{ FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
+  (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
+function CallArtifactCheck(const A: TGocciaArtifact; var Err: UnicodeString): Boolean;
+var H: TArtifactCheck;
+begin
+  H := ArtifactCheck;
+  Result := H(A, Err);
+end;
 
 function ResolvingSourcePhase: Boolean;
 begin
@@ -784,7 +833,7 @@ begin
       Err := 'Imported bytecode requires a linked module artifact';
       A.Top := nil;
     end
-    else if Assigned(ArtifactCheck) and not ArtifactCheck(A, Err) then
+    else if Assigned(ArtifactCheck) and not CallArtifactCheck(A, Err) then
     begin
       FreeAndNil(A.Info);
       A.Top := nil;
@@ -905,7 +954,7 @@ begin
   end;
   Src := '';
   I := 0;
-  if Assigned(HostModules) then I := HostModules(Path, V);
+  if Assigned(HostModules) then I := CallHostModules(Path, V);
   case I of
     1: Exit(MakeHostModule(Path, V, M));
     2: Src := StrToUnicode(StrOf(V));
