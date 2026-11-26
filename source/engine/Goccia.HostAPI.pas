@@ -167,7 +167,7 @@ threadvar
 implementation
 
 uses
-  Math, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
+  Math, MemoryDetection, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -287,38 +287,13 @@ begin
   Result := True;
 end;
 
-{ physical memory from /proc/meminfo, 0 when it cannot be read }
-function PhysicalMemory: Int64;
-var L: TStringList; I: Integer; S: string;
-begin
-  Result := 0;
-  if not FileExists('/proc/meminfo') then Exit;
-  L := TStringList.Create;
-  try
-    try
-      L.LoadFromFile('/proc/meminfo');
-    except
-      Exit;
-    end;
-    for I := 0 to L.Count - 1 do
-      if Copy(L[I], 1, 9) = 'MemTotal:' then
-      begin
-        S := Trim(Copy(L[I], 10, MaxInt));
-        if Pos(' ', S) > 0 then S := Copy(S, 1, Pos(' ', S) - 1);
-        Result := StrToInt64Def(S, 0) * 1024;
-        Exit;
-      end;
-  finally
-    L.Free;
-  end;
-end;
-
-{ Goccia.gc.suggestedMaxBytes, and the ceiling without --max-memory or goccia.json max-memory: half of physical
-  memory, at most 8 GB (700 MB on a 32-bit build) (docs/built-ins.md) }
+{ Goccia.gc.suggestedMaxBytes, and the ceiling without --max-memory or goccia.json max-memory: half of the memory
+  available to the process (a Linux cgroup's limit, else physical memory; MemoryDetection), at most 8 GB (700 MB on a
+  32-bit build) (docs/built-ins.md) }
 function DefaultHeapCeiling: Int64;
 const Cap = {$IFDEF CPU64}Int64(8) * 1024 * 1024 * 1024{$ELSE}Int64(700) * 1024 * 1024{$ENDIF};
 begin
-  Result := PhysicalMemory div 2;
+  Result := GetAvailableMemoryBytes div 2;
   if (Result <= 0) or (Result > Cap) then Result := Cap;
 end;
 

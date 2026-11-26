@@ -84,8 +84,8 @@ nothing extra. Under an instruction budget `Execute` counts every instruction it
 count is exact and the same on every run. The JIT stays off while a timeout, an instruction budget or a frame bound
 is set: compiled calls check the fixed bound and do not count instructions.
 
-The memory limit is always in force: `--max-memory`, else half of physical memory up to 8 GB (700 MB on a 32-bit
-build). Under a limit the nursery is no larger than the room the old space leaves below it, so the collection that
+The memory limit is always in force: `--max-memory`, else half of the memory available to the process (a Linux
+cgroup's limit, else physical memory) up to 8 GB (700 MB on a 32-bit build). Under a limit the nursery is no larger than the room the old space leaves below it, so the collection that
 tests the limit runs before the heap can pass it. A full collection that leaves more live than the limit refuses at
 the next back edge or call with a catchable `RangeError: Allocation failed: GC heap size exceeds the configured
 memory limit` ([ADR 0185](../adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). At a call with at least 1,024

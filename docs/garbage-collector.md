@@ -146,8 +146,8 @@ These hold for every native, built-in and host routine in `source/engine` and fo
 
 `HeapCeiling` (per engine thread, in `Goccia.Core`) bounds the heap. It is set from `--max-memory=<bytes>`, the
 `max-memory` key of `goccia.json`, or `TGocciaEngine.MaxMemory`; without one it is `DefaultHeapCeiling` (`Goccia.HostAPI`):
-half of the physical memory `/proc/meminfo` reports, at most 8 GB on a 64-bit build or 700 MB on a 32-bit one. Where
-`/proc/meminfo` cannot be read (macOS, Windows), the default is that cap.
+half of `GetAvailableMemoryBytes` (`MemoryDetection`: a Linux cgroup's memory limit when one is set, else physical
+memory), at most 8 GB on a 64-bit build or 700 MB on a 32-bit one. Where neither can be read, the default is that cap.
 
 What counts against the ceiling is old space (`GCOldBytes`) plus `HeapExternalBytes`, the bytes held outside the
 heap that are charged to it: SharedArrayBuffer blocks and a sandbox search's native working memory.
