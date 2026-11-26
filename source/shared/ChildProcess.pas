@@ -99,14 +99,19 @@ begin
     Exit(DESCRIPTORS_UNLISTED);
   Result := 0;
   try
-    Entry := FpReaddir(Directory^);
-    while Entry <> nil do
-    begin
+    // readdir returns nil at the end and on an error alike; only errno tells
+    // them apart.
+    repeat
+      FpSetErrno(0);
+      Entry := FpReaddir(Directory^);
+      if Entry = nil then
+        Break;
       Descriptor := StrToIntDef(string(PAnsiChar(@Entry^.d_name[0])), -1);
       if Descriptor >= Result then
         Result := Descriptor + 1;
-      Entry := FpReaddir(Directory^);
-    end;
+    until False;
+    if FpGetErrno <> 0 then
+      Result := DESCRIPTORS_UNLISTED;
   finally
     FpClosedir(Directory^);
   end;

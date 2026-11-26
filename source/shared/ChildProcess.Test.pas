@@ -38,6 +38,9 @@ const
   // How long a reader may take to see end of file, or the parent to reopen
   // a file, once nothing else holds it.
   DEADLINE_MS = 2500;
+  // Run as `ChildProcess.Test DESCRIPTOR_STATE_SWITCH n...`, the program
+  // prints "n open" or "n closed" for each n instead of running the tests.
+  DESCRIPTOR_STATE_SWITCH = '--descriptor-state';
 
 type
   TChildProcessClass = class of TChildProcess;
@@ -112,6 +115,20 @@ begin
   Poll.revents := 0;
   Result := (FpPoll(@Poll, 1, AMilliseconds) = 1) and
     (FpRead(ADescriptor, ReadByte, 1) = 0);
+end;
+
+procedure ReportDescriptorStates;
+var
+  I, Descriptor: Integer;
+begin
+  for I := 2 to ParamCount do
+  begin
+    Descriptor := StrToInt(ParamStr(I));
+    if FpFcntl(Descriptor, F_GETFD) = -1 then
+      WriteLn(Descriptor, ' closed')
+    else
+      WriteLn(Descriptor, ' open');
+  end;
 end;
 {$ENDIF}
 
@@ -219,8 +236,9 @@ begin
   end;
 end;
 
-{ A shell can redirect to descriptor n (`true >&n`) exactly while it has n
-  open. }
+{ The child is this program again, run as DESCRIPTOR_STATE_SWITCH: it
+  reports each descriptor it is given as open or closed by fcntl(F_GETFD),
+  which no shell's redirection syntax limits. }
 procedure TChildProcessTests.TestARunCommandChildDoesNotSeeAParentDescriptor;
 var
   Held: TFileStream;
@@ -231,10 +249,8 @@ begin
   try
     Descriptor := Held.Handle;
     Expect<Boolean>(Descriptor > 2).ToBe(True);
-    Expect<Boolean>(RunCommand('/bin/sh', ['-c',
-      Format('for n in 1 %d; do if { true >&$n; } 2>/dev/null; then ' +
-        'echo "$n open"; else echo "$n closed"; fi; done', [Descriptor])],
-      Output)).ToBe(True);
+    Expect<Boolean>(RunCommand(ParamStr(0), [DESCRIPTOR_STATE_SWITCH, '1',
+      IntToStr(Descriptor)], Output)).ToBe(True);
   finally
     Held.Free;
   end;
@@ -280,6 +296,13 @@ end;
 {$ENDIF}
 
 begin
+  {$IFDEF UNIX}
+  if (ParamCount >= 1) and (ParamStr(1) = DESCRIPTOR_STATE_SWITCH) then
+  begin
+    ReportDescriptorStates;
+    Exit;
+  end;
+  {$ENDIF}
   Randomize;
   TestRunnerProgram.AddSuite(TChildProcessTests.Create('ChildProcess'));
   TestRunnerProgram.Run;
