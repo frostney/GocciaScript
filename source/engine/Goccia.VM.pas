@@ -2015,11 +2015,11 @@ threadvar
   NativeRaising: Boolean;
 
 { the built-in frame I is calling (its call instruction's callee, held in the callee register while the call is
-  in flight): True with its name }
-function NativeCalleeOf(I: Integer; var Nm: UnicodeString): Boolean;
-var T: PFuncTemplate; PC: Integer; Ins: QWord; V, NV: TValue;
+  in flight), nil for none }
+function NativeCallee(I: Integer): PObj;
+var T: PFuncTemplate; PC: Integer; Ins: QWord; V: TValue;
 begin
-  Result := False;
+  Result := nil;
   T := Frames[I].Tpl;
   if T = nil then Exit;
   PC := Frames[I].PC - 1;
@@ -2027,20 +2027,86 @@ begin
   Ins := T^.Code[PC];
   if not (TOp(Ins and $FF) in [opCall, opCallV, opNew, opNewV]) then Exit;
   V := VStack[Frames[I].Base + InsA(Ins)];
-  if not IsObject(V) or (ObjOf(V)^.OKind <> okNative) then Exit;
-  if DataPropertyOf(ObjOf(V), AtomName, NV) and IsString(NV) then Nm := StrToUnicode(StrOf(NV)) else Nm := '';
+  if IsObject(V) and (ObjOf(V)^.OKind = okNative) then Result := ObjOf(V);
+end;
+
+{ NativeCallee, True with its name }
+function NativeCalleeOf(I: Integer; var Nm: UnicodeString): Boolean;
+var O: PObj; NV: TValue;
+begin
+  O := NativeCallee(I);
+  Result := O <> nil;
+  if not Result then Exit;
+  if DataPropertyOf(O, AtomName, NV) and IsString(NV) then Nm := StrToUnicode(StrOf(NV)) else Nm := '';
   if Nm = '' then Nm := '<anonymous>';
-  Result := True;
+end;
+
+type
+  { a stack trace's text as it is built: one buffer that doubles, so a trace of n lines is written in O(n), not
+    copied again with each line (a dynamic array: a write is not a string's copy-on-write check) }
+  TTraceText = record
+    C: array of WideChar;
+    N: Integer;
+  end;
+
+const
+  { UnicodeString constants: converted once, not at each use }
+  TRACE_AT: UnicodeString = #10'    at ';
+  TRACE_NATIVE: UnicodeString = ' (native)';
+  TRACE_OPEN: UnicodeString = ' (';
+  TRACE_COLON: UnicodeString = ':';
+  TRACE_CLOSE: UnicodeString = ')';
+  TRACE_ONE_MORE: UnicodeString = #10'    ... 1 more frame';
+  TRACE_MORE_OPEN: UnicodeString = #10'    ... ';
+  TRACE_MORE_CLOSE: UnicodeString = ' more frames';
+
+procedure TraceRoom(var B: TTraceText; L: Integer); inline;
+begin
+  if B.N + L > Length(B.C) then
+    if 2 * Length(B.C) > B.N + L + 256 then SetLength(B.C, 2 * Length(B.C)) else SetLength(B.C, B.N + L + 256);
+end;
+
+procedure TracePut(var B: TTraceText; const T: UnicodeString);
+var L: Integer;
+begin
+  L := Length(T);
+  if L = 0 then Exit;
+  TraceRoom(B, L);
+  Move(PWideChar(T)^, B.C[B.N], L * SizeOf(WideChar));
+  Inc(B.N, L);
+end;
+
+procedure TracePutInt(var B: TTraceText; V: Integer);
+var D: array[0..11] of WideChar; I, K: Integer; Neg: Boolean;
+begin
+  Neg := V < 0;
+  if Neg then V := -V;
+  K := 0;
+  repeat
+    D[K] := WideChar(Ord('0') + V mod 10);
+    V := V div 10;
+    Inc(K);
+  until V = 0;
+  if Neg then begin D[K] := '-'; Inc(K); end;
+  TraceRoom(B, K);
+  for I := K - 1 downto 0 do
+  begin
+    B.C[B.N] := D[I];
+    Inc(B.N);
+  end;
 end;
 
 { the frames below the error being made, innermost first, one line each ("    at name (source:line:column)", and
   "    at name (native)" for a built-in a frame is calling: between that frame and the frame the built-in called, or
   innermost when the built-in raised the error); frames of the preludes and of field initializers are left out,
-  and past STACK_TRACE_FRAME_LIMIT a last line counts the rest }
+  and past STACK_TRACE_FRAME_LIMIT a last line counts the rest. The frames past the limit are only counted, with no
+  string made for them: a throw from a deep recursion (one under the tail-call floor, TAIL_FLOOR) walks them all. }
 function StackFramesText: UnicodeString;
-var I, N, Skipped, PC, L, C: Integer; T: PFuncTemplate; Nm, Src: UnicodeString; Raising: Boolean;
+var I, N, Skipped, PC, L, C: Integer; T: PFuncTemplate; Nm: UnicodeString; Raising, UserSrc: Boolean;
+  B: TTraceText;
 begin
-  Result := '';
+  B.C := nil;
+  B.N := 0;
   N := 0;
   Skipped := 0;
   Raising := NativeRaising;
@@ -2048,36 +2114,59 @@ begin
   begin
     T := Frames[I].Tpl;
     if T = nil then Continue;
-    Src := T^.SourceName;
+    { the preludes' sources are named <...>; a host's <stdin> is the user's code }
+    UserSrc := (T^.SourceName <> '') and ((T^.SourceName[1] <> '<') or (T^.SourceName = '<stdin>'));
     { a user frame calling a built-in: the built-in's frame first (the innermost one only when it raised) }
-    if ((I < FrameTop - 1) or Raising) and (Src <> '') and ((Src[1] <> '<') or (Src = '<stdin>')) and
-       NativeCalleeOf(I, Nm) then
-    begin
-      if N >= STACK_TRACE_FRAME_LIMIT then Inc(Skipped)
-      else
+    if ((I < FrameTop - 1) or Raising) and UserSrc then
+      if N >= STACK_TRACE_FRAME_LIMIT then
       begin
-        Result := Result + #10'    at ' + Nm + ' (native)';
+        if NativeCallee(I) <> nil then Inc(Skipped);
+      end
+      else if NativeCalleeOf(I, Nm) then
+      begin
+        TracePut(B, TRACE_AT);
+        TracePut(B, Nm);
+        TracePut(B, TRACE_NATIVE);
         Inc(N);
       end;
-    end;
-    { the preludes' sources are named <...>; a host's <stdin> is the user's code }
-    if (Src = '') or ((Src[1] = '<') and (Src <> '<stdin>')) then Continue;
-    if T^.Name <> nil then Nm := StrToUnicode(T^.Name) else Nm := '';
-    if Nm = '<script>' then Nm := '<module>'
-    else if Nm = '' then Nm := '<anonymous>'
-    else if (Nm[1] = '<') and (Nm <> '<module>') and (Nm <> '<eval>') then Continue;
+    if not UserSrc then Continue;
+    { a function named <...> is the compiler's (a field initializer), except a script's, a module's and eval's }
+    if (T^.Name <> nil) and (T^.Name^.Len > 0) and (StrChars(T^.Name)[0] = '<') then
+    begin
+      Nm := StrToUnicode(T^.Name);
+      if Nm = '<script>' then Nm := '<module>'
+      else if (Nm <> '<module>') and (Nm <> '<eval>') then Continue;
+    end
+    else if N >= STACK_TRACE_FRAME_LIMIT then Nm := ''
+    else if T^.Name <> nil then Nm := StrToUnicode(T^.Name)
+    else Nm := '';
     if N >= STACK_TRACE_FRAME_LIMIT then begin Inc(Skipped); Continue; end;
+    if Nm = '' then Nm := '<anonymous>';
     PC := Frames[I].PC - 1;
     L := 0;
     C := 0;
     if (PC >= 0) and (PC <= High(T^.Lines)) then L := T^.Lines[PC];
     if (PC >= 0) and (PC <= High(T^.Cols)) then C := T^.Cols[PC];
-    Result := Result + #10'    at ' + Nm + ' (' + Src + ':' + UnicodeString(IntToStr(L)) + ':' +
-      UnicodeString(IntToStr(C)) + ')';
+    TracePut(B, TRACE_AT);
+    TracePut(B, Nm);
+    TracePut(B, TRACE_OPEN);
+    TracePut(B, T^.SourceName);
+    TracePut(B, TRACE_COLON);
+    TracePutInt(B, L);
+    TracePut(B, TRACE_COLON);
+    TracePutInt(B, C);
+    TracePut(B, TRACE_CLOSE);
     Inc(N);
   end;
-  if Skipped = 1 then Result := Result + #10'    ... 1 more frame'
-  else if Skipped > 1 then Result := Result + #10'    ... ' + UnicodeString(IntToStr(Skipped)) + ' more frames';
+  if Skipped = 1 then TracePut(B, TRACE_ONE_MORE)
+  else if Skipped > 1 then
+  begin
+    TracePut(B, TRACE_MORE_OPEN);
+    TracePutInt(B, Skipped);
+    TracePut(B, TRACE_MORE_CLOSE);
+  end;
+  SetLength(Result, B.N);
+  if B.N > 0 then Move(B.C[0], PWideChar(Result)^, B.N * SizeOf(WideChar));
 end;
 
 function StackFramesNow: UnicodeString;
