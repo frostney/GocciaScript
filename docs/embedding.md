@@ -446,7 +446,7 @@ if not R.Ok then
 
 ## Execution Limits
 
-Four limits bound a run. Each is a property read by `Run`; 0 means none (`MaxMemory` 0: the default ceiling). A run with a timeout, an instruction budget or a frame bound runs without the JIT, since compiled code does not poll a deadline, and so does a run with `Coverage` or a profile; the memory limit leaves the JIT on.
+Four limits bound a run. Each is a property read by `Run`; 0 means none (`MaxMemory` 0: the default ceiling). A run with a timeout, an instruction budget or a frame bound runs without the JIT, since compiled code counts no instructions and reaches the timeout's interrupt only at loop back edges, and so does a run with `Coverage` or a profile; the memory limit leaves the JIT on.
 
 ```pascal
 Engine.TimeoutMs := 2000;
@@ -469,7 +469,7 @@ Engine.MaxFrames := 5000;
 
 ### Aborting a Run from Another Thread
 
-`TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled does not poll a deadline, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
+`TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled sees the interrupt only at loop back edges and counts no instructions, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
 
 ### Call Stack Depth Limit
 

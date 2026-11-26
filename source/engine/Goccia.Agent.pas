@@ -230,6 +230,13 @@ begin
     end;
     EnterCriticalSection(AgentLock);
     Done := True;
+    { a broadcast the agent never took (it never called receiveBroadcast, or one came while its callback ran)
+      gives back the reference Agent_Broadcast retained for it }
+    if HasMsg then
+    begin
+      HasMsg := False;
+      ReleaseBlock(MsgBlock);
+    end;
     LeaveCriticalSection(AgentLock);
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }

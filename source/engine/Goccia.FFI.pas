@@ -31,7 +31,8 @@ uses
   SysUtils, Math,
   Goccia.CapabilityAudit, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.FFI.ABI, Goccia.FFI.Call, Goccia.FFI.LibraryGuard,
   Goccia.FFI.CallbackSlots, Goccia.FFI.Types, Goccia.FFI.UTF8String, Goccia.URI,
-  Goccia.Core, Goccia.Instructions, Goccia.VM, Goccia.Eval, Goccia.Typed, Goccia.ThreadCleanupRegistry;
+  Goccia.Core, Goccia.Instructions, Goccia.VM, Goccia.Eval, Goccia.Typed, Goccia.ThreadCleanupRegistry,
+  FileUtils, Goccia.ModuleResolver, Goccia.Modules.Resolver, Goccia.HostAPI;
 
 const
   {$IFDEF DARWIN}
@@ -84,6 +85,10 @@ threadvar
   Descs: array of TGocciaFFITypeDescriptor;
   FieldRefs: array of TFieldRef;
   Ties: array of array of TTie;
+  { per tie row, the root aggregate's buffer (every view of it holds that buffer): once a collection finds the
+    buffer dead, the row is emptied and its index reused (FFIFinalizeHook) }
+  RootBufs: array of Pointer;
+  FreeRoots: array of Integer;
   { FFIType's and FFIAggregate's shared prototypes, ArrayBuffer.prototype, and per descriptor id the array of its
     fields' getters and setters (getter 2i, setter 2i + 1) }
   TypeProto, AggProto, ABProto, AccFns: TValue;
@@ -103,6 +108,9 @@ threadvar
   { callback handles by id (each slot released when closed or at FFIDone), their callables (CbFns, an array by
     id), FFICallback's prototype and its internal slot }
   Cbs: array of TCb;
+  { ids of call-scoped callbacks a call closed (no script value names them): NewCallback takes one before it grows
+    Cbs }
+  FreeCbs: array of Integer;
   { the callbacks open now: native code can call any of them during any call }
   OpenCbs: Integer;
   CbFns, CbProto, CbCloseFn: TValue;
@@ -326,8 +334,34 @@ end;
 
 function NewRoot: Integer;
 begin
+  if Length(FreeRoots) > 0 then
+  begin
+    Result := FreeRoots[High(FreeRoots)];
+    SetLength(FreeRoots, Length(FreeRoots) - 1);
+    Exit;
+  end;
   Result := Length(Ties);
   SetLength(Ties, Result + 1);
+  SetLength(RootBufs, Result + 1);
+end;
+
+{ after a collection: the tie rows of root aggregates whose buffer died are emptied and their indexes reused }
+procedure FFIFinalizeHook;
+var I: Integer; P: Pointer;
+begin
+  for I := 0 to High(RootBufs) do
+  begin
+    P := RootBufs[I];
+    if P = nil then Continue;
+    if GCSurvives(P) then RootBufs[I] := P
+    else
+    begin
+      RootBufs[I] := nil;
+      Ties[I] := nil;
+      SetLength(FreeRoots, Length(FreeRoots) + 1);
+      FreeRoots[High(FreeRoots)] := I;
+    end;
+  end;
 end;
 
 function FieldName(D: TGocciaFFITypeDescriptor; I: Integer): UnicodeString;
@@ -381,12 +415,18 @@ end;
 
 { a new root aggregate of descriptor Id, its bytes zeroed (Data nil) or copied from Data }
 function NewRootAggregate(Id: Integer; Data: PByte): TValue;
-var D: TGocciaFFITypeDescriptor; B: PObj;
+var D: TGocciaFFITypeDescriptor; B: PObj; Root: Integer;
 begin
   D := Descs[Id];
   B := NewArrayBuffer(D.Size, ABProto);
   if (Data <> nil) and (D.Size > 0) then Move(Data^, BufferData(B)^, D.Size);
-  Result := NewAggregate(Id, MkPtr(B), 0, NewRoot);
+  Root := NewRoot;
+  PushRoot(MkPtr(B));
+  Result := NewAggregate(Id, RootAt(TempTop - 1), 0, Root);
+  { the buffer as the aggregate holds it (NewAggregate allocates, which can move it) }
+  RootBufs[Root] := ObjOf(RootAt(TempTop - 1));
+  PopRoots(1);
+  AddGCFinalizeHook(@FFIFinalizeHook);
 end;
 
 function WriteField(T: TGocciaFFITypeDescriptor; V: TValue; This: TValue; FOff: Integer): Boolean; forward;
@@ -459,8 +499,8 @@ end;
   bytes copied, its pointer ties with them), a pointer field an FFIPointer, buffer or null (tied to the pointer's
   library), a number field V converted to its width, a boolean field V's truthiness }
 function WriteField(T: TGocciaFFITypeDescriptor; V: TValue; This: TValue; FOff: Integer): Boolean;
-var Id, Off, Root, SId, SOff, SRoot, I, Lib: Integer; Buf, SBuf, L: TValue; P, Src: PByte; Q: Pointer;
-  Str: TBytes; Scratch: array[0..15] of Byte;
+var Id, Off, Root, SId, SOff, SRoot, I, Lib, N: Integer; Buf, SBuf, L: TValue; P, Src: PByte; Q: Pointer;
+  Str: TBytes; Scratch: array[0..15] of Byte; Copied: array of TTie; O: PObj;
 begin
   AggOf(This, Id, Buf, Off, Root);
   if T.IsAggregate then
@@ -470,11 +510,18 @@ begin
     Src := AggData(SBuf, SOff, T.Size);
     P := AggData(Buf, Off, Descs[Id].Size);
     if (Src = nil) or (P = nil) then Exit(ThrowTypeError(SErrorFFIAggregateBackingStore));
-    Move(Src^, (P + FOff)^, T.Size);
-    DropTies(Root, Off + FOff, T.Size);
+    { the source's ties first: the source can be the field itself (o.a = o.a), whose ties DropTies removes }
+    N := 0;
+    SetLength(Copied, Length(Ties[SRoot]));
     for I := 0 to High(Ties[SRoot]) do
       if (Ties[SRoot][I].Off >= SOff) and (Ties[SRoot][I].Off + SizeOf(Pointer) <= SOff + T.Size) then
-        AddTie(Root, Off + FOff + Ties[SRoot][I].Off - SOff, Ties[SRoot][I].Lib);
+      begin
+        Copied[N] := Ties[SRoot][I];
+        Inc(N);
+      end;
+    Move(Src^, (P + FOff)^, T.Size);
+    DropTies(Root, Off + FOff, T.Size);
+    for I := 0 to N - 1 do AddTie(Root, Off + FOff + Copied[I].Off - SOff, Copied[I].Lib);
     Exit(True);
   end;
   if T.Kind = ftkCallback then
@@ -498,6 +545,23 @@ begin
   end;
   if (T.Kind = ftkScalar) and (T.ScalarType = fftPointer) then
   begin
+    { a buffer's or an aggregate's address outlives this call in the field, so its bytes must not move: a minor
+      collection first puts them in the old space, which never moves (as Bound_Call does for a call that can call
+      back), and the struct's own backing is found again after it }
+    if IsObject(V) then
+    begin
+      O := ObjOf(V);
+      if (O^.OKind in [okArrayBuffer, okTypedArray]) or ((O^.OKind = okPlain) and (GetOwnSlot(O, KAgg) >= 0)) then
+      begin
+        PushRoot(V);
+        PushRoot(This);
+        CollectMinor;
+        V := RootAt(TempTop - 2);
+        This := RootAt(TempTop - 1);
+        PopRoots(2);
+        AggOf(This, Id, Buf, Off, Root);
+      end;
+    end;
     if not PointerArg(V, 0, Q) then Exit(False);
     Lib := -1;
     if InternalOf(V, KPtrLib, L) then Lib := Trunc(NumOf(L))
@@ -823,6 +887,8 @@ procedure RunCallback(Id: Integer; var State: TGocciaFFICallbackMachineState);
 var Sig: TGocciaFFICompiledSignature; RP: PGocciaFFIReturnPlan; AP: PGocciaFFIArgumentPlan; Hidden, IP: Pointer;
   Data, Ret: TBytes; Base, I, J, N: Integer; Fn, R: TValue;
 begin
+  { a call-scoped callback's entry freed after its call (its slot was released first, so this is a stale call) }
+  if (Id < 0) or (Id > High(Cbs)) or (Cbs[Id].Sig = nil) then Exit;
   Sig := Cbs[Id].Sig;
   RP := Sig.ReturnPlanPointer;
   {$IF not defined(CPU64)}
@@ -935,7 +1001,7 @@ begin
     if (Length(Sig.ReturnPlanPointer^.Placements) > 0) and (Sig.ReturnPlanPointer^.Placements[0].Kind = fpkFPR) then
       FSize := Sig.ReturnPlanPointer^.Placements[0].Size;
     {$IFEND}
-    Id := Length(Cbs);
+    if Length(FreeCbs) > 0 then Id := FreeCbs[High(FreeCbs)] else Id := Length(Cbs);
     try
       Slot := AllocateFFICallbackSlot(Pointer(PtrUInt(Id + 1)), Loc, HSize, FSize, Code);
     except
@@ -945,7 +1011,7 @@ begin
         Exit(ThrowError('RangeError', Format(SErrorFFICallbackSlotLimit, [MAX_FFI_CALLBACK_SLOTS])));
       end;
     end;
-    SetLength(Cbs, Id + 1);
+    if Id < Length(Cbs) then SetLength(FreeCbs, Length(FreeCbs) - 1) else SetLength(Cbs, Id + 1);
     D.AddReference;
     Cbs[Id].Desc := D;
     Cbs[Id].Sig := Sig;
@@ -1014,6 +1080,21 @@ end;
 
 { ---------------- FFI.varargs ---------------- }
 
+{ the VATypes entry with exactly these descriptors, -1 for none }
+function SameVATypes(const Types: array of TGocciaFFITypeDescriptor): Integer;
+var I, K: Integer; Same: Boolean;
+begin
+  for I := 0 to High(VATypes) do
+    if Length(VATypes[I]) = Length(Types) then
+    begin
+      Same := True;
+      for K := 0 to High(Types) do
+        if VATypes[I][K] <> Types[K] then begin Same := False; Break; end;
+      if Same then Exit(I);
+    end;
+  Result := -1;
+end;
+
 function FFI_VarArgs(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var TL, VL: Int64; I, Id: Integer; E: TValue; Types: array of TGocciaFFITypeDescriptor;
 begin
@@ -1039,10 +1120,15 @@ begin
         if not GetElemV(Args[2], MkInt(I), E) then Exit;
         DefineElemRaw(RootAt(TempTop - 1), I, E);
       end;
-      Id := Length(VATypes);
-      SetLength(VATypes, Id + 1);
-      VATypes[Id] := Types;
-      Types := nil;
+      { the same type list as an earlier varargs() is that entry (a call in a loop makes no new one each time) }
+      Id := SameVATypes(Types);
+      if Id < 0 then
+      begin
+        Id := Length(VATypes);
+        SetLength(VATypes, Id + 1);
+        VATypes[Id] := Types;
+        Types := nil;
+      end;
       PushRoot(MkPtr(NewPlainObject(VAProto, 2)));
       DefineOwn(RootAt(TempTop - 1), KVA, MkInt(Id), pfHidden);
       DefineOwn(RootAt(TempTop - 1), KVAVals, RootAt(TempTop - 2), pfHidden);
@@ -1085,11 +1171,13 @@ function Bound_Call(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Id, I, N, Fixed, Lib, CbId, VAId: Integer; B: ^TBound; Sig, CallSig: TGocciaFFICompiledSignature;
   ArgData, ResultStorage: TBytes; Strs: array of TBytes; TempCbs: array of Integer; T, AT: TGocciaFFITypeDescriptor;
   S, V, Tail: TValue; P: PByte; Q: Pointer; Combined: array of TGocciaFFITypeDescriptor; Name: UnicodeString;
-  HasCallbacks, Failed: Boolean;
+  HasCallbacks, Failed: Boolean; TailRoot: Integer; PassedCbs: array of Integer;
 
+  { the variadic tail is read from its root slot: a collection (CollectMinor before pass 2, or one a conversion
+    runs) moves the array and updates the slot, not the local Tail }
   function ArgValue(I: Integer): TValue;
   begin
-    if I < Fixed then Result := Args[I + 1] else GetElemV(Tail, MkInt(I - Fixed), Result);
+    if I < Fixed then Result := Args[I + 1] else GetElemV(RootAt(TailRoot), MkInt(I - Fixed), Result);
   end;
 
 begin
@@ -1131,7 +1219,9 @@ begin
     Sig := CallSig;
   end;
   PushRoot(Tail);
+  TailRoot := TempTop - 1;
   SetLength(TempCbs, 0);
+  SetLength(PassedCbs, 0);
   try
     SetLength(ArgData, Sig.ArgumentDataSize + 1);
     SetLength(ResultStorage, Sig.ReturnPlanPointer^.TypeDescriptor.Size + FFI_BUFFER_ALIGNMENT);
@@ -1160,6 +1250,8 @@ begin
         end
         else
           Exit(ThrowTypeError(SErrorFFICallbackArgumentValue));
+        SetLength(PassedCbs, Length(PassedCbs) + 1);
+        PassedCbs[High(PassedCbs)] := CbId;
         Move(Cbs[CbId].Code, ArgData[Sig.ArgumentDataOffset(I)], SizeOf(Pointer));
         Continue;
       end;
@@ -1179,6 +1271,8 @@ begin
     end;
     { a conversion may have run script, which can close the library or a callback }
     if Libs[Lib].Guard.IsClosed then Exit(ThrowTypeError(Format(SErrorFFICallLibraryClosed, [Name])));
+    for I := 0 to High(PassedCbs) do
+      if Cbs[PassedCbs[I]].Closed then Exit(ThrowTypeError(SErrorFFICallbackClosed));
     { native code can enter script through a callback this call passes, or one it kept from an earlier call }
     if HasCallbacks or (OpenCbs > 0) then CollectMinor;
     { pass 2: the addresses and the aggregates' bytes }
@@ -1237,7 +1331,17 @@ begin
     Result := UnmarshalScalar(T, FFIAlignBuffer(@ResultStorage[0]), Lib, Res);
   finally
     PopRoots(1);
-    for I := 0 to High(TempCbs) do CloseCallback(TempCbs[I]);
+    for I := 0 to High(TempCbs) do
+    begin
+      CloseCallback(TempCbs[I]);
+      { a call-scoped callback has no handle a script holds: its entry is reused (NewCallback) }
+      Cbs[TempCbs[I]].Sig.Free;
+      Cbs[TempCbs[I]].Sig := nil;
+      Cbs[TempCbs[I]].Desc.ReleaseReference;
+      Cbs[TempCbs[I]].Desc := nil;
+      SetLength(FreeCbs, Length(FreeCbs) + 1);
+      FreeCbs[High(FreeCbs)] := TempCbs[I];
+    end;
     CallSig.Free;
   end;
 end;
@@ -1487,13 +1591,32 @@ const
   NOT_COVERED_REASON = 'the ffi capability does not cover this library';
   CHANGED_REASON = 'the library changed between the ffi check and the load';
 var LibPath, LoadPath, URLPath, PinnedLoadPath, PinnedPath, Reported, Detail: UnicodeString; Allowed, IsBare: Boolean;
-  Guard: TGocciaFFILibraryGuard; Id: Integer; O: PObj;
+  Guard: TGocciaFFILibraryGuard; Id: Integer; O: PObj; Resolver: TModuleResolver; IsProvider: Boolean;
+  LibBytes: TBytes; ReadErr, WinPinned: string;
   {$IFDEF LINUX}Fd: LongInt;{$ENDIF}
+  {$IFDEF MSWINDOWS}Pin: THandle; HoldingPin: Boolean;{$ENDIF}
 
   function Deny(const Suggestion, Reason: UnicodeString): Boolean;
   begin
     if not AuditOpen(False, LibPath, Reason) then Exit(False);
     Result := ThrowPermissionDenied(LibPath, Suggestion);
+  end;
+
+  { ADR 0122: a library inside a provider package must be the bytes its lockfile pins (read through the pinned
+    descriptor or handle where the platform has one; that fixes which file loads, not its contents) }
+  function VerifyProvider(BytesRead: Boolean): Boolean;
+  begin
+    if not BytesRead then Exit(ThrowTypeError('Failed to load library: ' + LibPath));
+    try
+      TGocciaModuleResolver(Resolver).VerifyProviderContent(UTF8Encode(LoadPath), LibBytes);
+    except
+      on E: Exception do
+      begin
+        if not AuditOpen(False, LibPath, UTF8Decode(E.Message)) then Exit(False);
+        Exit(ThrowTypeError(UTF8Decode(E.Message)));
+      end;
+    end;
+    Result := True;
   end;
 
 begin
@@ -1522,8 +1645,12 @@ begin
   end;
   if not Allowed then Exit(Deny(Detail, NOT_COVERED_REASON));
   if not AuditOpen(True, LibPath, 'the ffi capability covers this library') then Exit(False);
+  Resolver := CurrentResolver;
+  IsProvider := not IsBare and (Resolver is TGocciaModuleResolver) and
+    TGocciaModuleResolver(Resolver).IsProviderPackagePath(UTF8Encode(LoadPath));
   PinnedLoadPath := LoadPath;
   {$IFDEF LINUX}
+  { the file opened first, its descriptor's path judged verbatim, and the loader given the descriptor itself }
   Fd := -1;
   if not IsBare then
   begin
@@ -1536,8 +1663,50 @@ begin
       FpClose(Fd);
       Exit(Deny(Format('the ffi capability does not cover %s', [PinnedPath]), CHANGED_REASON));
     end;
+    if IsProvider and not VerifyProvider(ReadHostHandleBytes(THandle(Fd), LibBytes, ReadErr)) then
+    begin
+      FpClose(Fd);
+      Exit(False);
+    end;
   end;
   {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  { the file opened first without write or delete sharing, so neither it nor a directory on its path can be renamed
+    or replaced while the handle is held; its final path judged verbatim and loaded by that same path }
+  HoldingPin := False;
+  Pin := 0;
+  if not IsBare then
+  begin
+    if not OpenPinnedHostFile(UTF8Encode(LoadPath), Pin, WinPinned) then
+      Exit(ThrowTypeError('Failed to load library: ' + LibPath));
+    HoldingPin := True;
+    PinnedPath := UTF8Decode(WinPinned);
+    if not Caps.AllowsCanonicalPath(gcFFI, PinnedPath) then
+    begin
+      ClosePinnedHostFile(Pin);
+      Exit(Deny(Format('the ffi capability does not cover %s', [PinnedPath]), CHANGED_REASON));
+    end;
+    if IsProvider and not VerifyProvider(ReadHostHandleBytes(Pin, LibBytes, ReadErr)) then
+    begin
+      ClosePinnedHostFile(Pin);
+      Exit(False);
+    end;
+    PinnedLoadPath := PinnedPath;
+  end;
+  {$ENDIF}
+  {$IF not defined(LINUX) and not defined(MSWINDOWS)}
+  { no descriptor the loader can take: the path's bytes hashed just before the load (the post-load path check
+    below leaves the window docs/permissions.md describes) }
+  if IsProvider then
+  begin
+    try
+      LibBytes := ReadFileBytes(UTF8Encode(LoadPath));
+    except
+      on E: Exception do Exit(VerifyProvider(False));
+    end;
+    if not VerifyProvider(True) then Exit(False);
+  end;
+  {$IFEND}
   try
     try
       Guard := TGocciaFFILibraryGuard.Create(LibPath, PinnedLoadPath);
@@ -1547,6 +1716,9 @@ begin
   finally
     {$IFDEF LINUX}
     if Fd >= 0 then FpClose(Fd);
+    {$ENDIF}
+    {$IFDEF MSWINDOWS}
+    if HoldingPin then ClosePinnedHostFile(Pin);
     {$ENDIF}
   end;
   {$IF not defined(LINUX)}
@@ -1834,9 +2006,10 @@ begin
   begin
     if Cbs[I].Slot >= 0 then ReleaseFFICallbackSlot(Cbs[I].Slot);
     Cbs[I].Sig.Free;
-    Cbs[I].Desc.ReleaseReference;
+    if Cbs[I].Desc <> nil then Cbs[I].Desc.ReleaseReference;
   end;
   Cbs := nil;
+  FreeCbs := nil;
   OpenCbs := 0;
   for I := 0 to High(VATypes) do
     for K := 0 to High(VATypes[I]) do VATypes[I][K].ReleaseReference;
@@ -1847,6 +2020,8 @@ begin
   Descs := nil;
   FieldRefs := nil;
   Ties := nil;
+  RootBufs := nil;
+  FreeRoots := nil;
   { each library closed, its dependents released (unloading it), then its owner (freeing the guard) }
   for I := 0 to High(Libs) do
   begin
@@ -1871,7 +2046,10 @@ begin
   Descs := nil;
   FieldRefs := nil;
   Ties := nil;
+  RootBufs := nil;
+  FreeRoots := nil;
   Cbs := nil;
+  FreeCbs := nil;
   CallFailed := nil;
   VATypes := nil;
 end;

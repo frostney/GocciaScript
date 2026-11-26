@@ -2413,6 +2413,9 @@ begin
   GF^.RetIdx := GF^.Base;
   GenYielded := False;
   GenYieldRaw := False;
+  { the generator as the frame holds it: the compiled body may have allocated, and a collection moves the object
+    (it updates the frame's NewTarget, not this function's copy) }
+  Gen := GF^.NewTarget;
   PushRoot(Gen);
   Ok := Execute(FrameTop - 1, V);
   Gv := RootAt(TempTop - 1);
@@ -5300,7 +5303,14 @@ begin
     JitBuf[JitFixes[I].At + 2] := (D shr 16) and $FF; JitBuf[JitFixes[I].At + 3] := D shr 24;
   end;
   Code := JitAlloc(JitLen);
-  if Code = nil then begin FreeMem(Table); Exit; end;
+  if Code = nil then
+  begin
+    { no executable memory: the template stays interpreted, and nothing of this compile is kept }
+    FreeMem(Table);
+    if Info <> nil then Dispose(Info);
+    JitInfo := nil;
+    Exit;
+  end;
   {$IFDEF GOCCIA_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
   JitPublish(Code);
   if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, T, 'base');

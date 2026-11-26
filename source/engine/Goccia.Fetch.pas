@@ -95,6 +95,9 @@ type
     { the fetch() call, which the hop decisions are attributed to }
     Site: UnicodeString;
     Line, Column: Integer;
+    { the script stopped waiting (fetchCancel): the entry keeps its slot until its worker finishes, so at most
+      MAX_FETCH_WORKERS workers run, but the run no longer waits for it (FetchPending) }
+    Cancelled: Boolean;
   end;
 
 threadvar
@@ -378,7 +381,9 @@ begin
   finally
     LeaveCriticalSection(Owner.Lock);
   end;
-  RemovePending(I);
+  { the slot stays taken until the worker finishes (FetchPump drops its answer and the entry then) }
+  Pendings[I].Cancelled := True;
+  Pendings[I].Deadline := 0;
 end;
 
 { fetchRegister(settle): the prelude's settle function, called as settle(id, kind, ...): kind 0 a response
@@ -407,8 +412,11 @@ end;
 { ---------------- settling ---------------- }
 
 function FetchPending: Boolean;
+var I: Integer;
 begin
-  Result := Length(Pendings) > 0;
+  for I := 0 to High(Pendings) do
+    if not Pendings[I].Cancelled then Exit(True);
+  Result := False;
 end;
 
 { calls the settle function with A, passed from root slots, which a collection inside the call updates (A's values
@@ -487,8 +495,12 @@ begin
       PushRoot(VNull);
     URL := W.Response.FinalURL;
     if URL = '' then URL := W.URL;
-    Result := Settle([MkInt(P.Id), MkInt(0), MkInt(W.Response.StatusCode), StrFromUnicode(W.Response.StatusText),
-      RootAt(TempTop - 2), RootAt(TempTop - 1), StrFromUnicode(URL), MkBool(W.Response.Redirected)]);
+    { every value rooted before the next allocation: a collection inside StrFromUnicode moves what it reaches, so
+      the arguments are read from the root slots only after the last of them is made }
+    PushRoot(StrFromUnicode(W.Response.StatusText));
+    PushRoot(StrFromUnicode(URL));
+    Result := Settle([MkInt(P.Id), MkInt(0), MkInt(W.Response.StatusCode), RootAt(TempTop - 2),
+      RootAt(TempTop - 4), RootAt(TempTop - 3), RootAt(TempTop - 1), MkBool(W.Response.Redirected)]);
   finally
     PopRoots(TempTop - Base);
   end;
@@ -506,7 +518,7 @@ begin
       Waits := Owner.Done.Count;
       LeaveCriticalSection(Owner.Lock);
       if Waits > 0 then Break;
-      if Length(Pendings) = 0 then Exit;
+      if not FetchPending then Exit;
       { the run's deadline passed: a call into script ends the run }
       if Interrupt <> 0 then Exit(Settle([MkInt(-1), MkInt(3)]));
       Now_ := GetTickCount64;
@@ -546,6 +558,8 @@ begin
       K := PendingIndex(W.Id);
       if W.Cancelled or (K < 0) then
       begin
+        { a cancelled request's worker finished: its slot frees now }
+        if K >= 0 then RemovePending(K);
         W.Free;
         Continue;
       end;
@@ -559,13 +573,15 @@ begin
       if not Result then Break;
     end;
   finally
-    { what a failed settle left is dropped }
-    for I := 0 to Taken.Count - 1 do
-      if Taken[I] <> nil then
-      begin
-        TFetchWorker(Taken[I]).WaitFor;
-        TFetchWorker(Taken[I]).Free;
-      end;
+    { what a failed settle left goes back for the next pump: those requests are still the script's, and their
+      entries still name their workers }
+    EnterCriticalSection(Owner.Lock);
+    try
+      for I := Taken.Count - 1 downto 0 do
+        if Taken[I] <> nil then Owner.Done.Insert(0, Taken[I]);
+    finally
+      LeaveCriticalSection(Owner.Lock);
+    end;
     Taken.Free;
   end;
 end;

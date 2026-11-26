@@ -327,8 +327,11 @@ procedure GCEphKeysClear;
 function GCIsYoung(P: Pointer): Boolean;
 { GCVisit for other units (not inlined: its threadvar reads stay in this unit) }
 procedure GCVisitValue(var V: TValue);
-{ like GCWeakHook, for releasing what dead cells held outside the heap (Goccia.Shared's buffer references) }
-var GCFinalizeHook: procedure = nil;
+{ like GCWeakHook, for releasing what dead cells held outside the heap (Goccia.Shared's buffer references,
+  Goccia.FFI's tie rows): each hook added runs after every collection, in the order added }
+type
+  TGCFinalizeHook = procedure;
+procedure AddGCFinalizeHook(Hook: TGCFinalizeHook);
 function GCSurvives(var P: Pointer): Boolean;
 function GCInMinor: Boolean;
 procedure WriteBarrier(Container: PCell; V: TValue); inline;
@@ -1340,6 +1343,39 @@ begin
   Result := InMinor;
 end;
 
+const
+  MAX_GC_FINALIZE_HOOKS = 8;
+var
+  { process-wide (each hook is a procedure over its own threadvars): a slot is written once, before the count that
+    publishes it, so a collection reads them without the lock }
+  GCFinalizeHooks: array[0..MAX_GC_FINALIZE_HOOKS - 1] of TGCFinalizeHook;
+  GCFinalizeHookCount: Integer;
+  GCFinalizeHooksLock: TRTLCriticalSection;
+
+procedure AddGCFinalizeHook(Hook: TGCFinalizeHook);
+var I: Integer;
+begin
+  EnterCriticalSection(GCFinalizeHooksLock);
+  try
+    for I := 0 to GCFinalizeHookCount - 1 do
+      if @GCFinalizeHooks[I] = @Hook then Exit;
+    if GCFinalizeHookCount = MAX_GC_FINALIZE_HOOKS then raise Exception.Create('too many GC finalize hooks');
+    GCFinalizeHooks[GCFinalizeHookCount] := Hook;
+    System.WriteBarrier;
+    Inc(GCFinalizeHookCount);
+  finally
+    LeaveCriticalSection(GCFinalizeHooksLock);
+  end;
+end;
+
+procedure RunGCFinalizeHooks;
+var I, N: Integer;
+begin
+  N := GCFinalizeHookCount;
+  System.ReadBarrier;
+  for I := 0 to N - 1 do GCFinalizeHooks[I]();
+end;
+
 function GCSurvives(var P: Pointer): Boolean;
 begin
   if P = nil then Exit(False);
@@ -1402,7 +1438,7 @@ begin
   FixOpenUpvalLinks;
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
-  if Assigned(GCFinalizeHook) then GCFinalizeHook;
+  RunGCFinalizeHooks;
   InMinor := False;
   if GCVerify then
   begin
@@ -1535,7 +1571,7 @@ begin
     while GCEphemeronHook() do DrainGray;
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
-  if Assigned(GCFinalizeHook) then GCFinalizeHook;
+  RunGCFinalizeHooks;
   RetireDeadShapes;
   ShapesNoteMajor;
   SweepPages;
@@ -3036,5 +3072,9 @@ begin
 end;
 
 initialization
+  InitCriticalSection(GCFinalizeHooksLock);
   RegisterThreadvarCleanup(@GocciaCoreThreadvarCleanup);
+
+finalization
+  DoneCriticalSection(GCFinalizeHooksLock);
 end.

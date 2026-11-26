@@ -9795,6 +9795,85 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
   }
 });
 
+await section("Runner: an aborted fetch keeps its slot until its worker ends, so at most 16 requests run...", async () => {
+  // docs/built-ins-fetch.md: each host thread runs at most 16 requests, and a
+  // worker frees its slot when it finishes. Aborting a request rejects it at
+  // once, but its worker still waits on the socket, so the slot stays taken;
+  // the run itself does not wait for it.
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const tmp = makeNativeTmp();
+  try {
+    const url = `http://127.0.0.1:${silent.port}/`;
+    writeFileSync(
+      join(tmp, "cap.js"),
+      [
+        "const controllers = Array.from({ length: 16 }, () => new AbortController());",
+        `const first = controllers.map((c) => fetch(${JSON.stringify(url)}, { signal: c.signal }).then(() => "ok", (e) => e.name));`,
+        "for (const c of controllers) c.abort();",
+        "console.log((await Promise.all(first)).every((r) => r === 'AbortError'));",
+        `try { await fetch(${JSON.stringify(url)}); console.log("17th started"); } catch (e) { console.log(e.message); }`,
+        "",
+      ].join("\n"),
+    );
+    const started = Date.now();
+    const proc = Bun.spawnSync([RUNNER, `--allow-net=127.0.0.1`, join(tmp, "cap.js")], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+    });
+    const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 2);
+    if (JSON.stringify(lines) !== JSON.stringify(["true", "fetch worker limit exceeded"]))
+      throw new Error(`The aborted requests should keep their slots: got ${JSON.stringify(lines)} ${proc.stderr.toString()}`);
+    if (Date.now() - started > 30_000)
+      throw new Error("The run should not wait for the aborted requests' workers");
+  } finally {
+    silent.stop(true);
+    clean(tmp);
+  }
+});
+
+await section("Runner: a virtual module's imports are held to the read policy, as the script's are...", async () => {
+  // A config's virtual module runs under the script's capability set: an
+  // import of a host file outside the project is refused for it, as for the
+  // entry, statically and dynamically alike.
+  const tmp = makeNativeTmp();
+  try {
+    const outside = join(tmp, "outside");
+    const proj = join(tmp, "proj");
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(proj, { recursive: true });
+    const secret = join(outside, "secret.json").replace(/\\/g, "/");
+    writeFileSync(join(outside, "secret.json"), '{"secret":42}');
+    writeFileSync(
+      join(proj, "goccia.json"),
+      JSON.stringify({
+        modules: {
+          "virt:x": { content: `export const load = () => import(${JSON.stringify(secret)}, { with: { type: "json" } });` },
+          "virt:y": { content: `import s from ${JSON.stringify(secret)} with { type: "json" }; export const s2 = s;` },
+        },
+      }),
+    );
+    writeFileSync(
+      join(proj, "main.js"),
+      [
+        'try { await (await import("virt:x")).load(); console.log("dynamic read"); } catch (e) { console.log("dynamic", e.name); }',
+        'try { await import("virt:y"); console.log("static read"); } catch (e) { console.log("static", e.name); }',
+        "export {};",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync([RUNNER, join(proj, "main.js")], { cwd: proj, stdout: "pipe", stderr: "pipe" });
+    const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 2);
+    const expected = ["dynamic PermissionDenied", "static PermissionDenied"];
+    if (JSON.stringify(lines) !== JSON.stringify(expected))
+      throw new Error(
+        `SECURITY: a virtual module read a host file outside the project: expected ${JSON.stringify(expected)}, got ${JSON.stringify(lines)} ${proc.stderr.toString()}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner JSON output: a module definition that cannot apply fails the file inside the envelope...", async () => {
   // A configuration error before the file runs is the file's error in the
   // report: nothing is printed ahead of the envelope, and ok is false.

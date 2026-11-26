@@ -164,6 +164,9 @@ threadvar
   { Goccia.Embed's description of a benchmark's thrown value (set by RunBenchmarks) }
   BenchDescribeThrown: procedure(V: TValue; var E: TGocciaBenchEntry);
 
+{ the run's module resolver (an import map, aliases, node_modules, provider packages), else the plain one }
+function CurrentResolver: TModuleResolver;
+
 implementation
 
 uses
@@ -1161,7 +1164,6 @@ begin
   Pending := VUndefined;
 end;
 
-{ the run's resolver (an import map, aliases, node_modules), else the plain one }
 function CurrentResolver: TModuleResolver;
 begin
   Result := ProvidedResolver;
@@ -1393,7 +1395,9 @@ begin
   { the read policy judges every request while it is on: the run's (a function a host module left behind imports as
     the guest it runs for) and a config's loads; the host's own loads before the run are not judged }
   Policy := ReadPolicy;
-  Guard := (Policy <> nil) and not IsVirtualKey(Referrer);
+  { a virtual module's imports are judged too: a config's or a --module definition runs under the script's
+    capability set (docs/virtual-modules.md), so it reaches no host file the script could not }
+  Guard := Policy <> nil;
   if Guard then
   begin
     Policy.Spec := UTF8Encode(Spec);

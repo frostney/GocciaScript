@@ -181,7 +181,7 @@ begin
   SharedObjs[SharedCount] := O;
   SharedBlocks[SharedCount] := B;
   Inc(SharedCount);
-  GCFinalizeHook := @SharedFinalizeHook;
+  AddGCFinalizeHook(@SharedFinalizeHook);
 end;
 
 
