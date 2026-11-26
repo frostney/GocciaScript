@@ -10227,6 +10227,23 @@ LReload:
           Fr^.PC := PC;
           if Tpl^.Loaded and not (IsObject(R[A])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           Argc := (I shr 24) and $FFFF;
+          if ((I shr 40) and SUPER_UP_SPREAD) <> 0 then
+          begin
+            { the arguments as opSuperCallV takes them: the array in R[A + 2], into the registers from R[A + 2] }
+            if Tpl^.Loaded and not OpdArray(R[A + 2]) then begin XBadOperand; goto LThrow; end;
+            O := ObjOf(R[A + 2]);
+            Argc := ArrayLen(O);
+            if Fr^.Base + A + 2 + Argc + 4 >= STACK_MAX then
+            begin
+              ThrowError('RangeError', 'Maximum call stack size exceeded'); goto LThrow;
+            end;
+            for J := 0 to Argc - 1 do
+            begin
+              V := O^.Elements^.Data[J];
+              if V = VHole then V := VUndefined;
+              R[A + 2 + J] := V;
+            end;
+          end;
           VA := ObjOf(R[A])^.Shape^.Proto;
           if not IsConstructorV(VA) then begin ThrowTypeError('Super constructor is not a constructor'); goto LThrow; end;
           StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
@@ -10234,7 +10251,7 @@ LReload:
           StackTop := Fr^.Base + Tpl^.MaxRegs;
           { BindThisValue through the constructor's this, an upvalue of this arrow }
           Ups := PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2));
-          U := PUpval(PtrOf(Ups^.Data[I shr 40]));
+          U := PUpval(PtrOf(Ups^.Data[(I shr 40) and (SUPER_UP_SPREAD - 1)]));
           if U^.StackIndex >= 0 then VB := VStack[U^.StackIndex] else VB := U^.Value;
           if VB <> VHole then
           begin

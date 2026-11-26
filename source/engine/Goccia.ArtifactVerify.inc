@@ -291,7 +291,9 @@ begin
       opSetHome: begin Reg(A); Reg(B); end;
       opYieldStar: begin Reg(A); Regs(B, 4); end;
       opYieldStarAsync: begin Reg(A); Regs(B, 5); end;
-      opSuperCallUp: begin Regs(A, B + 2); Upv(C); end;
+      opSuperCallUp:
+        if (C and SUPER_UP_SPREAD) <> 0 then begin Regs(A, 3); Upv(C and (SUPER_UP_SPREAD - 1)); end
+        else begin Regs(A, B + 2); Upv(C); end;
       opIterCallNext: begin Reg(A); Regs(B, 2); end;
       opIterUnpack: begin Reg(A); Reg(B); Jump(CS); end;
       opAsyncIterReturn: begin Reg(A); Reg(B); Jump(CS); end;

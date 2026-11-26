@@ -158,6 +158,9 @@ type
     procedure RunFilesParallel(const AFiles: TStringList);
     { a parallel file whose source does not load: its report, the class and message of the failure (as
       GocciaRunner's worker reports it) }
+    { a file that failed before it ran, in a JSON report: not ok, with the error's type and message }
+    procedure ReportSetupFailure(AReportIndex: Integer; const AFileName, AErrorType, AMessage: string;
+      AStart: Int64);
     procedure ReportLoadFailure(AReportIndex: Integer; const AFileName: string; const E: Exception;
       AStart: Int64);
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
@@ -1121,9 +1124,18 @@ begin
       { a module definition that cannot apply is a configuration error, as GocciaRunner's }
       if not DefineVirtualModules(Engine, FileConfigPath, GlobalsError) then
       begin
-        { an error a manifest threw, by its name (a refused read's PermissionDenied) }
+        { an error a manifest threw, by its name (a refused read's PermissionDenied); in a JSON report the
+          file's entry carries it, so nothing is printed ahead of the envelope }
         if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
-          WriteLn('Fatal error: ', UTF8Encode(HostError.ErrorName), ': ', UTF8Encode(HostError.ErrorText))
+        begin
+          if IsJsonOutput then
+            ReportSetupFailure(AReportIndex, AFileName, UTF8Encode(HostError.ErrorName),
+              UTF8Encode(HostError.ErrorText), Start)
+          else
+            WriteLn('Fatal error: ', UTF8Encode(HostError.ErrorName), ': ', UTF8Encode(HostError.ErrorText));
+        end
+        else if IsJsonOutput then
+          ReportSetupFailure(AReportIndex, AFileName, 'Exception', GlobalsError, Start)
         else
           WriteLn('Fatal error: ', GlobalsError);
         ExitCode := 1;
@@ -1131,6 +1143,16 @@ begin
       end;
       if not InjectGlobals(Engine, GlobalsError) then
       begin
+        if IsJsonOutput then
+        begin
+          { the file's entry in the JSON report carries the error, by its name when it has one }
+          if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
+            ReportSetupFailure(AReportIndex, AFileName, UTF8Encode(HostError.ErrorName),
+              UTF8Encode(HostError.ErrorText), Start)
+          else
+            ReportSetupFailure(AReportIndex, AFileName, 'RuntimeError', GlobalsError, Start);
+          Exit;
+        end;
         { a globals module that threw is reported as the run's error would be, located where it threw }
         if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorLine > 0) then
           WriteLn(FailureText(UTF8Encode(HostError.ErrorFile), HostError, nil, Engine, '', nil, True, True,
@@ -1335,6 +1357,12 @@ end;
 
 procedure TGocciaRunnerApp.ReportLoadFailure(AReportIndex: Integer; const AFileName: string;
   const E: Exception; AStart: Int64);
+begin
+  ReportSetupFailure(AReportIndex, AFileName, E.ClassName, E.Message, AStart);
+end;
+
+procedure TGocciaRunnerApp.ReportSetupFailure(AReportIndex: Integer; const AFileName, AErrorType,
+  AMessage: string; AStart: Int64);
 var
   Report: TGocciaFileReport;
 begin
@@ -1342,8 +1370,8 @@ begin
   Report.FileName := AFileName;
   Report.Ok := False;
   Report.ErrorInfo := DefaultCLIJSONErrorInfo;
-  Report.ErrorInfo.ErrorType := E.ClassName;
-  Report.ErrorInfo.Message := E.Message;
+  Report.ErrorInfo.ErrorType := AErrorType;
+  Report.ErrorInfo.Message := AMessage;
   Report.ErrorInfo.FileName := AFileName;
   Report.Timing.TotalTimeNanoseconds := GetNanoseconds - AStart;
   Report.Timing.ExecuteTimeNanoseconds := Report.Timing.TotalTimeNanoseconds;

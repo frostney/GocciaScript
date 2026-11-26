@@ -39,6 +39,13 @@
     try { return apply(r, it, []); } catch (e) {}
   }
 
+  // 7.4.13 AsyncIteratorClose with a throw completion (IfAbruptCloseAsyncIterator): return() is called and its
+  // result awaited, and whatever that throws or rejects with is dropped, the original error going on
+  async function closeAfterThrow(it, sync) {
+    if (sync) { closeQuiet(it); return; }
+    try { await closeAsync(it); } catch (e) {}
+  }
+
   // Array.fromAsync ( asyncItems [ , mapfn [ , thisArg ] ] )
   var fromAsync = {
     async fromAsync(asyncItems) {
@@ -49,10 +56,11 @@
       if (usingAsync === undefined) usingSync = getMethod(asyncItems, SymIterator);
       var A, k = 0, v;
       if (usingAsync !== undefined || usingSync !== undefined) {
-        A = isConstructor(C) ? construct(C, []) : [];
+        // steps 5-6 then 7.a: the iterator (GetIteratorFromMethod) before the result is constructed
         var it = apply(usingAsync !== undefined ? usingAsync : usingSync, asyncItems, []);
         if (!isObject(it)) throw new TypeErr("the iterator is not an object");
         var next = it.next, sync = usingAsync === undefined;
+        A = isConstructor(C) ? construct(C, []) : [];
         for (;;) {
           var r = apply(next, it, []);
           if (!sync) r = await r;
@@ -64,10 +72,10 @@
           }
           if (mapping) {
             try { v = await apply(mapfn, thisArg, [v, k]); }
-            catch (e) { if (sync) { closeQuiet(it); } else await closeAsync(it); throw e; }
+            catch (e) { await closeAfterThrow(it, sync); throw e; }
           }
           try { createDataProperty(A, k, v); }
-          catch (e) { if (sync) { closeQuiet(it); } else await closeAsync(it); throw e; }
+          catch (e) { await closeAfterThrow(it, sync); throw e; }
           k++;
         }
       }

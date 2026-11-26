@@ -9795,6 +9795,66 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
   }
 });
 
+await section("Runner JSON output: a module definition that cannot apply fails the file inside the envelope...", async () => {
+  // A configuration error before the file runs is the file's error in the
+  // report: nothing is printed ahead of the envelope, and ok is false.
+  const tmp = makeNativeTmp();
+  try {
+    const entry = join(tmp, "ok.js");
+    writeFileSync(entry, "console.log(1);\n");
+    for (const flag of ["--module=x", `--modules=${join(tmp, "missing-manifest.json")}`]) {
+      const proc = Bun.spawnSync([RUNNER, "--output=json", flag, entry], { stdout: "pipe", stderr: "pipe" });
+      const out = proc.stdout.toString();
+      if (!out.startsWith("{"))
+        throw new Error(`${flag}: the JSON envelope should be the whole output, got: ${out}`);
+      const report = JSON.parse(out);
+      if (report.ok !== false || proc.exitCode !== 1 || !report.error || !report.error.message)
+        throw new Error(`${flag}: the envelope should report the failure, got exit ${proc.exitCode} ${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: importing a module again after its dependency failed to load rejects again, without a crash...", async () => {
+  // A module whose dependency did not load stays in the module map with that
+  // dependency missing. The next import must load its requests again (and
+  // fail the same way, or succeed once the dependency is there), not link the
+  // half-loaded record: that used to end the run with an access violation.
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "missing-dep.mjs"), 'import "./not-there.mjs";\nexport const x = 1;\n');
+    writeFileSync(join(tmp, "bad.json"), "{ not json\n");
+    writeFileSync(join(tmp, "bad-dep.mjs"), 'import data from "./bad.json" with { type: "json" };\nexport const x = data;\n');
+    writeFileSync(
+      join(tmp, "main.mjs"),
+      [
+        // Literal specifiers: a computed import needs a read grant.
+        "const tryImport = async (spec, attempt, load) => {",
+        "  try { await load(); console.log(spec, attempt, 'loaded'); } catch (e) { console.log(spec, attempt, e.name); }",
+        "};",
+        "for (const attempt of [1, 2]) await tryImport('./missing-dep.mjs', attempt, () => import('./missing-dep.mjs'));",
+        "for (const attempt of [1, 2]) await tryImport('./bad-dep.mjs', attempt, () => import('./bad-dep.mjs'));",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync([RUNNER, join(tmp, "main.mjs")], { stdout: "pipe", stderr: "pipe" });
+    const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 4);
+    const expected = [
+      "./missing-dep.mjs 1 Error",
+      "./missing-dep.mjs 2 Error",
+      "./bad-dep.mjs 1 SyntaxError",
+      "./bad-dep.mjs 2 SyntaxError",
+    ];
+    if (proc.exitCode !== 0 || JSON.stringify(lines) !== JSON.stringify(expected))
+      throw new Error(
+        `Re-importing a module with a failed dependency should reject each time: expected ${JSON.stringify(expected)}, got exit ${proc.exitCode} ${JSON.stringify(lines)} ${proc.stderr.toString()}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: import.meta.url and import.meta.resolve name sandbox paths, with no host drive...", async () => {
   // A sandbox's paths are its own, rooted at /: on Windows a host path
   // expansion would put the current drive in front (file:///C:/main.js).

@@ -16,6 +16,8 @@ const
   TYPE_BOOLEAN = 2;
   TYPE_STRING = 3;
   TYPE_OBJECT = 4;
+  { opSuperCallUp's C flag: the arguments are one array (a spread argument list) in R[A + 2] }
+  SUPER_UP_SPREAD = $800000;
   { prototype hops a get IC's entry follows to the property's holder (VerMask has a bit for each) }
   IC_MAX_DEPTH = 8;
 
@@ -66,7 +68,8 @@ type
                                completes with R[A] := the inner result's value }
     opLoadCallee,            { R[A] := the running function (a derived constructor's, for super() in its arrows) }
     opSuperCallUp,           { super() in an arrow: R[A] constructor, R[A+1] new.target, B args from R[A+2]; this is
-                               bound through upvalue C }
+                               bound through upvalue C (its low 23 bits); C's SUPER_UP_SPREAD bit: the arguments
+                               are the array in R[A+2] (a spread argument list) }
     opGetAsyncIter,          { 7.4.2 GetIterator(R[B], async): R[A] iterator, R[A + 1] next }
     opIterCallNext,          { R[A] := Call(R[B + 1], R[B]); an abrupt call leaves R[B] done }
     opIterUnpack,            { R[A] (an iterator result) not an object: TypeError; done: jump C; else R[A] := its value }

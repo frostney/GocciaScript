@@ -6313,7 +6313,7 @@ begin
 end;
 
 procedure TCompiler.CompileUnary(E: TGocciaUnaryExpression; Dest: Integer);
-var Save, R, K, J, CI: Integer; M: TGocciaMemberExpression; WEnds, SavedJ: TJumpList;
+var Save, ObjSave, R, K, J, CI: Integer; M: TGocciaMemberExpression; WEnds, SavedJ: TJumpList;
 begin
   NoBareYield(E.Operand);
   Save := FS.FreeReg;
@@ -6383,11 +6383,20 @@ begin
           ChainLink := False;
           ChainBegin(SavedJ);
           ChainObject(M.ObjectExpr);
+          ObjSave := FS.FreeReg;
           R := ExprAny(M.ObjectExpr);
           ChainLink := False;
           if M.Optional then ChainAdd(EmitJ(opJNullish, R, 0));
           if M.Computed then
           begin
+            { 13.5.1.2 / 13.3.2.1: the object is read before the key evaluates; a variable's register the key may
+              change is copied, as a computed read's is }
+            if (R < ObjSave) and OperandMayChange(R, M.PropertyExpression) then
+            begin
+              K := AllocReg;
+              Emit(Ins(opMov, K, R, 0));
+              R := K;
+            end;
             K := ExprAny(M.PropertyExpression);
             Emit(Ins(opDelElem, Dest, R, K));
           end
@@ -6555,8 +6564,11 @@ begin
     LoadIdent('%ctor', Base);
     LoadIdent('%newtarget', Base + 1);
     Argc := CompileArgs(E.Arguments, Base + 2, Spread);
-    if Spread then RaiseUnsupported('spread super call in an arrow', E);
-    Emit(Ins(opSuperCallUp, Base, Argc, ResolveUpval(FS, '%this')));
+    { C: the this binding's upvalue, with SUPER_UP_SPREAD when the arguments are one array in R[A + 2] }
+    J := ResolveUpval(FS, '%this');
+    if J >= SUPER_UP_SPREAD then raise ECompileError.Create('Too many upvalues in one function');
+    if Spread then J := J or SUPER_UP_SPREAD;
+    Emit(Ins(opSuperCallUp, Base, Argc, J));
     if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
     if Reuse then FreeTo(Base + 1) else FreeTo(Base);
     ChainEnd(IsLink, SavedJ, Base);

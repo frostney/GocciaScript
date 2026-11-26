@@ -164,6 +164,9 @@ type
       imports the same path (a ShadowRealm's importValue, a test262 realm's import) loads a record of its own: the
       records are found by realm and path (FindModule). }
     Realm: Integer;
+    { LinkRequests: 0 not run or failed (a dependency did not load: Deps has nil entries, and the next request
+      loads them again, 16.2.1.5.1 as a new graph load would), 1 running (a cycle reached the record), 2 done }
+    RequestsState: Byte;
     Info: TModuleInfo;
     Tpl: PFuncTemplate;
     Status: TModStatus;
@@ -721,7 +724,10 @@ function LinkRequests(M: TModRec): Boolean;
 var Resolved, Path: UnicodeString; I: Integer; D: TModRec;
 begin
   Path := M.Path;
+  M.RequestsState := 1;
+  Result := False;
   SetLength(M.Deps, Length(M.Info.Requests));
+  for I := 0 to High(M.Deps) do M.Deps[I] := nil;
   for I := 0 to High(M.Info.Requests) do
   begin
     { the declaration is where a host's resolution decision is made (ImportSiteNow) }
@@ -748,10 +754,12 @@ begin
         LoadFailLine := M.Info.RequestLines[I];
         LoadFailColumn := M.Info.RequestColumns[I];
       end;
+      M.RequestsState := 0;
       Exit(False);
     end;
     M.Deps[I] := D;
   end;
+  M.RequestsState := 2;
   Result := True;
 end;
 
@@ -831,6 +839,10 @@ begin
   if Assigned(M) then
   begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
+    { a record whose requests failed to load: loaded again, so the failure repeats (or a dependency now there
+      loads) instead of the graph walk meeting the missing dependency }
+    if (M.Status = msNew) and (M.Info <> nil) and (M.RequestsState = 0) and (Length(M.Info.Requests) > 0) then
+      Exit(LinkRequests(M));
     Exit(True);
   end;
   Result := LoadArtifactRecord(Key, GbcPath, B, M);
@@ -869,6 +881,10 @@ begin
   if Assigned(M) then
   begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
+    { a record whose requests failed to load: loaded again, so the failure repeats (or a dependency now there
+      loads) instead of the graph walk meeting the missing dependency }
+    if (M.Status = msNew) and (M.Info <> nil) and (M.RequestsState = 0) and (Length(M.Info.Requests) > 0) then
+      Exit(LinkRequests(M));
     Exit(True);
   end;
   if Pos(#1, Path) > 0 then Exit(LoadTypedModule(Path, M));
