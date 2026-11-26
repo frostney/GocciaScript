@@ -2,6 +2,65 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.18.0] - 2026-11-26
+
+### ⚡ Performance
+
+- perf(array): join writes its result once at its exact size, so `${array}` and join take linear time (#2147)
+
+### 🌐 Website
+
+- fix(website): docs pages served as Markdown resolve repository links as their HTML pages do (#2165)
+
+### 🏗️ Internal
+
+- docs: give --max-memory's real default and annotate the 0.18.0 changelog entries the engine change affects (#2188)
+- chore(test262): bump pin to ebf6ae62 (#2133)
+- ci(website): run the website's Biome check, type-check and tests on pull requests (#2175)
+- chore(tc39-mcp): bump pin to v0.6.6 (#2135)
+- chore(awfy): bump pin to f35aed0a (#2137)
+- test(intl): accept narrow month names in the zh iso8601 range test (#2145)
+- test(compiler): count work, not wall-clock time, in the switch case-clause scaling test (#2126)
+
+### 🐛 Fixed
+
+- fix(build): give each checkout its own instantfpc cache, so concurrent build.pas runs from different worktrees no longer collide (#2182)
+- fix(process): a child process no longer inherits the parent's files, locks and other children's pipes on Unix (#2184)
+- fix(with): resolve for-in and for-of heads and destructuring var through the with object (#2177)
+- fix(strict-types): check ++ and -- on a strictly typed binding before the store (#2176)
+- fix(sandbox): copy-in refuses FIFOs, sockets and devices instead of waiting on them (#2169)
+- fix(strict-types): check class member parameters, and check every argument and var redeclaration before code trusts its type (#2161)
+- fix(fuzz): give the instrumented harness a 1 MiB coverage map, with afl-fuzz and afl-showmap built to match (#2172)
+- fix(strict-types): enforce an annotation only where every value of its type passes, so N["kind"] accepts "text" (#2160)
+- fix(console): write each console line as it is logged, with error, warn, assert and trace on stderr (#2164)
+- fix(sandbox): a filesystem root stays a root in copy-in and write-back (#2166)
+- fix(fuzz): build afl-as from AFL++ v4.21c, so the fuzz jobs run on ubuntu-26.04 again (#2170)
+- fix(sandbox): pin a read-write input before copy-in reads it (#2155)
+- fix(engine): FPC i386 builds compute doubles in SSE2, so subnormal results round once (#2157)
+- fix(fetch): connect to IPv6 and fall back across address families (#2154)
+- fix(engine): x ** -1 and Math.pow(x, -1) return the correctly rounded 1 / x (#2153)
+- fix(engine): an entry whose imports fail to evaluate frees the list it collected them in (#2152)
+- fix(object-model): a definition takes its descriptor on every exit, so a raise inside one never leaks it (#2151)
+- fix(regexp): source keeps an escaped slash as written, so new RegExp(re.source, re.flags) matches what re matches (#2150)
+- fix(compiler): module code clears what each top-level statement left, and an imported module keeps no completion value (#2148)
+- fix(engine): take a Linux thread's stack bounds from pthread_getattr_np, so a stack next to another keeps the right reserve (#2146)
+- fix(vm): a callee that can drop a parameter releases the caller's copies of its arguments (#2036)
+- fix(vm): a value the program has dropped is no longer held by await, catch or yield (bytecode format v101) (#2035) — kept by the new engine (#2187), which writes bytecode format 200 and refuses format 100 and 101 files
+- fix(parser): erase template literal types in TypeScript call and new type arguments (#2144)
+- fix(loader): an imported module's parse warnings honour SuppressWarnings and never precede a JSON envelope (#2038)
+- fix(array): an instruction budget reaches native loops over a huge array, so a limit or abort can stop them (#2037)
+- fix(jsx): support TypeScript type arguments on JSX elements and erase them (#2139)
+- fix(intl): format iso8601 with Gregorian data when ICU 78 drops its names (#2143)
+- fix(vm): name boxed numeric keys in nullish access errors (#2134)
+- fix(output): replace unpaired surrogates in UTF-8 text (#2132)
+- fix(array): honor string coercion and guard cyclic joins (#2129)
+- fix(parser): preserve regexp iterables in assignment-target for-of loops (#2128)
+- fix(parser): resolve Script await identifiers by source goal (#2122)
+
+### 🚀 Added
+
+- feat!: run every GocciaScript application on the new engine, and delete the old interpreter, compiler and VM (#2187) — breaking for embedders: `TGocciaEngine` in `Goccia.Embed` replaces the old engine classes (docs/embedding.md maps them); the CLI keeps its options, config keys and reports, and the toolchain is FPC 3.3.1 from fpc-toolchain
+
 ## [0.17.0] - 2026-11-07
 
 ### 🌐 Website
