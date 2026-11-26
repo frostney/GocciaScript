@@ -806,7 +806,7 @@ The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage r
 
 ### What is Tracked
 
-**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop, with per-frame line-change deduplication so several instructions on one source line count as one hit.
+**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop: a line is hit each time a frame enters it, so a function called five times hits its body's lines five times, and a one-line function's line also counts its declaration. Consecutive instructions of one frame on one line count as one hit, so a loop whose body stays on its own line counts once per entry, not once per iteration.
 
 **Branch coverage:** Which branch arms were taken at:
 

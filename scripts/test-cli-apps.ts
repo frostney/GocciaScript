@@ -6553,6 +6553,21 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error("Function body's first line should still record a line hit");
     }
 
+    // Every call is a line hit of its own (each frame entering a line counts
+    // once, docs/testing.md): a one-line arrow declared once and called five
+    // times from another line is hit six times, even when nothing else is
+    // recorded between the calls (the calling line's frame stays on its line).
+    const repeatedPath = join(tmp, "repeated-calls.js");
+    writeFileSync(repeatedPath, "const f = () => 1;\nfor (const _ of [1, 2, 3, 4, 5]) f();\n");
+    const repeatedLcovPath = join(tmp, "repeated-calls.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${repeatedLcovPath} ${repeatedPath}`.quiet();
+    const repeatedRecords = readFileSync(repeatedLcovPath, "utf-8").split(/\r?\n/);
+    for (const expected of ["DA:1,6", "DA:2,1", "FNDA:5,f"]) {
+      if (!repeatedRecords.includes(expected)) {
+        throw new Error(`LCOV should report ${expected} for repeated calls, got ${repeatedRecords.filter((l) => l.startsWith("DA") || l.startsWith("FNDA")).join(" ")}`);
+      }
+    }
+
     console.log("TestRunner: coverage hit counts are identical across --jobs...");
     const jobsDir = join(tmp, "coverage-jobs");
     mkdirSync(jobsDir, { recursive: true });

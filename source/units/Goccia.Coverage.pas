@@ -135,8 +135,6 @@ type
     { Canonical report key -> native on-disk path it was derived from. }
     FResolvedPaths: TGocciaCoveragePathMap;
     FEnabled: Boolean;
-    FLastHitFile: string;
-    FLastHitLine: Integer;
     { Single-entry memo over the canonicalize-then-look-up pair, which
       together dominate the per-line-hit cost of a coverage run. }
     FLastLookupPath: string;
@@ -847,9 +845,8 @@ end;
 procedure TGocciaCoverageTracker.RecordLineHit(const AFilePath: string;
   const ALine: Integer);
 begin
-  if (ALine = FLastHitLine) and (AFilePath = FLastHitFile) then Exit;
-  FLastHitLine := ALine;
-  FLastHitFile := AFilePath;
+  { every call counts: the engine records a line once each time a frame enters it (Goccia.VM CovStep), so a
+    function called again on the line the last hit was on is a hit of its own }
   FileFor(AFilePath).RecordLineHit(ALine);
 end;
 
