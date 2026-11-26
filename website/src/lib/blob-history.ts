@@ -124,7 +124,14 @@ async function readPointer<Run>(
   isRun: (value: unknown) => value is Run,
 ): Promise<LoadedPointer<Run>> {
   try {
-    const response = await get(pointer.pathname, { access });
+    // fetch asks for compressed bodies by default, and the Blob CDN answers a
+    // compressed response with a weak ETag. A weak ETag cannot prove that the
+    // bytes are the listed generation, so ask for the identity encoding, whose
+    // ETag is the strong one the listing reports.
+    const response = await get(pointer.pathname, {
+      access,
+      headers: { "accept-encoding": "identity" },
+    });
     if (!response || response.statusCode !== 200 || !response.stream)
       return { pathname: pointer.pathname, etag: null, run: null };
     const text = await new Response(response.stream).text();
@@ -194,6 +201,7 @@ export async function listBlobHistory<Run extends RunOrder>(
   prefix: string,
   access: Access,
   isRun: (value: unknown) => value is Run,
+  projectRun: (run: Run) => Run = (run) => run,
 ): Promise<Run[]> {
   const pointers = await listPointers(`${prefix}/daily/`);
   const { partitions, uncached } = partitionPointers(prefix, pointers);
@@ -211,8 +219,11 @@ export async function listBlobHistory<Run extends RunOrder>(
   const raw = await readInBatches(fallback, (pointer) =>
     readPointer(pointer, access, isRun),
   );
+  // Raw pointers get the projection a snapshot would have stored, so a read
+  // returns the same runs whether or not its month has a snapshot.
   for (const [index, pointer] of raw.entries())
-    runs[fallback[index].order] = pointer.run;
+    runs[fallback[index].order] =
+      pointer.run === null ? null : projectRun(pointer.run);
   return runs
     .filter((run): run is Run => run !== null)
     .sort(

@@ -360,9 +360,18 @@ function timelinePoint(
       typeof summary?.protocolKey === "string" ? summary.protocolKey : null,
     targets: targetNames.sort(),
   });
+  // Name each field: a run read from Blob carries more than RunMeta at
+  // runtime (its summary, report descriptor and, in older JetStream pointers,
+  // the whole report), and the page serializes every point.
   return {
     suite,
-    ...run,
+    runId: run.runId,
+    runNumber: run.runNumber,
+    artifactId: run.artifactId,
+    runUrl: run.runUrl,
+    headSha: run.headSha,
+    shortSha: run.shortSha,
+    createdAt: run.createdAt,
     complete,
     stale: false,
     quickjsRatio: complete ? quickjsRatio : null,
@@ -445,28 +454,43 @@ function fallback(
 }
 
 async function loadUncachedPerformanceDashboardData(): Promise<PerformanceDashboardData> {
+  const [awfyRuns, jetStreamRuns] = await Promise.all([
+    listAwfyBlobDailyRuns(),
+    listJetStreamBlobDailyRuns(),
+  ]);
+  const [awfy, jetstream] = await Promise.all([
+    buildSuiteData("awfy", awfyRuns, readAwfyBlobReportJson),
+    buildSuiteData("jetstream", jetStreamRuns, readJetStreamBlobReportJson),
+  ]);
+  if (awfy.timeline.length === 0 && jetstream.timeline.length === 0) {
+    return fallback("empty", "No performance barometer reports were found.");
+  }
+  return {
+    status: "ready",
+    generatedAt: new Date().toISOString(),
+    source: {
+      repositoryUrl: GITHUB_REPO_URL,
+      workflowUrl: `${GITHUB_REPO_URL}/actions/workflows/ci.yml`,
+    },
+    awfy,
+    jetstream,
+  };
+}
+
+// A failed read throws out of the cached function so the cache never keeps
+// it: the previous good entry keeps being served while revalidation retries.
+const loadCachedPerformanceDashboardData = unstable_cache(
+  loadUncachedPerformanceDashboardData,
+  ["performance-dashboard"],
+  {
+    revalidate: PERFORMANCE_DASHBOARD_CACHE_SECONDS,
+    tags: ["performance-dashboard"],
+  },
+);
+
+export async function loadPerformanceDashboardData(): Promise<PerformanceDashboardData> {
   try {
-    const [awfyRuns, jetStreamRuns] = await Promise.all([
-      listAwfyBlobDailyRuns(),
-      listJetStreamBlobDailyRuns(),
-    ]);
-    const [awfy, jetstream] = await Promise.all([
-      buildSuiteData("awfy", awfyRuns, readAwfyBlobReportJson),
-      buildSuiteData("jetstream", jetStreamRuns, readJetStreamBlobReportJson),
-    ]);
-    if (awfy.timeline.length === 0 && jetstream.timeline.length === 0) {
-      return fallback("empty", "No performance barometer reports were found.");
-    }
-    return {
-      status: "ready",
-      generatedAt: new Date().toISOString(),
-      source: {
-        repositoryUrl: GITHUB_REPO_URL,
-        workflowUrl: `${GITHUB_REPO_URL}/actions/workflows/ci.yml`,
-      },
-      awfy,
-      jetstream,
-    };
+    return await loadCachedPerformanceDashboardData();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = /No blob credentials|No read-write token/i.test(message)
@@ -476,16 +500,8 @@ async function loadUncachedPerformanceDashboardData(): Promise<PerformanceDashbo
   }
 }
 
-export const loadPerformanceDashboardData = unstable_cache(
-  loadUncachedPerformanceDashboardData,
-  ["performance-dashboard"],
-  {
-    revalidate: PERFORMANCE_DASHBOARD_CACHE_SECONDS,
-    tags: ["performance-dashboard"],
-  },
-);
-
 export const performanceDashboardTestApi = {
+  loadUncachedPerformanceDashboardData,
   normalizeReport,
   buildSuiteData,
   targetsFromReport,
