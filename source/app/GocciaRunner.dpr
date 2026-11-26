@@ -1882,6 +1882,7 @@ begin
     FSandboxHost := Host;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
+    Host.InspectDepth := InspectDepthOf(EngineOptions);
     Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');
     Host.Aliases.Assign(EngineOptions.Aliases.Values);
     { filtered to net by HonoredCapabilities }

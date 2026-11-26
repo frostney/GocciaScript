@@ -175,6 +175,7 @@ begin
     AEngine.SourceKind := gskDetect;
   end;
   AEngine.FetchMaxResponseBytes := ASettings.FetchMaxResponseBytes;
+  AEngine.InspectDepth := ASettings.InspectDepth;
   AEngine.JSModuleSources := ASettings.ExperimentalJSModuleSource;
   if ASettings.MaxMemorySet then
     AEngine.MaxMemory := ASettings.MaxMemory

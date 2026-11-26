@@ -124,6 +124,7 @@ type
     FCapabilities: TGocciaCapabilities;
     FHasCapabilities: Boolean;
     FFetchMaxResponseBytes: Integer;
+    FInspectDepth: Integer;
     FCoverage: Boolean;
     FRandomRoot: IGocciaHostRandom;
     FProfileOpcodes, FProfileFunctions: Boolean;
@@ -268,6 +269,8 @@ type
     property Capabilities: TGocciaCapabilities read FCapabilities write SetCapabilities;
     { fetch()'s response-body ceiling in bytes (--max-fetch-bytes); 0 for the default (8 MiB) }
     property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes write FFetchMaxResponseBytes;
+    { how many levels deep console output renders objects (--inspect-depth), 1 to 64; 0 for the default (5) }
+    property InspectDepth: Integer read FInspectDepth write FInspectDepth;
     { coverage of the run's code (Goccia.Coverage): its lines, branches and functions recorded in the calling
       thread's TGocciaCoverageTracker, which the host creates and enables; the run takes the interpreter only }
     property Coverage: Boolean read FCoverage write FCoverage;
@@ -874,6 +877,7 @@ begin
   { fetch() judges destinations by the capability set (none without one) }
   if FHasCapabilities then SetFetchPolicy(FCapabilities, FFetchMaxResponseBytes)
   else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);
+  SetInspectDepth(FInspectDepth);
   SetModuleLoadingUnsupported(FBare);
   Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers, FBare);
   if Result and FHasCapabilities and FCapabilities.Grants(gcFFI) then Result := InstallFFI(FCapabilities, Err);

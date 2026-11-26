@@ -41,8 +41,16 @@ function TakeHostError: TValue;
   host's print; no console, performance, timers, web APIs or host modules) }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
   var Err: UnicodeString; ExposeTimers: Boolean = True; Bare: Boolean = False): Boolean;
-{ the heap limit when none is given: half the physical memory, at most 8 GB (700 MB on a 32-bit build) }
+{ the heap limit when none is given: half the memory available to the process, at most 8 GB (700 MB on a 32-bit
+  build) }
 function DefaultHeapCeiling: Int64;
+
+const
+  { console output's object inspection depth (--inspect-depth): the default, and the deepest it may be set }
+  DEFAULT_INSPECT_DEPTH = 5;
+  MAX_INSPECT_DEPTH = 64;
+{ this thread's console inspection depth: ADepth levels, 1 to MAX_INSPECT_DEPTH (0 or less: the default) }
+procedure SetInspectDepth(ADepth: Integer);
 
 type
   { a console line with the method that wrote it (log, warn, error, ...), in place of writing it to stdout }
@@ -1964,6 +1972,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
   DefineNative(RootAt(TempTop - 1), 'dataParse', Host_DataParse, 2);
   DefineNative(RootAt(TempTop - 1), 'fileURL', Host_FileURL, 1);
+  DefineNative(RootAt(TempTop - 1), 'inspectDepth', Host_InspectDepth, 0);
   DefineNative(RootAt(TempTop - 1), 'specifierOf', Host_SpecifierOf, 1);
   DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);

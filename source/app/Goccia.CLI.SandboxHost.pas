@@ -81,6 +81,7 @@ type
     FInputs: TSandboxHostInputs;
     FTimeoutMilliseconds: Integer;
     FMaxInstructions: Int64;
+    FInspectDepth: Integer;
     FImportMapPath: string;
     FAliases: TStringList;
     FRootCapabilities: TGocciaCapabilities;
@@ -125,6 +126,9 @@ type
       write FTimeoutMilliseconds;
     property MaxInstructions: Int64 read FMaxInstructions
       write FMaxInstructions;
+    { console output's inspection depth in each run (--inspect-depth), 0 for
+      the default }
+    property InspectDepth: Integer read FInspectDepth write FInspectDepth;
     property ImportMapPath: string read FImportMapPath write FImportMapPath;
     property Aliases: TStringList read FAliases;
     property RootCapabilities: TGocciaCapabilities read FRootCapabilities
@@ -361,6 +365,7 @@ begin
         Run.Engine.ExposeTimers := False;
         Run.Engine.TimeoutMs := Run.TimeoutMilliseconds;
         Run.Engine.MaxInstructions := Host.MaxInstructions;
+        Run.Engine.InspectDepth := Host.InspectDepth;
         if Run.Parent <> nil then
           Run.Engine.ResultForm := grfSandbox
         else if Host.PrintRootResult then

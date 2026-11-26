@@ -4456,6 +4456,22 @@ console.log("console.log renders functions, classes and errors as util.inspect d
     if (run.exitCode !== 0 || out !== expectedFns)
       throw new Error(`Function and class rendering should be:\n${expectedFns}\ngot (exit ${run.exitCode}):\n${out}${run.stderr.toString()}`);
 
+    // --inspect-depth sets how many levels deep console output renders (5
+    // by default); 0 renders one level, as any value below 1 does.
+    const deep = join(tmp, "inspect-depth.js");
+    writeFileSync(deep, "console.log({ a: { b: { c: { d: { e: { f: { g: 1 } } } } } } });\n");
+    for (const [flags, expected] of [
+      [[], "{ a: { b: { c: { d: { e: [Object] } } } } }"],
+      [["--inspect-depth=2"], "{ a: { b: [Object] } }"],
+      [["--inspect-depth=0"], "{ a: [Object] }"],
+      [["--inspect-depth=10"], "{ a: { b: { c: { d: { e: { f: { g: 1 } } } } } } }"],
+    ] as const) {
+      const depthRun = await $`${RUNNER} ${flags} ${deep}`.nothrow().quiet();
+      const depthOut = scriptStdout(depthRun.stdout.toString()).trim();
+      if (depthRun.exitCode !== 0 || depthOut !== expected)
+        throw new Error(`${flags.join(" ") || "no flag"} should render ${expected}, got (exit ${depthRun.exitCode}): ${depthOut}${depthRun.stderr.toString()}`);
+    }
+
     const errors = join(tmp, "errors.js");
     writeFileSync(
       errors,

@@ -41,6 +41,8 @@ type
     MaxMemory: Int64;
     { the largest fetch response in bytes, 0 for the default }
     FetchMaxResponseBytes: Integer;
+    { console output's inspection depth (--inspect-depth), 0 for the default }
+    InspectDepth: Integer;
   end;
 
 { AFileConfig is the file's own config (empty when it has none); the root
@@ -59,6 +61,10 @@ function ResolveFileSourceType(
   const AFileConfig: TConfigEntryArray;
   const AFileName: string): TGocciaFileSourceType;
 
+{ --inspect-depth as an engine's InspectDepth: 0 when it is not given (the
+  default depth), else at least 1, as the option has always clamped it }
+function InspectDepthOf(const AEngineOptions: TGocciaEngineOptions): Integer;
+
 { a per-file config value of a limit, parsed by the option itself with its
   units and bounds }
 function ParseConfigValue(const AOption: TInt64Option;
@@ -67,6 +73,7 @@ function ParseConfigValue(const AOption: TInt64Option;
 implementation
 
 uses
+  Math,
   SysUtils,
 
   Goccia.FileExtensions;
@@ -117,6 +124,14 @@ begin
   end;
 
   Result := DefaultSourceTypeForFileName(AFileName);
+end;
+
+function InspectDepthOf(const AEngineOptions: TGocciaEngineOptions): Integer;
+begin
+  if AEngineOptions.InspectDepth.Present then
+    Result := Max(1, AEngineOptions.InspectDepth.Value)
+  else
+    Result := 0;
 end;
 
 function ParseConfigValue(const AOption: TInt64Option;
@@ -195,6 +210,8 @@ begin
   else if AEngineOptions.MaxFetchBytes.Present then
     Result.FetchMaxResponseBytes :=
       Integer(AEngineOptions.MaxFetchBytes.Value);
+
+  Result.InspectDepth := InspectDepthOf(AEngineOptions);
 end;
 
 end.

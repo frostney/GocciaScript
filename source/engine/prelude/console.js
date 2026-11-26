@@ -1,9 +1,9 @@
-// console for the CLI host, as Goccia.Builtins.Console has it: every method writes one line to standard output
-// (warn, error, info and debug behind a "Warning: ", "Error: ", "Info: " or "Debug: " prefix), indented two spaces
-// per open group, its values rendered by Goccia.Values.Formatting's console form (util.inspect's shapes to a depth of
-// 5: strings quoted when nested, -0 kept, functions, classes and errors in brackets). Called once per realm with the
-// global object, the host's natives (n) and the preludes' shared internals; replaces the conformance host's console
-// and sets shared.inspect.
+// console for the CLI host: every method writes one line through n.writeLine with the method's name, which picks the
+// stream (warn, error, info and debug behind a "Warning: ", "Error: ", "Info: " or "Debug: " prefix), indented two
+// spaces per open group. Values render in util.inspect's shapes to the depth n.inspectDepth() gives (5 unless
+// --inspect-depth sets it): strings quoted when nested, -0 kept, functions, classes and errors in brackets. Called
+// once per realm with the global object, the host's natives (n) and the preludes' shared internals; replaces the
+// conformance host's console and sets shared.inspect.
 (function (G, n, shared) {
   'use strict';
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -11,7 +11,8 @@
   const apply = Reflect.apply;
   const isArray = Array.isArray;
   const hidden = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
-  const DEPTH = 5;
+  // the inspection depth, read from the host when a value's rendering starts
+  let DEPTH = 5;
   const brand = (fn) => (v) => { try { apply(fn, v, []); return true; } catch { return false; } };
   const isMap = brand(getOwnPropertyDescriptor(Map.prototype, 'size').get);
   const isSet = brand(getOwnPropertyDescriptor(Set.prototype, 'size').get);
@@ -141,9 +142,9 @@
     const p = properties(v, depth, consoleForm, []);
     return { text: p.entries.length === 0 ? '{}' : join('', '{', '}', p.entries, p.multi), multi: p.multi };
   }
-  const inspect = (v) => render(v, false, 0, true).text;
+  const inspect = (v) => { DEPTH = n.inspectDepth(); return render(v, false, 0, true).text; };
   shared.inspect = inspect;
-  shared.display = (v) => render(v, false, 0, false).text;
+  shared.display = (v) => { DEPTH = n.inspectDepth(); return render(v, false, 0, false).text; };
 
   // ---------------- console ----------------
   let groupDepth = 0;
