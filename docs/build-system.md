@@ -645,8 +645,18 @@ Overflow and range checks are enabled in development mode for safety. In product
 The build script is a FreePascal program that runs via the `instantfpc` shebang:
 
 ```pascal
-#!/usr/bin/env -S instantfpc -B -Fu./source/shared
+#!/usr/bin/env -S instantfpc --set-cache=./build/instantfpc -B -Fu./source/shared
 ```
+
+instantfpc keeps a script's source copy and compiled binary in its cache
+directory, under the script's file name. Its default cache,
+`~/.cache/instantfpc`, is shared by every checkout on a machine, so two
+`./build.pas` runs from different worktrees would write the same
+`build.pas` copy at once and fail with `Unable to create file`, or one would
+compile and run the other checkout's script. `--set-cache` gives each checkout
+its own cache under `build/instantfpc`, for `build.pas`, `format.pas` and
+`safeseh.pas` alike. Like `-Fu./source/shared`, the path is relative to the
+working directory, so run these scripts from the repository root.
 
 It:
 

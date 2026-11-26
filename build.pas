@@ -1,4 +1,4 @@
-#!/usr/bin/env -S instantfpc -B -Fu./source/shared
+#!/usr/bin/env -S instantfpc --set-cache=./build/instantfpc -B -Fu./source/shared
 
 {$mode delphi}
 {$H+}
