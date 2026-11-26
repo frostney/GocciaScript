@@ -3,6 +3,7 @@ program CLI.ConfigFile.Test;
 {$I Shared.inc}
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
   SysUtils,
 
@@ -76,6 +77,7 @@ type
     procedure TestDiscoverWalksUpToParent;
     procedure TestDiscoverRespectsExtensionPriority;
     procedure TestDiscoverReturnsEmptyWhenNotFound;
+    procedure TestDiscoverSkipsAFifo;
 
     { FindConfigEntry }
     procedure TestFindConfigEntryReturnsMatch;
@@ -150,6 +152,13 @@ begin
   Test('DiscoverConfigFile walks up to parent', TestDiscoverWalksUpToParent);
   Test('DiscoverConfigFile respects extension priority', TestDiscoverRespectsExtensionPriority);
   Test('DiscoverConfigFile returns empty when not found', TestDiscoverReturnsEmptyWhenNotFound);
+  {$IFDEF UNIX}
+  Test('DiscoverConfigFile skips a FIFO that has the name',
+    TestDiscoverSkipsAFifo);
+  {$ELSE}
+  Skip('DiscoverConfigFile skips a FIFO that has the name',
+    TestDiscoverSkipsAFifo, 'Windows has no FIFOs in the filesystem');
+  {$ENDIF}
 
   Test('FindConfigEntry returns matching value', TestFindConfigEntryReturnsMatch);
   Test('FindConfigEntry returns false when key missing', TestFindConfigEntryReturnsFalseWhenMissing);
@@ -898,6 +907,32 @@ begin
   Found := DiscoverConfigFile(ChildDir, ['myapp'], ['.json']);
 
   Expect<string>(Found).ToBe(ExpandFileName(ConfigPath));
+end;
+
+procedure TConfigFileTests.TestDiscoverSkipsAFifo;
+{$IFDEF UNIX}
+const
+  FIFO_MODE = $1B6;
+var
+  ParentDir, ChildDir, ConfigPath, Found: string;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { Reading the FIFO would wait for a writer; discovery passes over it to
+    the parent's config. }
+  ParentDir := CreateTempDirectory;
+  ChildDir := IncludeTrailingPathDelimiter(ParentDir) + 'sub';
+  ForceDirectories(ChildDir);
+  ConfigPath := IncludeTrailingPathDelimiter(ParentDir) + 'myapp.json';
+  WriteTextFile(ConfigPath, '{}');
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(
+    IncludeTrailingPathDelimiter(ChildDir) + 'myapp.json')), FIFO_MODE))
+    .ToBe(0);
+
+  Found := DiscoverConfigFile(ChildDir, ['myapp'], ['.json']);
+
+  Expect<string>(Found).ToBe(ExpandFileName(ConfigPath));
+  {$ENDIF}
 end;
 
 procedure TConfigFileTests.TestDiscoverRespectsExtensionPriority;

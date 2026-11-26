@@ -745,6 +745,12 @@ never reachable from the guest.
 - Symbolic links are refused rather than followed, anywhere in a copied tree:
   `Copy path is a symlink (not supported): <path>` (exit 1, see
   [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md)).
+- Anything else that is neither a regular file nor a directory, such as a
+  FIFO, a socket or a device, is refused without being read, so copy-in never
+  waits on it: `Copy path is not a regular file (not supported): <path>`
+  (exit 1). Its type is judged from its name before anything is opened; on
+  POSIX the read checks the opened file again, so one swapped in after that
+  check is refused the same way.
 
 The positional entry file is copied, without write-back, to `/<basename>` — unless it lies
 inside a copied input, in which case it runs at that input's sandbox path and is

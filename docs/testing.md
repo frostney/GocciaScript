@@ -736,10 +736,10 @@ build → test, boot-timing, benchmark*      → timing comment (benchmark* also
       → web-tooling-workload → web-tooling-report → Web Tooling comment
       → test262 → test262-merge             → test262 comment
       → cli
-docs, test-structure (no build)       * also needs build-main, a build of the PR's base commit
+docs, test-structure, website (no build)  * also needs build-main, a build of the PR's base commit
 ```
 
-`docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks.
+`docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs the website's own checks ([Build System](build-system.md#pryml--pull-requests)).
 
 The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the per-file engines' heaps: collections and allocated bytes are summed over the files, in a parallel run live bytes add up across files and the peak is the largest `--jobs` files' peaks together, while in a sequential run the peak is the largest file's and the live bytes are the last file's (`AggregateMemoryStats` in `Goccia.CLI.FileEngine`). Freeing a file's engine and its heap at the end of the file is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 

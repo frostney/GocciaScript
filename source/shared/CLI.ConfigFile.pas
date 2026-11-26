@@ -800,7 +800,9 @@ begin
       begin
         CandidatePath := IncludeTrailingPathDelimiter(CurrentDirectory) +
           ABaseNames[B] + AExtensions[E];
-        if FileExists(CandidatePath) then
+        { Only a regular file, or a link to one, is a config: reading a FIFO
+          that has the name would wait for a writer before the run starts. }
+        if HostPathNamesRegularFile(CandidatePath) then
           Exit(CandidatePath);
       end;
 
