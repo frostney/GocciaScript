@@ -38,6 +38,14 @@ postprocessors = [
   # 0.16.0: #1943's subject names the profiler's `<module>` row. Unquoted,
   # GitHub drops it as an unknown HTML tag and the entry reads "exceeds 's".
   { pattern = '(?m)^(- fix\(profiler\): a recursive function.s total time counts each outermost call once, so it no longer exceeds )<module>(.s \(#1943\))$', replace = "$1`<module>`$2" },
+  # 0.18.0: #2035 and #2036 fixed the old VM; #2187 replaced it with the
+  # engine, which keeps their behaviour but writes bytecode format 200.
+  { pattern = '(?m)^(- fix\(vm\): a value the program has dropped is no longer held by await, catch or yield \(bytecode format v101\) \(#2035\))$', replace = "$1 — kept by the new engine (#2187), which writes bytecode format 200 and refuses format 100 and 101 files" },
+  # 0.18.0: #2187's breaking change is the embedding API; the CLI keeps its
+  # options, config keys and reports.
+  { pattern = '(?m)^(- feat!: run every GocciaScript application on the new engine, and delete the old interpreter, compiler and VM \(#2187\))$', replace = "$1 — breaking for embedders: `TGocciaEngine` in `Goccia.Embed` replaces the old engine classes (docs/embedding.md maps them); the CLI keeps its options, config keys and reports, and the toolchain is FPC 3.3.1 from fpc-toolchain" },
+  # 0.18.0: #2128 was squash-merged without its PR number in the subject.
+  { pattern = '(?m)^(- fix\(parser\): preserve regexp iterables in assignment-target for-of loops)$', replace = "$1 (#2128)" },
 ]
 
 [git]
