@@ -1,4 +1,4 @@
-#!/usr/bin/env -S instantfpc -Fu./source/shared '--set-cache=./build/instantfpc cache'
+#!/usr/bin/env -Sinstantfpc\_-Fu./source/shared\_"--set-cache=./build/instantfpc\_cache"
 { The shebang compiles this script into the checkout's own "build/instantfpc cache";
   docs/build-system.md (Prerequisites) explains the quoted name with a space. }
 

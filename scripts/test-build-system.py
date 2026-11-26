@@ -171,11 +171,14 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
 # the checkouts shared made one run fail before build.pas started, or compile
 # and run the other checkout's script. The second checkout's path has an
 # apostrophe, which instantfpc's compiler command line survives only because
-# the cache directory's name has a space, so instantfpc quotes it.
+# the cache directory's name has a space, so instantfpc quotes it. Both share
+# one disposable INSTANTFPCCACHE, the cache a shebang without --set-cache
+# would use, so a regression fails here without touching the user's cache.
 if not shutil.which("instantfpc"):
     raise SystemExit("instantfpc is required")
 with tempfile.TemporaryDirectory(prefix="goccia-build-cache-") as directory:
     checkouts = [Path(directory) / "plain", Path(directory) / "O'Brien" / "marked"]
+    cache_env = dict(os.environ, INSTANTFPCCACHE=str(Path(directory) / "shared-cache"))
     for checkout in checkouts:
         (checkout / "source/units").mkdir(parents=True)
         (checkout / "source/shared").symlink_to(REPO / "source/shared")
@@ -185,10 +188,20 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-cache-") as directory:
             script = head + "\nbegin\n  WriteLn('marked checkout');\n" + tail
         (checkout / "build.pas").write_text(script)
         (checkout / "build.pas").chmod(0o755)
-    launches = [subprocess.Popen(["./build.pas", "nosuchtarget"], cwd=checkout,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True) for checkout in checkouts]
-    outputs = [launch.communicate(timeout=600)[0] for launch in launches]
+    launches = []
+    try:
+        for checkout in checkouts:
+            launches.append(subprocess.Popen(
+                ["./build.pas", "nosuchtarget"], cwd=checkout, env=cache_env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+        outputs = [launch.communicate(timeout=600)[0] for launch in launches]
+    finally:
+        # A launch or wait that failed leaves no child writing into the
+        # fixture while it is removed.
+        for launch in launches:
+            if launch.poll() is None:
+                launch.kill()
+                launch.wait()
     for checkout, output in zip(checkouts, outputs):
         assert "Unknown build target: nosuchtarget" in output, (checkout, output)
         assert (checkout / "build/instantfpc cache/build").exists(), checkout

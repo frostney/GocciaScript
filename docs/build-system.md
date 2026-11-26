@@ -24,7 +24,7 @@ This file is the authoritative command reference for local builds and CLI usage.
 
 See [Build from source](../README.md#build-from-source) in the README for FPC installation instructions.
 
-- **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas`, `format.pas` and `safeseh.pas` as scripts. instantfpc caches a compiled script under its file name, and its per-user default cache (`~/.cache/instantfpc`) would give every checkout's `build.pas` the same entry, so two runs from different worktrees would collide or run each other's script. Each shebang therefore passes `--set-cache` with the checkout's own `build/instantfpc cache` directory. The path is relative, like `-Fu./source/shared`, so run the scripts from the repository root. The space in the name makes instantfpc quote the path in the compiler command line, which keeps a checkout path containing an apostrophe working.
+- **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas`, `format.pas` and `safeseh.pas` as scripts. instantfpc caches a compiled script under its file name, and its per-user default cache (`~/.cache/instantfpc`) would give every checkout's `build.pas` the same entry, so two runs from different worktrees would collide or run each other's script. Each shebang therefore passes `--set-cache` with the checkout's own `build/instantfpc cache` directory. The path is relative, like `-Fu./source/shared`, so run the scripts from the repository root. The space in the name makes instantfpc quote the path in the compiler command line, which keeps a checkout path containing an apostrophe working (one containing a double quote still fails to compile). The shebang is a single `env -S` word with `\_` for each separating space, because macOS splits a shebang line at its spaces before `env` reads it.
 
 Delphi 12 contributors build the Win32 and Win64 native application matrix from `source/app/GocciaScript.Delphi.groupproj`; see [Delphi Validation](contributing/delphi.md) for the complete IDE workflow and validation contract.
 
@@ -645,7 +645,7 @@ Overflow and range checks are enabled in development mode for safety. In product
 The build script is a FreePascal program that runs via the `instantfpc` shebang:
 
 ```pascal
-#!/usr/bin/env -S instantfpc -B '--set-cache=./build/instantfpc cache' -Fu./source/shared
+#!/usr/bin/env -Sinstantfpc\_-B\_"--set-cache=./build/instantfpc\_cache"\_-Fu./source/shared
 ```
 
 It:
