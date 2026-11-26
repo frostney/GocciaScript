@@ -894,7 +894,7 @@ Limits are settings, not capabilities. Each takes a unit:
 | Option | Value | `0` means |
 |---|---|---|
 | `--timeout` | a duration: `500ms`, `5s`, `2m`, or plain milliseconds | no timeout |
-| `--max-memory` | a size: `64MiB`, `1GiB`, or plain bytes | no ceiling |
+| `--max-memory` | a size: `64MiB`, `1GiB`, or plain bytes | the default: half the memory available, at most 8 GB (700 MB on a 32-bit build) |
 | `--max-instructions` | a count | no limit |
 | `--max-stack` | a count | no limit |
 | `--max-fetch-bytes` | a size (default `8MiB`) | the default |
