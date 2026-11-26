@@ -390,12 +390,12 @@ export function Install({
               before 0.14), <code>GocciaScriptLoaderBare</code>,{" "}
               <code>GocciaTestRunner</code>, <code>GocciaTest262Runner</code>,{" "}
               <code>GocciaBundler</code>, <code>GocciaBenchmarkRunner</code>,{" "}
-              <code>GocciaREPL</code>, and <code>GocciaFuzzHarness</code> —
-              plus the <code>tests/</code>,{" "}
-              <code>benchmarks/</code>, and <code>examples/</code> directories,
-              all inside one versioned folder named after the archive. The
-              commands below put the three most common binaries on your{" "}
-              <code>$PATH</code>; the rest are yours to copy from that folder.
+              <code>GocciaREPL</code>, and <code>GocciaFuzzHarness</code> — plus
+              the <code>tests/</code>, <code>benchmarks/</code>, and{" "}
+              <code>examples/</code> directories, all inside one versioned
+              folder named after the archive. The commands below put the three
+              most common binaries on your <code>$PATH</code>; the rest are
+              yours to copy from that folder.
             </p>
             <CommandTabs
               tabs={OS_TABS}
