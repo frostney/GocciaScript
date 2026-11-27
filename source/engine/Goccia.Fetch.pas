@@ -236,7 +236,8 @@ end;
 
 destructor TFetchWorker.Destroy;
 begin
-  Cancellation.Release;
+  { nil when the thread could not be created }
+  if Cancellation <> nil then Cancellation.Release;
   inherited Destroy;
 end;
 

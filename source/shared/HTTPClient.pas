@@ -936,6 +936,14 @@ begin
       on E: Exception do
         ErrorMessage := E.Message;
     end;
+    { The slot goes back before the waiter learns the outcome: a request it
+      ends, such as a cancelled one, frees its own slot for the next request,
+      which must find this one free too. }
+    if FWorkerSlotAcquired then
+    begin
+      FWorkerSlotAcquired := False;
+      ReleaseHTTPConnectionWorker;
+    end;
     FState.Complete(Socket, ConnectedIndex, ErrorMessage);
   except
     if IsValidHTTPSocket(Socket) then
@@ -953,7 +961,6 @@ var
   State: THTTPConnectionState;
   WaitResult: TWaitResult;
   Worker: THTTPConnectionWorker;
-  WaitUntilNs, RemainingMs: Int64;
 begin
   if ATimeoutMilliseconds <= 0 then
     Exit(ConnectSocketBlocking(AHost, APort, AAddresses, ADeadlineNs,
@@ -967,21 +974,10 @@ begin
     Worker.Start;
     Worker := nil;
 
-    { With a cancellation the wait is cut into polls that observe it. A
-      cancelled attempt is abandoned; one that completed meanwhile is taken,
-      and the caller closes it. }
-    WaitUntilNs := GetNanoseconds + Int64(ATimeoutMilliseconds) * 1000000;
-    repeat
-      if NetworkCancelled(ACancellation) and State.TryAbandon then
-        raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
-      RemainingMs := (WaitUntilNs - GetNanoseconds + 999999) div 1000000;
-      if RemainingMs <= 0 then
-        WaitResult := wrTimeout
-      else
-        WaitResult := State.WaitFor(Cardinal(CancellableWaitMilliseconds(
-          ACancellation, RemainingMs)));
-    until (WaitResult <> wrTimeout) or (RemainingMs <= 0) or
-          not Assigned(ACancellation);
+    { A cancellation is not abandoned here: the attempt observes it within
+      one poll and completes with its error, having given its worker slot
+      back, so the request that starts next finds the slot free. }
+    WaitResult := State.WaitFor(ATimeoutMilliseconds);
     if WaitResult = wrTimeout then
     begin
       if State.TryAbandon then

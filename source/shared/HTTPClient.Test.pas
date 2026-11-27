@@ -1329,8 +1329,9 @@ begin
   finally
     Cancellation.Release;
   end;
-  Expect<Boolean>(WaitForHTTPConnectionWorkers(
-    CANCELLED_WITHIN_MILLISECONDS)).ToBe(True);
+  { The attempt's thread gave its slot back before the request ended, so a
+    request started next finds it free. }
+  Expect<Boolean>(WaitForHTTPConnectionWorkers(0)).ToBe(True);
 end;
 
 { A listener that is never accepted: the kernel completes the connection and
@@ -1477,11 +1478,15 @@ begin
   try
     Server := TSilentTLSServer.Create(CertificateFile, KeyFile);
     try
-      ExpectCancelEndsTheRequest(
-        Format('https://localhost:%d/', [Server.Port]), NO_REQUEST_TIMEOUT,
-        Server.Release);
-      Server.Release;
-      Server.WaitFor;
+      try
+        ExpectCancelEndsTheRequest(
+          Format('https://localhost:%d/', [Server.Port]), NO_REQUEST_TIMEOUT,
+          Server.Release);
+      finally
+        { Joined before it is freed, whatever the request reported. }
+        Server.Release;
+        Server.WaitFor;
+      end;
       Expect<string>(Server.Failure).ToBe('');
       Expect<Boolean>(Server.HandshakeCompleted).ToBe(True);
     finally
