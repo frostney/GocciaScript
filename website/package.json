@@ -17,7 +17,7 @@
     "lint": "biome check",
     "format": "biome format --write",
     "test": "bun test",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && fumadocs-mdx && tsc --noEmit"
   },
   "browserslist": {
     "production": [
