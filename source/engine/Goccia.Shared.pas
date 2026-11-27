@@ -31,6 +31,9 @@ type
     GrowLock: LongInt;      { atomic: held while a grow zeroes the new bytes and publishes the length }
   end;
 
+{ the tick count a wait of TimeoutMs milliseconds ends at: High(QWord) for an infinite timeout and for one past
+  1e15 ms (some 31,000 years), which a deadline cannot hold; shared by Atomics.wait and Atomics.waitAsync }
+function WaitDeadline(TimeoutMs: Double): QWord;
 function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
 procedure RetainBlock(B: PSharedBlock);
 procedure ReleaseBlock(B: PSharedBlock);
@@ -82,6 +85,15 @@ implementation
 
 uses
   Math, Goccia.ThreadCleanupRegistry;
+
+function WaitDeadline(TimeoutMs: Double): QWord;
+const LongestWaitMs = 1e15;
+begin
+  if IsInfinite(TimeoutMs) or (TimeoutMs > LongestWaitMs) then Exit(High(QWord));
+  if TimeoutMs <= 0 then Exit(GetTickCount64);
+  { Ceil64: Ceil is 32-bit and would wrap a wait of 2^32 ms or more }
+  Result := GetTickCount64 + QWord(Ceil64(TimeoutMs));
+end;
 
 { ---------------- blocks ---------------- }
 
@@ -348,10 +360,7 @@ begin
   if WaitTail = nil then WaitHead := @W else WaitTail^.Next := @W;
   WaitTail := @W;
   LeaveCriticalSection(WaitLock);
-  { a timeout past 1e15 ms (some 31,000 years) waits as an infinite one does, as Atomics.waitAsync's does: converting
-    it would overflow and end the wait at once }
-  Deadline := High(QWord);
-  if not IsInfinite(TimeoutMs) and (TimeoutMs <= 1e15) then Deadline := GetTickCount64 + QWord(Ceil(TimeoutMs));
+  Deadline := WaitDeadline(TimeoutMs);
   repeat
     EnterCriticalSection(WaitLock);
     Notified := W.Notified;

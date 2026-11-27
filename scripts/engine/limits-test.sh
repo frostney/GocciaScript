@@ -35,6 +35,9 @@ check atomics-wait-huge-timeout --timeout=200 "$T" \
   'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1e300); console.log("returned");'
 check atomics-wait-max-timeout --timeout=200 "$T" \
   'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number.MAX_VALUE); console.log("returned");'
+# a long finite timeout past 32 bits of milliseconds (about 49.7 days) is a real wait, not one that wraps to zero
+check atomics-wait-long-timeout --timeout=200 "$T" \
+  'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2 ** 32); console.log("returned");'
 check atomics-guest-timeout --timeout=2000 'timed-out' \
   'const a = new Int32Array(new SharedArrayBuffer(4)); console.log(Atomics.wait(a, 0, 0, 10));' 5
 check do-while --timeout=200 "$T" 'let n = 0; do { n++; } while (true);'
