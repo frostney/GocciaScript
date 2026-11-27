@@ -207,8 +207,11 @@ operations rather than observable methods.
   `var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);`
   `var StringPrototypeSlice = uncurryThis(String.prototype.slice);` then `StringPrototypeSlice(s, 1, 2)`. Getters
   the same way (`uncurryThis(getOwnPropertyDescriptor(Map.prototype, 'size').get)`), including a typed array's
-  `length`, `buffer` and `byteOffset`. `ReflectApply(f, this, args)` replaces `f.call` and `f.apply`.
-- **Lists.** Append with `defineProperty` (an index setter on `Array.prototype` must not see the value). Do not call
+  `length`, `buffer` and `byteOffset`. `ReflectApply(f, this, args)` replaces `f.call` and `f.apply`. The VM and the
+  baseline JIT call an uncurried method as fast as a method call ([Bytecode VM](bytecode-vm.md)).
+- **Lists.** Append with `defineProperty` (an index setter on `Array.prototype` must not see the value), or make a
+  list that never reaches a script without a prototype (`setPrototypeOf([], null)`) and store by index, which is as
+  fast as `push`. Do not call
   `map`, `filter`, `slice`, `concat`, `splice` or `flat` on a list the prelude made: they look up the array's
   `constructor` and `Symbol.species`; write the loop. The same holds for a typed array's `slice` and `subarray`
   and an `ArrayBuffer`'s `slice`.

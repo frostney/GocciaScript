@@ -24,13 +24,14 @@
   var BigIntPrototypeToString = uncurryThis(BigInt.prototype.toString);
   var ArrayPrototypeIndexOf = uncurryThis(Array.prototype.indexOf), ArrayPrototypeSort = uncurryThis(Array.prototype.sort);
   var ObjectPrototypeHasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
-  // a list append that defines the index (a setter on Array.prototype or Object.prototype must not see it)
-  function append(list) {
-    for (var i = 1; i < arguments.length; i++) ObjectDefineProperty(list, list.length, { value: arguments[i], writable: true, enumerable: true, configurable: true });
-  }
+  // the operations' own lists: arrays without a prototype, so an index store reaches no setter a script put on
+  // Array.prototype or Object.prototype, and is as fast as push (none of them is handed to a script)
+  var ObjectSetPrototypeOf = Object.setPrototypeOf;
+  function newList() { return ObjectSetPrototypeOf([], null); }
+  function append(list, v) { list[list.length] = v; }
   // a new list of a's elements then b's (concat would look up a's constructor and Symbol.species)
   function listConcat(a, b) {
-    var r = [];
+    var r = newList();
     for (var i = 0; i < a.length; i++) append(r, a[i]);
     for (i = 0; i < b.length; i++) append(r, b[i]);
     return r;
@@ -641,7 +642,7 @@
   function newParse() {
     return { year: undefined, month: undefined, day: undefined, hour: undefined, minute: undefined,
       second: undefined, fraction: undefined, z: false, offset: undefined, tzAnnotation: undefined,
-      calendar: undefined, annotations: [], hasDay: false, hasYear: false, hasTime: false };
+      calendar: undefined, annotations: newList(), hasDay: false, hasYear: false, hasTime: false };
   }
   function isDateTimeSep(c) { return c === 84 || c === 116 || c === 32; }
   // AnnotatedDateTime[Zoned, TimeRequired] (and TemporalInstantString when instant)
@@ -662,7 +663,7 @@
       }
     } else if (timeRequired || instant) return null;
     if (instant && !r.z && r.offset === undefined) return null;
-    r.annotations = [];
+    r.annotations = newList();
     var save = { cal: r.calendar };
     try { j = pAnnotations(s, j, r); } catch (err) { r.error = err; }
     if (j < 0 || j !== s.length) return null;
@@ -896,7 +897,7 @@
     zoneIndex["utc"] = { id: "UTC", primary: "UTC" };
     var text = tzIndex();
     if (typeof text === "string") {
-      var lines = StringPrototypeSplit(text, "\n"), links = [];
+      var lines = StringPrototypeSplit(text, "\n"), links = newList();
       for (var i = 0; i < lines.length; i++) {
         var l = lines[i];
         if (StringPrototypeCharCodeAt(l, 0) === 90 && StringPrototypeCharCodeAt(l, 1) === 32) {          // "Z name ..."
@@ -970,7 +971,7 @@
       at += c.time * 5 + c.type * 6 + c.chr + c.leap * 8 + c.isstd + c.isut;
       c = counts(at); at += 44; tsize = 8;
     }
-    var times = [], idx = [], types = [];
+    var times = newList(), idx = newList(), types = newList();
     for (var i = 0; i < c.time; i++) append(times, tsize === 8 ? be64(b, at + i * 8) : be32(b, at + i * 4));
     at += c.time * tsize;
     for (i = 0; i < c.time; i++) append(idx, StringPrototypeCharCodeAt(b, at + i));
@@ -983,7 +984,7 @@
       if (e > at) footer = StringPrototypeSlice(b, at + 1, e);
     }
     // offsets after each transition, dropping those that do not change the offset
-    var tr = [], offs = [];
+    var tr = newList(), offs = newList();
     var initial = types.length > 0 ? types[0].off : 0;
     var prev = initial;
     for (i = 0; i < times.length; i++) {
@@ -1192,7 +1193,7 @@
     if (id === "UTC") return [local];
     var z = zoneForId(id), ls = epochSecondsOf(local);
     var cands = [zoneOffsetSeconds(z, ls - 86400), zoneOffsetSeconds(z, ls), zoneOffsetSeconds(z, ls + 86400)];
-    var res = [], seen = [];
+    var res = newList(), seen = newList();
     for (var i = 0; i < 3; i++) {
       var o = cands[i];
       if (ArrayPrototypeIndexOf(seen, o) >= 0) continue;
@@ -1319,7 +1320,7 @@
   function PrepareCalendarFields(calendar, obj, calNames, nonCalNames, required) {
     var names = listConcat(calNames, nonCalNames);
     // CalendarExtraFields: era and eraYear with year, for a calendar with eras
-    if (ArrayPrototypeIndexOf(calNames, "year") >= 0 && CalendarSupportsEra(calendar)) append(names, "era", "eraYear");
+    if (ArrayPrototypeIndexOf(calNames, "year") >= 0 && CalendarSupportsEra(calendar)) { append(names, "era"); append(names, "eraYear"); }
     ArrayPrototypeSort(names);
     var result = {}, any = false;
     for (var i = 0; i < names.length; i++) {
@@ -1344,20 +1345,20 @@
     return result;
   }
   function CalendarFieldKeysToIgnore(calendar, keys) {
-    var r = [], eras = calendar !== "iso8601" && CalendarSupportsEra(calendar), mid = calendar === "japanese";
+    var r = newList(), eras = calendar !== "iso8601" && CalendarSupportsEra(calendar), mid = calendar === "japanese";
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
       append(r, k);
       if (k === "month") append(r, "monthCode"); else if (k === "monthCode") append(r, "month");
-      if (eras && (k === "era" || k === "eraYear" || k === "year")) append(r, "era", "eraYear", "year");
-      if (mid && (k === "day" || k === "month" || k === "monthCode")) append(r, "era", "eraYear");
+      if (eras && (k === "era" || k === "eraYear" || k === "year")) { append(r, "era"); append(r, "eraYear"); append(r, "year"); }
+      if (mid && (k === "day" || k === "month" || k === "monthCode")) { append(r, "era"); append(r, "eraYear"); }
     }
     return r;
   }
   var FIELD_ORDER = ["era", "eraYear", "year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond",
     "microsecond", "nanosecond", "offset", "timeZone"];
   function CalendarMergeFields(calendar, fields, additional) {
-    var addKeys = [];
+    var addKeys = newList();
     for (var i = 0; i < FIELD_ORDER.length; i++) if (additional[FIELD_ORDER[i]] !== undefined) append(addKeys, FIELD_ORDER[i]);
     var overridden = CalendarFieldKeysToIgnore(calendar, addKeys);
     var merged = {};
@@ -2219,7 +2220,7 @@
     constructor(years = undefined, months = undefined, weeks = undefined, days = undefined, hours = undefined, minutes = undefined,
       seconds = undefined, milliseconds = undefined, microseconds = undefined, nanoseconds = undefined) {
       if (years === TOKEN) { this.#s = months; return; }
-      var a = arguments, v = [];
+      var a = arguments, v = newList();
       for (var i = 0; i < 10; i++) append(v, a[i] === undefined ? 0 : ToIntegerIfIntegral(a[i]));
       if (!IsValidDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9])) throw rangeError("invalid duration");
       var s = {};
@@ -2266,13 +2267,13 @@
     with(temporalDurationLike) {
       var d = getDur(this);
       var p = ToTemporalPartialDurationRecord(temporalDurationLike);
-      var v = [];
+      var v = newList();
       for (var i = 0; i < 10; i++) append(v, p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : d[DUR_KEYS[i]]);
       return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
     }
     negated() { return CreateNegatedTemporalDuration(getDur(this)); }
     abs() {
-      var d = getDur(this), v = [];
+      var d = getDur(this), v = newList();
       for (var i = 0; i < 10; i++) append(v, MathAbs(d[DUR_KEYS[i]]));
       return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
     }
@@ -2406,7 +2407,7 @@
       if (typeof item !== "string") throw typeError("duration must be a string or an object");
       return ParseTemporalDurationString(item);
     }
-    var p = ToTemporalPartialDurationRecord(item), v = [];
+    var p = ToTemporalPartialDurationRecord(item), v = newList();
     for (var i = 0; i < 10; i++) append(v, p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : 0);
     return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
   }
@@ -2498,7 +2499,7 @@
     constructor(hour = undefined, minute = undefined, second = undefined, millisecond = undefined, microsecond = undefined,
       nanosecond = undefined) {
       if (hour === TOKEN) { this.#s = minute; return; }
-      var a = arguments, v = [];
+      var a = arguments, v = newList();
       for (var i = 0; i < 6; i++) append(v, a[i] === undefined ? 0 : ToIntegerWithTruncation(a[i]));
       if (!IsValidTime(v[0], v[1], v[2], v[3], v[4], v[5])) throw rangeError("invalid time");
       this.#s = { time: Time(v[0], v[1], v[2], v[3], v[4], v[5]) };

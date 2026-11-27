@@ -4622,6 +4622,14 @@ begin
     okBound:
       begin
         if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+        { uncurryThis(f) (Function.prototype.call.bind(f), no bound arguments) called with (t, ...args): f called
+          with this t and the rest, as the call native would call it }
+        if (PValueArray(PtrOf(O^.Aux2))^.Len = 1) and IsObject(O^.Aux1) and (ObjOf(O^.Aux1)^.OKind = okNative) and
+           (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsCallable(PValueArray(PtrOf(O^.Aux2))^.Data[0]) then
+        begin
+          if Argc = 0 then Exit(CallValue(PValueArray(PtrOf(O^.Aux2))^.Data[0], VUndefined, nil, 0, Res));
+          Exit(CallValue(PValueArray(PtrOf(O^.Aux2))^.Data[0], Args^, PValue(PtrUInt(Args) + SizeOf(TValue)), Argc - 1, Res));
+        end;
         { 10.4.1.1: a chain of bound functions followed in a loop, each level's bound arguments in front of those
           of the level outside it, the innermost bound this }
         N := BoundChainArgs(O, Args, Argc, F, This, nil);
@@ -7319,6 +7327,35 @@ begin
   Result := 1;
 end;
 
+{ whether O is uncurryThis(f) for a native f: Function.prototype.call.bind(f) with no bound arguments (the preludes'
+  captured prototype methods), which FastLoop's opCall calls as f.call }
+function XUncurriedNative(O: PObj): Boolean; inline;
+var B: PValueArray;
+begin
+  B := PValueArray(PtrOf(O^.Aux2));
+  Result := (B^.Len = 1) and IsObject(O^.Aux1) and (ObjOf(O^.Aux1)^.OKind = okNative) and
+    (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsObject(B^.Data[0]) and (ObjOf(B^.Data[0])^.OKind = okNative);
+end;
+
+{ the baseline JIT's call stub's shift for uncurryThis(f) with a native f (R the call's R[A], ArgcFlags its Argc with
+  the undefined-this flag at bit 16): f moved to R[0], the first argument to R[1] as its this, the rest down a place;
+  the new Argc returned (no flag), or -1, nothing changed, for any other callee }
+function XJitUncurry(R: PValue; ArgcFlags: PtrInt): PtrInt;
+var O: PObj; Argc, J: Integer;
+begin
+  O := ObjOf(R[0]);
+  if (O^.OKind <> okBound) or not XUncurriedNative(O) then Exit(-1);
+  Argc := ArgcFlags and $FFFF;
+  R[0] := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+  if Argc = 0 then
+  begin
+    R[1] := VUndefined;
+    Exit(0);
+  end;
+  for J := 0 to Argc - 1 do R[1 + J] := R[2 + J];
+  Result := Argc - 1;
+end;
+
 { FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }
 procedure XFastNewObj(R: PValue; A: NativeInt; N: Integer); noinline;
 begin
@@ -8180,6 +8217,28 @@ LSetPropSlow:
           O := ObjOf(VA);
           Argc := PWord(PByte(IP) - 5)^;
           if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
+          if (O^.OKind = okBound) and XUncurriedNative(O) then
+          begin
+            { uncurryThis(f)(t, ...args) for a native f: the registers shift down a place, f the callee and t its
+              this, and f is called here, as f.call(t, ...args) is below }
+            VA := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+            R[A] := VA;
+            if Argc = 0 then R[A + 1] := VUndefined
+            else
+            begin
+              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+              Dec(Argc);
+            end;
+            O := ObjOf(VA);
+            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+            if not XFastNative(O, R, A, (PQWord(IP)[-1] and not ((QWord($FFFF) shl 24) or (QWord(1) shl 40))) or
+              (QWord(Argc) shl 24), Fr) then
+            begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            Continue;
+          end;
           if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
           begin
             { f.call(t, ...args) with the intrinsic call (as Execute's opCall): the registers shift down a place, f
@@ -9676,9 +9735,27 @@ LReload:
             R[A] := V;
             Continue;
           end;
+          { uncurryThis(f), the preludes' captured prototype methods (Function.prototype.call.bind(f) with no bound
+            arguments), called with (t, ...args): f is called with this t and the rest, as the bound function's call
+            of the call native would call it, without that copy of the arguments and the native in between }
+          if (O^.OKind = okBound) and (PValueArray(PtrOf(O^.Aux2))^.Len = 1) and IsObject(O^.Aux1) and
+             (ObjOf(O^.Aux1)^.OKind = okNative) and (ObjOf(O^.Aux1)^.Native = FuncCallNative) and
+             IsObject(PValueArray(PtrOf(O^.Aux2))^.Data[0]) and
+             (ObjOf(PValueArray(PtrOf(O^.Aux2))^.Data[0])^.OKind in [okFunction, okNative]) then
+          begin
+            VA := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+            R[A] := VA;
+            if Argc = 0 then R[A + 1] := VUndefined
+            else
+            begin
+              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+              Dec(Argc);
+            end;
+            O := ObjOf(VA);
+          end
           { f.call(t, ...args) with the intrinsic call and a bytecode or native f: the registers shift down a place
             (f the callee, t its this) and f is called here, without the call native's nested Execute }
-          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] shr 48) = TAG_PTR_HI) and
+          else if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] shr 48) = TAG_PTR_HI) and
              (PCell(PtrUInt(R[A + 1] and PTR_MASK))^.Kind = ckObject) and (ObjOf(R[A + 1])^.OKind in [okFunction, okNative]) then
           begin
             VA := R[A + 1];

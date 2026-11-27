@@ -112,17 +112,19 @@
   const fromCharCode = String.fromCharCode;
   function atob(data) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'atob': 1 argument required, but only 0 present.");
-    let s = strip(String(data), '\t\n\f\r ', true);
+    let s = String(data);
+    if (RegExpPrototypeExec(/[\t\n\f\r ]/, s) !== null) s = strip(s, '\t\n\f\r ', true);
     if (s.length % 4 === 0) s = s[s.length - 1] !== '=' ? s : StringPrototypeSlice(s, 0, s[s.length - 2] === '=' ? -2 : -1);
     if (s.length % 4 === 1 || RegExpPrototypeExec(/[^A-Za-z0-9+/]/, s) !== null)
       throw new DOMException("Failed to execute 'atob': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
     const bytes = fromBase64(s, { lastChunkHandling: 'loose' });
     let out = '';
-    // by chunks of plain arrays: subarray would look up the species, and apply would read a typed array's length
-    const length = taLengthOf(bytes);
+    // by chunks, each a view of the bytes with an own length (subarray would look up the species, and apply would
+    // read the length through %TypedArray%.prototype's getter)
+    const length = taLengthOf(bytes), buffer = taBufferOf(bytes), offset = taOffsetOf(bytes);
     for (let i = 0; i < length; i += 8192) {
-      const chunk = [], end = length < i + 8192 ? length : i + 8192;
-      for (let j = i; j < end; j++) append(chunk, bytes[j]);
+      const n = length < i + 8192 ? length - i : 8192, chunk = new Uint8Array(buffer, offset + i, n);
+      defineProperty(chunk, 'length', { value: n });
       out += apply(fromCharCode, null, chunk);
     }
     return out;
