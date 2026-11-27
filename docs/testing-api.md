@@ -64,7 +64,7 @@ The testing API is installed by `InstallTestingAPI` (`Goccia.HostAPI`), which ru
 
 The [timer surface](#fake-timers) — `goccia:timers` and the `setTimeout` family — is installed with the host unless the host turns it off (`TGocciaEngine.ExposeTimers`). `GocciaRunner`, its sandbox mode, `GocciaBenchmarkRunner` and `GocciaScriptLoaderBare` turn it off; `GocciaTestRunner` and `GocciaREPL` keep it. The timers are deterministic and carry no ambient authority either way.
 
-An embedder sets `TGocciaEngine.TestMode` for the test framework's host behaviour (no process exit on an uncaught error, the `vitest` shim below) and calls `InstallTestingAPI` after `TGocciaEngine.PrepareHost` to get the API.
+An embedder sets `TGocciaEngine.TestMode` for the test framework's host behaviour (no process exit on an uncaught error, the `vitest` shim below) and calls `InstallTestingAPI` after `TGocciaEngine.PrepareHost` to get the API, which installs the testing globals. An embedder that wants Vitest-style tests by import only leaves `TestMode` off and opts in to the shim instead ([below](#the-vitest-compatibility-shim)).
 
 The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) and, outside the runner, the `=== Test Results ===` block straight to standard output, not through the console builtin. It is on when the host sets the `TestReporterOn` thread variable in `Goccia.HostAPI`: `GocciaTestRunner` sets it except in its `--output=json` and `--output=compact-json` modes, and `GocciaRunner` except in those modes and `--silent`, so the reporter never precedes a JSON envelope. Its sandbox mode leaves it off, as the sandbox's console is captured. Muting loses no information: the run's report, or the `runTests()` result, still carries the counts and failure messages.
 
@@ -533,7 +533,9 @@ Running `tests/` under Vitest needs a local Vitest install and a config that poi
 
 A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
 
-The shim is a runner default only: the host prelude (`source/engine/prelude/host.js`) registers the `vitest` module only for an engine in test mode (`TGocciaEngine.TestMode`), which `GocciaTestRunner` sets and the other binaries do not, so in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere. The shim's source is in `source/units/Goccia.VitestShim.inc`; it statically imports `goccia:test` and `goccia:timers`, so an embedder that sets `TestMode` also calls `InstallTestingAPI` and keeps `TGocciaEngine.ExposeTimers` on, or every `vitest` import fails to resolve.
+The shim is a runner default: the host prelude (`source/engine/prelude/host.js`) registers the `vitest` module for an engine in test mode (`TGocciaEngine.TestMode`), which `GocciaTestRunner` and `goccia --test` set and the other binaries do not, so in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the hosts that run test files are Vitest-shaped; both also hoist module mocks. There is no CLI flag that turns it on elsewhere. The shim's source is in `source/units/Goccia.VitestShim.inc`; it statically imports `goccia:test` and `goccia:timers`, so an embedder that sets `TestMode` also calls `InstallTestingAPI` and keeps `TGocciaEngine.ExposeTimers` on, or every `vitest` import fails to resolve.
+
+An embedder can also opt in without `TestMode` and without the testing globals: set `TGocciaEngine.ConfigJson` to `{"vitest-compat": "true"}` on the standard host (not `Bare`) and keep `ExposeTimers` on. Tests are then available only by import from `vitest` or `goccia:test`, and `runTests()` from `goccia:test` runs them synchronously and returns the report. Without timers the shim is not registered, so the host's own resolver decides what `vitest` names. Module mocks need the pass that hoists `vi.mock` and `vi.unmock` out of a test file before its module graph loads, which `GocciaTestRunner` and `goccia --test` run and this opt-in's host does not run. So in the opt-in `vi.mock` and `vi.unmock` throw an `Error` that says so instead of doing nothing. The members that `GocciaTestRunner` already refuses beside a module mock (`vi.doMock`, `vi.doUnmock`, `vi.resetModules`, `vi.importActual`, `vi.importMock`, `vi.hoisted`) keep their own reasons, prefixed by a note that this host applies no module mocks. The factory form below applies to the hosts that hoist.
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 
@@ -541,15 +543,15 @@ The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only 
 |---|---|
 | `vi.fn` | The engine's `mock` |
 | `vi.spyOn` | The engine's `spyOn` |
-| `vi.mock` | Supported, **factory form only** (see below) |
-| `vi.unmock` | Supported; hoisted with `vi.mock`, last directive in source order wins |
+| `vi.mock` | Supported where the host hoists it (`GocciaTestRunner`, `goccia --test`), **factory form only** (see below); throws in the module-only opt-in |
+| `vi.unmock` | Supported where the host hoists it; hoisted with `vi.mock`, last directive in source order wins; throws in the module-only opt-in |
 | the unsupported members listed [below](#the-rest-of-the-vi-namespace) | Throws, naming the member and why it cannot be honored |
 
 None of these is a silent no-op, and each names its own reason. `vi.isMockFunction`, `vi.mockObject`, `vi.dynamicImportSettled`, and `vi.defineHelper` are absent, so calling one is an ordinary `is not a function` TypeError ([#1278](https://github.com/frostney/GocciaScript/issues/1278)).
 
 #### `vi.mock` — what is supported
 
-`vi.mock(specifier, factory)` replaces a module for the duration of one test file. The call is **hoisted**: it applies to imports written above it, exactly as in Vitest.
+`vi.mock(specifier, factory)` replaces a module for the duration of one test file in a host that hoists it (`GocciaTestRunner`, `goccia --test`). The call is **hoisted**: it applies to imports written above it, exactly as in Vitest.
 
 ```javascript
 import { vi } from "vitest";
@@ -597,7 +599,7 @@ The factory must be a **synchronous arrow function whose body is directly an obj
 | `vi.importActual` / `vi.importMock` / `importOriginal` inside a factory | Throws |
 | `vi.hoisted` | Throws |
 
-**These throw on first import of the mocked module, not at the `vi.mock` call.** The `vi.mock` call itself is a no-op by then — the work happened during hoisting — so the error surfaces where the generated module is first evaluated. A mocked module nothing imports never reports its error at all, which matches the laziness Vitest also has.
+**In the hosts that hoist (`GocciaTestRunner`, `goccia --test`), these throw on first import of the mocked module, not at the `vi.mock` call.** The `vi.mock` call itself is a no-op by then — the work happened during hoisting — so the error surfaces where the generated module is first evaluated. A mocked module nothing imports never reports its error at all, which matches the laziness Vitest also has.
 
 Export names are read statically from the factory's returned object literal, because the engine resolves named imports at link time and a generated module must declare its exports up front. That is what rules out spread-based partial mocks — a real gap, and the most likely reason an unmodified Vitest suite will not run as-is.
 
@@ -606,7 +608,7 @@ Automock throws because it would have to execute the real module's top-level cod
 Further divergences from Vitest worth knowing:
 
 - A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. GocciaScript raises it as a `SyntaxError` before any module of the test file's graph evaluates.
-- An **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling.
+- In the hosts that hoist, an **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling. In the module-only opt-in every spelling throws at the call, as nothing is hoisted there.
 - A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
 - A test-file `var` (under `--compat-var`) referenced from a factory is a `ReferenceError` under module source type, where Vitest yields `undefined`. Under script source type a static import sees `undefined`, as in Vitest, and a dynamic `import()` resolves the variable, as for `const` in the table above.
 
