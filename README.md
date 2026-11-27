@@ -537,6 +537,8 @@ complete implementation, default-profile, and compatibility-path detail, see
 
 ## FreePascal and native embedding
 
+An embedder can [pump asynchronous host work](docs/embedding.md#asynchronous-host-work) alongside JavaScript promises and built-in work.
+
 FreePascal builds GocciaScript's native binaries, so the engine needs no other
 runtime underneath, and it is the toolchain for releases and the documented
 embedding API. Delphi support is planned for a later release

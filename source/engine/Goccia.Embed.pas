@@ -17,6 +17,7 @@ type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
   TGocciaNativeModuleFactory = TNativeModuleFactory;
+  TGocciaEmbedderWork = TEmbedderWork;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -228,6 +229,8 @@ type
     { Registers a native factory for an import, with the same lifetime as this engine. }
     function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
       var Err: UnicodeString): Boolean;
+    { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
+    procedure SetHostWork(Work: TGocciaEmbedderWork);
     function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
@@ -951,6 +954,11 @@ begin
   Result := InstallHost(Err);
 end;
 
+procedure TGocciaEngine.SetHostWork(Work: TGocciaEmbedderWork);
+begin
+  SetEmbedderWork(Work);
+end;
+
 function TGocciaEngine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
@@ -990,6 +998,7 @@ begin
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
   LimitsArm(FTimeoutMs, FMaxInstructions);
+  Result := False;
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
@@ -999,7 +1008,8 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
-    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark);
+    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark)
+    else if not Result then DiscardEmbedderWork;
     LimitsDisarm;
   end;
 end;
@@ -1180,6 +1190,8 @@ begin
   if not PrepareHost(Err) then
   begin
     Result.ErrorMessage := Err;
+    { work the host source holds from before does not outlive the failed run }
+    DiscardEmbedderWork;
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
@@ -1212,11 +1224,13 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions);
+      Compiled := False;
       try
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+        else if not Compiled then DiscardEmbedderWork;
         LimitsDisarm;
       end;
     end
@@ -1268,6 +1282,8 @@ begin
     Result.CompileNanoseconds := GetNanoseconds - Start;
     if not Compiled then
     begin
+      { work a loaded host environment started does not outlive the failed run }
+      DiscardEmbedderWork;
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1289,6 +1305,7 @@ begin
     Result.ErrorLine := ParseErrorLine;
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
+    DiscardEmbedderWork;
     Exit;
   end;
   Result.Compiled := True;
@@ -1425,7 +1442,8 @@ begin
         end;
     end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result.Ok then DiscardEmbedderWork;
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
@@ -1449,6 +1467,7 @@ begin
   SetModuleContentCheck(FModuleContentCheck);
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
+  Result := False;
   try
     Result := RunTestSuites(Json, Err);
     case AbortKind of
@@ -1467,7 +1486,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1511,6 +1531,7 @@ begin
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
+  Result := False;
   try
     Result := RunBenchmarkSuites(Deterministic, Entries, Total, DurationNanoseconds, Err);
     case AbortKind of
@@ -1529,7 +1550,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);

@@ -63,7 +63,7 @@ end.
 |-------|---------|
 | Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact` |
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
-| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment` |
+| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment`, [`SetHostWork`](#asynchronous-host-work) |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
 | Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, [`DefineNativeModule`](#native-modules), `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
@@ -217,6 +217,38 @@ Settings choose the rest:
 | `ConfigJson` with `"vitest-compat": "true"` | Enables imports from `vitest` outside `TestMode`, with no testing globals. `goccia:test.runTests()` stays synchronous and tests are available by import. Requires the standard host with timers enabled; module mocks (`vi.mock`, `vi.unmock` and their helpers) throw, as nothing hoists them ([the `vitest` shim](testing-api.md#the-vitest-compatibility-shim)) |
 | `BenchMode` | The benchmark runner's host: `InstallBenchmarkAPI` installs `goccia:microbench`, and the limits `Run` armed stay armed for `RunBenchmarks` |
 | `Capabilities` granting `ffi` | Installs the `FFI` global; `FFI.open` judges each library by the `ffi` scopes |
+
+### Asynchronous host work
+
+Install a `TGocciaEmbedderWork` instance with `Engine.SetHostWork` before running code. Keep the
+instance alive until it is removed with `SetHostWork(nil)` or the engine is destroyed. A bare
+engine can use this hook as well.
+
+- `HasPending` reports outstanding work such as a native request holding a JavaScript promise.
+- `Pump(TimeoutMs)` takes ready results and settles their promises on the engine thread. Zero
+  means return immediately. A positive value bounds the wait for a wake from the work source.
+  Return `False` with an engine exception pending when the pump stops the run.
+- `Discard` drops outstanding requests and clears their temporary roots without executing guest
+  code. The engine calls it when discarding pending work after failure, replacing the handler or
+  ending the engine.
+- `Mark` records the current request boundary. `DiscardFrom(Mark)` drops requests added after
+  that boundary when an individual test times out, leaving earlier work in place.
+
+Background producers send native data to the work source. Keep JavaScript values and promise
+settlement on the engine thread. Root storage registered with `AddRoot` or `AddRootRange` must
+outlive the engine, even when the work source is detached first. Keep such slots in the
+engine owner's storage and clear them to `VUndefined` when releasing their values.
+
+The event loop checks deadlines and cancellation before and after the pump. Results a pump
+delivers after the deadline passed are late: their promises settle, but their reactions do
+not run, so a value derived from one never settles. While host work is pending, virtual
+timers do not jump ahead: only a timer already due runs. In test mode a pump that returns
+`False` fails the current test and the suite goes on, even when the failing request belongs
+to work another test started. Idle pumps do not spend the instruction budget, and neither do timers that cannot
+fire while host work waits. JavaScript callbacks and native work explicitly charged by the
+host still spend it. The [event loop's order](architecture.md#synchronous-microtask-queue) and
+[ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md) describe the
+scheduling.
 
 ### Sandbox filesystem
 
@@ -527,7 +559,7 @@ path and leave `HasInstructionCount` false. Counter-enabled entries run in the i
 
 ## Event Loop
 
-Promise jobs, timers and `fetch` completions are run by `Run` itself; a host drains nothing. The script is one task: its synchronous code runs to completion, then its jobs in order, then each due timer followed by the jobs it queued. Timers wait on a virtual clock, not on wall time: when the engine runs out of work the clock jumps to the next due timer. A pending `fetch` is waited for in slices, so the run's deadline still ends the wait.
+Promise jobs, timers, `Atomics.waitAsync` waits and `fetch` completions are run by `Run` itself; a host drains nothing. The [architecture guide](architecture.md#synchronous-microtask-queue) lists the loop's order, including the virtual timer clock. A host with native work of its own settles it through [`SetHostWork`](#asynchronous-host-work).
 
 ## Garbage Collector
 
