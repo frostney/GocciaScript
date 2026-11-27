@@ -241,8 +241,11 @@ procedure JitTakeThread;
   of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). The memory limit
   (HeapCeiling) is always in force: a full collection that leaves more live aborts the run the same way, with a
   RangeError (MemoryLimitMessage) and AbortKind 3. }
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean = False);
 procedure LimitsDisarm;
+{ The entry counter before disarming, including the step that refused an exhausted cap. }
+function ReadInstructionCount(out Count: QWord): Boolean;
+procedure StopInstructionMeasurement;
 { the spent limit that aborted the run until LimitsDisarm: 0 none, 1 the timeout, 2 the instruction budget, 3 the
   memory limit, 4 a host abort }
 function LimitAbortKind: Integer;
@@ -744,12 +747,35 @@ begin
   Result := False;
 end;
 
+function ReadInstructionCount(out Count: QWord): Boolean;
+var Initial: Int64;
+begin
+  Count := 0;
+  Result := InstrCounted;
+  if not Result then Exit;
+  if InstrMax > 0 then Initial := InstrMax else Initial := High(Int64);
+  if InstrLeft >= 0 then Count := QWord(Initial - InstrLeft)
+  else Count := QWord(Initial) + 1;
+end;
+
+{ False on the first charge past a positive cap. The measurement-only counter saturates. }
+function ChargeInstruction: Boolean; inline;
+begin
+  if InstrLeft > 0 then
+  begin
+    Dec(InstrLeft);
+    Exit(True);
+  end;
+  if InstrMax <= 0 then Exit(True);
+  InstrLeft := -1;
+  Result := False;
+end;
+
 function PollInterrupt: Boolean;
 begin
   if InstrCounted then
   begin
-    Dec(InstrLeft);
-    if InstrLeft < 0 then Exit(AbortInstructions);
+    if not ChargeInstruction then Exit(AbortInstructions);
   end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;
@@ -966,6 +992,14 @@ begin
   LimitTimer.Start;
 end;
 
+procedure StopInstructionMeasurement;
+begin
+  if (InstrMax > 0) or not InstrCounted then Exit;
+  InstrCounted := False;
+  InstrLeft := 0;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil);
+end;
+
 procedure LimitsDropTimer;
 begin
   if LimitTimer = nil then Exit;
@@ -998,17 +1032,15 @@ begin
   end;
 end;
 
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean);
 begin
   LimitsDisarm;
   LimitTimeoutMs := TimeoutMs;
   InstrMax := MaxInstructions;
-  if MaxInstructions > 0 then
-  begin
-    InstrCounted := True;
-    InstrLeft := MaxInstructions;
-  end;
-  if (TimeoutMs > 0) or (MaxInstructions > 0) or CoverageOn or ProfileOn then JitBlocked := True;
+  InstrCounted := (MaxInstructions > 0) or MeasureInstructions;
+  if MaxInstructions > 0 then InstrLeft := MaxInstructions
+  else if MeasureInstructions then InstrLeft := High(Int64);
+  if (TimeoutMs > 0) or InstrCounted or CoverageOn or ProfileOn then JitBlocked := True;
   if TimeoutMs > 0 then
   begin
     LimitTimer := TLimitTimer.Create(True);
@@ -8711,7 +8743,6 @@ LReload:
   end;
   while True do
   begin
-    {$IFNDEF GOCCIA_OPSTATS}
     if Counted then
     begin
       if CoverageOn then CovStep(Fr, PC);
@@ -8719,8 +8750,7 @@ LReload:
       { an instruction limit: every instruction here, none in FastLoop }
       if InstrCounted then
       begin
-        Dec(InstrLeft);
-        if InstrLeft < 0 then
+        if not ChargeInstruction then
         begin
           Fr^.PC := PC + 1;
           XAbort(2);
@@ -8728,12 +8758,13 @@ LReload:
         end;
       end;
     end
+    {$IFNDEF GOCCIA_OPSTATS}
     else if FastOp[Code[PC] and $FF] then
     begin
       PC := FastLoop(Code, PC, R, K, ICB, Fr, StopFrame);
       if PC < 0 then goto LReload;
-    end;
-    {$ENDIF}
+    end
+    {$ENDIF};
     I := Code[PC];
     A := PWord(PByte(@Code[PC]) + 1)^;
     Inc(PC);
