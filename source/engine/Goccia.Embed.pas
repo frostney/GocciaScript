@@ -1203,11 +1203,13 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions);
+      Compiled := False;
       try
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+        else if not Compiled then DiscardEmbedderWork;
         LimitsDisarm;
       end;
     end
@@ -1439,6 +1441,7 @@ begin
   SetModuleContentCheck(FModuleContentCheck);
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
+  Result := False;
   try
     Result := RunTestSuites(Json, Err);
     case AbortKind of
@@ -1457,7 +1460,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1501,6 +1505,7 @@ begin
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
+  Result := False;
   try
     Result := RunBenchmarkSuites(Deterministic, Entries, Total, DurationNanoseconds, Err);
     case AbortKind of
@@ -1519,7 +1524,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);

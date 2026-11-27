@@ -63,7 +63,7 @@ end.
 |-------|---------|
 | Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact` |
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
-| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment` |
+| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment`, [`SetHostWork`](#asynchronous-host-work) |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
 | Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
@@ -230,10 +230,17 @@ engine can use this hook as well.
 - `Discard` drops outstanding requests and clears their temporary roots without executing guest
   code. The engine calls it when discarding pending work after failure, replacing the handler or
   ending the engine.
+- `Mark` records the current request boundary. `DiscardFrom(Mark)` drops requests added after
+  that boundary when an individual test times out, leaving earlier work in place.
 
 Background producers send native data to the work source. Keep JavaScript values and promise
-settlement on the engine thread. The event loop checks execution limits around the pump and
-services ready built-in work while the host has something pending.
+settlement on the engine thread. Root storage registered with `AddRoot` or `AddRootRange` must
+outlive the engine, even when the work source is detached first. Keep such slots in the
+engine owner's storage and clear them to `VUndefined` when releasing their values.
+
+The event loop checks deadlines and cancellation before and after the pump. Idle pumps do
+not spend the instruction budget. JavaScript callbacks and native work explicitly charged
+by the host still spend it.
 
 ### Sandbox filesystem
 

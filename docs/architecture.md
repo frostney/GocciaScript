@@ -183,6 +183,12 @@ GocciaScript implements ECMAScript Promises with a synchronous job queue that dr
 4. the `fetch` requests that finished, waiting for those still in flight before any timer fires (`Goccia.Fetch`);
 5. the next timer on the [virtual timer queue](adr/0113-deterministic-virtual-timer-queue.md) (`prelude/timers.js`, `shared.timers.fireNext`). Nothing there waits on wall time: the clock jumps to the next due timer when the engine has nothing else to do, or moves only when a test moves it under fake timers. Each timer is followed by the microtasks it queued, which is the macrotask-then-microtask order of an event loop without real elapsed time.
 
+When [an embedder has outstanding work](embedding.md#asynchronous-host-work), the loop also
+pumps its ready results and drains the reactions they queue. It polls ready Atomics and fetch
+results without blocking on either. An in-flight fetch still prevents a virtual timer jump.
+If only native work can make progress, the loop gives the embedder a bounded wait before it
+checks all sources again.
+
 When nothing is left but a FinalizationRegistry cell still waits on its target, the loop collects once, so a cleanup that came due still runs.
 
 **Why drain after the script, not during it?** In the ECMAScript specification a job runs only when the execution context stack is empty ([ES2026 §9.5](https://tc39.es/ecma262/#sec-jobs)): all synchronous code runs to completion first, then the reactions in FIFO order. A promise resolved with a thenable takes one job to adopt it and another for the reaction.

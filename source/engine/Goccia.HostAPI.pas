@@ -113,6 +113,9 @@ type
     { A zero timeout pumps only ready work. A positive timeout bounds the wait for its next wake. }
     function Pump(TimeoutMs: Cardinal): Boolean; virtual; abstract;
     procedure Discard; virtual; abstract;
+    { A test can abandon requests it started without affecting work already pending. }
+    function Mark: QWord; virtual; abstract;
+    procedure DiscardFrom(AMark: QWord); virtual; abstract;
   end;
 procedure SetEmbedderWork(Work: TEmbedderWork);
 procedure DiscardEmbedderWork;
@@ -2314,7 +2317,7 @@ function RunEventLoopIn(Intervals: Boolean): Boolean; forward;
   ['timeout'] once the deadline ended it. A file deadline sooner than ms stays the one in force, and ends the run. }
 function Test_CallWithin(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Ms, Outer, Elapsed: Int64; NoOuter, Binding, Ok: Boolean; Start: QWord; R, E: TValue; Status: UnicodeString;
-  Mark: Integer;
+  Mark: Integer; HostMark: QWord; Work: TEmbedderWork;
 begin
   if (Argc < 1) or not IsCallable(Args[1]) then Exit(ThrowTypeError('callWithin needs a function'));
   Ms := 0;
@@ -2324,6 +2327,9 @@ begin
   Binding := (Ms > 0) and (NoOuter or (Ms < Outer));
   if Binding then LimitsSetDeadline(Ms);
   Mark := FetchMark;
+  Work := EmbedderWork;
+  HostMark := 0;
+  if Work <> nil then HostMark := Work.Mark;
   Start := GetTickCount64;
   R := VUndefined;
   Ok := CallValue(Args[1], VUndefined, nil, 0, R);
@@ -2337,6 +2343,7 @@ begin
     Pending := VUndefined;
     { the requests the body started are not waited for after it: their promises stay pending }
     FetchCancelFrom(Mark);
+    if (Work <> nil) and (Work = EmbedderWork) then Work.DiscardFrom(HostMark);
     Status := 'timeout';
   end
   else if not Ok then
@@ -2560,7 +2567,9 @@ function PumpEmbedderWork(TimeoutMs: Cardinal): Boolean;
 var Work: TEmbedderWork;
 begin
   Work := EmbedderWork;
-  Result := PollInterrupt and Work.Pump(TimeoutMs) and PollInterrupt;
+  if Interrupt <> 0 then Exit(AbortInterrupted);
+  Result := Work.Pump(TimeoutMs);
+  if Interrupt <> 0 then Result := AbortInterrupted;
 end;
 
 function EmbedderWorkWait: Cardinal;
@@ -2600,6 +2609,8 @@ begin
     begin
       PumpAsyncWaits;
       if not RunMicrotasks then Exit(False);
+      if EmbedderWorkPending then Continue;
+      if not FetchPending then Continue;
       Due := NextAsyncDeadline;
       Cap := GetTickCount64 + 50;
       if Due > Cap then Due := Cap;
@@ -2621,12 +2632,18 @@ begin
     end;
     { the fetches that finished settle first; while any is in flight the loop waits for it before the timers, which
       do not keep real time }
-    if not HostPending and FetchPending then
+    if FetchPending then
     begin
-      if not FetchPump(True) then Exit(False);
+      if EmbedderWorkPending then
+      begin
+        if not PumpEmbedderWork(EmbedderWorkWait) then Exit(False);
+      end
+      else if not FetchPump(True) then Exit(False);
       Continue;
     end;
-    if IsObject(FireNextV) then
+    if IsObject(FireNextV) and (not HostPending or JobErrorDropsTimers or
+      (IsObject(TimerQueue) and (MapCount(TimerQueue) > 0)) or
+      (IsObject(TimerHostTasks) and (ArrayLen(ObjOf(TimerHostTasks)) > 0))) then
     begin
       { a test file's job that threw took the pending timers with it }
       if JobErrorDropsTimers then
