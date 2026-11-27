@@ -201,6 +201,12 @@ jobs:
             -obuild/module-only-vitest-test scripts/engine/module-only-vitest-test.pas
           timeout 20 build/module-only-vitest-test
 
+      - name: Native module factories preserve module and engine identity
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/native-module-test scripts/engine/native-module-test.pas
+          timeout 20 build/native-module-test
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 

@@ -65,7 +65,7 @@ end.
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
 | Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment` |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
-| Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
+| Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, [`DefineNativeModule`](#native-modules), `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
 | Capabilities | `Capabilities`, `ProjectRoot`, `AuditSink`, `Audit`, `FetchMaxResponseBytes` |
 | Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `MaxMemory`, `MaxFrames` |
@@ -211,7 +211,7 @@ Settings choose the rest:
 
 | Setting | Effect |
 |---------|--------|
-| `Bare` | Only the core language with `print`, `Goccia`, `DOMException`, `atob`, `btoa` and `PermissionDenied`: no console, timers, web APIs or host modules, and no module content provider, so an import that finds its file fails with `ERR_MODULE_LOADING_UNSUPPORTED` (`GocciaScriptLoaderBare`) |
+| `Bare` | Only the core language with `print`, `Goccia`, `DOMException`, `atob`, `btoa` and `PermissionDenied`: no console, timers, web APIs or default host modules. Hosts can register [native modules](#native-modules). With no module content provider, an import that finds its file fails with `ERR_MODULE_LOADING_UNSUPPORTED` (`GocciaScriptLoaderBare`) |
 | `ExposeTimers := False` | No timer globals and no `goccia:timers`; the timer queue still serves the host's own users, such as `AbortSignal.timeout` |
 | `ConfigJson` | The host config as a JSON object of strings (`goccia.json`'s keys), read by the preludes |
 | `TestMode` | The test framework's host: an uncaught error does not end the process; `InstallTestingAPI` (`Goccia.HostAPI`) then installs `describe`, `test`, `expect` and `goccia:test`, and `RunTests` runs the suites |
@@ -367,6 +367,38 @@ Aliases follow WHATWG import map matching: a key without a trailing `/` matches 
 
 A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant` callback grants the walk; a resolver without one refuses it. The CLI hosts answer it from the `import` capability (`Goccia.CLI.FileEngine` `TGocciaImportGrant`), which also grants and audits provider packages (`ProviderGrant`, `ProviderAudit`) and checks their files against their pins through `ModuleContentCheck` and `ProviderGraph`.
 
+### Native modules
+
+`TGocciaEngine.DefineNativeModule(Specifier, Factory, Err)` registers a native implementation under a virtual
+address such as `host:sample`. Configure the engine first and register on its owning thread before running
+source or an artifact. Registration refuses an existing module key and the runtime's `goccia:` namespace, including the modules a test or
+bench host installs later. It also works with `Bare`.
+
+The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
+loads: while the import graph loads, before any module in it evaluates, even if linking the graph fails afterwards and
+under `import defer` too. A factory with side effects must not rely on another module of the same graph having run. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
+string. Build the list with `NewArray` and `ArrayPush` and release temporary roots after setting `ExportList`.
+Return `False` with a pending error when initialization fails, and never let a Pascal exception escape the callback;
+`False` with nothing pending fails the import with a `TypeError`. A later import calls the factory again. The module
+loader retains the exports for that realm, and repeated imports use the same namespace object. A load that reaches
+the same module in the same realm while its factory is still running fails with a `TypeError` instead of calling
+the factory again. Keep the callback's owner live until the engine is
+destroyed. Registrations end with that engine.
+
+```pascal
+Base := TempTop;
+PushRoot(MkPtr(NewArray(0, 2)));
+try
+  PushRoot(StrFromUnicode('answer'));
+  ArrayPush(ObjOf(RootAt(Base)), RootAt(Base + 1));
+  ArrayPush(ObjOf(RootAt(Base)), MkInt(42));
+  ExportList := RootAt(Base);
+finally
+  PopRoots(TempTop - Base);
+end;
+Result := True;
+```
+
 ### Virtual Modules
 
 Virtual modules supply modules that are not files ([Virtual Module Configuration](virtual-modules.md)). Define them before the run:
@@ -467,7 +499,7 @@ Engine.MaxFrames := 5000;
 
 ### Instruction Limit
 
-`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
+`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`), as `Array.prototype.fill` and the element loops of the typed-array built-ins do. A `set` or the constructor between typed arrays of one element type copies their bytes in one move and charges no steps; a same-type `slice` copies element by element and charges one step per element. The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
 
 A capped entry reports its count in `TGocciaRunResult`, including the charge that found an exhausted cap.
 Set `MeasureInstructions` to count the same units in an uncapped entry. Both modes count the entry and its event

@@ -76,7 +76,7 @@ environment.
 ## Embed it
 
 Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. A host can
+application-specific globals, [native modules](docs/embedding.md#native-modules), capabilities, and limits. A host can
 grant or withhold `fetch` through the `net` capability
 ([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
 read-only, bound a run with a timeout or measure its charged instructions
