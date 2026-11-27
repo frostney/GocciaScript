@@ -87,7 +87,8 @@
   if (!testMode && !shared.bare) shared.hostModules['goccia:test'] = () => n.testingModule();
 
   // Vitest uses goccia:test and goccia:timers. A normal embedder with timers can opt in without the runner's
-  // globals; its shim refuses vi.mock, which only the runner hoists. Without the shim, the host's resolver decides.
+  // globals; its shim refuses module mocks, which only a host that runs test files hoists. Without the shim, the
+  // host's resolver decides.
   if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource(false);
   else if (!testMode && !shared.bare && shared.exposeTimers !== false && configFlag('vitest-compat'))
     shared.hostModules.vitest = () => n.vitestSource(true);

@@ -535,7 +535,7 @@ A suite written against Vitest imports from a bare `vitest` specifier, which wou
 
 The shim is a runner default: the host prelude (`source/engine/prelude/host.js`) registers the `vitest` module for an engine in test mode (`TGocciaEngine.TestMode`), which `GocciaTestRunner` sets and the other binaries do not, so in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag that turns it on elsewhere. The shim's source is in `source/units/Goccia.VitestShim.inc`; it statically imports `goccia:test` and `goccia:timers`, so an embedder that sets `TestMode` also calls `InstallTestingAPI` and keeps `TGocciaEngine.ExposeTimers` on, or every `vitest` import fails to resolve.
 
-An embedder can also opt in without `TestMode` and without the testing globals: set `TGocciaEngine.ConfigJson` to `{"vitest-compat": "true"}` on the standard host (not `Bare`) and keep `ExposeTimers` on. Tests are then available only by import from `vitest` or `goccia:test`, and `runTests()` from `goccia:test` runs them synchronously and returns the report. Without timers the shim is not registered, so the host's own resolver decides what `vitest` names. Only `GocciaTestRunner` hoists `vi.mock` and `vi.unmock` out of a file before its module graph loads, so in an embedder's shim both throw an `Error` that says so instead of doing nothing.
+An embedder can also opt in without `TestMode` and without the testing globals: set `TGocciaEngine.ConfigJson` to `{"vitest-compat": "true"}` on the standard host (not `Bare`) and keep `ExposeTimers` on. Tests are then available only by import from `vitest` or `goccia:test`, and `runTests()` from `goccia:test` runs them synchronously and returns the report. Without timers the shim is not registered, so the host's own resolver decides what `vitest` names. Module mocks need the pass that hoists `vi.mock` and `vi.unmock` out of a test file before its module graph loads, which `GocciaTestRunner` and `goccia --test` run and this opt-in does not. In it, `vi.mock`, `vi.unmock` and the members that only make sense beside a module mock (`vi.doMock`, `vi.doUnmock`, `vi.resetModules`, `vi.importActual`, `vi.importMock`, `vi.hoisted`) throw an `Error` that says so instead of doing nothing; the factory form below applies to the hosts that hoist.
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 
@@ -543,15 +543,15 @@ The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only 
 |---|---|
 | `vi.fn` | The engine's `mock` |
 | `vi.spyOn` | The engine's `spyOn` |
-| `vi.mock` | Supported in `GocciaTestRunner`, **factory form only** (see below); throws in an embedder's shim |
-| `vi.unmock` | Supported in `GocciaTestRunner`; hoisted with `vi.mock`, last directive in source order wins; throws in an embedder's shim |
+| `vi.mock` | Supported where the host hoists it (`GocciaTestRunner`, `goccia --test`), **factory form only** (see below); throws in the module-only opt-in |
+| `vi.unmock` | Supported where the host hoists it; hoisted with `vi.mock`, last directive in source order wins; throws in the module-only opt-in |
 | the unsupported members listed [below](#the-rest-of-the-vi-namespace) | Throws, naming the member and why it cannot be honored |
 
 None of these is a silent no-op, and each names its own reason. `vi.isMockFunction`, `vi.mockObject`, `vi.dynamicImportSettled`, and `vi.defineHelper` are absent, so calling one is an ordinary `is not a function` TypeError ([#1278](https://github.com/frostney/GocciaScript/issues/1278)).
 
 #### `vi.mock` — what is supported
 
-`vi.mock(specifier, factory)` replaces a module for the duration of one test file. The call is **hoisted**: it applies to imports written above it, exactly as in Vitest.
+`vi.mock(specifier, factory)` replaces a module for the duration of one test file in a host that hoists it (`GocciaTestRunner`, `goccia --test`). The call is **hoisted**: it applies to imports written above it, exactly as in Vitest.
 
 ```javascript
 import { vi } from "vitest";

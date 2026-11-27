@@ -1930,25 +1930,37 @@ begin
   PopRoots(1);
 end;
 
-{ vitestSource(embedded): the vitest compatibility shim's module source (Goccia.VitestShim.inc). Only
-  GocciaTestRunner hoists vi.mock and vi.unmock out of a file before it is parsed; an embedder's shim (embedded true)
-  refuses them instead of ignoring them }
-function VitestShimSource(Embedded: Boolean): UnicodeString;
+{ vitestSource(moduleOnly): the vitest compatibility shim's module source (Goccia.VitestShim.inc). The hosts that run
+  a test file (GocciaTestRunner, goccia --test) hoist vi.mock and vi.unmock out of it before it is parsed. The
+  module-only opt-in (moduleOnly true) has no such pass and no module mocks at all: vi.mock, vi.unmock and the members
+  that only make sense beside a module mock refuse with that reason instead of ignoring the call }
+function VitestShimSource(ModuleOnly: Boolean): UnicodeString;
 const
   LB = #10;
   Hoisted: array[0..1] of UnicodeString = ('  mock: hoistedDirective,' + LB, '  unmock: hoistedDirective,' + LB);
   Refused: array[0..1] of UnicodeString = ('  mock: unsupported("mock", NOT_HOISTED),' + LB,
     '  unmock: unsupported("unmock", NOT_HOISTED),' + LB);
-  NotHoisted = 'const NOT_HOISTED = "Module mocks apply only when GocciaTestRunner runs the file, " +' + LB +
-    '  "which hoists them before the module graph is loaded.";' + LB;
-var I: Integer;
+  { the reasons that describe factory-form vi.mock as supported }
+  MockReasons: array[0..2] of UnicodeString = ('DYNAMIC_MOCKING', 'NO_ACTUAL_MODULE', 'FACTORY_SCOPE');
+  NotHoisted = 'const NOT_HOISTED = "Module mocks need the pass that hoists them out of a test file before its " +' +
+    LB + '  "module graph loads, which GocciaTestRunner and goccia --test run and this host does not.";' + LB;
+var I, Start, Stop: Integer;
 begin
   {$I Goccia.VitestShim.inc}
-  if not Embedded then Exit;
+  if not ModuleOnly then Exit;
   for I := 0 to High(Hoisted) do
   begin
     if Pos(Hoisted[I], Result) = 0 then raise Exception.Create('vitest shim lost its hoisted directive');
     Result := StringReplace(Result, Hoisted[I], Refused[I], []);
+  end;
+  for I := 0 to High(MockReasons) do
+  begin
+    Start := Pos('const ' + MockReasons[I] + ' =', Result);
+    if Start = 0 then raise Exception.Create('vitest shim lost ' + MockReasons[I]);
+    Stop := Pos(';' + LB, Result, Start);
+    if Stop = 0 then raise Exception.Create('vitest shim has no end for ' + MockReasons[I]);
+    Result := Copy(Result, 1, Start - 1) + 'const ' + MockReasons[I] + ' = NOT_HOISTED;' +
+      Copy(Result, Stop + 1, MaxInt);
   end;
   Result := NotHoisted + Result;
 end;

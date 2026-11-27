@@ -12,7 +12,8 @@ const
   UnresolvedVitest = 'Cannot resolve bare module specifier "vitest"';
   { every name the test runner installs as a global; an import of vitest must publish none of them }
   NoTestGlobals = '["describe", "test", "it", "expect", "mock", "spyOn", "beforeAll", "beforeEach", "afterEach",' +
-    ' "afterAll", "onTestFinished", "runTests", "vi"].every(name => globalThis[name] === undefined)';
+    ' "afterAll", "onTestFinished", "runTests", "__gocciaTest262Describe", "__gocciaTest262Test", "vi"]' +
+    '.every(name => globalThis[name] === undefined)';
 
 procedure Check(const ACondition: Boolean; const AMessage: UnicodeString);
 begin
@@ -46,10 +47,11 @@ const
     '  test("failed assertion", () => expect(1).toBe(2));' +
     '});' +
     'const refused = (member) => { try { vi[member]("./dep.mjs"); return false; }' +
-    '  catch (e) { return e.message.includes("GocciaTestRunner"); } };' +
+    '  catch (e) { return e.message.includes("vi." + member + " ") && e.message.includes("this host does not"); } };' +
     'const summary = runTests({ showTestResults: false });' +
     'summary.passed === 1 && summary.failed === 1 && summary.totalRunTests === 2 &&' +
-    '  summary.failedTests[0].includes("failed assertion") && refused("mock") && refused("unmock") && ' +
+    '  summary.failedTests[0].includes("failed assertion") && ' +
+    '  ["mock", "unmock", "doMock", "doUnmock", "resetModules", "importActual", "importMock", "hoisted"].every(refused) && ' +
     NoTestGlobals + ';';
 var
   Engine: TGocciaEngine;
