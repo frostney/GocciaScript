@@ -3936,22 +3936,30 @@ end;
   then exposes the entry. Compiled templates belong to this engine. The fixed shared stubs live for the process.
   Keep the existing core serialization before exposing a newly published entry, including between CPU cores. }
 function JitPublish(AShared: Boolean): PByte;
-var Code: Pointer;
+var Code: Pointer; MappingIndex, MappingCapacity: Integer; Mapping: TJitCodeMapping;
 begin
   Result := nil;
   if (JitLen <= 0) or (JitLen > JIT_MAX_CODE_BYTES) then Exit;
-  Code := Fpmmap(nil, JitLen, PROT_READ or PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  { Linux may add execute permission to PROT_READ when READ_IMPLIES_EXEC is set. The copy needs only write. }
+  Code := Fpmmap(nil, JitLen, PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
   if Code = MAP_FAILED then Exit;
   try
     Move(JitBuf[0], Code^, JitLen);
     if Fpmprotect(Code, JitLen, PROT_READ or PROT_EXEC) <> 0 then Exit;
     if not AShared then
     begin
-      if JitCodeMappingCount = Length(JitCodeMappings) then
-        SetLength(JitCodeMappings, JitCodeMappingCount * 2 + 32);
-      JitCodeMappings[JitCodeMappingCount].Address := Code;
-      JitCodeMappings[JitCodeMappingCount].Size := JitLen;
-      Inc(JitCodeMappingCount);
+      MappingIndex := JitCodeMappingCount;
+      MappingCapacity := Length(JitCodeMappings);
+      if MappingIndex = MappingCapacity then
+        try
+          SetLength(JitCodeMappings, MappingCapacity * 2 + 32);
+        except
+          on EOutOfMemory do Exit;
+        end;
+      Mapping.Address := Code;
+      Mapping.Size := JitLen;
+      JitCodeMappings[MappingIndex] := Mapping;
+      JitCodeMappingCount := MappingIndex + 1;
     end;
     JitSerializeCore;
     if JitSyncCore then Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);

@@ -10810,10 +10810,13 @@ end;
   The compiling thread keeps the shared executable stubs for the next engine. }
 procedure JitEngineDone;
 {$IFDEF GOCCIA_JIT}
-var I: Integer;
+var I: Integer; Mapping: TJitCodeMapping;
 begin
   for I := 0 to JitCodeMappingCount - 1 do
-    Fpmunmap(JitCodeMappings[I].Address, JitCodeMappings[I].Size);
+  begin
+    Mapping := JitCodeMappings[I];
+    Fpmunmap(Mapping.Address, Mapping.Size);
+  end;
   JitCodeMappings := nil;
   JitCodeMappingCount := 0;
   if GetCurrentThreadId <> JitMainThread then Exit;

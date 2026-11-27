@@ -35,7 +35,7 @@ begin
       FirstAddress := StrToQWord('$' + Copy(Line, 1, Dash - 1));
       EndAddress := StrToQWord('$' + Copy(Line, Dash + 1, Space - Dash - 1));
       if (FirstAddress <= AAddress) and (AAddress < EndAddress) then
-        Exit(Copy(Line, Space + 1, 3));
+        Exit(Copy(Line, Space + 1, 4));
     end;
   finally
     CloseFile(Maps);
@@ -69,7 +69,7 @@ begin
     CodeAddress := PtrUInt(Template^.Jit);
     Check(CodeAddress <> 0, 'fixture was not compiled');
     Permissions := MappingPermissions(CodeAddress);
-    Check(Permissions = 'r-x', 'compiled code permissions are ' + Permissions);
+    Check(Permissions = 'r-xp', 'compiled code permissions are ' + Permissions);
   finally
     Engine.Free;
   end;
