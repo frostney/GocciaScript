@@ -29,14 +29,18 @@ uses
   SysUtils;
 
 type
+  { A lock rather than 64-bit atomics, which 32-bit targets lack: engines take it once per reserve, not per
+    instruction. }
   TInstructionBudget = class(TInterfacedObject, IGocciaInstructionBudget)
   private
     FLimit: Int64;
     { Remaining units for a capped job (-1 after refusal), accumulated units otherwise. }
     FState: Int64;
-    function ReadState: Int64; inline;
+    FLock: TRTLCriticalSection;
+    function ReadState: Int64;
   public
     constructor Create(ALimit: Int64);
+    destructor Destroy; override;
     function Limit: Int64;
     function Count: QWord;
     function TryCharge(AUnits: QWord): Boolean;
@@ -50,11 +54,20 @@ begin
   if ALimit < 0 then raise EArgumentOutOfRangeException.Create('Instruction budget cannot be negative');
   FLimit := ALimit;
   FState := ALimit;
+  InitCriticalSection(FLock);
+end;
+
+destructor TInstructionBudget.Destroy;
+begin
+  DoneCriticalSection(FLock);
+  inherited Destroy;
 end;
 
 function TInstructionBudget.ReadState: Int64;
 begin
-  Result := InterlockedCompareExchange64(FState, 0, 0);
+  EnterCriticalSection(FLock);
+  Result := FState;
+  LeaveCriticalSection(FLock);
 end;
 
 function TInstructionBudget.Limit: Int64;
@@ -78,51 +91,49 @@ begin
 end;
 
 function TInstructionBudget.Reserve(AMin, AMax: QWord): QWord;
-var State, Replacement: Int64;
 begin
   if AMin = 0 then AMin := 1;
   if AMax < AMin then AMax := AMin;
-  repeat
-    State := ReadState;
-    if State < 0 then Exit(0);
+  EnterCriticalSection(FLock);
+  try
+    if FState < 0 then Exit(0);
     if FLimit > 0 then
     begin
-      if AMin > QWord(State) then
+      if AMin > QWord(FState) then
       begin
-        Result := 0;
-        Replacement := -1;
-      end
-      else
-      begin
-        if AMax <= QWord(State) then Result := AMax else Result := QWord(State);
-        Replacement := State - Int64(Result);
+        FState := -1;
+        Exit(0);
       end;
+      if AMax <= QWord(FState) then Result := AMax else Result := QWord(FState);
+      Dec(FState, Int64(Result));
     end
     else
     begin
       Result := AMax;
-      if AMax <= QWord(High(Int64) - State) then Replacement := State + Int64(AMax)
-      else Replacement := High(Int64);
+      if AMax <= QWord(High(Int64) - FState) then Inc(FState, Int64(AMax)) else FState := High(Int64);
     end;
-  until InterlockedCompareExchange64(FState, Replacement, State) = State;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 procedure TInstructionBudget.Refund(AUnits: QWord);
-var State, Replacement: Int64;
 begin
   if AUnits = 0 then Exit;
-  repeat
-    State := ReadState;
-    if State < 0 then Exit;
+  EnterCriticalSection(FLock);
+  try
+    if FState < 0 then Exit;
     if FLimit > 0 then
     begin
-      if AUnits > QWord(FLimit - State) then AUnits := QWord(FLimit - State);
-      Replacement := State + Int64(AUnits);
+      if AUnits > QWord(FLimit - FState) then AUnits := QWord(FLimit - FState);
+      Inc(FState, Int64(AUnits));
     end
-    else if State = High(Int64) then Exit
-    else if AUnits >= QWord(State) then Replacement := 0
-    else Replacement := State - Int64(AUnits);
-  until InterlockedCompareExchange64(FState, Replacement, State) = State;
+    else if FState = High(Int64) then Exit
+    else if AUnits >= QWord(FState) then FState := 0
+    else Dec(FState, Int64(AUnits));
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 function NewInstructionBudget(ALimit: Int64): IGocciaInstructionBudget;
