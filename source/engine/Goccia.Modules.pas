@@ -2412,25 +2412,10 @@ begin
     if M.Errored or not (M.Status in [msNew, msEvaluated]) or ((M.Status = msNew) and (M.RequestsState = 1)) then
       M.Superseded := True;
   end;
-  { a record only loaded (a source phase import's) ran nothing, so it stays, and with it the identity of its source,
-    unless a record it links went }
-  repeat
-    Changed := False;
-    for I := Mark to Mods.Count - 1 do
-    begin
-      M := Mods[I];
-      if M.Superseded or (M.Status <> msNew) then Continue;
-      for D in M.Deps do
-        if (D <> nil) and D.Superseded then
-        begin
-          M.Superseded := True;
-          Changed := True;
-          Break;
-        end;
-    end;
-  until not Changed;
-  { a cycle member that finished but waits on a cycle root this call superseded (an async cycle the abort left) goes
-    too; a root superseded before, by a file that changed (ADR 0139), keeps its members }
+  { what this call superseded, and what follows from it until neither rule adds a record: a record only loaded (a
+    source phase import's) ran nothing, so it stays, and with it the identity of its source, unless a record it links
+    went; a cycle member that finished but waits on a cycle root that went (an async cycle the abort left) goes too.
+    A root superseded before, by a file that changed (ADR 0139), keeps its members. }
   Fresh := TList<TModRec>.Create;
   try
     for I := Mark to Mods.Count - 1 do
@@ -2440,9 +2425,17 @@ begin
       for I := 0 to Mods.Count - 1 do
       begin
         M := Mods[I];
-        if not M.Superseded and (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then
+        if M.Superseded then Continue;
+        if (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then M.Superseded := True
+        else if (I >= Mark) and (M.Status = msNew) then
+          for D in M.Deps do
+            if (D <> nil) and D.Superseded then
+            begin
+              M.Superseded := True;
+              Break;
+            end;
+        if M.Superseded then
         begin
-          M.Superseded := True;
           Fresh.Add(M);
           Changed := True;
         end;

@@ -75,6 +75,21 @@ var
   AbortAtTop, AbortInTimeZone: Boolean;
   TimeZoneCalls: Integer;
 
+{ waits on an event nobody sets, through WaitForRunEvent, for longer than CheckActiveAbort allows: only the abort
+  handle's wake ends the wait in time, not a polling interval of the code that waits }
+function WaitForRunEventNative(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+var Event: PRTLEvent;
+begin
+  Event := RTLEventCreate;
+  try
+    WaitForRunEvent(Event, 5000);
+  finally
+    RTLEventDestroy(Event);
+  end;
+  AResult := VUndefined;
+  Result := True;
+end;
+
 function RequestAbort(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
 begin
   if CurrentAbort <> nil then CurrentAbort.Request;
@@ -122,6 +137,7 @@ begin
   Check(InjectGlobalBinding('requestAbort', NewNativeFunction(@RequestAbort, 'requestAbort', 0)) and
     InjectGlobalBinding('requestAbortAndThrow', NewNativeFunction(@RequestAbortAndThrow, 'requestAbortAndThrow', 0)) and
     InjectGlobalBinding('markEntered', NewNativeFunction(@MarkEntered, 'markEntered', 0)) and
+    InjectGlobalBinding('waitForRunEvent', NewNativeFunction(@WaitForRunEventNative, 'waitForRunEvent', 0)) and
     InjectGlobalBinding('requestAbortAtTop', NewNativeFunction(@RequestAbortAtTop, 'requestAbortAtTop', 0)) and
     InjectGlobalBinding('requestAbortInTimeZone',
       NewNativeFunction(@RequestAbortInTimeZone, 'requestAbortInTimeZone', 0)), 'could not install abort natives');
@@ -192,6 +208,18 @@ begin
   end;
 end;
 
+procedure WriteModule(const ADirectory, AName: string; const ASource: UnicodeString);
+var Lines: TStringList;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := ASource;
+    Lines.SaveToFile(ADirectory + PathDelim + AName);
+  finally
+    Lines.Free;
+  end;
+end;
+
 { A module the cancellation interrupted evaluates again when the same path runs next, as do its imports. }
 procedure CheckCancelledModuleReloads;
 var
@@ -236,12 +264,32 @@ begin
       '(await import.source("./source-dependency.mjs")) === globalThis.saved;');
     Check(RunResult.Ok and (RunResult.ResultText = 'true'),
       'a cancelled run''s source phase import lost its identity: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    { a record only loaded for its source (cycle-c) links a member (cycle-b) of a cycle whose root (cycle-a) the
+      cancellation left suspended in top-level await: the member goes with its root, and so does the record that
+      links it, so a later import of it evaluates afresh }
+    WriteModule(Directory, 'cycle-a.mjs', 'import "./cycle-b.mjs"; ' +
+      'await new Promise((resolve) => setTimeout(() => { requestAbort(); resolve(); }, 0)); export const a = 1;');
+    WriteModule(Directory, 'cycle-b.mjs', 'import "./cycle-a.mjs"; export const b = 2;');
+    WriteModule(Directory, 'cycle-c.mjs', 'import { b } from "./cycle-b.mjs"; export const c = b + 1;');
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'cycle-entry.mjs',
+      'await import.source("./cycle-c.mjs"); await import("./cycle-a.mjs"); 1;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the cycle run was not cancelled: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'cycle-check.mjs',
+      'const { c } = await import("./cycle-c.mjs"); c;');
+    Check(RunResult.Ok and (RunResult.ResultText = '3'),
+      'a record linking a cancelled cycle''s member did not evaluate again: ' + RunResult.ResultText +
+      RunResult.ErrorMessage);
   finally
     CurrentAbort := nil;
     AEngine.Free;
     Lines.Free;
     DeleteFile(Dependency);
     if SourceDependency <> '' then DeleteFile(SourceDependency);
+    DeleteFile(Directory + PathDelim + 'cycle-a.mjs');
+    DeleteFile(Directory + PathDelim + 'cycle-b.mjs');
+    DeleteFile(Directory + PathDelim + 'cycle-c.mjs');
     RemoveDir(Directory);
   end;
 end;
@@ -426,6 +474,7 @@ begin
     end;
     CheckLateAbort(Engine);
     InstallAbortNatives(Engine);
+    CheckActiveAbort(Engine, 'console.log("ready"); waitForRunEvent(); markEntered();');
     CheckAbortDuringResult(Engine);
     CheckPreStartKeepsEarlierWork(Engine);
     CheckNativeRequestThenThrow(Engine);
