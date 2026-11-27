@@ -61,9 +61,9 @@ type
 
 { Atomics.wait: suspends the calling thread on (Block, ByteIndex) if Check holds, until notified or
   TimeoutMs passes. TimeoutMs is +Infinity or >= 0 (25.4.13: NaN is +Infinity, a negative time 0).
-  When AInterrupt is set, end the wait once the engine raises that flag. The caller delivers the abort. }
+  When InterruptWord is set, end the wait once the engine raises that flag. The caller delivers the abort. }
 function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
-  TimeoutMs: Double; AInterrupt: PLongInt): TWaitResult;
+  TimeoutMs: Double; InterruptWord: PLongInt): TWaitResult;
 { Atomics.waitAsync: adds an async waiter for this thread with Token if Check holds (wrOk), else wrNotEqual.
   A notify posts Token to this thread's mailbox (SharedAsyncPoll). }
 function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
@@ -333,7 +333,7 @@ begin
 end;
 
 function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
-  TimeoutMs: Double; AInterrupt: PLongInt): TWaitResult;
+  TimeoutMs: Double; InterruptWord: PLongInt): TWaitResult;
 const InterruptCheckMs = 10;
 var W: TWaiter; Ms: Cardinal; Deadline, Now_: QWord; Notified: Boolean;
 begin
@@ -355,14 +355,14 @@ begin
     Notified := W.Notified;
     LeaveCriticalSection(WaitLock);
     if Notified then Break;
-    if (AInterrupt <> nil) and (AInterrupt^ <> 0) then Break;
+    if (InterruptWord <> nil) and (InterruptWord^ <> 0) then Break;
     Now_ := GetTickCount64;
     if Now_ >= Deadline then Break;
-    if (AInterrupt = nil) and (Deadline = High(QWord)) then RTLEventWaitFor(W.Event)
+    if (InterruptWord = nil) and (Deadline = High(QWord)) then RTLEventWaitFor(W.Event)
     else
     begin
       if Deadline - Now_ > 1000000 then Ms := 1000000 else Ms := Deadline - Now_;
-      if (AInterrupt <> nil) and (Ms > InterruptCheckMs) then Ms := InterruptCheckMs;
+      if (InterruptWord <> nil) and (Ms > InterruptCheckMs) then Ms := InterruptCheckMs;
       RTLEventWaitFor(W.Event, Ms);
     end;
   until False;
