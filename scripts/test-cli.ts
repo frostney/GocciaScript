@@ -1947,7 +1947,7 @@ console.log('buffer allocated');
     const operations = {
       compile: 'const re = new RegExp("a".repeat(64 * 1024)); console.log(re.source.length);',
       "compile literal": `console.log(/${"a".repeat(64 * 1024)}/.source.length);`,
-      match: 'const re = new RegExp("a".repeat(256)); console.log(re.test("a".repeat(32 * 1024)));',
+      match: 'const re = new RegExp("a".repeat(256)); console.log(re.test("a".repeat(48 * 1024)));',
     };
     for (const [name, operation] of Object.entries(operations)) {
       writeFileSync(path, `
