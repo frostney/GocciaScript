@@ -87,6 +87,10 @@ The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not ope
 
 All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
 
+## Markdown Lint
+
+The pre-commit `lint-markdown` check runs `markdownlint-cli2` on the staged Markdown files only, each passed as a literal path, and skips a staged symlink, so a file you did not stage never fails the commit. CI's docs job lints the whole tree from the `globs` in `.markdownlint-cli2.jsonc` and skips what `.gitignore` excludes; `npx markdownlint-cli2` with no files runs that check locally.
+
 ## Platform-Specific Pitfalls
 
 ### Focused Builds and Tests
