@@ -15,6 +15,11 @@ uses
 
 type
   ECompileError = class(Exception);
+
+  TModuleDeclarationLocation = record
+    Line, Column, EndLine, EndColumn: Integer;
+  end;
+  TModuleDeclarationLocations = array of TModuleDeclarationLocation;
   { an early error the compiler finds (ParseAndCompile reports it as a SyntaxError, like the parser's) }
   EEarlySyntaxError = class(ECompileError);
 
@@ -22,7 +27,7 @@ type
   (16.1.7 GlobalDeclarationInstantiation), 2 eval code run in the global environment (19.2.1.3; strict eval
   code is goal 0) }
 function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; ReturnLast: Boolean = False;
-  Goal: Integer = 0): PFuncTemplate;
+  Goal: Integer = 0; const DeclarationLocations: TModuleDeclarationLocations = nil): PFuncTemplate;
 
 threadvar
   { the eval code starts with a "use strict" directive the caller inserted to make it strict: not its value }
@@ -49,6 +54,7 @@ type
   TModEntry = record
     ExportName, LocalName, Request, ImportName: UnicodeString;
     Slot: Integer;
+    SourceLine, SourceColumn: Integer;
   end;
   { 16.2.1.6 the parts of a Source Text Module Record the compiler finds (goal 3): the cell table holds one slot
     per import (0 .. imports - 1) and one per exported local binding }
@@ -551,6 +557,7 @@ type
   TCompiler = class
     FS: TFuncState;
     SourceName: UnicodeString;
+    DeclarationLocations: TModuleDeclarationLocations;
     { the calls in tail position (15.10.1 IsInTailPosition) of the return values being compiled: their opCall gets
       the tail bit (bit 41), which lets the VM reuse the frame. Each return's own calls are pushed on top and taken
       off again once its value is compiled }
@@ -9029,7 +9036,8 @@ begin
 end;
 
 procedure CollectModule(Prog: TGocciaProgram; MI: TModuleInfo; Nodes: TList<TGocciaASTNode>; C: TCompiler);
-var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList; Pair: TStringStringMap.TKeyValuePair;
+var I, J, K, DeclLine, DeclColumn: Integer;
+  N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList; Pair: TStringStringMap.TKeyValuePair;
   E: TModEntry; Scan: TTLAScan; MScan: TModDeclScan; ReqKey: UnicodeString;
   procedure AddImport(const Local, Req, Imported: UnicodeString);
   begin
@@ -9042,6 +9050,7 @@ var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList
     with MI.Imports[High(MI.Imports)] do
     begin
       LocalName := Local; Request := Req; ImportName := Imported; ExportName := ''; Slot := C.ModImportNames.Count - 1;
+      SourceLine := DeclLine; SourceColumn := DeclColumn;
     end;
   end;
   procedure AddExport(const Exp, Local: UnicodeString);
@@ -9059,6 +9068,7 @@ var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList
     with MI.IndirectExports[High(MI.IndirectExports)] do
     begin
       ExportName := Exp; Request := Req; ImportName := Imported; LocalName := ''; Slot := -1;
+      SourceLine := DeclLine; SourceColumn := DeclColumn;
     end;
   end;
 begin
@@ -9069,13 +9079,23 @@ begin
     for I := 0 to Prog.Body.Count - 1 do
     begin
       N := Prog.Body[I];
+      if (N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration) then
+      begin
+        DeclLine := N.Line;
+        DeclColumn := N.Column;
+        if (I < Length(C.DeclarationLocations)) and (C.DeclarationLocations[I].Line > 0) then
+        begin
+          DeclLine := C.DeclarationLocations[I].Line;
+          DeclColumn := C.DeclarationLocations[I].Column;
+        end;
+      end;
       if N is TGocciaImportDeclaration then
       begin
         with TGocciaImportDeclaration(N) do
         begin
           if DuplicateBinding <> '' then raise EEarlySyntaxError.Create('Identifier ''' + DuplicateBinding + ''' has already been declared');
           ReqKey := ModuleRequestKey(ModulePath, AttributeType);
-          MI.AddRequest(ReqKey, N.Line, N.Column);
+          MI.AddRequest(ReqKey, DeclLine, DeclColumn);
           if Phase = icpSource then
           begin
             { the source phase loads the module, never evaluates it }
@@ -9101,7 +9121,7 @@ begin
         with TGocciaReExportDeclaration(N) do
         begin
           ReqKey := ModuleRequestKey(ModulePath, AttributeType);
-          MI.AddRequest(ReqKey, N.Line, N.Column);
+          MI.AddRequest(ReqKey, DeclLine, DeclColumn);
           MI.AddEager(ReqKey);
           if IsStarExport and (NamespaceName = '') then
           begin
@@ -9169,10 +9189,12 @@ begin
         begin
           ExportName := ExpNames[I]; Request := MI.Imports[K].Request; ImportName := MI.Imports[K].ImportName;
           LocalName := ''; Slot := -1;
+          SourceLine := MI.Imports[K].SourceLine; SourceColumn := MI.Imports[K].SourceColumn;
         end;
         Continue;
       end;
-      E.ExportName := ExpNames[I]; E.LocalName := ExpLocals[I]; E.Request := ''; E.ImportName := '';
+      E := Default(TModEntry);
+      E.ExportName := ExpNames[I]; E.LocalName := ExpLocals[I];
       if K >= 0 then E.Slot := K
       else
       begin
@@ -9284,13 +9306,14 @@ const
     TGocciaExportFunctionDeclaration, TGocciaExportClassDeclaration, TGocciaExportEnumDeclaration);
 
 function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; ReturnLast: Boolean;
-  Goal: Integer): PFuncTemplate;
+  Goal: Integer; const DeclarationLocations: TModuleDeclarationLocations): PFuncTemplate;
 var C: TCompiler; Params: TGocciaParameterArray; I: Integer; Nodes: TList<TGocciaASTNode>; Strict: Boolean;
   MI: TModuleInfo; Outer: TFuncState; OT: PFuncTemplate; Desc, Entry: UnicodeString; Fields: TUnicodeStringArray;
   K, P1, D, Ser: Integer; Done: Boolean;
 begin
   C := TCompiler.Create;
   C.SourceName := SourceName;
+  C.DeclarationLocations := DeclarationLocations;
   C.FS := nil;
   C.ProfLine := -1;
   { the compile profile (--profile=compile), unless the source is the host's }
