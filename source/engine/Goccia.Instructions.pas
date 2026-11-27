@@ -112,6 +112,7 @@ type
     ,opCovBranch             { nothing: under coverage, an Istanbul branch counter: path A of the branch registered at index C }
     ,opCovFn                 { nothing: under coverage, an Istanbul function counter at the start of a function's body: the
                                function registered at index C is called }
+    ,opMapArgTypes           { attach the parameter type codes in Consts[C] to the arguments object in R[A] }
   );
 
   PFuncTemplate = ^TFuncTemplate;
