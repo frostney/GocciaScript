@@ -27,5 +27,11 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
 ## Consequences
 
 - A host captures a fresh handle for each run it may cancel.
-- A cancelled run has no completion value, whenever the request came.
-- A host environment setup that a cancellation cuts short loads again on the next run.
+- A cancelled run has no completion value, whenever the request came. A run cancelled before it started made
+  nothing, so what earlier runs left stays in place.
+- The engine's own host setup runs before the handle binds, so a request cannot leave the host half installed.
+- A host environment setup that an abort of any kind cuts short, or that fails after the provider loaded, is undone
+  and loads again on the next run.
+- A run with an armed handle runs in the interpreter, as a run with a limit does, so it does not use the JIT.
+- The handle covers the entry only: a request during `RunTests` or `RunBenchmarks`, or while the run waits for a
+  nested sandbox run on another thread, takes effect only once control returns to the entry's engine.

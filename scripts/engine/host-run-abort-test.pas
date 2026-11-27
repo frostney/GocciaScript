@@ -120,6 +120,28 @@ begin
     'a cancelled run kept its completion value: ' + RunResult.ResultText);
 end;
 
+{ A run cancelled before it started leaves what earlier runs left: a FinalizationRegistry cell still cleans up. }
+procedure CheckPreStartKeepsEarlierWork(AEngine: TGocciaEngine);
+var
+  Handle: IGocciaAbortHandle;
+  RunResult: TGocciaRunResult;
+begin
+  RunResult := AEngine.Run('weak-register.js',
+    'globalThis.cleaned = false; globalThis.target = {};' +
+    'globalThis.registry = new FinalizationRegistry(() => { globalThis.cleaned = true; });' +
+    'registry.register(globalThis.target, 1); 1;');
+  Check(RunResult.Ok, 'weak registration failed: ' + RunResult.ErrorMessage);
+  Handle := AEngine.CaptureAbortHandle;
+  Handle.Request;
+  RunResult := AEngine.Run('weak-cancelled.js', '1;');
+  Check(RunResult.Aborted = gaHostAbort, 'pre-start cancellation was not reported');
+  RunResult := AEngine.Run('weak-release.js', 'globalThis.target = undefined; 1;');
+  Check(RunResult.Ok, 'weak release failed: ' + RunResult.ErrorMessage);
+  RunResult := AEngine.Run('weak-check.js', 'String(globalThis.cleaned);');
+  Check(RunResult.Ok and (RunResult.ResultText = 'true'),
+    'a pre-start cancellation dropped an earlier run''s cleanup: ' + RunResult.ResultText + RunResult.ErrorMessage);
+end;
+
 { A cancelled host environment setup loads again: at the provider's top level, then inside its time zone call. }
 procedure CheckProviderAbort;
 var
@@ -297,6 +319,7 @@ begin
     CheckLateAbort(Engine);
     InstallAbortNatives(Engine);
     CheckAbortDuringResult(Engine);
+    CheckPreStartKeepsEarlierWork(Engine);
     RunResult := Engine.Run('reuse-after-checks.js', '21 * 2;');
     Check(RunResult.Ok and (RunResult.ResultText = '42'), 'cancelled engine could not be reused');
   finally

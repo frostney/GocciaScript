@@ -1185,14 +1185,24 @@ begin
 end;
 
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
-var Signal: IRunAbortSignal; Requested: Boolean;
+var Signal: IRunAbortSignal; Requested, Started: Boolean; Err: UnicodeString; WeakMark: Int64;
 begin
   Signal := FNextRunAbort;
   if Signal = nil then Exit(RunEntry(FileName, Source));
   FNextRunAbort := nil;
+  { the engine's own setup runs before the handle binds: a request cannot leave the host half installed, and takes
+    effect when the run starts (RunEntry reports a setup that failed) }
+  Err := '';
+  PrepareHost(Err);
+  WeakMark := WeakCleanupMark;
+  Started := False;
   BeginRunAbort(Signal);
   try
-    if not RunAbortRequested then Result := RunEntry(FileName, Source)
+    if not RunAbortRequested then
+    begin
+      Started := True;
+      Result := RunEntry(FileName, Source);
+    end
     else Result := Default(TGocciaRunResult);
   finally
     Requested := EndRunAbort;
@@ -1200,8 +1210,9 @@ begin
   if Requested and (Result.Aborted = gaNone) then
   begin
     { a request that came after the run's own last check: the run is reported cancelled, so what it left (a job a
-      throwing entry queued, a timer) is discarded as after any abort, not run by the next entry }
-    DiscardAbortedRunWork(FWeakCleanupMark);
+      throwing entry queued, a timer) is discarded as after any abort, not run by the next entry. A run cancelled
+      before it started made nothing, and what earlier runs left stays. }
+    if Started then DiscardAbortedRunWork(WeakMark);
     Result.Ok := False;
     Result.Aborted := gaHostAbort;
     Result.ErrorIsError := True;

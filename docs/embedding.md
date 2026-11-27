@@ -483,6 +483,8 @@ Use a fresh handle for every run. Capturing again before the run replaces the ea
 nothing. A request that lands while the run finishes still reports `gaHostAbort`, and a cancelled run has no
 completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
 thread may each release their reference whenever they are done with it.
+A run with an armed handle runs in the interpreter, without the JIT. The handle does not reach
+`RunTests`, `RunBenchmarks` or a nested sandbox run another thread executes.
 [ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design. The interpreter handles runs with an abort handle armed. Compilation and custom
 blocking native functions can reach the abort only when they return or encounter an engine checkpoint.
 
