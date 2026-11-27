@@ -89,6 +89,35 @@ function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
 procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
   const AExtraLength: Integer);
 
+type
+  { SecureTransport's read (SSLRead) and its query of the decrypted plaintext
+    it holds (SSLGetBufferedReadSize), as ReadSecureTransportRecords calls
+    them. Both return an OSStatus. }
+  TSecureTransportRecordRead = function(AContext: Pointer; AData: Pointer;
+    ADataLength: NativeUInt; var AProcessed: NativeUInt): LongInt; cdecl;
+  TSecureTransportBufferedSize = function(AContext: Pointer;
+    var ABufferSize: NativeUInt): LongInt; cdecl;
+
+{ The read loop of the SecureTransport backend, with its two SecureTransport
+  calls passed in so a test can stand in for the record layer. Reads at most
+  ALength bytes into ABuffer and returns how many; AStatus is the last read's
+  OSStatus, which the caller checks.
+
+  SSLRead first copies the plaintext it holds from a record it has already
+  decrypted, and then, while the caller's buffer still has room, reads one
+  more record from the socket (Apple's sslTransport.c). Its socket read
+  blocks, so on a connection the server keeps open after a response, a read
+  asked for more than the rest of the response waits for a record that never
+  comes once that rest is already decrypted (issue #1558). A read is
+  therefore asked for no more than the plaintext held, when there is any, and
+  goes to the socket only when there is none. A read that would block before
+  it has produced a byte is tried again. }
+function ReadSecureTransportRecords(const AContext: Pointer;
+  const ARead: TSecureTransportRecordRead;
+  const ABufferedSize: TSecureTransportBufferedSize;
+  var ABuffer: array of Byte; const ALength: Integer;
+  out AStatus: LongInt): Integer;
+
 {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
 { How many client contexts the OpenSSL backend has built in this process:
   one, shared by every connection, plus one for each change of SSL_CERT_FILE
@@ -192,6 +221,31 @@ begin
   if (AExtraLength > 0) and (ConsumedLength > 0) then
     Move(AInput[ConsumedLength], AInput[0], AExtraLength);
   SetLength(AInput, AExtraLength);
+end;
+
+function ReadSecureTransportRecords(const AContext: Pointer;
+  const ARead: TSecureTransportRecordRead;
+  const ABufferedSize: TSecureTransportBufferedSize;
+  var ABuffer: array of Byte; const ALength: Integer;
+  out AStatus: LongInt): Integer;
+const
+  SECURE_TRANSPORT_SUCCESS = 0;
+  SECURE_TRANSPORT_WOULD_BLOCK = -9803;
+var
+  Buffered: NativeUInt;
+  Requested: NativeUInt;
+  Processed: NativeUInt;
+begin
+  Requested := ALength;
+  Buffered := 0;
+  if (ABufferedSize(AContext, Buffered) = SECURE_TRANSPORT_SUCCESS) and
+     (Buffered > 0) and (Buffered < Requested) then
+    Requested := Buffered;
+  Processed := 0;
+  repeat
+    AStatus := ARead(AContext, @ABuffer[0], Requested, Processed);
+  until (AStatus <> SECURE_TRANSPORT_WOULD_BLOCK) or (Processed > 0);
+  Result := Processed;
 end;
 
 { A write to a peer that reset the connection must fail the write with EPIPE
@@ -467,6 +521,9 @@ function SSLWrite(AContext: SSLContextRef; AData: Pointer;
   external name 'SSLWrite';
 function SSLClose(AContext: SSLContextRef): OSStatus; cdecl;
   external name 'SSLClose';
+function SSLGetBufferedReadSize(AContext: SSLContextRef;
+  var ABufferSize: NativeUInt): OSStatus; cdecl;
+  external name 'SSLGetBufferedReadSize';
 procedure CFRelease(ARef: Pointer); cdecl; external name 'CFRelease';
 
 function SecureTransportSocketRead(AConnection: SSLConnectionRef;
@@ -605,18 +662,14 @@ function ReadSecureTransport(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 var
   Data: TSecureTransportData;
-  Processed: NativeUInt;
-  Status: OSStatus;
+  Status: LongInt;
 begin
   Data := TSecureTransportData(AConnection.BackendData);
-  Processed := 0;
-  repeat
-    Status := SSLRead(Data.Context, @ABuffer[0], ALength, Processed);
-  until (Status <> ERR_SSL_WOULD_BLOCK) or (Processed > 0);
+  Result := ReadSecureTransportRecords(Data.Context, SSLRead,
+    SSLGetBufferedReadSize, ABuffer, ALength, Status);
   if (Status <> ERR_SEC_SUCCESS) and (Status <> ERR_SSL_CLOSED_GRACEFUL) and
      (Status <> ERR_SSL_WOULD_BLOCK) then
     raise ETransportSecurityError.CreateFmt('%s: %d', [TLS_READ_ERROR, Status]);
-  Result := Processed;
 end;
 
 function WriteSecureTransport(var AConnection: TTransportSecurityConnection;
