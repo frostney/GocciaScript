@@ -27,10 +27,11 @@ interface
 uses
   Goccia.Core;
 
-{ the natives the builtins5 prelude receives: newBox(target, forCleanup), get(box), keep(target),
-  setCleanup(fn, queue) }
+{ the natives the builtins5 prelude receives: newBox(target, forCleanup, heldValue), get(box),
+  takeHeld(box), keep(target), setCleanup(fn, queue) }
 function WeakBoxNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakGetNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+function WeakTakeHeldNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakKeepNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakSetCleanupNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 { the ephemeron tables of WeakMap and WeakSet: tableNew(), tableGet(t, key), tableHas(t, key),
@@ -467,7 +468,7 @@ begin
   Result := True;
 end;
 
-{ newBox(target, forCleanup): a box holding target weakly (an object or a symbol: the caller checked) }
+{ newBox(target, forCleanup, heldValue): holds target weakly, and a registration's held value strongly }
 function WeakBoxNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PWeakState; O: PObj; Kind: UInt32;
 begin
@@ -482,6 +483,11 @@ begin
   begin
     O^.Aux1 := MkNumber(S^.NextCell);
     Inc(S^.NextCell);
+    if Argc >= 3 then
+    begin
+      O^.Aux2 := Args[3];
+      WriteBarrier(@O^.Hdr, O^.Aux2);
+    end;
   end;
   if S^.Count >= Length(S^.Boxes) then SetLength(S^.Boxes, S^.Count * 2);
   S^.Boxes[S^.Count] := O;
@@ -497,6 +503,18 @@ begin
   if ObjOf(Args[1])^.Pad = (WEAK_MAGIC or BOX_DISCARDED_CELL) then Res := VNull
   else if ObjOf(Args[1])^.Native = nil then Res := VUndefined
   else Res := MkPtr(ObjOf(Args[1])^.Native);
+  Result := True;
+end;
+
+{ takeHeld(box): releases the held value when a registration is removed or its callback runs }
+function WeakTakeHeldNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Box: PObj;
+begin
+  if (Argc < 1) or not IsBox(Args[1]) or (ObjOf(Args[1])^.Pad <> (WEAK_MAGIC or BOX_CELL)) then
+    Exit(ThrowTypeError('finalization registration expected'));
+  Box := ObjOf(Args[1]);
+  Res := Box^.Aux2;
+  Box^.Aux2 := VUndefined;
   Result := True;
 end;
 
@@ -599,6 +617,7 @@ begin
     if (Box^.Pad = (WEAK_MAGIC or BOX_CELL)) and ((Box^.Native = nil) or (NumOf(Box^.Aux1) >= Mark)) then
     begin
       Box^.Native := nil;
+      Box^.Aux2 := VUndefined;
       Box^.Pad := WEAK_MAGIC or BOX_DISCARDED_CELL;
     end;
   end;

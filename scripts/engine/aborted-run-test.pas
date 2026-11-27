@@ -170,7 +170,11 @@ begin
     RunResult := Engine.Run('setup.js',
       'globalThis.registry = new FinalizationRegistry(countCallback);' +
       'globalThis.registerTarget = () => {' +
-      '  let target = {}; registry.register(target, "held"); target = undefined;' +
+      '  let target = {};' +
+      '  const held = {};' +
+      '  registry.register(target, held);' +
+      '  globalThis.heldRef = new WeakRef(held);' +
+      '  target = undefined;' +
       '};');
     Check(RunResult.Ok, 'finalization fixture setup: ' + RunResult.ErrorMessage);
     Check(GetV(GlobalObj, AtomOf('registerTarget'), RegisterTarget), 'could not read finalization fixture');
@@ -182,8 +186,12 @@ begin
     RunResult := Engine.Run('stop.js', 'stopRun();');
     Check(RunResult.Aborted = gaHostAbort, 'finalization fixture should abort');
     Check(not WeakCleanupPending, 'abort should discard finalization work');
-    RunResult := Engine.Run('next.js', '1 + 1;');
+    CollectMinor;
+    CollectMajor;
+    Engine.ResultForm := grfString;
+    RunResult := Engine.Run('next.js', 'heldRef.deref() === undefined;');
     Check(RunResult.Ok and (CallbackCount = 0), 'aborted finalization must not run later');
+    Check(RunResult.ResultText = 'true', 'a discarded registration should release its held value');
   finally
     Engine.Free;
   end;
