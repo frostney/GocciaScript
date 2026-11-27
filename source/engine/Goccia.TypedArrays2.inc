@@ -449,7 +449,7 @@ begin
   Lo := 0; Hi := Len - 1;
   while Lo < Hi do
   begin
-    { one element per poll; the pointer stays valid, as no script code runs here }
+    { one poll per swap of two elements; the pointer stays valid, as no script code runs here }
     if not PollInterrupt then Exit(False);
     for J := 0 to ES - 1 do
     begin
@@ -534,7 +534,7 @@ end;
 
 { 23.2.3.27 slice }
 function TAP_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, Fin, Count: Int64; N: SizeInt; LV, T: TValue; O, A: PObj; ES: Integer;
+var Len, K, Fin, Count: Int64; N: SizeInt; LV, T: TValue; O, A: PObj; ES, J: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 1), Len, 0, K) then Exit(False);
@@ -552,8 +552,12 @@ begin
     if TAKind(A) = TAKind(O) then
     begin
       ES := TAElemSize[TAKind(O)];
-      { a byte copy, element by element in order (the two may share the buffer) }
-      for N := 0 to Count * ES - 1 do (TAData(A) + N)^ := (TAData(O) + K * ES + N)^;
+      { a byte copy, element by element in order (the two may share the buffer), one poll per element }
+      for N := 0 to Count - 1 do
+      begin
+        if not PollInterrupt then Exit(False);
+        for J := 0 to ES - 1 do (TAData(A) + N * ES + J)^ := (TAData(O) + (K + N) * ES + J)^;
+      end;
     end
     else
     begin

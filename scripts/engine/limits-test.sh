@@ -25,47 +25,43 @@ check() {
 
 check typed-fill-budget --max-instructions=50 'Fatal error: Execution exceeded instruction limit of 50' \
   'const a = new Int32Array(256); a.fill(42); console.log(a[13]);'
-# the control: the script's own bytecode fits under the cap, so each case below is charged by its method's loop
-check typed-loop-control --max-instructions=200 '42' \
-  'const a = new Int32Array(1); const f = new Float64Array(1); a.indexOf(1); console.log(42);'
-check typed-from-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); Int32Array.from(a); console.log(42);'
-check typed-map-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.map(Math.abs); console.log(42);'
-check typed-for-each-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.forEach(Math.abs); console.log(42);'
-check typed-every-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.every(Number.isInteger); console.log(42);'
-check typed-filter-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.filter(Boolean); console.log(42);'
-check typed-reduce-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.reduce(Math.max); console.log(42);'
-check typed-index-of-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.indexOf(1); console.log(42);'
-check typed-last-index-of-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.lastIndexOf(1); console.log(42);'
-check typed-includes-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.includes(1); console.log(42);'
-check typed-join-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.join(); console.log(42);'
-check typed-reverse-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.reverse(); console.log(42);'
-check typed-set-convert-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); f.set(a); console.log(42);'
-check typed-slice-convert-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'class G extends Float64Array { static get [Symbol.species]() { return Int32Array; } } const g = new G(100000); g.slice(); console.log(42);'
-check typed-sort-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.sort(); console.log(42);'
-check typed-to-sorted-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.toSorted(); console.log(42);'
-check typed-to-reversed-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.toReversed(); console.log(42);'
-check typed-with-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); a.with(0, 1); console.log(42);'
-check typed-construct-convert-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); new Float64Array(a); console.log(42);'
-check typed-construct-iterable-budget --max-instructions=200 'Fatal error: Execution exceeded instruction limit of 200' \
-  'const a = new Int32Array(100000); const f = new Float64Array(100000); new Int32Array(a.values()); console.log(42);'
+# typed-array element loops: one step per element. Single-loop cases run 100,000 elements under a cap of 200, and the
+# control shows the script's own bytecode fits under it. Cases with several loops have a cap below their total but
+# above the total less any one loop's elements (measured: filter 30,017, sort 12,301, iterables about 20,017, of
+# 4,017), so a loop that stopped polling would let the case finish.
+TA_CAP=--max-instructions=200
+TA_LIMIT='Fatal error: Execution exceeded instruction limit of 200'
+check typed-loop-control "$TA_CAP" '42' 'const a = new Int32Array(1); a.indexOf(1); console.log(42);'
+check typed-from-array-like-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); Int32Array.from({ length: 100000 }); console.log(42);'
+check typed-map-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.map(Math.abs); console.log(42);'
+check typed-for-each-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.forEach(Math.abs); console.log(42);'
+check typed-every-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.every(Number.isInteger); console.log(42);'
+check typed-reduce-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.reduce(Math.max); console.log(42);'
+check typed-index-of-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.indexOf(1); console.log(42);'
+check typed-last-index-of-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.lastIndexOf(1); console.log(42);'
+check typed-includes-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.includes(1); console.log(42);'
+check typed-join-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.join(); console.log(42);'
+check typed-reverse-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.reverse(); console.log(42);'
+check typed-set-convert-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); new Float64Array(100000).set(a); console.log(42);'
+check typed-set-array-like-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.set({ length: 100000 }); console.log(42);'
+check typed-slice-same-type-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.slice(); console.log(42);'
+check typed-to-reversed-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.toReversed(); console.log(42);'
+check typed-with-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.with(0, 1); console.log(42);'
+check typed-construct-convert-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); new Float64Array(a); console.log(42);'
+check typed-slice-convert-budget "$TA_CAP" "$TA_LIMIT" \
+  'class G extends Float64Array { static get [Symbol.species]() { return Int32Array; } } new G(100000).slice(); console.log(42);'
+check typed-filter-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
+  'const a = new Int32Array(10000); a.fill(1); a.filter(Boolean); console.log(42);'
+check typed-sort-budget --max-instructions=11800 'Fatal error: Execution exceeded instruction limit of 11800' \
+  'const a = new Int32Array(1024); a.sort(); console.log(42);'
+check typed-to-sorted-budget --max-instructions=11800 'Fatal error: Execution exceeded instruction limit of 11800' \
+  'const a = new Int32Array(1024); a.toSorted(); console.log(42);'
+check typed-construct-iterable-budget --max-instructions=15000 'Fatal error: Execution exceeded instruction limit of 15000' \
+  'const a = new Int32Array(10000); new Int32Array(a.values()); console.log(42);'
+check typed-from-iterable-budget --max-instructions=15000 'Fatal error: Execution exceeded instruction limit of 15000' \
+  'const a = new Int32Array(10000); Int32Array.from(a); console.log(42);'
+check typed-of-budget --max-instructions=3000 'Fatal error: Execution exceeded instruction limit of 3000' \
+  'const b = new Array(2000); Int32Array.of(...b); console.log(42);'
 
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
