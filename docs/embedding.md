@@ -429,10 +429,10 @@ Engine.AuditSink := Log.Record_;
 
 ```pascal
 if not R.Ok then
-  if not R.Compiled then
-    WriteLn('syntax error at ', R.ErrorLine, ':', R.ErrorColumn, ': ', UTF8Encode(R.ErrorText))
-  else if R.Aborted <> gaNone then
+  if R.Aborted <> gaNone then
     WriteLn('stopped: ', UTF8Encode(R.ErrorMessage))
+  else if not R.Compiled then
+    WriteLn('syntax error at ', R.ErrorLine, ':', R.ErrorColumn, ': ', UTF8Encode(R.ErrorText))
   else if R.ErrorIsError then
     WriteLn(UTF8Encode(R.ErrorName), ': ', UTF8Encode(R.ErrorText), ' (', UTF8Encode(R.ErrorFile), ':',
       R.ErrorLine, ':', R.ErrorColumn, ')')
@@ -479,7 +479,11 @@ A request during execution ends it past guest handlers with `Aborted = gaHostAbo
 and Atomics waits, then discards pending guest work under the same rules as a timeout.
 
 The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
-Use a fresh handle for every run. The interpreter handles runs with an abort handle armed. Compilation and custom
+Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do
+nothing. A request that lands while the run finishes still reports `gaHostAbort`, and a cancelled run has no
+completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
+thread may each release their reference whenever they are done with it.
+[ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design. The interpreter handles runs with an abort handle armed. Compilation and custom
 blocking native functions can reach the abort only when they return or encounter an engine checkpoint.
 
 ### Call Stack Depth Limit

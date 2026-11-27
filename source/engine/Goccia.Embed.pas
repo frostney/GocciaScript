@@ -117,6 +117,8 @@ type
       and whether a clock or random export is running (a provider that reads its own source is refused) }
     FHostEnvironment: UnicodeString;
     FEnvLoaded: Boolean;
+    { FEnvFns is a root of the engine (registered once) }
+    FEnvRooted: Boolean;
     FEnvFns: array[0..3] of TValue;
     FEnvStreams: array of UInt64;
     FEnvStreamSet: array of Boolean;
@@ -676,7 +678,8 @@ end;
 function TGocciaEngine.LoadHostEnvironment: Boolean;
 const NAMES: array[0..3] of UnicodeString = ('epochNanoseconds', 'monotonicNanoseconds', 'timeZoneIdentifier',
   'random');
-var NS, V, R: TValue; I: Integer; Z, C: string;
+var NS, V, R: TValue; I: Integer; Z, C: string; PrevClock: THostClockFn; PrevRandom: THostRandomFn;
+  Committed: Boolean;
 begin
   Result := False;
   if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(FHostEnvironment))), NS) then Exit;
@@ -692,30 +695,49 @@ begin
   finally
     PopRoots(1);
   end;
-  AddRootRange(@FEnvFns[0], 4);
-  FEnvLoaded := True;
+  if not FEnvRooted then
+  begin
+    AddRootRange(@FEnvFns[0], 4);
+    FEnvRooted := True;
+  end;
   FRandomForks := 0;
   SetLength(FEnvStreams, 0);
   SetLength(FEnvStreamSet, 0);
+  PrevClock := HostClock;
+  PrevRandom := HostRandom;
   HostClock := ProviderClock;
   HostRandom := ProviderRandom;
-  if not TimeOriginInit then Exit;
-  { the default time zone, read once (Date's local time, Temporal.Now, Intl), as GocciaScript canonicalizes it }
-  FEnvClockCalling := True;
+  { the provider counts as loaded only once its setup has finished: a setup an error or an abort stopped in one of its
+    calls is undone, and the next run loads it again }
+  Committed := False;
   try
-    if not CallValue(FEnvFns[2], VUndefined, nil, 0, R) then Exit;
+    if not TimeOriginInit then Exit;
+    { the default time zone, read once (Date's local time, Temporal.Now, Intl), as GocciaScript canonicalizes it }
+    FEnvClockCalling := True;
+    try
+      if not CallValue(FEnvFns[2], VUndefined, nil, 0, R) then Exit;
+    finally
+      FEnvClockCalling := False;
+    end;
+    if not IsString(R) then Exit(ThrowTypeError('Host environment export "timeZoneIdentifier" must return a string'));
+    Z := StrToUnicode(StrOf(R));
+    if TimeZoneIdentifiersEqual(Z, 'UTC') then Z := 'UTC'
+    else if TryCanonicalizeTimeZoneIdentifierCase(Z, C) and IsValidTimeZone(C) then Z := C
+    else if not IsValidTimeZone(Z) then
+      Exit(ThrowError('RangeError', 'Host environment export "timeZoneIdentifier" returned an unsupported time ' +
+        'zone: ' + Z));
+    TimeZoneOverride := Z;
+    FEnvLoaded := True;
+    Committed := True;
+    Result := True;
   finally
-    FEnvClockCalling := False;
+    if not Committed then
+    begin
+      HostClock := PrevClock;
+      HostRandom := PrevRandom;
+      for I := 0 to 3 do FEnvFns[I] := VUndefined;
+    end;
   end;
-  if not IsString(R) then Exit(ThrowTypeError('Host environment export "timeZoneIdentifier" must return a string'));
-  Z := StrToUnicode(StrOf(R));
-  if TimeZoneIdentifiersEqual(Z, 'UTC') then Z := 'UTC'
-  else if TryCanonicalizeTimeZoneIdentifierCase(Z, C) and IsValidTimeZone(C) then Z := C
-  else if not IsValidTimeZone(Z) then
-    Exit(ThrowError('RangeError', 'Host environment export "timeZoneIdentifier" returned an unsupported time ' +
-      'zone: ' + Z));
-  TimeZoneOverride := Z;
-  Result := True;
 end;
 
 procedure TGocciaEngine.SetCapabilities(const Value: TGocciaCapabilities);
@@ -1177,6 +1199,9 @@ begin
   end;
   if Requested and (Result.Aborted = gaNone) then
   begin
+    { a request that came after the run's own last check: the run is reported cancelled, so what it left (a job a
+      throwing entry queued, a timer) is discarded as after any abort, not run by the next entry }
+    DiscardAbortedRunWork(FWeakCleanupMark);
     Result.Ok := False;
     Result.Aborted := gaHostAbort;
     Result.ErrorIsError := True;
@@ -1197,7 +1222,7 @@ function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeStr
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean; EnvAbort: Integer;
+  Compiled: Boolean; EnvAbort, EnvMark: Integer;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1237,11 +1262,17 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions);
+      EnvMark := ModuleCount;
       try
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+        if EnvAbort <> 0 then
+        begin
+          DiscardAbortedRunWork(FWeakCleanupMark);
+          { an abort is not the provider's own failure: what it cut short loads again on the next run }
+          SupersedeFailedModulesFrom(EnvMark);
+        end;
         LimitsDisarm;
       end;
     end
@@ -1393,6 +1424,12 @@ begin
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
     if (AbortKind = 0) and RunAbortRequested then AbortInterrupted;
+    { a cancelled run has no completion value, whenever the request came }
+    if AbortKind = 4 then
+    begin
+      Result.HasResult := False;
+      Result.ResultText := '';
+    end;
     case AbortKind of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;

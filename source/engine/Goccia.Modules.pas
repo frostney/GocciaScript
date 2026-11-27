@@ -86,6 +86,9 @@ function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTempl
   pending }
 function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 function ModuleCount: Integer;
+{ the records made since Mark that did not finish evaluating, superseded: the next request for one loads it again
+  (a load an abort cut short, which is not the module's own failure) }
+procedure SupersedeFailedModulesFrom(Mark: Integer);
 { the file eligible for a code frame at Path, if a guest module loaded after Mark records came from it }
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
 { the entry's first module record (ModuleCount when the run starts): the records before it are the host's, and a
@@ -2299,6 +2302,18 @@ end;
 function ModuleCount: Integer;
 begin
   if Mods = nil then Result := 0 else Result := Mods.Count;
+end;
+
+procedure SupersedeFailedModulesFrom(Mark: Integer);
+var I: Integer; M: TModRec;
+begin
+  if Mods = nil then Exit;
+  if Mark < 0 then Mark := 0;
+  for I := Mark to Mods.Count - 1 do
+  begin
+    M := Mods[I];
+    if M.Errored or (M.Status <> msEvaluated) then M.Superseded := True;
+  end;
 end;
 
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
