@@ -345,90 +345,28 @@ begin
   end;
 end;
 
-{ S as a JavaScript string literal }
-function QuoteJS(const S: UnicodeString): UnicodeString;
-var I: Integer;
-begin
-  Result := '"';
-  for I := 1 to Length(S) do
-    case S[I] of
-      '"', '\': Result := Result + '\' + S[I];
-      #10: Result := Result + '\n';
-      #13: Result := Result + '\r';
-      #$2028: Result := Result + ' ';
-      #$2029: Result := Result + ' ';
-    else
-      Result := Result + S[I];
-    end;
-  Result := Result + '"';
-end;
-
-{ the import declarations and re-exports of a Script's top level taken out of it, and written as the source of a
-  module of only them (ScriptImportSource), each where it stood (a link error is located at its declaration); the
-  nodes taken out are freed }
+{ Keep each original declaration in its place in the companion module. The parser's span includes its
+  full text, so a combined import and two imports on the same line keep their original coordinates. }
 function ScriptImportsAsModule(Prog: TGocciaProgram): UnicodeString;
-var I, Line, Col, AtLine: Integer; N: TGocciaStatement; Decl, From: UnicodeString; Pair: TStringStringMap.TKeyValuePair;
-  Found: Boolean;
+var I, AtLine, AtColumn: Integer; N: TGocciaStatement;
 begin
   Result := '';
   AtLine := 1;
-  Found := False;
+  AtColumn := 1;
   for I := 0 to Prog.Body.Count - 1 do
   begin
     N := Prog.Body[I];
-    if N is TGocciaImportDeclaration then
-      with TGocciaImportDeclaration(N) do
-      begin
-        From := QuoteJS(ModulePath);
-        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
-        Decl := '';
-        if Phase = icpSource then
-        begin
-          for Pair in Imports do Decl := Decl + 'import source ' + UnicodeString(Pair.Key) + ' from ' + From + ';';
-        end
-        else if Phase = icpDefer then
-          Decl := 'import defer * as ' + NamespaceName + ' from ' + From + ';'
-        else
-        begin
-          if NamespaceName <> '' then Decl := 'import * as ' + NamespaceName + ' from ' + From + ';';
-          if Imports.Count > 0 then
-          begin
-            Decl := Decl + 'import { ';
-            for Pair in Imports do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + UnicodeString(Pair.Key) + ', ';
-            Decl := Decl + '} from ' + From + ';';
-          end;
-          if Decl = '' then Decl := 'import ' + From + ';';
-        end;
-      end
-    else if N is TGocciaReExportDeclaration then
-      with TGocciaReExportDeclaration(N) do
-      begin
-        From := QuoteJS(ModulePath);
-        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
-        if IsStarExport and (NamespaceName = '') then Decl := 'export * from ' + From + ';'
-        else if IsStarExport then Decl := 'export * as ' + QuoteJS(NamespaceName) + ' from ' + From + ';'
-        else
-        begin
-          Decl := 'export { ';
-          for Pair in ExportsTable do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + QuoteJS(Pair.Key) + ', ';
-          Decl := Decl + '} from ' + From + ';';
-        end;
-      end
-    else Continue;
-    Line := N.Line;
-    Col := N.Column;
-    if Line < AtLine then Line := AtLine;
-    while AtLine < Line do
+    if not ((N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration)) then Continue;
+    if N.Line > AtLine then
     begin
-      Result := Result + #10;
-      Inc(AtLine);
+      Result := Result + StringOfChar(#10, N.Line - AtLine);
+      AtColumn := 1;
     end;
-    if Col > 1 then Result := Result + StringOfChar(' ', Col - 1);
-    Result := Result + Decl + #10;
-    Inc(AtLine);
-    Found := True;
+    if N.Column > AtColumn then Result := Result + StringOfChar(' ', N.Column - AtColumn);
+    Result := Result + N.Span.Text;
+    AtLine := N.Span.EndLine;
+    AtColumn := N.Span.EndColumn + 1;
   end;
-  if not Found then Exit;
   for I := Prog.Body.Count - 1 downto 0 do
     if (Prog.Body[I] is TGocciaImportDeclaration) or (Prog.Body[I] is TGocciaReExportDeclaration) then
       Prog.Body.Delete(I);

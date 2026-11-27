@@ -535,7 +535,8 @@ begin
     end;
     { located only from the provenance the engine recorded when it made the error, never from a thrown value's
       own stack string, which can name any file }
-    if ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
+    if not ErrorSourceLocation(RootAt(TempTop - 1), R.ErrorFile, R.ErrorLine, R.ErrorColumn) and
+       ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
     { the host's suggestion for the error it threw (a PermissionDenied's grant) }
     if ErrorHostSuggestion(RootAt(TempTop - 1), Text) then R.ErrorSuggestion := Text;
   finally
@@ -1382,8 +1383,7 @@ begin
       if LoadFailure(FailPath, FailLine, FailColumn) then
       begin
         { an explicit Script's import declaration: the entry's own }
-        if Pos(ScriptImportsSuffix, FailPath) > 1 then
-          SetLength(FailPath, Pos(ScriptImportsSuffix, FailPath) - 1);
+        FailPath := ModuleDiagnosticPath(FailPath);
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
         begin

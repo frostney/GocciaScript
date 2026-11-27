@@ -403,6 +403,8 @@ function StackFramesNow: UnicodeString;
   script cannot see or change; E rooted by the caller }
 procedure SetErrorHostSuggestion(E: TValue; const Text: UnicodeString);
 function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
+procedure SetErrorSourceLocation(E: TValue; const Source: UnicodeString; Line, Column: Integer);
+function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
 { throws the TypeError for an iterator result V that is not an object (False) }
 function ThrowIterResultNotObject(V: TValue): Boolean;
@@ -2245,6 +2247,8 @@ end;
 threadvar
   SuggestionKey: PStr;
   SuggestionKeyGen: Integer;
+  ErrorLocationKey: PStr;
+  ErrorLocationKeyGen: Integer;
 
 function SuggestionKeyNow: PStr;
 begin
@@ -2271,6 +2275,42 @@ begin
   I := GetOwnSlot(ObjOf(E), SuggestionKeyNow);
   if (I < 0) or not IsString(GetSlot(ObjOf(E), I)) then Exit;
   Text := StrToUnicode(StrOf(GetSlot(ObjOf(E), I)));
+  Result := True;
+end;
+
+function ErrorLocationKeyNow: PStr;
+begin
+  if FirstInEngine(ErrorLocationKeyGen) then ErrorLocationKey := NewKeyAtom('%errorLocation', kfInternal);
+  Result := ErrorLocationKey;
+end;
+
+procedure SetErrorSourceLocation(E: TValue; const Source: UnicodeString; Line, Column: Integer);
+var Base: Integer; Key: PStr;
+begin
+  if not IsObject(E) or (ObjOf(E)^.OKind <> okError) then Exit;
+  Base := TempTop;
+  PushRoot(E);
+  Key := ErrorLocationKeyNow;
+  PushRoot(StrFromUnicode(Source));
+  PushRoot(MkPtr(NewArray(0, 3)));
+  ArrayPush(ObjOf(RootAt(Base + 2)), RootAt(Base + 1));
+  ArrayPush(ObjOf(RootAt(Base + 2)), MkInt(Line));
+  ArrayPush(ObjOf(RootAt(Base + 2)), MkInt(Column));
+  DefineOwn(RootAt(Base), Key, RootAt(Base + 2), pfHidden);
+  PopRoots(TempTop - Base);
+end;
+
+function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
+var I: Integer; Fields: PValueArray;
+begin
+  Result := False;
+  if not IsObject(E) or (ObjOf(E)^.OKind <> okError) or not SameEngine(ErrorLocationKeyGen) then Exit;
+  I := GetOwnSlot(ObjOf(E), ErrorLocationKey);
+  if I < 0 then Exit;
+  Fields := ObjOf(GetSlot(ObjOf(E), I))^.Elements;
+  Source := StrToUnicode(StrOf(Fields^.Data[0]));
+  Line := IntOf(Fields^.Data[1]);
+  Column := IntOf(Fields^.Data[2]);
   Result := True;
 end;
 

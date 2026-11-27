@@ -7,7 +7,7 @@ unit Goccia.Artifact;
   verifier (VerifyTemplate) then checks the code before anything of it runs.
 
   Layout, little-endian:
-    header   magic 'GBC'#0, u16 format version (200; the old engine's files are version 100), the runtime tag
+    header   magic 'GBC'#0, u16 format version (201), the runtime tag
              'goccia-engine', u64 engine fingerprint (the instruction set: a build whose opcodes differ rejects
              the file), source path (its extension gives the module's logical address), the compile profile
              (Goccia.Bytecode.Profile's wire fields, then the engine's unrestricted flag), u8 kind (0 Script,
@@ -763,7 +763,7 @@ begin
 end;
 
 procedure VerifyModuleInfo(const A: TGocciaArtifact);
-  procedure Entries(const AEntries: array of TModEntry);
+  procedure Entries(const AEntries: array of TModEntry; RequireLocation: Boolean);
   var Entry: TModEntry;
   begin
     for Entry in AEntries do
@@ -771,16 +771,17 @@ procedure VerifyModuleInfo(const A: TGocciaArtifact);
       if (Entry.Slot < -1) or (Entry.Slot >= A.Info.SlotCount) then
         Reject(A.Top, -1, Format('module cell %d outside 0..%d', [Entry.Slot, A.Info.SlotCount - 1]));
       if (Entry.SourceLine < 0) or (Entry.SourceColumn < 0) or
-         ((Entry.SourceLine = 0) <> (Entry.SourceColumn = 0)) then
+         (Entry.SourceLine > GOCCIA_GBC_MAX_FILE_BYTES) or (Entry.SourceColumn > GOCCIA_GBC_MAX_FILE_BYTES) or
+         ((Entry.SourceLine = 0) <> (Entry.SourceColumn = 0)) or (RequireLocation and (Entry.SourceLine = 0)) then
         Reject(A.Top, -1, 'invalid module declaration location');
     end;
   end;
 begin
   if A.Info = nil then Exit;
   if (A.Info.SlotCount < 0) or (A.Info.SlotCount > MAX_REGS) then Reject(A.Top, -1, 'module cell count');
-  Entries(A.Info.Imports);
-  Entries(A.Info.LocalExports);
-  Entries(A.Info.IndirectExports);
+  Entries(A.Info.Imports, True);
+  Entries(A.Info.LocalExports, False);
+  Entries(A.Info.IndirectExports, True);
 end;
 
 var

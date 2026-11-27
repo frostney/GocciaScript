@@ -40,6 +40,8 @@ function ModuleRecordExists(const Key: UnicodeString): Boolean;
   loop when a top-level await waits on more. Finish, once it fulfilled, binds each name it imports as a const global
   lexical binding on the binding it imports, for the Script to run against; False with the error pending. }
 const ScriptImportsSuffix = '#script-imports';
+
+function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
@@ -214,7 +216,7 @@ const
 threadvar
   { A Script's imports form their own module for each entry. A REPL can reuse the same entry name. }
   ScriptImportRuns: Integer;
-  ScriptImportKey: UnicodeString;
+  ScriptImportKey, ScriptImportEntry: UnicodeString;
   Mods: TList<TModRec>;
   { (SetEntryModuleMark) and, while a host-owned module's import loads, True: the records it makes are the host's }
   EntryModuleMark: Integer;
@@ -1304,15 +1306,20 @@ begin
   Result := False;
 end;
 
+function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
+begin
+  Result := Path;
+  if (ScriptImportKey <> '') and (Path = ScriptImportKey) then Result := ScriptImportEntry;
+end;
+
 procedure ThrowLinkSyntaxError(const AModule: TModRec; const AEntry: TModEntry; const AMessage: UnicodeString);
 var Path, Location: UnicodeString;
 begin
   ThrowError('SyntaxError', AMessage);
   if AEntry.SourceLine = 0 then Exit;
-  Path := AModule.Address.Path;
-  if (ScriptImportKey <> '') and (Path = ScriptImportKey) then
-    SetLength(Path, Pos(ScriptImportsSuffix, Path) - 1);
+  Path := ModuleDiagnosticPath(AModule.Address.Path);
   Location := Path + ':' + IntToStr(AEntry.SourceLine) + ':' + IntToStr(AEntry.SourceColumn);
+  SetErrorSourceLocation(Pending, Path, AEntry.SourceLine, AEntry.SourceColumn);
   SetEngineErrorStack(Pending, 'SyntaxError: ' + AMessage + #10'    at <module link> (' + Location + ')',
     ProfileStackTraces);
 end;
@@ -1846,6 +1853,7 @@ begin
   Key := EntryPath + ScriptImportsSuffix;
   if ScriptImportRuns > 1 then Key := Key + UnicodeString(IntToStr(ScriptImportRuns));
   ScriptImportKey := Key;
+  ScriptImportEntry := EntryPath;
   SavedPath := ProvidedPath;
   SavedSrc := ProvidedSrc;
   SetProvidedSource(Key, Source);
@@ -2394,6 +2402,7 @@ begin
   SitePath := '';
   ProvidedArtifactPath := '';
   ScriptImportKey := '';
+  ScriptImportEntry := '';
 end;
 
 initialization
