@@ -10,6 +10,11 @@ uses
 function TryDecodeUTF8(const ABytes: TBytes; out AText: string;
   out AErrorOffset: Integer): Boolean;
 function DecodeUTF8WithReplacement(const ABytes: TBytes): string; overload;
+{ AText's UTF-8 bytes as text, as the RTL's UTF8Decode decodes them, except
+  that the noncharacters U+FFFE and U+FFFF stay themselves: UTF8Decode turns
+  both into '?'. Text with either one is decoded strictly (TryDecodeUTF8), and
+  only text that is not valid UTF-8 falls back to UTF8Decode. }
+function UTF8DecodeKeepingNoncharacters(const AText: RawByteString): UnicodeString;
 { Decodes ABytes[AStart..] as DecodeUTF8WithReplacement decodes all of them,
   without copying the tail first. }
 function DecodeUTF8WithReplacement(const ABytes: TBytes;
@@ -191,6 +196,26 @@ begin
         (AIndex + Result < Length(ABytes)) and
         IsContinuationByte(ABytes[AIndex + Result]) do
     Inc(Result);
+end;
+
+function UTF8DecodeKeepingNoncharacters(const AText: RawByteString): UnicodeString;
+var
+  Bytes: TBytes;
+  Decoded: string;
+  ErrorOffset, I: Integer;
+begin
+  { EF BF BE and EF BF BF are U+FFFE and U+FFFF }
+  for I := 1 to Length(AText) - 2 do
+    if (AText[I] = #$EF) and (AText[I + 1] = #$BF) and
+       ((AText[I + 2] = #$BE) or (AText[I + 2] = #$BF)) then
+    begin
+      SetLength(Bytes, Length(AText));
+      Move(AText[1], Bytes[0], Length(AText));
+      if TryDecodeUTF8(Bytes, Decoded, ErrorOffset) then
+        Exit(Decoded);
+      Break;
+    end;
+  Result := UTF8Decode(AText);
 end;
 
 function DecodeUTF8WithReplacement(const ABytes: TBytes): string;

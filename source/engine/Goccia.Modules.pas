@@ -152,7 +152,7 @@ implementation
 
 uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.VM,
-  Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry;
+  Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry, TextEncoding;
 
 
 const
@@ -615,7 +615,7 @@ begin
   Result := ReadModuleBytes(Address.Path, Address.FilePath, B);
   if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
-  Src := UnicodeString(UTF8Decode(B));
+  Src := UTF8DecodeKeepingNoncharacters(B);
   if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
 end;
 

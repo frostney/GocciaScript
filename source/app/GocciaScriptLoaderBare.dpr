@@ -462,7 +462,7 @@ begin
       Engine.Resolver := Resolver;
       Engine.OnWarning := Warnings.Warn;
       InitializeProfiler(Engine, AOptions);
-      RunResult := Engine.Run(DisplayName, UTF8Decode(Source.Text));
+      RunResult := Engine.Run(DisplayName, StringListToEngineSourceText(Source));
       if RunResult.Ok then
       begin
         if RunResult.HasResult then
