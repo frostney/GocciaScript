@@ -520,6 +520,24 @@ const seen = await (await fetch('${BASE}/arrivals')).json()
 console.log(result, seen.arrivals.includes('late') ? 'started' : 'never started')
 " "TimeoutError never started"
 
+check "an abort listener's fetch does not start another waiting request whose signal timed out" 0 "
+await fetch('${BASE}/arrivals-reset')
+const quick = Array.from({ length: 16 }, (_, i) => fetch('${BASE}/sleep/50/quick' + i))
+const first = AbortSignal.timeout(100)
+let fromListener = null
+first.addEventListener('abort', () => { fromListener = fetch('${BASE}/sleep/0/listener').then((r) => r.status) })
+const a = fetch('${BASE}/sleep/0/first', { signal: first }).then(() => 'answered', (e) => e.name)
+const b = fetch('${BASE}/sleep/0/second', { signal: AbortSignal.timeout(100) }).then(() => 'answered', (e) => e.name)
+const until = Date.now() + 400
+// busy without yielding: an iterator that ends once the time has passed
+for (const _ of { [Symbol.iterator]: () => ({ next: () => ({ done: Date.now() >= until }) }) }) {}
+const results = [await a, await b]
+await Promise.all(quick)
+results.push(fromListener === null ? 'no listener fetch' : await fromListener)
+const seen = await (await fetch('${BASE}/arrivals')).json()
+console.log(results.join(','), seen.arrivals.includes('first') || seen.arrivals.includes('second') ? 'started' : 'never started')
+" "TimeoutError,TimeoutError,200 never started"
+
 check "slow answers past two seconds arrive, with no signal, a controller's signal, or after waiting" 0 "
 await fetch('${BASE}/arrivals-reset')
 const controller = new AbortController()

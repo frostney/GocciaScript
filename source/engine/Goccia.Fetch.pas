@@ -53,6 +53,9 @@ const
   FETCH_DEADLINE_SLACK_MS = 2000;
   { the slice the event loop waits in, so that the run's interrupt is seen }
   WAIT_SLICE_MS = 50;
+  { how soon the pump observes a waiting request's signal again when observing it did not abort it yet: the host's
+    tick and the signal's clock can differ by a tick }
+  SIGNAL_RECHECK_MS = 10;
 
 type
   THop = record
@@ -108,9 +111,11 @@ type
     Redirect: THTTPRedirectMode;
     { the bytes of the entry charged against the memory limit (Charge), until it is removed }
     Bytes: Int64;
-    { GetTickCount64 at the request's signal deadline (0: none), until the pump has had the signals observed for it }
+    { GetTickCount64 at which the pump next has the signals observed for the request (0: none): its signal's deadline,
+      then for a request still waiting a recheck shortly after }
     Deadline: QWord;
-    { the same deadline, kept for the socket's timeout when the request starts }
+    { GetTickCount64 at the request's signal deadline (0: none): the socket's timeout when it starts, and for a
+      waiting request the time past which it never starts }
     SignalDeadline: QWord;
     { the fetch() call, which the hop decisions are attributed to }
     Site: UnicodeString;
@@ -381,7 +386,8 @@ end;
 
 { the waiting requests started, oldest first, while a slot is free; the slots of cancelled requests whose workers
   finished free first. None starts once the run is interrupted (its abort discards them), and none whose signal's
-  deadline passed before the pump had the signals observed: that observation aborts it, which drops it unstarted }
+  deadline passed: observing its signal aborts it, which drops it unstarted, and an abort listener that calls fetch()
+  before the pump observes the rest must not start them }
 procedure StartWaiting;
 var I, Running: Integer; Now_: QWord;
 begin
@@ -397,7 +403,7 @@ begin
   for I := 0 to High(Pendings) do
   begin
     if Running >= MAX_FETCH_WORKERS then Exit;
-    if (Pendings[I].Worker = nil) and ((Pendings[I].Deadline = 0) or (Pendings[I].Deadline > Now_)) then
+    if (Pendings[I].Worker = nil) and ((Pendings[I].SignalDeadline = 0) or (Pendings[I].SignalDeadline > Now_)) then
     begin
       StartWorker(Pendings[I]);
       Inc(Running);
@@ -703,11 +709,14 @@ begin
       for I := 0 to High(Pendings) do
         if (Pendings[I].Deadline <> 0) and ((Earliest = 0) or (Pendings[I].Deadline < Earliest)) then
           Earliest := Pendings[I].Deadline;
-      { a signal's deadline passed: its signal aborts when observed, which rejects and cancels its request }
+      { a signal's deadline passed: its signal aborts when observed, which rejects and cancels its request. A waiting
+        request is observed again shortly, until its signal aborts: it never starts }
       if (Earliest <> 0) and (Earliest <= Now_) then
       begin
         for I := 0 to High(Pendings) do
-          if (Pendings[I].Deadline <> 0) and (Pendings[I].Deadline <= Now_) then Pendings[I].Deadline := 0;
+          if (Pendings[I].Deadline <> 0) and (Pendings[I].Deadline <= Now_) then
+            if Pendings[I].Worker = nil then Pendings[I].Deadline := Now_ + SIGNAL_RECHECK_MS
+            else Pendings[I].Deadline := 0;
         Exit(Settle([MkInt(-1), MkInt(2)]));
       end;
       { the caller's own deadline (an async wait's timeout): it waits no longer }
