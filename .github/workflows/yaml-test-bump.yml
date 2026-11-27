@@ -1,7 +1,7 @@
 name: yaml-test weekly bump
 
 # Pulls the latest yaml/yaml-test-suite data SHA, updates the pin in
-# scripts/run_yaml_test_suite.py, and opens a PR.  Merge once the
+# tests/compliance/yaml-test-suite.pin, and opens a PR.  Merge once the
 # compliance delta is acceptable.
 #
 # Cadence: weekly (Mondays 07:00 UTC).  Manual trigger available via
@@ -33,12 +33,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update pin in suite runner
-        run: bun scripts/suite-bump-pin.ts scripts/run_yaml_test_suite.py ${{ steps.latest.outputs.sha }}
+      - name: Update the suite pin file
+        run: bun scripts/suite-bump-pin.ts tests/compliance/yaml-test-suite.pin ${{ steps.latest.outputs.sha }}
 
       - id: changed
         run: |
-          if git diff --quiet -- scripts/run_yaml_test_suite.py; then
+          if git diff --quiet -- tests/compliance/yaml-test-suite.pin; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "yaml-test-suite already pinned to ${{ steps.latest.outputs.short }} — no PR to open."
           else

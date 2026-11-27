@@ -65,7 +65,7 @@ The codes actually in use, which new commands should follow:
 
 Code `70` is sysexits' `EX_SOFTWARE`, "an internal software error has been detected", and it says something `1` cannot: the run stopped because the engine caught itself in an unsound state (a use-after-free, an invalid dereference, a broken heap — see [ADR 0109](../adr/0109-engine-integrity-faults-are-uncatchable.md)), so no result the process produced should be believed. `1` means the opposite — the work was done and the answer is "failed". A harness that only distinguishes zero from non-zero keeps working unchanged; one that reports build health should surface `70` separately, because a suite that aborted is not a suite that failed.
 
-Code `2` is the narrower one: it means the process did no work because the invocation itself was unusable. `GocciaTOMLComplianceRunner` uses it for an unusable invocation.
+Code `2` is the narrower one: it means the process did no work because the invocation itself was unusable. `GocciaTOMLComplianceRunner` and `GocciaYAMLComplianceRunner` use it for an unusable invocation.
 
 Raise `TCLIUsageError` (in `CLI.Options`) for a usage error. `TGocciaApplication.Run` catches it, prints `Error: <message>` to stderr, and exits `2` (`EXIT_CODE_USAGE`); binaries with their own argument parser do the same. The option layer already raises it for:
 
