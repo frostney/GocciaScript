@@ -27,10 +27,11 @@ interface
 uses
   Goccia.Core;
 
-{ the natives the builtins5 prelude receives: newBox(target, forCleanup), get(box), keep(target),
-  setCleanup(fn) }
+{ the natives the builtins5 prelude receives: newBox(target, forCleanup, heldValue), get(box),
+  takeHeld(box), keep(target), setCleanup(fn, queue) }
 function WeakBoxNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakGetNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+function WeakTakeHeldNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakKeepNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function WeakSetCleanupNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 { the ephemeron tables of WeakMap and WeakSet: tableNew(), tableGet(t, key), tableHas(t, key),
@@ -51,6 +52,10 @@ function WeakCleanupPending: Boolean;
 function WeakCellsWaiting: Boolean;
 { one cleanup job (the registries' callback for one dead cell); False when it threw (Pending holds the error) }
 function RunWeakCleanup: Boolean;
+{ the first registration made by the next run; older live registrations survive that run's abort }
+function WeakCleanupMark: Int64;
+{ drops already queued cleanup jobs and the aborted run's registrations }
+procedure DiscardWeakCleanup(Mark: Int64);
 
 implementation
 
@@ -62,6 +67,7 @@ const
   BOX_REF = 0;
   BOX_CELL = 1;
   BOX_TABLE = 2;
+  BOX_DISCARDED_CELL = 3;
 
 type
   TPtrIntMap = specialize TDictionary<Pointer, Integer>;
@@ -91,7 +97,9 @@ type
     Count: Integer;
     Kept: TValue;           { a JS array: [[KeptAlive]] }
     CleanupFns: TValue;     { a JS array: each realm's cleanup function }
+    CleanupQueues: TValue;  { a JS array: each realm's queue of dead registrations }
     CleanupPending: Boolean;
+    NextCell: Int64;
     Tables: array of PEphTable;
     TableCount: Integer;
     EphEpoch: Integer;      { the collection the watches belong to }
@@ -340,7 +348,9 @@ begin
   SetLength(Result^.Boxes, 64);
   Result^.Kept := VUndefined;
   Result^.CleanupFns := VUndefined;
+  Result^.CleanupQueues := VUndefined;
   Result^.CleanupPending := False;
+  Result^.NextCell := 0;
   Result^.TableCount := 0;
   Result^.EphEpoch := -1;
   Result^.WatchHead := TPtrIntMap.Create;
@@ -348,6 +358,7 @@ begin
   WeakStateVar := Result;
   AddRoot(@Result^.Kept);
   AddRoot(@Result^.CleanupFns);
+  AddRoot(@Result^.CleanupQueues);
   GCWeakRefHook := @WeakRefHook;
   GCEphemeronHook := @EphemeronHook;
 end;
@@ -457,7 +468,7 @@ begin
   Result := True;
 end;
 
-{ newBox(target, forCleanup): a box holding target weakly (an object or a symbol: the caller checked) }
+{ newBox(target, forCleanup, heldValue): holds target weakly, and a registration's held value strongly }
 function WeakBoxNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PWeakState; O: PObj; Kind: UInt32;
 begin
@@ -468,6 +479,16 @@ begin
   O^.OFlags := O^.OFlags or 8;   { not extensible }
   O^.Pad := WEAK_MAGIC or Kind;
   O^.Native := PtrOf(Args[1]);   { Args is on the value stack: current after the allocation }
+  if Kind = BOX_CELL then
+  begin
+    O^.Aux1 := MkNumber(S^.NextCell);
+    Inc(S^.NextCell);
+    if Argc >= 3 then
+    begin
+      O^.Aux2 := Args[3];
+      WriteBarrier(@O^.Hdr, O^.Aux2);
+    end;
+  end;
   if S^.Count >= Length(S^.Boxes) then SetLength(S^.Boxes, S^.Count * 2);
   S^.Boxes[S^.Count] := O;
   Inc(S^.Count);
@@ -475,11 +496,25 @@ begin
   Result := True;
 end;
 
-{ get(box): its target, or undefined once the target was collected }
+{ get(box): its target, undefined once collected, or null for a discarded registration }
 function WeakGetNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   if (Argc < 1) or not IsBox(Args[1]) then Exit(ThrowTypeError('weak box expected'));
-  if ObjOf(Args[1])^.Native = nil then Res := VUndefined else Res := MkPtr(ObjOf(Args[1])^.Native);
+  if ObjOf(Args[1])^.Pad = (WEAK_MAGIC or BOX_DISCARDED_CELL) then Res := VNull
+  else if ObjOf(Args[1])^.Native = nil then Res := VUndefined
+  else Res := MkPtr(ObjOf(Args[1])^.Native);
+  Result := True;
+end;
+
+{ takeHeld(box): releases the held value when a registration is removed or its callback runs }
+function WeakTakeHeldNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Box: PObj;
+begin
+  if (Argc < 1) or not IsBox(Args[1]) or (ObjOf(Args[1])^.Pad <> (WEAK_MAGIC or BOX_CELL)) then
+    Exit(ThrowTypeError('finalization registration expected'));
+  Box := ObjOf(Args[1]);
+  Res := Box^.Aux2;
+  Box^.Aux2 := VUndefined;
   Result := True;
 end;
 
@@ -495,7 +530,7 @@ begin
   Result := True;
 end;
 
-{ setCleanup(fn): a realm's cleanup function: runs one cleanup job, true when more may be waiting }
+{ setCleanup(fn, queue): a realm's cleanup function and the queue it drains }
 function WeakSetCleanupNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PWeakState;
 begin
@@ -504,6 +539,8 @@ begin
   if (Argc < 1) or not IsCallable(Args[1]) then Exit(True);
   if not IsObject(S^.CleanupFns) then S^.CleanupFns := MkPtr(NewArray(0, 2));
   ArrayPush(ObjOf(S^.CleanupFns), Args[1]);
+  if not IsObject(S^.CleanupQueues) then S^.CleanupQueues := MkPtr(NewArray(0, 2));
+  ArrayPush(ObjOf(S^.CleanupQueues), Args[2]);
   Result := True;
 end;
 
@@ -558,6 +595,38 @@ begin
     end;
   end;
   if More then S^.CleanupPending := True;
+end;
+
+function WeakCleanupMark: Int64;
+var State: PWeakState;
+begin
+  State := WeakStateNow;
+  if State = nil then Exit(0);
+  Result := State^.NextCell;
+end;
+
+procedure DiscardWeakCleanup(Mark: Int64);
+var State: PWeakState; Box: PObj; I: Integer; Queues: PValueArray;
+begin
+  ClearKeptObjects;
+  State := WeakStateNow;
+  if State = nil then Exit;
+  for I := 0 to State^.Count - 1 do
+  begin
+    Box := PObj(State^.Boxes[I]);
+    if (Box^.Pad = (WEAK_MAGIC or BOX_CELL)) and ((Box^.Native = nil) or (NumOf(Box^.Aux1) >= Mark)) then
+    begin
+      Box^.Native := nil;
+      Box^.Aux2 := VUndefined;
+      Box^.Pad := WEAK_MAGIC or BOX_DISCARDED_CELL;
+    end;
+  end;
+  if IsObject(State^.CleanupQueues) then
+  begin
+    Queues := ObjOf(State^.CleanupQueues)^.Elements;
+    for I := 0 to Integer(Queues^.Len) - 1 do ArraySetLength(ObjOf(Queues^.Data[I]), 0);
+  end;
+  State^.CleanupPending := False;
 end;
 
 end.

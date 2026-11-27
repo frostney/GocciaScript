@@ -1,4 +1,4 @@
-(function (G, markIntrinsic, privGet, privSet, privHas, weakBox, weakGet, weakKeep, weakSetCleanup, tableNew, tableGet,
+(function (G, markIntrinsic, privGet, privSet, privHas, weakBox, weakGet, weakTakeHeld, weakKeep, weakSetCleanup, tableNew, tableGet,
   tableHas, tableSet, tableDelete) {
   "use strict";
   // Array.fromAsync, Object.groupBy / Map.groupBy, Map / WeakMap getOrInsert and getOrInsertComputed, by the spec's
@@ -757,7 +757,7 @@
   var cleanupQueue = [];
   class FinalizationRegistry {
     #callback;
-    #cells;   // { box (the target, weakly), held, token (a box, or undefined), done }
+    #cells;   // { box (weak target and strong held value), token (a box, or undefined), done, queued }
     constructor(cleanupCallback) {
       if (!isCallable(cleanupCallback)) throw new TypeErr("FinalizationRegistry: cleanup must be callable");
       this.#callback = cleanupCallback;
@@ -779,8 +779,7 @@
         unregisterToken = undefined;
       }
       push(cells, {
-        box: weakBox(target, true),
-        held: heldValue,
+        box: weakBox(target, true, heldValue),
         token: unregisterToken === undefined ? undefined : weakBox(unregisterToken, false),
         done: false,
         queued: false
@@ -793,11 +792,12 @@
       var removed = false;
       for (var i = cells.length - 1; i >= 0; i--) {
         var c = cells[i];
-        if (c.done || c.token === undefined) continue;
+        if (c.done || c.token === undefined || weakGet(c.box) === null) continue;
         var t = weakGet(c.token);
         if (t !== undefined && sameValue(t, unregisterToken)) {
           // a cell whose target died stays registered until its job runs: removing it here cancels that job
           c.done = true;
+          weakTakeHeld(c.box);
           cells.splice(i, 1);
           removed = true;
         }
@@ -813,7 +813,8 @@
           if (reg === undefined) continue;
           push(live, registries[i]);
           var cells = reg.#cells, keep = [];
-          for (var j = 0; j < cells.length; j++) if (!cells[j].done) push(keep, cells[j]);
+          for (var j = 0; j < cells.length; j++)
+            if (!cells[j].done && weakGet(cells[j].box) !== null) push(keep, cells[j]);
           reg.#cells = keep;
           for (var k = keep.length - 1; k >= 0; k--) {
             var c = keep[k];
@@ -832,11 +833,11 @@
           var e = cleanupQueue.shift();
           if (e.cell.done) continue;
           e.cell.done = true;
-          apply(e.registry.#callback, undefined, [e.cell.held]);
+          apply(e.registry.#callback, undefined, [weakTakeHeld(e.cell.box)]);
           return cleanupQueue.length > 0;
         }
         return false;
-      });
+      }, cleanupQueue);
     }
   }
   defineProperty(FinalizationRegistry.prototype, SymToStringTag, { value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });

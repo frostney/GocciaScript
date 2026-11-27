@@ -31,6 +31,8 @@ procedure PumpAsyncWaits;
 { whether an async wait is pending, and the tick the earliest of their timeouts falls due (High(QWord): none) }
 function AsyncWaitsPending: Boolean;
 function NextAsyncDeadline: QWord;
+{ unregisters the aborted run's waits and drops their promises }
+procedure DiscardAsyncWaits;
 { a SharedArrayBuffer object of this engine for B; takes a reference to B }
 function WrapSharedBlock(B: PSharedBlock): TValue;
 function IsSharedBuffer(V: TValue): Boolean;
@@ -538,11 +540,12 @@ begin
 end;
 
 function RunHostLoop: Boolean;
-var Done: TBoundArray; I: Integer; Now_, Next: QWord; Wait: Cardinal;
+var Done: TBoundArray; I: Integer; Now_, Next: QWord; Wait: Cardinal; Remaining: Int64;
 begin
   Result := True;
   while AsyncPending > 0 do
   begin
+    if (Interrupt <> 0) and not PollInterrupt then Exit(False);
     Now_ := GetTickCount64;
     Next := High(QWord);
     for I := 0 to AsyncCount - 1 do
@@ -550,13 +553,25 @@ begin
     if Next <= Now_ then Wait := 0
     else if Next - Now_ > 1000 then Wait := 1000
     else Wait := Next - Now_;
+    Remaining := LimitRemainingMs;
+    if (Remaining > 0) and (Remaining < Wait) then Wait := Remaining;
     Done := SharedAsyncPoll(Wait);
+    if (Interrupt <> 0) and not PollInterrupt then Exit(False);
     for I := 0 to High(Done) do SettleAsync(Done[I], 'ok');
     Now_ := GetTickCount64;
     for I := 0 to AsyncCount - 1 do
       if AsyncLive[I] and (AsyncDeadlines[I] <= Now_) and SharedAsyncCancel(I) then SettleAsync(I, 'timed-out');
     if not RunMicrotasks then Exit(False);
   end;
+end;
+
+procedure DiscardAsyncWaits;
+begin
+  if AsyncCount = 0 then Exit;
+  SharedAsyncDiscard;
+  ArraySetLength(ObjOf(AsyncPromises), 0);
+  AsyncCount := 0;
+  AsyncPending := 0;
 end;
 
 function AsyncWaitsPending: Boolean;

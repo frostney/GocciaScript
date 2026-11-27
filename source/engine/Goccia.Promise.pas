@@ -35,6 +35,8 @@ function TakeRejections(From: Integer): TValue;
 function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;
 function TakeJobErrors: TValue;
 procedure DiscardJobs;
+{ clears unhandled rejections without allocating the report that TakeRejections returns }
+procedure DiscardRejections;
 { the jobs queued and not yet run }
 function PendingJobCount: Integer;
 threadvar
@@ -274,6 +276,11 @@ begin
   if From < N then ObjOf(Rejected)^.Elements^.Len := From;
   Result := RootAt(TempTop - 1);
   PopRoots(1);
+end;
+
+procedure DiscardRejections;
+begin
+  if SameEngine(RejectedRootedGen) and IsObject(Rejected) then ArraySetLength(ObjOf(Rejected), 0);
 end;
 
 function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;

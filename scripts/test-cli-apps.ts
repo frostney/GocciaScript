@@ -9588,6 +9588,26 @@ await section("REPL: error recovery...", async () => {
   if (!out.includes("4")) throw new Error(`After error, second expression should produce 4, got: ${out}`);
 });
 
+await section("REPL: a spent execution limit leaves the session usable...", async () => {
+  for (const [flag, diagnostic] of [
+    ["--max-instructions=1000", "Fatal error: Execution exceeded instruction limit of 1000"],
+    ["--timeout=100ms", "Fatal error: file timed out after 100ms"],
+  ]) {
+    const proc = Bun.spawnSync([REPL, "--compat-while-loops", flag], {
+      stdin: new TextEncoder().encode("while (true) {}\n6 * 7;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 10_000,
+    });
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    const stderr = proc.stderr.toString();
+    // A REPL that does not echo piped input prints the result after its prompt.
+    const recovered = stdout.split("\n").some((line) => line === "42" || line === "> 42");
+    if (proc.exitCode !== 0 || !recovered || !`${stdout}\n${stderr}`.includes(diagnostic))
+      throw new Error(`REPL did not recover after ${flag}: ${stdout}\n${stderr}`);
+  }
+});
+
 await section("REPL: an unhandled promise rejection is reported and the session continues...", async () => {
   const out = await $`printf 'Promise.reject(new Error("repl rejection"));\n6 * 7;\n' | ${REPL} 2>&1`.text();
   // Reported as an uncaught error, not echoed as a value. Where the terminal

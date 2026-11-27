@@ -48,7 +48,7 @@ begin
 end;
 
 procedure InitBuiltins5;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..13] of TValue; Ok: Boolean; I: Integer;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..14] of TValue; Ok: Boolean; I: Integer;
 begin
   if not CompilePrelude('<builtins5>', Builtins5Src, T, Err) then
     raise Exception.Create('builtins5 prelude: ' + string(Err));
@@ -60,10 +60,11 @@ begin
   PushRoot(NewNativeFunction(Priv_Set, 'privSet', 3));
   PushRoot(NewNativeFunction(Priv_Has, 'privHas', 2));
   { Goccia.Weak: WeakRef and FinalizationRegistry }
-  PushRoot(NewNativeFunction(WeakBoxNative, 'weakBox', 2));
+  PushRoot(NewNativeFunction(WeakBoxNative, 'weakBox', 3));
   PushRoot(NewNativeFunction(WeakGetNative, 'weakGet', 1));
+  PushRoot(NewNativeFunction(WeakTakeHeldNative, 'weakTakeHeld', 1));
   PushRoot(NewNativeFunction(WeakKeepNative, 'weakKeep', 1));
-  PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 1));
+  PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 2));
   { Goccia.Weak's ephemeron tables: WeakMap and WeakSet }
   PushRoot(NewNativeFunction(TableNewNative, 'tableNew', 0));
   PushRoot(NewNativeFunction(TableGetNative, 'tableGet', 2));
@@ -71,9 +72,9 @@ begin
   PushRoot(NewNativeFunction(TableSetNative, 'tableSet', 3));
   PushRoot(NewNativeFunction(TableDeleteNative, 'tableDelete', 2));
   CA[0] := GlobalObj;
-  for I := 1 to 13 do CA[I] := RootAt(TempTop - 14 + I);
-  Ok := CallValue(RootAt(TempTop - 14), VUndefined, @CA[0], 14, R);
-  PopRoots(13);
+  for I := 1 to High(CA) do CA[I] := RootAt(TempTop - Length(CA) + I);
+  Ok := CallValue(RootAt(TempTop - Length(CA)), VUndefined, @CA[0], Length(CA), R);
+  PopRoots(High(CA));
   if not Ok then
   begin
     PopRoots(1);

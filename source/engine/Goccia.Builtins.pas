@@ -19,6 +19,8 @@ var
   { Goccia.Intl's full Unicode case mapping (Locale '' the root's) and normalization (Form NFC, NFD, NFKC or NFKD) }
   CaseMapHook: function(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean = nil;
 function NewSymbolValue(const Desc: UnicodeString): TValue;
+{ empties an internal map without allocation or JS dispatch, even after a spent execution limit }
+procedure DiscardMapEntries(Map: TValue);
 
 threadvar
   { set by an embedder (Goccia.Engine) to take this thread's console output; nil writes to stdout }
@@ -3106,17 +3108,31 @@ begin
   Result := True;
 end;
 
-function MapProto_Clear(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var E: PValueArray; I: Integer;
+procedure EmptyMap(Map: TValue);
+var Entries: PValueArray; I: Integer;
 begin
-  if not MapLikeThis(Args) then Exit(False);
-  E := MapEntries(Args[0]);
-  for I := 0 to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
-  E^.Len := 0;
+  Entries := MapEntries(Map);
+  for I := 0 to Integer(Entries^.Len) - 1 do Entries^.Data[I] := VUndefined;
+  Entries^.Len := 0;
   { 24.1.3.1: the entries are emptied, and the ones added later follow them: an iterator part-way through sees
     those (Goccia.VM IntrinsicIteratorStep starts it over once the map's clear count moved past its own) }
-  Inc(ObjOf(Args[0])^.Pad);
-  SetMapCount(Args[0], 0);
+  Inc(ObjOf(Map)^.Pad);
+  SetMapCount(Map, 0);
+end;
+
+procedure DiscardMapEntries(Map: TValue);
+var Index: PValueArray; I: Integer;
+begin
+  EmptyMap(Map);
+  Index := MapIndex(Map);
+  Index^.Data[MIX_ADDR] := MkInt(0);
+  for I := MIX_SLOTS to Integer(Index^.Len) - 1 do Index^.Data[I] := MkInt(0);
+end;
+
+function MapProto_Clear(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if not MapLikeThis(Args) then Exit(False);
+  EmptyMap(Args[0]);
   MapRebuild(Args[0], 4);
   Res := VUndefined;
   Result := True;
