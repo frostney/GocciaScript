@@ -782,7 +782,8 @@ begin
   FMaxStack.Maximum := High(Integer);
   FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',
     'Maximum fetch response body: 1MiB or plain bytes (default: 8MiB; ' +
-    'TypeError on exceed)', LIMITS_GROUP);
+    'TypeError on exceed). At most 16 requests run at once; later ones ' +
+    'wait their turn', LIMITS_GROUP);
   FMaxFetchBytes.Maximum := High(Integer);
   FUnsafeFunctionConstructor := TFlagOption.Create(
     UNSAFE_REQUEST_KEYS[gurFunctionConstructor],
