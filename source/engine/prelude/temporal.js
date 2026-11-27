@@ -12,12 +12,40 @@
   var TypeErr = TypeError, RangeErr = RangeError, Str = String, Num = Number, Big = BigInt;
   var SymToStringTag = Symbol.toStringTag, SymToPrimitive = Symbol.toPrimitive;
   var StringFromCharCode = String.fromCharCode;
-  var ArrayIsArray = Array.isArray;
+  var ArrayIsArray = Array.isArray, ReflectApply = Reflect.apply;
+  // a prototype method as a function of its receiver and arguments: uncurryThis(String.prototype.slice)(s, 1, 2)
+  // is s.slice(1, 2) without looking slice up on the live prototype, which a script may have replaced
+  var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  var StringPrototypeSlice = uncurryThis(String.prototype.slice), StringPrototypeSplit = uncurryThis(String.prototype.split);
+  var StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt);
+  var StringPrototypeCharAt = uncurryThis(String.prototype.charAt);
+  var StringPrototypeIndexOf = uncurryThis(String.prototype.indexOf);
+  var StringPrototypeToUpperCase = uncurryThis(String.prototype.toUpperCase);
+  var BigIntPrototypeToString = uncurryThis(BigInt.prototype.toString);
+  var ArrayPrototypeIndexOf = uncurryThis(Array.prototype.indexOf), ArrayPrototypeSort = uncurryThis(Array.prototype.sort);
+  var ObjectPrototypeHasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+  // a list append that defines the index (a setter on Array.prototype or Object.prototype must not see it)
+  function append(list) {
+    for (var i = 1; i < arguments.length; i++) ObjectDefineProperty(list, list.length, { value: arguments[i], writable: true, enumerable: true, configurable: true });
+  }
+  // a new list of a's elements then b's (concat would look up a's constructor and Symbol.species)
+  function listConcat(a, b) {
+    var r = [];
+    for (var i = 0; i < a.length; i++) append(r, a[i]);
+    for (i = 0; i < b.length; i++) append(r, b[i]);
+    return r;
+  }
+  // s without its colons
+  function removeColons(s) {
+    var r = "";
+    for (var i = 0; i < s.length; i++) if (s[i] !== ":") r += s[i];
+    return r;
+  }
 
   // ASCII-lowercase (toLowerCase would also fold non-ASCII letters, as U+0130 to "i")
   function asciiLower(s) {
     var r = "";
-    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); r += c >= 65 && c <= 90 ? StringFromCharCode(c + 32) : s.charAt(i); }
+    for (var i = 0; i < s.length; i++) { var c = StringPrototypeCharCodeAt(s, i); r += c >= 65 && c <= 90 ? StringFromCharCode(c + 32) : StringPrototypeCharAt(s, i); }
     return r;
   }
   // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
@@ -47,7 +75,7 @@
     var neg = p < 0n; if (neg) p = -p;
     // scale so the integer quotient has at least 65 significant bits, then round once with a sticky bit
     var shift = 0;
-    var bitsP = p.toString(2).length, bitsQ = q.toString(2).length;
+    var bitsP = BigIntPrototypeToString(p, 2).length, bitsQ = BigIntPrototypeToString(q, 2).length;
     shift = 66 - (bitsP - bitsQ);
     var num = shift > 0 ? p << Big(shift) : p, den = shift < 0 ? q << Big(-shift) : q;
     var m = num / den, rem = num % den;
@@ -85,14 +113,14 @@
     var ex = v[SymToPrimitive];
     if (ex !== undefined && ex !== null) {
       if (!isCallable(ex)) throw typeError("@@toPrimitive is not callable");
-      var r = ex.call(v, "string");
+      var r = ReflectApply(ex, v, ["string"]);
       if (isObject(r)) throw typeError("@@toPrimitive returned an object");
       return r;
     }
     var names = ["toString", "valueOf"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (isCallable(f)) { var r2 = f.call(v); if (!isObject(r2)) return r2; }
+      if (isCallable(f)) { var r2 = ReflectApply(f, v, []); if (!isObject(r2)) return r2; }
     }
     throw typeError("Cannot convert object to primitive value");
   }
@@ -256,7 +284,7 @@
       return dflt;
     }
     v = ToStringV(v);
-    if (allowed !== undefined && allowed.indexOf(v) < 0) throw rangeError(v + " is not a valid value for " + name);
+    if (allowed !== undefined && ArrayPrototypeIndexOf(allowed, v) < 0) throw rangeError(v + " is not a valid value for " + name);
     return v;
   }
   var REQUIRED = {};
@@ -316,13 +344,13 @@
     v = ToStringV(v);
     if (v === "auto") return "auto";
     var u = UNIT_NAMES[v];
-    if (u === undefined || !Object.prototype.hasOwnProperty.call(UNIT_NAMES, v)) throw rangeError(v + " is not a valid value for " + name);
+    if (u === undefined || !ObjectPrototypeHasOwnProperty(UNIT_NAMES, v)) throw rangeError(v + " is not a valid value for " + name);
     return u;
   }
   // ValidateTemporalUnitValue(value, unitGroup, extraValues)
   function ValidateTemporalUnitValue(value, group, extra) {
     if (value === undefined) return;
-    if (extra !== undefined && extra.indexOf(value) >= 0) return;
+    if (extra !== undefined && ArrayPrototypeIndexOf(extra, value) >= 0) return;
     if (value === "auto") throw rangeError("auto is not allowed here");
     var i = unitIndex(value);
     if (group === "date" && i > 3) throw rangeError(value + " is not a date unit");
@@ -391,11 +419,11 @@
     if (precision === "auto") {
       if (subNs === 0) return "";
       var s = pad(subNs, 9);
-      while (s.charCodeAt(s.length - 1) === 48) s = s.slice(0, -1);
+      while (StringPrototypeCharCodeAt(s, s.length - 1) === 48) s = StringPrototypeSlice(s, 0, -1);
       return "." + s;
     }
     if (precision === 0) return "";
-    return "." + pad(subNs, 9).slice(0, precision);
+    return "." + StringPrototypeSlice(pad(subNs, 9), 0, precision);
   }
   function FormatTimeString(h, mi, s, subNs, precision) {
     var r = pad(h, 2) + ":" + pad(mi, 2);
@@ -437,14 +465,14 @@
   function digitsAt(s, i, n) {
     if (i + n > s.length) return -1;
     var v = 0;
-    for (var k = 0; k < n; k++) { var c = s.charCodeAt(i + k); if (!isDigit(c)) return -1; v = v * 10 + (c - 48); }
+    for (var k = 0; k < n; k++) { var c = StringPrototypeCharCodeAt(s, i + k); if (!isDigit(c)) return -1; v = v * 10 + (c - 48); }
     return v;
   }
   function isSign(c) { return c === 43 || c === 45 || c === 0x2212; }
   function signOf(c) { return c === 43 ? 1 : -1; }
   // DateYear
   function pYear(s, i, r) {
-    var c = s.charCodeAt(i);
+    var c = StringPrototypeCharCodeAt(s, i);
     if (isSign(c)) {
       if (c === 0x2212) return -1;
       var v = digitsAt(s, i + 1, 6);
@@ -468,11 +496,11 @@
   // DateSpec[Extended], either form, with IsValidDate
   function pDate(s, i, r) {
     var j = pYear(s, i, r); if (j < 0) return -1;
-    var ext = s.charCodeAt(j) === 45;
+    var ext = StringPrototypeCharCodeAt(s, j) === 45;
     if (ext) j++;
     j = pMonth(s, j, r); if (j < 0) return -1;
-    if (ext) { if (s.charCodeAt(j) !== 45) return -1; j++; }
-    else if (s.charCodeAt(j) === 45) return -1;
+    if (ext) { if (StringPrototypeCharCodeAt(s, j) !== 45) return -1; j++; }
+    else if (StringPrototypeCharCodeAt(s, j) === 45) return -1;
     j = pDay(s, j, r); if (j < 0) return -1;
     if (!validMonthDay(r.month, r.day)) return -1;
     if (r.month === 2 && r.day === 29 && !isLeap(r.year)) return -1;
@@ -480,27 +508,27 @@
   }
   function pYearMonth(s, i, r) {
     var j = pYear(s, i, r); if (j < 0) return -1;
-    if (s.charCodeAt(j) === 45) j++;
+    if (StringPrototypeCharCodeAt(s, j) === 45) j++;
     return pMonth(s, j, r);
   }
   function pMonthDay(s, i, r) {
     var j = i;
-    if (s.charCodeAt(j) === 45 && s.charCodeAt(j + 1) === 45) j += 2;
+    if (StringPrototypeCharCodeAt(s, j) === 45 && StringPrototypeCharCodeAt(s, j + 1) === 45) j += 2;
     j = pMonth(s, j, r); if (j < 0) return -1;
-    if (s.charCodeAt(j) === 45) j++;
+    if (StringPrototypeCharCodeAt(s, j) === 45) j++;
     j = pDay(s, j, r); if (j < 0) return -1;
     if (!validMonthDay(r.month, r.day)) return -1;
     return j;
   }
   // TemporalDecimalFraction: the digits (1 to 9)
   function pFraction(s, i, r, key) {
-    var c = s.charCodeAt(i);
+    var c = StringPrototypeCharCodeAt(s, i);
     if (c !== 46 && c !== 44) return i;
     var j = i + 1, k = j;
-    while (k < s.length && isDigit(s.charCodeAt(k)) && k - j < 9) k++;
+    while (k < s.length && isDigit(StringPrototypeCharCodeAt(s, k)) && k - j < 9) k++;
     if (k === j) return -1;
-    if (k < s.length && isDigit(s.charCodeAt(k))) return -1;
-    r[key] = s.slice(j, k);
+    if (k < s.length && isDigit(StringPrototypeCharCodeAt(s, k))) return -1;
+    r[key] = StringPrototypeSlice(s, j, k);
     return k;
   }
   // TimeSpec, either form: hour [minute [second fraction?]]
@@ -508,12 +536,12 @@
     var h = digitsAt(s, i, 2); if (h < 0 || h > 23) return -1;
     r.hour = h; r.minute = 0; r.second = 0; r.fraction = undefined;
     var j = i + 2;
-    var ext = s.charCodeAt(j) === 58;
+    var ext = StringPrototypeCharCodeAt(s, j) === 58;
     var j2 = ext ? j + 1 : j;
     var mi = digitsAt(s, j2, 2);
     if (mi < 0 || mi > 59) return ext ? -1 : j;
     r.minute = mi; j = j2 + 2;
-    var c = s.charCodeAt(j);
+    var c = StringPrototypeCharCodeAt(s, j);
     if (ext) { if (c !== 58) return j; j++; }
     else if (c === 58) return -1;
     var se = digitsAt(s, j, 2);
@@ -524,17 +552,17 @@
   }
   // UTCOffset[SubMinutePrecision]: returns the end; the source text is s.slice(i, end)
   function pOffset(s, i, subMinute) {
-    var c = s.charCodeAt(i);
+    var c = StringPrototypeCharCodeAt(s, i);
     if (!isSign(c) || c === 0x2212) return -1;
     var h = digitsAt(s, i + 1, 2); if (h < 0 || h > 23) return -1;
     var j = i + 3;
-    var ext = s.charCodeAt(j) === 58;
+    var ext = StringPrototypeCharCodeAt(s, j) === 58;
     var j2 = ext ? j + 1 : j;
     var m = digitsAt(s, j2, 2);
     if (m < 0 || m > 59) return ext ? -1 : j;
     j = j2 + 2;
     if (!subMinute) return j;
-    var c2 = s.charCodeAt(j);
+    var c2 = StringPrototypeCharCodeAt(s, j);
     if (ext) { if (c2 !== 58) return j; j++; }
     else if (c2 === 58) return -1;
     var se = digitsAt(s, j, 2);
@@ -551,54 +579,54 @@
     if (e >= 0) return e;
     var j = i;
     while (true) {
-      if (!isTZLeading(s.charCodeAt(j))) return -1;
+      if (!isTZLeading(StringPrototypeCharCodeAt(s, j))) return -1;
       j++;
-      while (j < s.length && isTZChar(s.charCodeAt(j))) j++;
-      if (s.charCodeAt(j) !== 47) return j;
+      while (j < s.length && isTZChar(StringPrototypeCharCodeAt(s, j))) j++;
+      if (StringPrototypeCharCodeAt(s, j) !== 47) return j;
       j++;
     }
   }
   // TimeZoneAnnotation? Annotations? up to the end of the string
   function pAnnotations(s, i, r) {
-    if (s.charCodeAt(i) === 91) {
+    if (StringPrototypeCharCodeAt(s, i) === 91) {
       var j = i + 1;
-      if (s.charCodeAt(j) === 33) j++;
+      if (StringPrototypeCharCodeAt(s, j) === 33) j++;
       var e = pTimeZoneIdentifier(s, j);
-      if (e >= 0 && s.charCodeAt(e) === 93) {
-        r.tzAnnotation = s.slice(j, e);
+      if (e >= 0 && StringPrototypeCharCodeAt(s, e) === 93) {
+        r.tzAnnotation = StringPrototypeSlice(s, j, e);
         i = e + 1;
       }
     }
     var calendarCritical = false;
     while (i < s.length) {
-      if (s.charCodeAt(i) !== 91) return -1;
+      if (StringPrototypeCharCodeAt(s, i) !== 91) return -1;
       var k = i + 1, critical = false;
-      if (s.charCodeAt(k) === 33) { critical = true; k++; }
-      var ks = k, c = s.charCodeAt(k);
+      if (StringPrototypeCharCodeAt(s, k) === 33) { critical = true; k++; }
+      var ks = k, c = StringPrototypeCharCodeAt(s, k);
       if (!((c >= 97 && c <= 122) || c === 95)) return -1;
       k++;
       while (k < s.length) {
-        c = s.charCodeAt(k);
+        c = StringPrototypeCharCodeAt(s, k);
         if ((c >= 97 && c <= 122) || c === 95 || isDigit(c) || c === 45) k++; else break;
       }
-      var key = s.slice(ks, k);
-      if (s.charCodeAt(k) !== 61) return -1;
+      var key = StringPrototypeSlice(s, ks, k);
+      if (StringPrototypeCharCodeAt(s, k) !== 61) return -1;
       k++;
       var vs = k;
       while (true) {
         var cs = k;
         while (k < s.length) {
-          c = s.charCodeAt(k);
+          c = StringPrototypeCharCodeAt(s, k);
           if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || isDigit(c)) k++; else break;
         }
         if (k === cs) return -1;
-        if (s.charCodeAt(k) === 45) { k++; continue; }
+        if (StringPrototypeCharCodeAt(s, k) === 45) { k++; continue; }
         break;
       }
-      var value = s.slice(vs, k);
-      if (s.charCodeAt(k) !== 93) return -1;
+      var value = StringPrototypeSlice(s, vs, k);
+      if (StringPrototypeCharCodeAt(s, k) !== 93) return -1;
       i = k + 1;
-      r.annotations.push({ key: key, value: value, critical: critical });
+      append(r.annotations, { key: key, value: value, critical: critical });
     }
     // ParseISODateTime's annotation rules
     for (var a = 0; a < r.annotations.length; a++) {
@@ -622,15 +650,15 @@
     var j = pDate(s, 0, r);
     if (j < 0) return null;
     r.hasDay = true; r.hasYear = true;
-    if (j < s.length && isDateTimeSep(s.charCodeAt(j))) {
+    if (j < s.length && isDateTimeSep(StringPrototypeCharCodeAt(s, j))) {
       j = pTime(s, j + 1, r);
       if (j < 0) return null;
       r.hasTime = true;
-      var c = s.charCodeAt(j);
+      var c = StringPrototypeCharCodeAt(s, j);
       if ((zoned || instant) && (c === 90 || c === 122)) { r.z = true; j++; }
       else {
         var e = pOffset(s, j, true);
-        if (e >= 0) { r.offset = s.slice(j, e); j = e; }
+        if (e >= 0) { r.offset = StringPrototypeSlice(s, j, e); j = e; }
       }
     } else if (timeRequired || instant) return null;
     if (instant && !r.z && r.offset === undefined) return null;
@@ -644,22 +672,22 @@
   }
   function tryTimeOnly(s) {
     var r = newParse(), j = 0, designated = false;
-    var c0 = s.charCodeAt(0);
+    var c0 = StringPrototypeCharCodeAt(s, 0);
     if (c0 === 84 || c0 === 116) { designated = true; j = 1; }
     j = pTime(s, j, r);
     if (j < 0) return null;
     r.hasTime = true;
     var timeEnd = j;
     var e = pOffset(s, j, true);
-    if (e >= 0) { r.offset = s.slice(j, e); j = e; }
-    var c = s.charCodeAt(j);
+    if (e >= 0) { r.offset = StringPrototypeSlice(s, j, e); j = e; }
+    var c = StringPrototypeCharCodeAt(s, j);
     if (c === 90 || c === 122) return null;
     var tEnd = j;
     try { j = pAnnotations(s, j, r); } catch (err) { r.error = err; }
     if (j < 0 || j !== s.length) return null;
     if (!designated) {
       // the early errors: Time DateTimeUTCOffset? must not also be a month-day or a year-month
-      var t = s.slice(0, tEnd), q = newParse();
+      var t = StringPrototypeSlice(s, 0, tEnd), q = newParse();
       var md = pMonthDay(t, 0, q);
       if (md === t.length) return null;
       q = newParse();
@@ -716,7 +744,7 @@
     var res = {
       year: r.hasYear ? r.year : undefined,
       month: r.month, day: r.day === undefined ? 1 : r.day,
-      time: r.hasTime ? Time(r.hour, r.minute, r.second, +f.slice(0, 3), +f.slice(3, 6), +f.slice(6, 9)) : "start-of-day",
+      time: r.hasTime ? Time(r.hour, r.minute, r.second, +StringPrototypeSlice(f, 0, 3), +StringPrototypeSlice(f, 3, 6), +StringPrototypeSlice(f, 6, 9)) : "start-of-day",
       timeZone: { z: r.z, offsetString: r.offset, tzAnnotation: r.tzAnnotation },
       calendar: r.calendar
     };
@@ -726,12 +754,12 @@
   // AnnotationValue (a bare calendar type)
   function isAnnotationValue(s) {
     if (s.length === 0) return false;
-    var parts = s.split("-");
+    var parts = StringPrototypeSplit(s, "-");
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
       if (p.length === 0) return false;
       for (var k = 0; k < p.length; k++) {
-        var c = p.charCodeAt(k);
+        var c = StringPrototypeCharCodeAt(p, k);
         if (!((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || isDigit(c))) return false;
       }
     }
@@ -747,12 +775,12 @@
   // UTC offsets: the offset in nanoseconds of a string that is a UTCOffset[+SubMinutePrecision]
   function ParseDateTimeUTCOffset(s) {
     if (pOffset(s, 0, true) !== s.length) throw rangeError("invalid UTC offset: " + s);
-    var sg = s.charCodeAt(0) === 45 ? -1 : 1;
-    var h = +s.slice(1, 3), rest = s.slice(3);
-    if (rest.charCodeAt(0) === 58) rest = rest.replace(/:/g, "");
-    var m = rest.length >= 2 ? +rest.slice(0, 2) : 0;
-    var sec = rest.length >= 4 ? +rest.slice(2, 4) : 0;
-    var frac = rest.length > 5 ? (rest.slice(5) + "000000000").slice(0, 9) : "0";
+    var sg = StringPrototypeCharCodeAt(s, 0) === 45 ? -1 : 1;
+    var h = +StringPrototypeSlice(s, 1, 3), rest = StringPrototypeSlice(s, 3);
+    if (StringPrototypeCharCodeAt(rest, 0) === 58) rest = removeColons(rest);
+    var m = rest.length >= 2 ? +StringPrototypeSlice(rest, 0, 2) : 0;
+    var sec = rest.length >= 4 ? +StringPrototypeSlice(rest, 2, 4) : 0;
+    var frac = rest.length > 5 ? StringPrototypeSlice(StringPrototypeSlice(rest, 5) + "000000000", 0, 9) : "0";
     return sg * (((h * 60 + m) * 60 + sec) * 1e9 + +frac);
   }
   function IsOffsetTimeZoneIdentifier(s) { return pOffset(s, 0, false) === s.length; }
@@ -780,9 +808,9 @@
   // ParseTemporalDurationString: the ten components
   function ParseTemporalDurationString(s) {
     var i = 0, n = s.length, sg = 1;
-    var c = s.charCodeAt(0);
+    var c = StringPrototypeCharCodeAt(s, 0);
     if (c === 43 || c === 45) { sg = c === 45 ? -1 : 1; i++; }
-    c = s.charCodeAt(i);
+    c = StringPrototypeCharCodeAt(s, i);
     if (c !== 80 && c !== 112) throw rangeError("invalid duration: " + s);
     i++;
     var v = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -790,12 +818,12 @@
     var fracH, fracM;
     function digits() {
       var st = i;
-      while (i < n && isDigit(s.charCodeAt(i))) i++;
+      while (i < n && isDigit(StringPrototypeCharCodeAt(s, i))) i++;
       if (i === st) throw rangeError("invalid duration: " + s);
-      return s.slice(st, i);
+      return StringPrototypeSlice(s, st, i);
     }
     while (i < n) {
-      c = s.charCodeAt(i);
+      c = StringPrototypeCharCodeAt(s, i);
       if (c === 84 || c === 116) {
         if (inTime) throw rangeError("invalid duration: " + s);
         inTime = true; i++;
@@ -805,21 +833,21 @@
       if (fractionSeen) throw rangeError("invalid duration: " + s);
       var ds = digits();
       var frac = undefined;
-      c = s.charCodeAt(i);
+      c = StringPrototypeCharCodeAt(s, i);
       if (c === 46 || c === 44) {
         var r0 = {};
         var e = pFraction(s, i, r0, "f");
         if (e < 0) throw rangeError("invalid duration: " + s);
         frac = r0.f; i = e;
       }
-      var d = s.charAt(i).toUpperCase(); i++;
+      var d = StringPrototypeToUpperCase(StringPrototypeCharAt(s, i)); i++;
       if (!inTime) {
-        var k = order.indexOf(d);
+        var k = StringPrototypeIndexOf(order, d);
         if (k < 0 || k <= lastDate || frac !== undefined) throw rangeError("invalid duration: " + s);
         lastDate = k;
         v[k] = ToIntegerWithTruncation(ds);
       } else {
-        var t = "HMS".indexOf(d);
+        var t = StringPrototypeIndexOf("HMS", d);
         if (t < 0 || t <= lastTime) throw rangeError("invalid duration: " + s);
         lastTime = t;
         if (frac !== undefined) fractionSeen = true;
@@ -868,15 +896,15 @@
     zoneIndex["utc"] = { id: "UTC", primary: "UTC" };
     var text = tzIndex();
     if (typeof text === "string") {
-      var lines = text.split("\n"), links = [];
+      var lines = StringPrototypeSplit(text, "\n"), links = [];
       for (var i = 0; i < lines.length; i++) {
         var l = lines[i];
-        if (l.charCodeAt(0) === 90 && l.charCodeAt(1) === 32) {          // "Z name ..."
-          var name = l.slice(2).split(" ")[0];
+        if (StringPrototypeCharCodeAt(l, 0) === 90 && StringPrototypeCharCodeAt(l, 1) === 32) {          // "Z name ..."
+          var name = StringPrototypeSplit(StringPrototypeSlice(l, 2), " ")[0];
           if (zoneIndex[asciiLower(name)] === undefined) zoneIndex[asciiLower(name)] = { id: name, primary: name };
-        } else if (l.charCodeAt(0) === 76 && l.charCodeAt(1) === 32) {   // "L target link"
-          var p = l.slice(2).split(" ");
-          links.push(p);
+        } else if (StringPrototypeCharCodeAt(l, 0) === 76 && StringPrototypeCharCodeAt(l, 1) === 32) {   // "L target link"
+          var p = StringPrototypeSplit(StringPrototypeSlice(l, 2), " ");
+          append(links, p);
         }
       }
       for (var k = 0; k < links.length; k++) {
@@ -928,11 +956,11 @@
   // A zone's rules: transitions (epoch seconds, ascending), the UTC offset (seconds) from each one, the offset
   // before the first, and the POSIX TZ rule for times past the last transition.
   var zoneCache = ObjectCreate(null);
-  function be32(s, i) { var v = (s.charCodeAt(i) << 24) | (s.charCodeAt(i + 1) << 16) | (s.charCodeAt(i + 2) << 8) | s.charCodeAt(i + 3); return v | 0; }
+  function be32(s, i) { var v = (StringPrototypeCharCodeAt(s, i) << 24) | (StringPrototypeCharCodeAt(s, i + 1) << 16) | (StringPrototypeCharCodeAt(s, i + 2) << 8) | StringPrototypeCharCodeAt(s, i + 3); return v | 0; }
   function be64(s, i) { return be32(s, i) * 4294967296 + (be32(s, i + 4) >>> 0); }
   function parseTZif(b) {
-    if (b.slice(0, 4) !== "TZif") return null;
-    var version = b.charCodeAt(4);
+    if (StringPrototypeSlice(b, 0, 4) !== "TZif") return null;
+    var version = StringPrototypeCharCodeAt(b, 4);
     function counts(at) {
       return { isut: be32(b, at + 20), isstd: be32(b, at + 24), leap: be32(b, at + 28), time: be32(b, at + 32),
         type: be32(b, at + 36), chr: be32(b, at + 40) };
@@ -943,16 +971,16 @@
       c = counts(at); at += 44; tsize = 8;
     }
     var times = [], idx = [], types = [];
-    for (var i = 0; i < c.time; i++) times.push(tsize === 8 ? be64(b, at + i * 8) : be32(b, at + i * 4));
+    for (var i = 0; i < c.time; i++) append(times, tsize === 8 ? be64(b, at + i * 8) : be32(b, at + i * 4));
     at += c.time * tsize;
-    for (i = 0; i < c.time; i++) idx.push(b.charCodeAt(at + i));
+    for (i = 0; i < c.time; i++) append(idx, StringPrototypeCharCodeAt(b, at + i));
     at += c.time;
-    for (i = 0; i < c.type; i++) types.push({ off: be32(b, at + i * 6), dst: b.charCodeAt(at + i * 6 + 4) });
+    for (i = 0; i < c.type; i++) append(types, { off: be32(b, at + i * 6), dst: StringPrototypeCharCodeAt(b, at + i * 6 + 4) });
     at += c.type * 6 + c.chr + c.leap * (tsize + 4) + c.isstd + c.isut;
     var footer = null;
-    if (tsize === 8 && b.charCodeAt(at) === 10) {
-      var e = b.indexOf("\n", at + 1);
-      if (e > at) footer = b.slice(at + 1, e);
+    if (tsize === 8 && StringPrototypeCharCodeAt(b, at) === 10) {
+      var e = StringPrototypeIndexOf(b, "\n", at + 1);
+      if (e > at) footer = StringPrototypeSlice(b, at + 1, e);
     }
     // offsets after each transition, dropping those that do not change the offset
     var tr = [], offs = [];
@@ -961,7 +989,7 @@
     for (i = 0; i < times.length; i++) {
       var o = types[idx[i]].off;
       if (o === prev) continue;
-      tr.push(times[i]); offs.push(o); prev = o;
+      append(tr, times[i]); append(offs, o); prev = o;
     }
     return { transitions: tr, offsets: offs, initial: initial, rule: footer ? parsePosixTZ(footer) : null };
   }
@@ -969,48 +997,48 @@
   function parsePosixTZ(s) {
     var i = 0;
     function name() {
-      if (s.charCodeAt(i) === 60) { var e = s.indexOf(">", i); if (e < 0) return null; i = e + 1; return true; }
+      if (StringPrototypeCharCodeAt(s, i) === 60) { var e = StringPrototypeIndexOf(s, ">", i); if (e < 0) return null; i = e + 1; return true; }
       var st = i;
-      while (i < s.length) { var c = s.charCodeAt(i); if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) i++; else break; }
+      while (i < s.length) { var c = StringPrototypeCharCodeAt(s, i); if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) i++; else break; }
       return i - st >= 3 ? true : null;
     }
     function offset() {
       // hh[:mm[:ss]], POSIX sign (west positive): the seconds east of UTC
-      var sg = 1, c = s.charCodeAt(i);
+      var sg = 1, c = StringPrototypeCharCodeAt(s, i);
       if (c === 43) i++; else if (c === 45) { sg = -1; i++; }
       var parts = [0, 0, 0], k = 0, st = i;
       while (k < 3) {
         var v = 0, d0 = i;
-        while (i < s.length && isDigit(s.charCodeAt(i))) { v = v * 10 + s.charCodeAt(i) - 48; i++; }
+        while (i < s.length && isDigit(StringPrototypeCharCodeAt(s, i))) { v = v * 10 + StringPrototypeCharCodeAt(s, i) - 48; i++; }
         if (i === d0) return null;
         parts[k++] = v;
-        if (s.charCodeAt(i) !== 58) break;
+        if (StringPrototypeCharCodeAt(s, i) !== 58) break;
         i++;
       }
       if (i === st) return null;
       return sg * (parts[0] * 3600 + parts[1] * 60 + parts[2]);
     }
     function dateRule() {
-      var c = s.charCodeAt(i), r = {};
+      var c = StringPrototypeCharCodeAt(s, i), r = {};
       if (c === 77) {   // Mm.w.d
         i++;
-        var m = 0; while (isDigit(s.charCodeAt(i))) m = m * 10 + s.charCodeAt(i++) - 48;
-        if (s.charCodeAt(i++) !== 46) return null;
-        var w = s.charCodeAt(i++) - 48;
-        if (s.charCodeAt(i++) !== 46) return null;
-        var d = s.charCodeAt(i++) - 48;
+        var m = 0; while (isDigit(StringPrototypeCharCodeAt(s, i))) m = m * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
+        if (StringPrototypeCharCodeAt(s, i++) !== 46) return null;
+        var w = StringPrototypeCharCodeAt(s, i++) - 48;
+        if (StringPrototypeCharCodeAt(s, i++) !== 46) return null;
+        var d = StringPrototypeCharCodeAt(s, i++) - 48;
         r = { kind: "M", m: m, w: w, d: d };
       } else if (c === 74) {   // Jn: 1-365, no Feb 29
         i++;
-        var n = 0; while (isDigit(s.charCodeAt(i))) n = n * 10 + s.charCodeAt(i++) - 48;
+        var n = 0; while (isDigit(StringPrototypeCharCodeAt(s, i))) n = n * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
         r = { kind: "J", n: n };
       } else {
-        var n2 = 0, st = i; while (isDigit(s.charCodeAt(i))) n2 = n2 * 10 + s.charCodeAt(i++) - 48;
+        var n2 = 0, st = i; while (isDigit(StringPrototypeCharCodeAt(s, i))) n2 = n2 * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
         if (i === st) return null;
         r = { kind: "N", n: n2 };
       }
       r.time = 7200;
-      if (s.charCodeAt(i) === 47) { i++; var t = offset(); if (t === null) return null; r.time = t; }
+      if (StringPrototypeCharCodeAt(s, i) === 47) { i++; var t = offset(); if (t === null) return null; r.time = t; }
       return r;
     }
     if (!name()) return null;
@@ -1019,10 +1047,10 @@
     if (i >= s.length) return { std: std, dst: null };
     if (!name()) return null;
     var dst = std + 3600;
-    if (i < s.length && s.charCodeAt(i) !== 44) { var o = offset(); if (o === null) return null; dst = -o; }
-    if (s.charCodeAt(i) !== 44) return { std: std, dst: null };
+    if (i < s.length && StringPrototypeCharCodeAt(s, i) !== 44) { var o = offset(); if (o === null) return null; dst = -o; }
+    if (StringPrototypeCharCodeAt(s, i) !== 44) return { std: std, dst: null };
     i++;
-    var start = dateRule(); if (start === null || s.charCodeAt(i) !== 44) return null;
+    var start = dateRule(); if (start === null || StringPrototypeCharCodeAt(s, i) !== 44) return null;
     i++;
     var end = dateRule(); if (end === null) return null;
     return { std: std, dst: dst, start: start, end: end };
@@ -1167,12 +1195,12 @@
     var res = [], seen = [];
     for (var i = 0; i < 3; i++) {
       var o = cands[i];
-      if (seen.indexOf(o) >= 0) continue;
-      seen.push(o);
+      if (ArrayPrototypeIndexOf(seen, o) >= 0) continue;
+      append(seen, o);
       var e = local - Big(o) * 1000000000n;
-      if (zoneOffsetSeconds(z, epochSecondsOf(e)) === o) res.push(e);
+      if (zoneOffsetSeconds(z, epochSecondsOf(e)) === o) append(res, e);
     }
-    res.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+    ArrayPrototypeSort(res, function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
     return res;
   }
   function GetOffsetNanosecondsFor(tz, ns) {
@@ -1259,7 +1287,7 @@
     var l = asciiLower(id);
     if (l === "islamicc") return "islamic-civil";
     if (l === "ethiopic-amete-alem") return "ethioaa";
-    if (CALENDAR_TYPES.indexOf(l) < 0) throw rangeError("unsupported calendar: " + id);
+    if (ArrayPrototypeIndexOf(CALENDAR_TYPES, l) < 0) throw rangeError("unsupported calendar: " + id);
     return l;
   }
   function CalendarEquals(a, b) { return a === b; }
@@ -1272,9 +1300,9 @@
   function ParseMonthCode(v) {
     var mc = ToPrimitiveString(v);
     if (typeof mc !== "string") throw typeError("monthCode must be a string");
-    var ok = mc.length >= 3 && mc.length <= 4 && mc.charCodeAt(0) === 77 && isDigit(mc.charCodeAt(1)) && isDigit(mc.charCodeAt(2));
-    if (ok && mc.length === 4 && mc.charCodeAt(3) !== 76) ok = false;
-    var n = ok ? +mc.slice(1, 3) : -1;
+    var ok = mc.length >= 3 && mc.length <= 4 && StringPrototypeCharCodeAt(mc, 0) === 77 && isDigit(StringPrototypeCharCodeAt(mc, 1)) && isDigit(StringPrototypeCharCodeAt(mc, 2));
+    if (ok && mc.length === 4 && StringPrototypeCharCodeAt(mc, 3) !== 76) ok = false;
+    var n = ok ? +StringPrototypeSlice(mc, 1, 3) : -1;
     if (ok && n === 0 && mc.length !== 4) ok = false;
     if (!ok) throw rangeError("invalid monthCode: " + mc);
     return { monthNumber: n, isLeapMonth: mc.length === 4 };
@@ -1289,10 +1317,10 @@
   var TIME_FIELDS = ["hour", "minute", "second", "millisecond", "microsecond", "nanosecond"];
   // PrepareCalendarFields(calendar, fields, calendarFieldNames, nonCalendarFieldNames, required ("partial" or a list))
   function PrepareCalendarFields(calendar, obj, calNames, nonCalNames, required) {
-    var names = calNames.concat(nonCalNames);
+    var names = listConcat(calNames, nonCalNames);
     // CalendarExtraFields: era and eraYear with year, for a calendar with eras
-    if (calNames.indexOf("year") >= 0 && CalendarSupportsEra(calendar)) names.push("era", "eraYear");
-    names.sort();
+    if (ArrayPrototypeIndexOf(calNames, "year") >= 0 && CalendarSupportsEra(calendar)) append(names, "era", "eraYear");
+    ArrayPrototypeSort(names);
     var result = {}, any = false;
     for (var i = 0; i < names.length; i++) {
       var p = names[i], v = obj[p];
@@ -1308,7 +1336,7 @@
         }
         result[p] = v;
       } else if (required !== "partial") {
-        if (required.indexOf(p) >= 0) throw typeError(p + " is required");
+        if (ArrayPrototypeIndexOf(required, p) >= 0) throw typeError(p + " is required");
         if (TIME_FIELD_DEFAULTS[p] !== undefined) result[p] = TIME_FIELD_DEFAULTS[p];
       }
     }
@@ -1319,10 +1347,10 @@
     var r = [], eras = calendar !== "iso8601" && CalendarSupportsEra(calendar), mid = calendar === "japanese";
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
-      r.push(k);
-      if (k === "month") r.push("monthCode"); else if (k === "monthCode") r.push("month");
-      if (eras && (k === "era" || k === "eraYear" || k === "year")) r.push("era", "eraYear", "year");
-      if (mid && (k === "day" || k === "month" || k === "monthCode")) r.push("era", "eraYear");
+      append(r, k);
+      if (k === "month") append(r, "monthCode"); else if (k === "monthCode") append(r, "month");
+      if (eras && (k === "era" || k === "eraYear" || k === "year")) append(r, "era", "eraYear", "year");
+      if (mid && (k === "day" || k === "month" || k === "monthCode")) append(r, "era", "eraYear");
     }
     return r;
   }
@@ -1330,12 +1358,12 @@
     "microsecond", "nanosecond", "offset", "timeZone"];
   function CalendarMergeFields(calendar, fields, additional) {
     var addKeys = [];
-    for (var i = 0; i < FIELD_ORDER.length; i++) if (additional[FIELD_ORDER[i]] !== undefined) addKeys.push(FIELD_ORDER[i]);
+    for (var i = 0; i < FIELD_ORDER.length; i++) if (additional[FIELD_ORDER[i]] !== undefined) append(addKeys, FIELD_ORDER[i]);
     var overridden = CalendarFieldKeysToIgnore(calendar, addKeys);
     var merged = {};
     for (i = 0; i < FIELD_ORDER.length; i++) {
       var k = FIELD_ORDER[i];
-      if (fields[k] !== undefined && overridden.indexOf(k) < 0) merged[k] = fields[k];
+      if (fields[k] !== undefined && ArrayPrototypeIndexOf(overridden, k) < 0) merged[k] = fields[k];
       if (additional[k] !== undefined) merged[k] = additional[k];
     }
     return merged;
@@ -1468,7 +1496,7 @@
   function eraRow(cal, era) {
     var rows = ERAS[cal];
     if (rows === undefined) return undefined;
-    for (var i = 0; i < rows.length; i++) if (rows[i][0] === era || rows[i][1].indexOf(era) >= 0) return rows[i];
+    for (var i = 0; i < rows.length; i++) if (rows[i][0] === era || ArrayPrototypeIndexOf(rows[i][1], era) >= 0) return rows[i];
     return undefined;
   }
   function CanonicalizeEraInCalendar(cal, era) { var r = eraRow(cal, era); return r === undefined ? undefined : r[0]; }
@@ -2139,10 +2167,10 @@
     var smallest = GetTemporalUnitValuedOption(o, "smallestUnit", undefined);
     ValidateTemporalUnitValue(largest, group, ["auto"]);
     if (largest === undefined) largest = "auto";
-    if (disallowed.indexOf(largest) >= 0) throw rangeError(largest + " is not allowed");
+    if (ArrayPrototypeIndexOf(disallowed, largest) >= 0) throw rangeError(largest + " is not allowed");
     ValidateTemporalUnitValue(smallest, group);
     if (smallest === undefined) smallest = fallbackSmallest;
-    if (disallowed.indexOf(smallest) >= 0) throw rangeError(smallest + " is not allowed");
+    if (ArrayPrototypeIndexOf(disallowed, smallest) >= 0) throw rangeError(smallest + " is not allowed");
     var dl = LargerOfTwoTemporalUnits(smallestLargestDefault, smallest);
     if (largest === "auto") largest = dl;
     if (LargerOfTwoTemporalUnits(largest, smallest) !== largest) throw rangeError("largestUnit is smaller than smallestUnit");
@@ -2192,7 +2220,7 @@
       seconds = undefined, milliseconds = undefined, microseconds = undefined, nanoseconds = undefined) {
       if (years === TOKEN) { this.#s = months; return; }
       var a = arguments, v = [];
-      for (var i = 0; i < 10; i++) v.push(a[i] === undefined ? 0 : ToIntegerIfIntegral(a[i]));
+      for (var i = 0; i < 10; i++) append(v, a[i] === undefined ? 0 : ToIntegerIfIntegral(a[i]));
       if (!IsValidDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9])) throw rangeError("invalid duration");
       var s = {};
       for (i = 0; i < 10; i++) s[DUR_KEYS[i]] = v[i];
@@ -2239,13 +2267,13 @@
       var d = getDur(this);
       var p = ToTemporalPartialDurationRecord(temporalDurationLike);
       var v = [];
-      for (var i = 0; i < 10; i++) v.push(p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : d[DUR_KEYS[i]]);
+      for (var i = 0; i < 10; i++) append(v, p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : d[DUR_KEYS[i]]);
       return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
     }
     negated() { return CreateNegatedTemporalDuration(getDur(this)); }
     abs() {
       var d = getDur(this), v = [];
-      for (var i = 0; i < 10; i++) v.push(MathAbs(d[DUR_KEYS[i]]));
+      for (var i = 0; i < 10; i++) append(v, MathAbs(d[DUR_KEYS[i]]));
       return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
     }
     add(other) { return AddDurations("add", getDur(this), other); }
@@ -2379,7 +2407,7 @@
       return ParseTemporalDurationString(item);
     }
     var p = ToTemporalPartialDurationRecord(item), v = [];
-    for (var i = 0; i < 10; i++) v.push(p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : 0);
+    for (var i = 0; i < 10; i++) append(v, p[DUR_KEYS[i]] !== undefined ? p[DUR_KEYS[i]] : 0);
     return CreateTemporalDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
   }
   function AddDurations(op, d, other) {
@@ -2412,13 +2440,13 @@
     var secs = TimeDurationFromComponents(0, 0, d.seconds, d.milliseconds, d.microseconds, d.nanoseconds);
     if (secs !== 0n || zeroMinutesAndHigher || precision !== "auto") {
       var a = babs(secs);
-      time += (a / 1000000000n).toString() + FormatFractionalSeconds(Num(a % 1000000000n), precision) + "S";
+      time += Str(a / 1000000000n) + FormatFractionalSeconds(Num(a % 1000000000n), precision) + "S";
     }
     var r = (sg < 0 ? "-" : "") + "P" + date;
     if (time !== "") r += "T" + time;
     return r;
   }
-  function fmtInt(n) { return n < 1e21 ? Str(n) : Big(n).toString(); }
+  function fmtInt(n) { return n < 1e21 ? Str(n) : Str(Big(n)); }
   // GetTemporalRelativeToOption: { plain, zoned }
   function GetTemporalRelativeToOption(o) {
     var v = o.relativeTo;
@@ -2429,7 +2457,7 @@
       if (isPlainDate(v)) return { plain: v, zoned: undefined };
       if (isPlainDateTime(v)) { var pdt = getPDT(v); return { plain: CreateTemporalDate(pdt.isoDateTime.isoDate, pdt.calendar), zoned: undefined }; }
       calendar = GetTemporalCalendarIdentifierWithISODefault(v);
-      var f = PrepareCalendarFields(calendar, v, DATE_FIELDS, TIME_FIELDS.concat(["offset", "timeZone"]), []);
+      var f = PrepareCalendarFields(calendar, v, DATE_FIELDS, listConcat(TIME_FIELDS, ["offset", "timeZone"]), []);
       var res = InterpretTemporalDateTimeFields(calendar, f, "constrain");
       timeZone = f.timeZone; offsetString = f.offset;
       if (offsetString === undefined) offsetBehaviour = "wall";
@@ -2457,7 +2485,7 @@
     return { plain: undefined, zoned: CreateTemporalZonedDateTime(ns, timeZone, calendar) };
   }
   // an offset string with more than one MinuteSecond (seconds)
-  function hasSubMinute(s) { var t = s.slice(1).replace(/:/g, ""); return t.length > 4; }
+  function hasSubMinute(s) { var t = removeColons(StringPrototypeSlice(s, 1)); return t.length > 4; }
   function InterpretTemporalDateTimeFields(calendar, f, overflow) {
     var d = CalendarDateFromFields(calendar, f, overflow);
     var t = RegulateTime(f.hour, f.minute, f.second, f.millisecond, f.microsecond, f.nanosecond, overflow);
@@ -2471,7 +2499,7 @@
       nanosecond = undefined) {
       if (hour === TOKEN) { this.#s = minute; return; }
       var a = arguments, v = [];
-      for (var i = 0; i < 6; i++) v.push(a[i] === undefined ? 0 : ToIntegerWithTruncation(a[i]));
+      for (var i = 0; i < 6; i++) append(v, a[i] === undefined ? 0 : ToIntegerWithTruncation(a[i]));
       if (!IsValidTime(v[0], v[1], v[2], v[3], v[4], v[5])) throw rangeError("invalid time");
       this.#s = { time: Time(v[0], v[1], v[2], v[3], v[4], v[5]) };
     }
@@ -3090,14 +3118,14 @@
     var ex = v[SymToPrimitive];
     if (ex !== undefined && ex !== null) {
       if (!isCallable(ex)) throw typeError("@@toPrimitive is not callable");
-      var r = ex.call(v, "number");
+      var r = ReflectApply(ex, v, ["number"]);
       if (isObject(r)) throw typeError("@@toPrimitive returned an object");
       return r;
     }
     var names = ["valueOf", "toString"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (isCallable(f)) { var r2 = f.call(v); if (!isObject(r2)) return r2; }
+      if (isCallable(f)) { var r2 = ReflectApply(f, v, []); if (!isObject(r2)) return r2; }
     }
     throw typeError("Cannot convert object to primitive value");
   }
@@ -3250,7 +3278,7 @@
       var t = dt.time;
       f.hour = t.hour; f.minute = t.minute; f.second = t.second; f.millisecond = t.millisecond; f.microsecond = t.microsecond; f.nanosecond = t.nanosecond;
       f.offset = FormatUTCOffsetNanoseconds(offNs);
-      var p = PrepareCalendarFields(s.calendar, temporalZonedDateTimeLike, DATE_FIELDS, TIME_FIELDS.concat(["offset"]), "partial");
+      var p = PrepareCalendarFields(s.calendar, temporalZonedDateTimeLike, DATE_FIELDS, listConcat(TIME_FIELDS, ["offset"]), "partial");
       f = CalendarMergeFields(s.calendar, f, p);
       var o = GetOptionsObject(options);
       var dis = GetTemporalDisambiguationOption(o);
@@ -3369,7 +3397,7 @@
         return CreateTemporalZonedDateTime(s.ns, s.timeZone, s.calendar);
       }
       calendar = GetTemporalCalendarIdentifierWithISODefault(item);
-      var f = PrepareCalendarFields(calendar, item, DATE_FIELDS, TIME_FIELDS.concat(["offset", "timeZone"]), ["timeZone"]);
+      var f = PrepareCalendarFields(calendar, item, DATE_FIELDS, listConcat(TIME_FIELDS, ["offset", "timeZone"]), ["timeZone"]);
       tz = f.timeZone; offsetString = f.offset;
       var o = GetOptionsObject(options);
       dis = GetTemporalDisambiguationOption(o);
@@ -3445,7 +3473,7 @@
   }
   function methodOf(f, name) {
     var len = f.length;
-    var m = { [name](a) { return f.apply(undefined, arguments); } }[name];
+    var m = { [name](a) { return ReflectApply(f, undefined, arguments); } }[name];
     ObjectDefineProperty(m, "length", { value: len, configurable: true });
     return m;
   }

@@ -208,6 +208,21 @@ export const installTripwire = () => {
       const C = lookup(path);
       return run(() => construct(C, args));
     },
+    // invokes each case [name, args, expected, allowed] on receiver: the method or getter proto.name (or
+    // proto[Symbol.x] for a name "[Symbol.x]") must look up nothing a script can replace beyond allowed, and give
+    // expected when that is not undefined, or throw when it is THROWS
+    covers(proto, receiver, cases) {
+      for (const [name, args, expected, allowed = []] of cases) {
+        const r = this.invoke(`${proto}${name[0] === "[" ? "" : "."}${name}`, receiver, ...args);
+        if (expected === THROWS) {
+          expect(r.threw).toBe(true);
+          expect(r.hits.filter((h) => !allowed.includes(h))).toEqual([]);
+        } else {
+          const value = expectClean(r, allowed);
+          if (expected !== undefined) expect(value).toEqual(expected);
+        }
+      }
+    },
     call(fn, thisArg, ...args) {
       return apply(fn, thisArg, args);
     },
@@ -227,6 +242,9 @@ export const installTripwire = () => {
     },
   };
 };
+
+// a case's expected value when the call must throw (the lookups up to the throw are still checked)
+export const THROWS = Symbol("throws");
 
 // asserts that a watched call finished without throwing and looked up nothing a script can replace beyond allowed,
 // the lookups the specification makes observable for its input

@@ -10,13 +10,7 @@ afterAll(() => wire.uninstall());
 
 const clean = (r, allowed) => expectClean(r, allowed);
 const make = (path, ...args) => clean(wire.construct(path, ...args));
-// every method and getter of a prototype, each called on receiver with the arguments listed for it
-const covers = (proto, receiver, cases) => {
-  for (const [name, args, expected, allowed] of cases) {
-    const value = clean(wire.invoke(`${proto}${name[0] === "[" ? "" : "."}${name}`, receiver, ...args), allowed);
-    if (expected !== undefined) expect(value).toEqual(expected);
-  }
-};
+const covers = (proto, receiver, cases) => wire.covers(proto, receiver, cases);
 
 test("Intl.getCanonicalLocales and Intl.supportedValuesOf", () => {
   expect(clean(wire.invoke("Intl.getCanonicalLocales", Intl, ["EN-us", "de"]))).toEqual(["en-US", "de"]);
