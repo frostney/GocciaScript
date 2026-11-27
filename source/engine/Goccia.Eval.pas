@@ -64,7 +64,7 @@ implementation
 
 uses
   Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.Scan,
-  Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
+  Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry, Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION}, Goccia.FaultInjection{$ENDIF};
 
 function ParseFailureName(E: Exception): UnicodeString;
 begin
@@ -125,6 +125,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then raise;
       WriteLn(ErrOutput, 'artifact round trip: ', FileName, ': cannot write: ', E.Message);
       Halt(70);
     end;
@@ -469,6 +470,9 @@ begin
         IsModule := True;
         Exit(True);
       end;
+      {$IFDEF GOCCIA_FAULT_INJECTION}
+      InjectFaultAt('compile-entry');   { inside the handler below, which makes any other exception a SyntaxError }
+      {$ENDIF}
       T := CompileProgram(Prog, FileName, ReturnLast, 1);
       if RoundTripOn then
       begin
@@ -479,6 +483,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         Err := UnicodeString(E.Message);
         ParseErrorName := ParseFailureName(E);
         ParseErrorLine := 0;
@@ -551,6 +556,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         Err := UnicodeString(E.Message);
         ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
@@ -630,6 +636,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         Err := UnicodeString(E.Message);
         if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
         ParseErrorName := ParseFailureName(E);
@@ -812,6 +819,7 @@ begin
     except
       on Ex: Exception do
       begin
+        if IsEngineIntegrityFault(Ex) then raise;
         Msg := UnicodeString(Ex.Message);
         if Ex is EHeapExternalMemoryLimit then ErrorName := 'RangeError';
       end;
@@ -878,6 +886,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         Err := UnicodeString(E.Message);
         ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
@@ -938,6 +947,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         Err := UnicodeString(E.Message);
         if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
         ParseErrorName := ParseFailureName(E);

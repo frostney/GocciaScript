@@ -49,6 +49,7 @@ uses
 
   Goccia.Core,
   Goccia.Embed,
+  Goccia.EngineFault,
   Goccia.HostAPI,
   Goccia.VM,
   Goccia.ThreadCleanupRegistry;
@@ -180,6 +181,10 @@ begin
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread: the files still running and the ones not started must not
+          report results from the state the fault calls into question (ADR 0196) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FResults[FIndex].FileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
@@ -687,6 +692,8 @@ var
       except
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FileName, E);
           Verdict_ := ghvFailed;
           Detail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
         end;
@@ -856,6 +863,9 @@ begin
       raise;
     on E: Exception do
     begin
+      { an engine fault is no verdict on the file: it stops the run (ADR 0196) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FileName, E);
       { a file the host could not set up is one failed file (GocciaTestRunner RunScriptFromFile) }
       Res.ErrorMessage := E.Message;
       Res.Failed := 1;
@@ -1070,7 +1080,13 @@ begin
       FlushPendingInlineSnapshots;
     except
       on E: Exception do
+      begin
+        { a fault while writing the inline snapshots back must not be filed as one finalization failure over
+          results the run then publishes }
+        if IsEngineFault(E) then
+          AbortOnEngineFault('<inline snapshot write-back>', E);
         RecordSnapshotFinalizationFailure('Snapshot finalization failed: ' + E.Message);
+      end;
     end;
     { the files' engines ran on threads of their own: the report sums their memory }
     SetLength(FileMemory, Length(FResults));

@@ -34,7 +34,11 @@ implementation
 uses
   CLI.Options,
 
+  Goccia.EngineFault,
   Goccia.Error,
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  Goccia.FaultInjection,
+  {$ENDIF}
   Goccia.Modules.Resolver,
   Goccia.Terminal.Colors;
 
@@ -67,6 +71,9 @@ function TGocciaApplication.Run: Integer;
 begin
   Result := 0;
   try
+    {$IFDEF GOCCIA_FAULT_INJECTION}
+    InjectFaultAt('startup');
+    {$ENDIF}
     Execute;
   except
     { An unusable invocation: the command did no work (CLI conventions). }
@@ -77,6 +84,10 @@ begin
     end;
     on E: Exception do
     begin
+      { a fault the application's own handlers did not stop at: raised on the
+        main thread, outside any file (ADR 0196) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FName, E);
       HandleError(E);
       Result := 1;
     end;

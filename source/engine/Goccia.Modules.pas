@@ -152,7 +152,7 @@ implementation
 
 uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.VM,
-  Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry, TextEncoding;
+  Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry, TextEncoding, Goccia.EngineFault;
 
 
 const
@@ -412,6 +412,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then raise;
       B := '';
       ThrowError('Error', UnicodeString(UTF8Decode(E.Message)));
       ContentRefused := True;

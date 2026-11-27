@@ -37,7 +37,9 @@ uses
   Goccia.TextFiles,
 
   Goccia.Core,
-  Goccia.Embed;
+  Goccia.Embed,
+  Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION},
+  Goccia.FaultInjection{$ENDIF};
 
 const
   BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
@@ -510,6 +512,9 @@ begin
   end;
   Options := Default(TBareOptions);
   try
+    {$IFDEF GOCCIA_FAULT_INJECTION}
+    InjectFaultAt('startup');
+    {$ENDIF}
     ParseOptions(Options);
     { clig.dev no-argument rule — see Goccia.CLI.Stdin.  Bare has its own
       argument parser, so the shared TGocciaCLIApplication gate does not
@@ -534,6 +539,12 @@ begin
     end;
     on E: Exception do
     begin
+      { the bare loader runs its file on the main thread: a fault in it, or outside it, lands here (ADR 0196) }
+      if IsEngineFault(E) then
+        if Options.FileName <> '' then
+          AbortOnEngineFault(Options.FileName, E)
+        else
+          AbortOnEngineFault(BARE_PROGRAM_NAME, E);
       WriteLn(ErrOutput, 'Error: ', E.Message);
       ExitCode := 1;
     end;

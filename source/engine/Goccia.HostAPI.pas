@@ -177,7 +177,7 @@ uses
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, TextEncoding, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
-  Goccia.Fetch, Goccia.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry, ConsoleStreams;
+  Goccia.Fetch, Goccia.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry, ConsoleStreams, Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1527,6 +1527,7 @@ begin
       Result := DenyResolution(E.Capability, E.Scope, E.Suggestion);
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then raise;
       Resolved := UTF8Decode(E.Message);
       if E is EModuleNotFound then ResolveCandidate := UTF8Decode(EModuleNotFound(E).ResolvedCandidatePath);
       Result := -1;
@@ -1743,7 +1744,11 @@ begin
     on E: ENativeDepthLimit do Exit(ThrowError('RangeError', UTF8Decode(E.Message)));
     on E: EGocciaDataTypeError do Exit(ThrowError('TypeError', UTF8Decode(E.Message)));
     { any other parser failure is still the text's: never let a Pascal exception into the VM }
-    on E: Exception do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
+    end;
   end;
   Res := StrFromUnicode(Json);
   Result := True;
@@ -1874,7 +1879,10 @@ begin
       else Res := StrFromUnicode(UTF8Decode(ModuleFileURL(Path)));
       Exit;
     except
-      on E: Exception do ;
+      on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then raise;
+      end;
     end;
   end;
   if SandboxActive and not IsVirtualKey(Ref) then
@@ -2212,7 +2220,11 @@ begin
     Passed := SnapshotState.MatchExternal(U8(ArgStr(Args, Argc, 1)), U8(ArgStr(Args, Argc, 2)),
       U8(ArgStr(Args, Argc, 3)), (Argc >= 4) and ToBool(Args[4]), Msg);
   except
-    on E: Exception do Exit(SnapshotFailed(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(SnapshotFailed(E));
+    end;
   end;
   Result := SnapshotOutcome(Passed, Msg, Res);
 end;
@@ -2235,7 +2247,11 @@ begin
       U8(ArgStr(Args, Argc, 3)), U8(ArgStr(Args, Argc, 4)), (Argc >= 5) and ToBool(Args[5]),
       (Argc >= 6) and ToBool(Args[6]), U8(Src), Line, Col, ArgIndex, Msg);
   except
-    on E: Exception do Exit(SnapshotFailed(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(SnapshotFailed(E));
+    end;
   end;
   Result := SnapshotOutcome(Passed, Msg, Res);
 end;
@@ -2259,7 +2275,11 @@ begin
       try
         SnapshotState.Finish(Errors, (Argc < 1) or ToBool(Args[1]));
       except
-        on E: Exception do Errors.Add('Snapshot finalization failed: ' + E.Message);
+        on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then raise;
+          Errors.Add('Snapshot finalization failed: ' + E.Message);
+        end;
       end;
     PushRoot(MkPtr(NewArray(0, Errors.Count)));
     for I := 0 to Errors.Count - 1 do

@@ -159,6 +159,9 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check that catch-all handlers guard against engine faults
+        run: bun run scripts/check-fault-guards.ts
+
       - name: Check parallel CI compilation
         run: python3 .github/scripts/test-compile-programs.py
 
@@ -390,6 +393,126 @@ jobs:
           # This job is the only producer of this target's artifact. Replace
           # an incomplete upload if the first attempt failed after creation.
           overwrite: true
+
+  # The applications built with Goccia.FaultInjection's hook, for every
+  # target, for the cli job's engine-fault checks (scripts/test-engine-faults.ts):
+  # faults reach the process as signals on Linux and macOS and as SEH exceptions
+  # on Windows, so each platform runs them. No shipped target sets
+  # GOCCIA_FAULT_INJECTION, and the artifact is not named gocciascript-*, so
+  # nothing that packages a build picks it up. It builds beside `build`, as
+  # build.pas does (the same runners, link libraries and flags), so the hook's
+  # builds do not lengthen the path every other job waits on.
+  fault-build:
+    needs: supersede
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-darwin
+            cpu: aarch64
+            os: darwin
+            runner: macos-latest
+          - target: x86_64-darwin
+            cpu: x86_64
+            os: darwin
+            runner: macos-15-intel
+          - target: x86_64-linux
+            cpu: x86_64
+            os: linux
+            runner: ubuntu-latest
+          - target: aarch64-linux
+            cpu: aarch64
+            os: linux
+            runner: ubuntu-latest
+          - target: x86_64-win64
+            cpu: x86_64
+            os: win64
+            runner: ubuntu-latest
+          - target: i386-win32
+            cpu: i386
+            os: win32
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+          targets: ${{ matrix.target }}
+
+      # The build job's pinned link libraries (see there).
+      - name: Select Linux link libraries
+        id: link-libs-asset
+        if: matrix.os == 'linux'
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-linux)
+              echo "name=Linux_AMD64_Ubuntu_2204.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=4684a45a073238fdbf02c730ca26f8d2f2f9cc09b021fd1fdf3677948e7882e0" >> "$GITHUB_OUTPUT"
+              ;;
+            aarch64-linux)
+              echo "name=Linux_AArch64_Ubuntu_1804.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Restore Linux link libraries
+        id: link-libs
+        if: matrix.os == 'linux'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: link-libs
+          key: link-libs-${{ matrix.target }}-${{ steps.link-libs-asset.outputs.sha256 }}
+
+      - name: Download Linux link libraries
+        if: matrix.os == 'linux' && steps.link-libs.outputs.cache-hit != 'true'
+        env:
+          LIBS: ${{ steps.link-libs-asset.outputs.name }}
+          LIBS_SHA256: ${{ steps.link-libs-asset.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all/${LIBS}" \
+            -o "$RUNNER_TEMP/link-libs.zip"
+          echo "${LIBS_SHA256}  $RUNNER_TEMP/link-libs.zip" | sha256sum -c -
+          mkdir -p link-libs
+          unzip -qo "$RUNNER_TEMP/link-libs.zip" -d link-libs
+
+      - name: Build the fault-injection applications
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            linux)
+              LIBDIR=$(find "$PWD/link-libs" -name "libc.so" -exec dirname {} \; | head -1)
+              if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in link-libs"; exit 1; fi
+              EXTRA_FLAGS="-Xd -Fl${LIBDIR}"
+              ;;
+            darwin)
+              SDK_ROOT="$(xcrun --show-sdk-path)"
+              EXTRA_FLAGS="-Fl${SDK_ROOT}/usr/lib -k-F${SDK_ROOT}/System/Library/Frameworks"
+              # instantfpc compiles build.pas for the host, which on a macOS
+              # runner needs the SDK paths too (as in compile-programs.py)
+              export INSTANTFPCOPTIONS="${INSTANTFPCOPTIONS:-} ${EXTRA_FLAGS}"
+              ;;
+            *)
+              EXTRA_FLAGS=""
+              ;;
+          esac
+          FPC_TARGET_CPU="${{ matrix.cpu }}" FPC_TARGET_OS="${{ matrix.os }}" \
+            GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS="${EXTRA_FLAGS} -dGOCCIA_FAULT_INJECTION" \
+            ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner
+
+      - name: Upload the fault-injection applications
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fault-injection-${{ matrix.target }}
+          path: build/Goccia*FaultInjection*
+          if-no-files-found: error
 
   test:
     needs: build
@@ -1479,7 +1602,7 @@ jobs:
             --details-archive ../benchmark-profile-details.tar.gz
 
   cli:
-    needs: build
+    needs: [build, fault-build]
     strategy:
       fail-fast: false
       matrix:
@@ -1510,6 +1633,12 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: gocciascript-${{ matrix.target }}
+          path: build/
+
+      - name: Download the fault-injection applications
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fault-injection-${{ matrix.target }}
           path: build/
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -1611,6 +1740,9 @@ jobs:
 
       - name: Check FFI callback slot exhaustion in its own process
         run: bun run scripts/test-cli-ffi-callback-slots.ts
+
+      - name: Check that every application stops on an engine fault
+        run: bun run scripts/test-engine-faults.ts
 
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts

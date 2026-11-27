@@ -24,7 +24,7 @@ procedure InitAgentHost;
 implementation
 
 uses
-  Goccia.Engine, Goccia.Shared, Goccia.Atomics, Goccia.Promise, Goccia.ThreadCleanupRegistry;
+  Goccia.Engine, Goccia.Shared, Goccia.Atomics, Goccia.Promise, Goccia.ThreadCleanupRegistry, Goccia.EngineFault;
 
 type
   TArgs = PValue;
@@ -226,7 +226,10 @@ begin
         EngineDone;
       end;
     except
-      on E: Exception do ;
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then AbortOnEngineFault('<$262.agent>', E);
+      end;
     end;
     EnterCriticalSection(AgentLock);
     Done := True;

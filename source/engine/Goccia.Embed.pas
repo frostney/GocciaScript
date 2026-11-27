@@ -336,7 +336,7 @@ implementation
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, Goccia.Engine, Goccia.Eval,
   Goccia.Promise, Goccia.Builtins, Goccia.BigIntV, Goccia.ObjModel, Goccia.FFI, Goccia.Fetch, Goccia.Compiler, Goccia.Sandbox, Goccia.Profile, Goccia.Profiler.Compile, Goccia.Weak,
-  Goccia.HeapSnapshot, Goccia.Bytecode.Profile;
+  Goccia.HeapSnapshot, Goccia.Bytecode.Profile, Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION}, Goccia.FaultInjection{$ENDIF};
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -770,7 +770,10 @@ begin
     FAuditSink(Event);
   except
     on E: Exception do
-      Exit(HostAbort('capability audit delivery failed: ' + E.Message));
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+        Exit(HostAbort('capability audit delivery failed: ' + E.Message));
+    end;
   end;
   Result := True;
 end;
@@ -1007,6 +1010,9 @@ begin
   Result := False;
   Bytes := nil;
   R := Default(TGocciaRunResult);
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  InjectFaultAt('compile');
+  {$ENDIF}
   SetActiveProfile(FProfile);
   case FSourceKind of
     gskScript: Kind := 1;
@@ -1066,6 +1072,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         R.ErrorName := 'Error';
         R.ErrorText := UnicodeString(E.Message);
         R.ErrorMessage := R.ErrorText;

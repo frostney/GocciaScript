@@ -49,6 +49,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.EngineFault,
   Goccia.Keywords.Reserved;
 
 const
@@ -425,8 +426,12 @@ begin
     if not FResolve(ASpecifier, FSourcePath, AAddress) then
       Exit(False);
   except
-    on Exception do
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Exit(False);
+    end;
   end;
   Result := AAddress <> '';
 end;
@@ -1012,8 +1017,12 @@ begin
       PipelineResult := TGocciaSourcePipeline.Parse(ASourceLines,
         ASourcePath, PipelineOptions);
     except
-      on Exception do
+      on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         PipelineResult := nil;
+      end;
     end;
 
     if not Assigned(PipelineResult) then
@@ -1023,8 +1032,12 @@ begin
         PipelineResult := TGocciaSourcePipeline.Parse(ASourceLines,
           ASourcePath, PipelineOptions);
       except
-        on Exception do
+        on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           Exit;
+        end;
       end;
     end;
 

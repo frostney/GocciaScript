@@ -582,7 +582,8 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation,
+  Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1665,7 +1666,9 @@ function RootAt(I: Integer): TValue; inline; begin Result := TempRoots[I]; end;
 procedure PopRoots(N: Integer); inline;
 begin
   Dec(TempTop, N);
-  if TempTop < 0 then RunError(204);   { more pops than pushes: a native's root bookkeeping is off }
+  { more pops than pushes: a native's root bookkeeping is off. EInvalidPointer, an engine fault (RunError would halt
+    the process from this thread instead, with exit status 204 and no report) }
+  if TempTop < 0 then RaiseRuntimeError(204);
 end;
 
 { open upvalues are linked through raw pointers; after a minor GC the moved ones are re-linked by the VM }

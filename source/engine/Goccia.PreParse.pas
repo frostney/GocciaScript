@@ -326,7 +326,7 @@ function PreParseSource(const Src: UnicodeString; Goal: TParseGoal; Strict: Bool
 implementation
 
 uses
-  Goccia.RegExp.Engine;
+  Goccia.RegExp.Engine, Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1493,7 +1493,10 @@ begin
       Msg := '';
     except
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then raise;
         if Pos('quantifier bound too large', E.Message) > 0 then Msg := '' else Msg := UnicodeString(E.Message);
+      end;
     end;
   if Msg <> '' then ErrHere('Invalid regular expression: ' + UTF8Encode(Msg));
 end;

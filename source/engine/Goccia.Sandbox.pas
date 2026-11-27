@@ -43,7 +43,7 @@ uses
   SysUtils, Math, SandboxVirtualFileSystem, SandboxGlob, SandboxFuzzy, SandboxShell, Goccia.Base64,
   Goccia.NativeLimits, Goccia.RegExp.VM, Goccia.Sandbox.FileSystemErrors, Goccia.Sandbox.Search, Goccia.VM, Goccia.Typed,
   Goccia.ObjModel,
-  Goccia.Modules;
+  Goccia.Modules, Goccia.EngineFault;
 
 const
   { the largest integer a Number holds exactly }
@@ -345,7 +345,11 @@ begin
     Bytes := Box.Fs.ReadAllBytes(Path);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'readFile', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Result := BufferOf(Bytes, Res);
 end;
@@ -389,7 +393,11 @@ begin
       Box.Fs.WriteAllBytes(Path, Data);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, Op, Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Result := True;
 end;
@@ -405,7 +413,11 @@ begin
     First := Box.Fs.MakeDirectoryWithResult(Path, Recursive);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'mkdir', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   if Recursive and (First <> '') then Res := StrFromUnicode(First) else Res := VUndefined;
   Result := True;
@@ -421,7 +433,11 @@ begin
     Entries := Box.Fs.List(Path);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'readdir', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Base := TempTop;
   PushArray(Length(Entries));
@@ -441,7 +457,11 @@ begin
     S := Box.Fs.Stat(Path);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'stat', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Base := TempTop;
   PushArray(10);
@@ -469,7 +489,11 @@ begin
     B := Box.Fs.Exists(Path);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'exists', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Res := MkBool(B);
   Result := True;
@@ -484,7 +508,11 @@ begin
     Box.Fs.DeletePath(Path, BoolArg(Args, Argc, 2));
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'rm', Path, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Res := VUndefined;
   Result := True;
@@ -504,7 +532,11 @@ begin
     on E: ESandboxFsError do
       if Copy_ then Exit(ThrowFsError(E, 'copyFile', Path, Dest, True))
       else Exit(ThrowFsError(E, 'rename', Path, Dest, True));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Res := VUndefined;
   Result := True;
@@ -540,7 +572,11 @@ begin
     Compiled := CompileSandboxGlobs(Patterns, Progress.Step);
   except
     on E: ESandboxGlobError do Result := ThrowTypeError(Method + ': ' + E.Message);
-    on E: Exception do Result := ThrowOther(E);
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Result := ThrowOther(E);
+    end;
   end;
 end;
 
@@ -561,7 +597,11 @@ begin
       Progress.Step);
   except
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'glob', Cwd, '', False));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Base := TempTop;
   PushArray(Length(Paths));
@@ -585,7 +625,11 @@ begin
       BoolArg(Args, Argc, First + 1), Globs, Excludes, Progress.Step);
   except
     on E: ESandboxFsError do Result := ThrowFsError(E, 'search', Cwd, '', False);
-    on E: Exception do Result := ThrowOther(E);
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Result := ThrowOther(E);
+    end;
   end;
 end;
 
@@ -611,7 +655,11 @@ begin
     on E: ESandboxGrepPatternError do Exit(ThrowError('SyntaxError', E.Message));
     on E: ERegExpStackExhausted do Exit(ThrowError('RangeError', E.Message));
     on E: ERegExpRuntimeError do Exit(ThrowError('Error', E.Message));
-    on E: Exception do Exit(ThrowOther(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(ThrowOther(E));
+    end;
   end;
   Base := TempTop;
   PushArray(Length(Found.Matches) + 1);
@@ -706,7 +754,11 @@ begin
   try
     R := Box.Shell.Exec(StrArg(Args, Argc, 1));
   except
-    on E: Exception do Exit(NestedFailure(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(NestedFailure(E));
+    end;
   end;
   Base := TempTop;
   PushArray(3);
@@ -780,7 +832,11 @@ begin
     end;
     R := Box.RunScriptCallback(Box, Box.Fs.Normalize(StrArg(Args, Argc, 1), Box.Shell.WorkingDirectory), Opt);
   except
-    on E: Exception do Exit(NestedFailure(E));
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit(NestedFailure(E));
+    end;
   end;
   Base := TempTop;
   PushArray(8);

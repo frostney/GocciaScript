@@ -34,6 +34,7 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Embed,
+  Goccia.EngineFault,
 
   FileUtils,
   Goccia.ThreadCleanupRegistry;
@@ -97,6 +98,9 @@ begin
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread (ADR 0196) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FPlan[FIndex].InputFile, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
         if E is EGocciaBundleFailure then FErrorDetail := EGocciaBundleFailure(E).Detail

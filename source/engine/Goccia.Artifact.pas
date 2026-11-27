@@ -74,7 +74,7 @@ function CurrentArtifactProfile(Module, ModuleSource: Boolean; out Unrestricted:
 implementation
 
 uses
-  TypInfo, BigInteger, Goccia.BigIntV, Goccia.VM, Goccia.SourceSpan;
+  TypInfo, BigInteger, Goccia.BigIntV, Goccia.VM, Goccia.SourceSpan, Goccia.EngineFault;
 
 const
   MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
@@ -880,6 +880,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then raise;
       Err := UnicodeString(E.Message);
       Result := False;
     end;
@@ -929,6 +930,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then raise;
       Err := UnicodeString(E.Message);
       FreeAndNil(A.Info);
       A.Top := nil;

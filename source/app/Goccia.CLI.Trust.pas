@@ -326,7 +326,8 @@ uses
 
   Goccia.CLI.Stdin,
   Goccia.JSON.Utils,
-  Goccia.Version;
+  Goccia.Version,
+  Goccia.EngineFault;
 
 const
   TRUSTED_KEY = 'trusted';
@@ -2032,7 +2033,11 @@ begin
             Status := '  (changed)';
         except
           on E: Exception do
+          begin
+            if IsEngineIntegrityFault(E) then
+              raise;
             Status := '  (unreadable: ' + E.Message + ')';
+          end;
         end;
       WriteLn(Entry.ConfigPath, '  trusted ', Entry.TrustedAt, '  ',
         DescribeStoredKeys(Entry.BlockJSON), Status);

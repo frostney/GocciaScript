@@ -44,7 +44,7 @@ implementation
 
 uses
   SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Builtins, Goccia.Error.Messages,
-  Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
+  Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry, Goccia.EngineFault;
 
 const
   MAX_FETCH_WORKERS = 16;
@@ -209,7 +209,11 @@ begin
       DeniedScope := E.Scope;
     end;
     on E: EHTTPError do ErrorMessage := E.Message;
-    on E: Exception do ErrorMessage := 'fetch failed: ' + E.Message;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then AbortOnEngineFault('<fetch>', E);
+      ErrorMessage := 'fetch failed: ' + E.Message;
+    end;
   end;
   O := Owner;
   EnterCriticalSection(O.Lock);

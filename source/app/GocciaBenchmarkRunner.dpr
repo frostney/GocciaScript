@@ -45,6 +45,7 @@ uses
   Goccia.TextFiles,
 
   Goccia.Embed,
+  Goccia.EngineFault,
   Goccia.HostAPI,
   Goccia.VM,
   Goccia.ThreadCleanupRegistry;
@@ -171,6 +172,9 @@ begin
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread (ADR 0196) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FResults[FIndex].Result.FileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
@@ -452,6 +456,9 @@ begin
       raise;
     on E: Exception do
     begin
+      { an engine fault is no verdict on the file: it stops the run (ADR 0196) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FileName, E);
       { a file the host could not set up is one failed file (GocciaBenchmarkRunner's "Error loading") }
       if not FParallel then
         WriteLn(ErrOutput, 'Error: ', E.Message);

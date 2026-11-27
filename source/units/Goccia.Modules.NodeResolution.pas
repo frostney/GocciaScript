@@ -230,6 +230,7 @@ uses
 
   FileUtils,
 
+  Goccia.EngineFault,
   Goccia.FileExtensions,
   Goccia.TextFiles;
 
@@ -1431,8 +1432,12 @@ begin
     { An unreadable or non-UTF-8 file is not evidence of CommonJS. Let the
       loader fail on its own terms rather than turning an encoding problem into
       a module-format accusation. }
-    on Exception do
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Result := False;
+    end;
   end;
 end;
 

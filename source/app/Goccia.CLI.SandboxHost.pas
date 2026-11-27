@@ -150,6 +150,7 @@ uses
   TextSemantics,
 
   Goccia.CapabilityAudit,
+  Goccia.EngineFault,
   Goccia.Error.Suggestions,
   Goccia.HostAPI,
   Goccia.HostEnvironment,
@@ -466,6 +467,8 @@ begin
         end;
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(Run.EntryPath, E);
           Result.Ok := False;
           Result.ExitCode := 1;
           Result.ErrorMessage := E.Message;
@@ -750,6 +753,8 @@ begin
       end;
       on E: Exception do
       begin
+        if IsEngineFault(E) then
+          AbortOnEngineFault(AEntryPath, E);
         Result.Ok := False;
         Result.ExitCode := 1;
         Result.ErrorMessage := E.Message;

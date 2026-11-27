@@ -12,6 +12,7 @@ uses
   Goccia.Compliance,
   Goccia.DataTree,
   Goccia.DataTree.JSON,
+  Goccia.EngineFault,
   Goccia.JSON.Utils,
   Goccia.TextFiles,
   Goccia.TOML,
@@ -358,6 +359,8 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         AResult.Outcome := coInfrastructure;
         AResult.MessageText := E.Message;
       end;
@@ -431,6 +434,8 @@ begin
         WriteLn(E.Message);
         Halt(1);
       end;
+      { fault-guard: a case's worker process, whose status 2 the coordinator records as an infrastructure result
+        naming the exception's class }
       on E: Exception do
       begin
         WriteLn(E.ClassName, ': ', E.Message);
@@ -538,6 +543,9 @@ begin
     except
       on E: Exception do
       begin
+        { each case runs in a worker process of its own; a fault in the coordinator itself ends the run (ADR 0196) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault('GocciaTOMLComplianceRunner', E);
         WriteLn('Error: ', E.Message);
         ExitCode := 2;
       end;

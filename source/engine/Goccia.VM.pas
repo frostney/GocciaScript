@@ -553,7 +553,7 @@ implementation
 
 uses
   {$IFDEF LINUX}Syscall, {$ENDIF}Classes, NumericText, NativeStackBounds, Goccia.Coverage, Goccia.Error.Messages,
-  Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry;
+  Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry, Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1288,6 +1288,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then raise;
         NativeStackReturn(Loan);
         AbandonRealm(Old, NewR);
         Pending := VUndefined;

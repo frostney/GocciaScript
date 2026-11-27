@@ -10,7 +10,9 @@ uses
 { Answers whether AException is an engine-integrity fault: a signal that the
   process state is no longer trustworthy, not something the running script did.
   This unit is the authoritative list; the decision is recorded in
-  docs/adr/0109-engine-integrity-faults-are-uncatchable.md.
+  docs/adr/0109-engine-integrity-faults-are-uncatchable.md, and what every
+  application does with a fault that reaches it in
+  docs/adr/0196-every-application-stops-on-an-engine-fault.md.
 
   These are the faults that mean a pointer was already freed, a mapping was
   never valid, or the heap itself is broken. Unlike a TypeError or a refused
@@ -50,6 +52,12 @@ uses
     EPrivilege         A privileged instruction was executed.
     EExternalException A hardware or OS exception FPC could not map to a more
                        specific class.
+    EAssertionFailed   An internal assertion (`Assert`, compiled in by `$C+`)
+                       found an engine or host invariant broken. Nothing a
+                       script does is meant to trip one, so one that fires is
+                       an engine bug, not a guest error.
+    EAbstractError     A call reached an abstract method: a dispatch the engine
+                       never meant to make.
 
   Deliberately NOT in the family — each is raised by the engine on a path with a
   defined continuation, so classifying it as an integrity fault would turn
@@ -60,7 +68,9 @@ uses
                        catchable guest error like any other non-fault Pascal
                        exception. Recursion depth is a guest-observable
                        limit, not corruption. No class listed above is an ancestor of it,
-                       so it keeps converting.
+                       so it keeps converting. One that reaches a host, past
+                       every script boundary, is an engine fault all the same:
+                       see IsEngineFault below.
     EOutOfMemory       A refusal, not a corruption: the allocator declined a
                        request and left the heap exactly as it was. FPC 3.2.2
                        raises it from a failed SetLength, and the engine's own
@@ -113,7 +123,78 @@ uses
       end; }
 function IsEngineIntegrityFault(const AException: Exception): Boolean;
 
+const
+  { The exit status of a process that stopped on an engine fault: sysexits'
+    EX_SOFTWARE, "an internal software error has been detected". Distinct from
+    1 (the work was done and failed: a script threw, a test failed) and 2 (the
+    invocation was unusable), so a harness can tell "this failed" from "stop
+    believing this process" (docs/contributing/cli-conventions.md). }
+  EXIT_CODE_ENGINE_FAULT = 70;
+
+  { Opens every line of the diagnostic AbortOnEngineFault writes. No other
+    line any application prints starts with it, so `grep 'Engine fault:'` over
+    a log finds the fault and nothing else. }
+  ENGINE_FAULT_PREFIX = 'Engine fault: ';
+
+{ Answers whether AException, having reached a host past every script
+  boundary, is an engine fault: the integrity family above, or an
+  EStackOverflow. A script's own recursion never surfaces as one: the engine
+  bounds it and reports a RangeError the script can catch. An EStackOverflow
+  that a host sees is native code that outran its stack without the engine's
+  bound noticing, which is the engine failing, not the script.
+
+  Everything else a host catches is an ordinary failure with its own report:
+  a script error, a file that does not exist, an invalid option. This is the
+  test hosts apply in every generic handler that would otherwise report the
+  exception as one of those (docs/adr/0196-every-application-stops-on-an-engine-fault.md). }
+function IsEngineFault(const AException: Exception): Boolean;
+
+{ Writes the engine-fault diagnostic for AException to stderr and ends the
+  process with EXIT_CODE_ENGINE_FAULT. Never returns. ASite names where the
+  fault surfaced: the file whose run it ended, or the application's name when
+  it came from outside any file.
+
+  It runs from whichever thread caught the fault, worker threads included,
+  and does not unwind. Unwinding would run the handlers and finalizers between
+  here and the program's end on state the fault calls into question, and
+  would let the caller go on to print a summary or a JSON report, whose
+  verdict the process is in no position to give.
+
+  The first fault in the process writes the diagnostic: two lines, each
+  opening with ENGINE_FAULT_PREFIX, the first naming the exception's class, the
+  site and the message. A later fault on another thread writes nothing and
+  waits, up to a bound, for that diagnostic to be flushed before it ends the
+  process, so the abort never cuts its own message short. The calling
+  thread's buffered stdout is flushed first, so what the script printed before
+  the fault comes out ahead of the diagnostic; what other threads still hold
+  dies with the process. }
+procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
+
+{ Ends the process at once with AStatus, running no unit finalization and
+  flushing nothing: _exit, or TerminateProcess on Windows, which unlike
+  ExitProcess also skips DLL process-detach handlers that could deadlock on a
+  lock a dead thread held. Halt would run unit finalization on the calling
+  thread and tear down process-wide RTL state (the thread manager among it)
+  under the threads still running. }
+procedure TerminateProcessNow(AStatus: LongInt);
+
+{ Raises the exception the RTL maps run-time error AErrno to (SysUtils'
+  ErrorProc: 204 is EInvalidPointer, 202 EStackOverflow, 216
+  EAccessViolation), through the path the RTL's own internal errors take
+  (FPC_HANDLEERROR). An engine check that finds its invariants broken calls
+  this rather than RunError: RunError is a program's own exit request, which
+  runs Halt, with unit finalization, on the calling thread and raises nothing
+  a host could report. }
+procedure RaiseRuntimeError(AErrno: LongInt);
+
 implementation
+
+procedure FpcHandleError(AErrno: LongInt); external name 'FPC_HANDLEERROR';
+
+procedure RaiseRuntimeError(AErrno: LongInt);
+begin
+  FpcHandleError(AErrno);
+end;
 
 function IsEngineIntegrityFault(const AException: Exception): Boolean;
 begin
@@ -122,7 +203,79 @@ begin
     (AException is EInvalidPointer) or
     (AException is EDivByZero) or
     (AException is EPrivilege) or
-    (AException is EExternalException);
+    (AException is EExternalException) or
+    (AException is EAssertionFailed) or
+    (AException is EAbstractError);
+end;
+
+function IsEngineFault(const AException: Exception): Boolean;
+begin
+  Result := IsEngineIntegrityFault(AException) or
+    (AException is EStackOverflow);
+end;
+
+{$IF DEFINED(MSWINDOWS)}
+function GetCurrentProcess: THandle; stdcall;
+  external 'kernel32' name 'GetCurrentProcess';
+function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
+  stdcall; external 'kernel32' name 'TerminateProcess';
+
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
+end;
+{$ELSEIF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
+{$ELSE}
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  Halt(AStatus);
+end;
+{$IFEND}
+
+const
+  { How long, in milliseconds, a thread ending the process waits for the
+    thread that won the report to finish writing it: generous next to one
+    flushed write, and bounded so a reporter that dies mid-write cannot leave
+    the process hanging. }
+  DIAGNOSTIC_WAIT_MS = 2000;
+
+var
+  { Claimed, with an interlocked exchange, by the first thread to report a
+    fault; never cleared. }
+  GFaultReported: LongInt = 0;
+  { Set by the reporting thread once its diagnostic is written and flushed. }
+  GDiagnosticWritten: LongInt = 0;
+
+procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
+var
+  Deadline: QWord;
+begin
+  if InterlockedExchange(GFaultReported, 1) = 0 then
+  begin
+    { best effort throughout: a closed or full stream must not keep the
+      process from ending with the fault's status (fault-guard: the process
+      is already ending on a fault, and nothing below may stop that) }
+    try
+      Flush(Output);
+    except
+      { fault-guard: see above }
+    end;
+    try
+      WriteLn(ErrOutput, ENGINE_FAULT_PREFIX + AException.ClassName + ' in ' +
+        ASite + ': ' + AException.Message + LineEnding + ENGINE_FAULT_PREFIX +
+        'the run was stopped because the engine can no longer vouch for its ' +
+        'own state; no result of this run can be trusted.');
+      Flush(ErrOutput);
+    except
+      { fault-guard: see above }
+    end;
+    InterlockedExchange(GDiagnosticWritten, 1);
+  end;
+  Deadline := GetTickCount64 + DIAGNOSTIC_WAIT_MS;
+  while (GDiagnosticWritten = 0) and (GetTickCount64 < Deadline) do
+    Sleep(1);
+  TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
 end;
 
 end.

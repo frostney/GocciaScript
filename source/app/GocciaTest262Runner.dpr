@@ -35,6 +35,10 @@ uses
   Goccia.VM,
   Goccia.Embed,
   Goccia.Engine,
+  Goccia.EngineFault,
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  Goccia.FaultInjection,
+  {$ENDIF}
   Goccia.Profile,
   Goccia.Test262,
   Goccia.ThreadCleanupRegistry;
@@ -837,8 +841,12 @@ begin
           if ParseTest(ReadUTF8FileText(FileCase.Path), Metadata) then
             Modes := RunModesFor(Metadata);
         except
-          on Exception do
+          on E: Exception do
+          begin
+            if IsEngineIntegrityFault(E) then
+              raise;
             Modes := [trmNonStrict];
+          end;
         end;
       finally
         Metadata.Free;
@@ -1232,6 +1240,7 @@ begin
         string(Test262PrintText), AResult.Status, AResult.Message,
         AResult.Diagnostic);
     except
+      { fault-guard: a wrapper-infrastructure result, which CI gates at zero (docs/test262.md) }
       on E: Exception do
       begin
         AResult.Status := toWrapperInfra;
@@ -1247,6 +1256,7 @@ begin
       try
         WriteProfileJSON(TGocciaProfiler.Instance, ProfilePath);
       except
+        { fault-guard: a wrapper-infrastructure result, which CI gates at zero (docs/test262.md) }
         on E: Exception do
         begin
           AResult.Status := toWrapperInfra;
@@ -1290,7 +1300,13 @@ begin
     try
       UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
     except
-      UsesAgents := False;
+      on E: Exception do
+      begin
+        { a case thread: re-raised, the fault would end the thread silently }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
+        UsesAgents := False;
+      end;
     end;
     if UsesAgents then
       EnterCriticalSection(AgentRunLock);
@@ -1411,6 +1427,8 @@ begin
           WriteWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
           fpExit(0);
         except
+          { fault-guard: the forked worker's status 2 is recorded as a wrapper-infrastructure result, which CI gates
+            at zero (docs/test262.md) }
           fpExit(2);
         end;
       end;
@@ -1476,7 +1494,11 @@ begin
           ReadWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
         except
           on E: Exception do
+          begin
+            if IsEngineIntegrityFault(E) then
+              raise;
             WorkerMessage := 'Invalid worker result: ' + E.Message;
+          end;
         end
       else
         WorkerMessage := Format(
@@ -1848,8 +1870,12 @@ begin
         Parsed.Free;
       end;
     except
-      on Exception do
+      on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         Result := False;
+      end;
     end;
   finally
     Lines.Free;
@@ -1957,6 +1983,9 @@ begin
   App := TTest262App.Create;
   try
     try
+      {$IFDEF GOCCIA_FAULT_INJECTION}
+      InjectFaultAt('startup');
+      {$ENDIF}
       ExitCode := App.Run;
     except
       { ParseArguments raises TCLIUsageError for an unusable invocation (a
@@ -1976,6 +2005,9 @@ begin
       end;
       on E: Exception do
       begin
+        { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0196 }
+        if IsEngineFault(E) then
+          AbortOnEngineFault('GocciaTest262Runner', E);
         WriteLn(ErrOutput, 'Error: ', E.Message);
         ExitCode := 1;
       end;

@@ -137,6 +137,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
@@ -321,8 +322,12 @@ begin
       Parsed := TGocciaSourcePipeline.Parse(Lines, AFileName, Options);
     except
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         raise EGocciaCrawlError.CreateFmt('%s does not parse: %s',
           [AFileName, E.Message]);
+      end;
     end;
     try
       Cursor.Tokens := Parsed.Tokens;

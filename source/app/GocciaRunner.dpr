@@ -46,6 +46,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Coverage,
   Goccia.Coverage.Report,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
@@ -234,6 +235,8 @@ begin
       except
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FFileName, E);
           if FApp.IsJsonOutput then
             FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start)
           else
@@ -261,6 +264,10 @@ begin
     except
       on E: Exception do
       begin
+        { the file's run stops the process here, on its own thread: other files must not go on running on the
+          state the fault calls into question (ADR 0196) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FFileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
@@ -1083,7 +1090,11 @@ begin
             HandleCapabilityAudit(Effective);
           except
             on E: Exception do
+            begin
+              if IsEngineFault(E) then
+                AbortOnEngineFault(AFileName, E);
               raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+            end;
           end;
         end;
         Engine.HostEnvironment := UnicodeString(HostEnvironmentPath(FileConfig, Engine.Deterministic));
@@ -1094,6 +1105,8 @@ begin
           raise;
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(AFileName, E);
           if IsJsonOutput then
             ReportLoadFailure(AReportIndex, AFileName, E, Start)
           else
@@ -1668,7 +1681,11 @@ begin
         HandleCapabilityAudit(Effective);
       except
         on E: Exception do
+        begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(ARun.EntryPath, E);
           raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+        end;
       end;
     end;
   end;
@@ -1820,7 +1837,11 @@ begin
   except
     { a config that does not parse cannot say; the error reports as usual }
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(Name, E);
       Result := False;
+    end;
   end;
 end;
 

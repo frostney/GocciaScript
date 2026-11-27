@@ -22,7 +22,7 @@ implementation
 uses
   {$IFDEF UNIX}BaseUnix, {$ENDIF}SysUtils, Classes, BigInteger, Goccia.Instructions, Goccia.VM, Goccia.BigIntV,
   Goccia.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar, Goccia.Temporal.TimeZone,
-  Goccia.Temporal.TimeZoneData;
+  Goccia.Temporal.TimeZoneData, Goccia.EngineFault;
 
 {$I Goccia.Temporal.inc}
 
@@ -51,7 +51,11 @@ begin
       F.Free;
     end;
   except
-    Exit;
+    on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then raise;
+      Exit;
+    end;
   end;
   SetLength(S, Length(B));
   for I := 0 to High(B) do S[I + 1] := WideChar(B[I]);

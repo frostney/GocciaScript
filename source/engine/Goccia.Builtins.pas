@@ -29,7 +29,8 @@ threadvar
 implementation
 
 uses
-  NumericText, Goccia.ObjModel, BigInteger, Goccia.BigIntV, TextSemantics, UnicodeNormalization;
+  NumericText, Goccia.ObjModel, BigInteger, Goccia.BigIntV, TextSemantics, UnicodeNormalization
+  {$IFDEF GOCCIA_FAULT_INJECTION}, Goccia.FaultInjection{$ENDIF};
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -162,6 +163,19 @@ begin
   else Res := MkNumber(Sign * Acc);
   Result := True;
 end;
+
+{$IFDEF GOCCIA_FAULT_INJECTION}
+{ __gocciaInjectFault(kind): the fault build's real engine fault, raised on the thread running the calling code
+  (Goccia.FaultInjection) }
+function G_InjectFault(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var S: PStr;
+begin
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  CauseInjectedFault(UTF8Encode(StrToUnicode(S)));
+  Res := VUndefined;
+  Result := True;
+end;
+{$ENDIF}
 
 { 19.2.4 parseFloat: the longest prefix that is a StrDecimalLiteral }
 function G_ParseFloat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -3612,6 +3626,9 @@ begin
   N(ConsoleObj, 'log', Console_Log, 0);
   N(ConsoleObj, 'error', Console_Log, 0);
   N(ConsoleObj, 'warn', Console_Log, 0);
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  N(GlobalObj, '__gocciaInjectFault', G_InjectFault, 1);
+  {$ENDIF}
   PerfObj := NewProtoObject(ObjectProto);
   DefineHidden(GlobalObj, 'performance', PerfObj);
   N(PerfObj, 'now', Perf_Now, 0);
