@@ -163,6 +163,15 @@ jobs:
       - name: Execution limits
         run: bash scripts/engine/limits-test.sh build/engine/goccia
 
+      - name: JIT code is read-execute and released at engine teardown
+        env:
+          GOCCIA_JIT: "1"
+          GOCCIA_OPT: "0"
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/jit-permissions-test scripts/engine/jit-permissions-test.pas
+          timeout 20 build/jit-permissions-test
+
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 

@@ -10806,27 +10806,23 @@ end;
 
 { ---------------- entry ---------------- }
 
-{ the compiling thread's engine ends: its templates' code goes, the JIT's memory back to the end of the shared
-  stubs (no other thread's engine has compiled code: only this thread compiles), and instanceof's cache is
-  emptied before HeapDone frees the shapes its entries name }
+{ Release the engine's compiled code and clear the instanceof cache before HeapDone frees its shapes.
+  The compiling thread keeps the shared executable stubs for the next engine. }
 procedure JitEngineDone;
 {$IFDEF GOCCIA_JIT}
 var I: Integer;
 begin
+  for I := 0 to JitCodeMappingCount - 1 do
+    Fpmunmap(JitCodeMappings[I].Address, JitCodeMappings[I].Size);
+  JitCodeMappings := nil;
+  JitCodeMappingCount := 0;
   if GetCurrentThreadId <> JitMainThread then Exit;
   FillChar(InstOfCache, SizeOf(InstOfCache), 0);
-  { the define and private-member caches of the code that goes now (every template's is past the mark) }
+  { the define and private-member caches of the engine's templates }
   for I := 0 to JitDefListCount - 1 do FreeMem(JitDefList[I]);
   for I := 0 to JitPrivListCount - 1 do FreeMem(JitPrivList[I]);
   JitDefList := nil; JitPrivList := nil; JitDefListCount := 0; JitPrivListCount := 0;
   ODblShapes := nil; ODblShapeCount := 0;
-  if JitMarkChunk = nil then Exit;
-  {$IFDEF UNIX}
-  for I := 0 to High(JitLaterChunks) do fpmunmap(JitLaterChunks[I], JIT_CHUNK);
-  {$ENDIF}
-  JitLaterChunks := nil;
-  JitChunk := JitMarkChunk;
-  JitChunkUsed := JitMarkUsed;
 end;
 {$ELSE}
 begin

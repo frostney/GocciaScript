@@ -4127,9 +4127,8 @@ begin
     D := Cardinal(Labels[OBranchFix[K].Blk] - (OBranchFix[K].At + 4));
     PCardinal(@JitBuf[OBranchFix[K].At])^ := D;
   end;
-  Code := JitAlloc(JitLen);
+  Code := JitPublish(False);
   if Code = nil then Exit;
-  JitPublish(Code);
   Result := Code;
   if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, OT, 'opt');
   if OptLog and (GetEnvironmentVariable('GOCCIA_OPTDUMP') <> '') then OptDump(Code);
