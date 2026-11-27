@@ -17,9 +17,18 @@ type
     procedure TestOperandPast24BitsRaises;
     procedure TestNegativeOperandRaises;
     procedure TestBackReferencePastIndexBitsRaises;
+    procedure TestWorkspaceLimitCountsNamedGroupStorage;
   public
     procedure SetupTests; override;
   end;
+
+  ETestWorkspaceLimit = class(Exception);
+
+procedure CheckTestWorkspace(const ABytes: Int64);
+begin
+  if ABytes > 3 * 1024 then
+    raise ETestWorkspaceLimit.Create('test workspace limit');
+end;
 
 function RaisesConvertError(const AOp: TRegExpOpCode;
   const AOperand: Integer): Boolean;
@@ -42,6 +51,32 @@ begin
   Test('a negative operand is an error', TestNegativeOperandRaises);
   Test('a back reference index past its operand bits is an error',
     TestBackReferencePastIndexBitsRaises);
+  Test('the workspace limit includes named-group bookkeeping',
+    TestWorkspaceLimitCountsNamedGroupStorage);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNamedGroupStorage;
+var
+  I: Integer;
+  NamedPattern, UnnamedPattern: string;
+  Refused: Boolean;
+begin
+  NamedPattern := '';
+  UnnamedPattern := '';
+  for I := 1 to 40 do
+  begin
+    NamedPattern := NamedPattern + '(?<group' + IntToStr(I) + '>a)';
+    UnnamedPattern := UnnamedPattern + '(a)';
+  end;
+  Expect<Integer>(CompileRegExp(UnnamedPattern, '', @CheckTestWorkspace).CaptureCount).ToBe(40);
+  Refused := False;
+  try
+    CompileRegExp(NamedPattern, '', @CheckTestWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
 end;
 
 procedure TRegExpCompilerTests.TestLargestOperandRoundTrips;

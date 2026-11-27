@@ -99,7 +99,7 @@ type
     procedure AnalyzeFirst;
     procedure AnalyzePossessive;
     function FirstSetFrom(PC: Integer; var Bits: TClassBits): Boolean;
-    procedure Peephole;
+    procedure Peephole(WorkspaceBytes: Int64; var SynthesizedRangeBytes: Int64);
     function Execute(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
   public
     constructor Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
@@ -429,21 +429,25 @@ begin
 end;
 
 constructor TRegexMatcher.Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
-var I, J: Integer; Lo, Hi: Cardinal; Op: TRegExpOpCode; T: Integer; Bytes: Int64;
+var I, J: Integer; Lo, Hi: Cardinal; Op: TRegExpOpCode; T: Integer; Bytes, WorkspaceBytes, SynthesizedRangeBytes: Int64;
 begin
   inherited Create;
   { Peephole's code copy, replacement code, dead bitmap, targets, distances and PC map can coexist. }
-  CheckRegExpWorkspace(Int64(Length(AProg.Code) + 1) * (2 * SizeOf(UInt32) + SizeOf(Boolean) + 3 * SizeOf(Integer)) +
-    Int64(Length(AProg.CharClasses)) * SizeOf(TRegExpCharClass) + InstanceSize);
+  FSlotCount := (AProg.CaptureCount + 1) * 2;
+  WorkspaceBytes := InstanceSize + Int64(FSlotCount) * SizeOf(Integer) +
+    Int64(Length(AProg.Code) + 1) * (2 * SizeOf(UInt32) + SizeOf(Boolean) + 3 * SizeOf(Integer));
+  CheckRegExpWorkspace(WorkspaceBytes + Int64(Length(AProg.CharClasses)) * SizeOf(TRegExpCharClass));
   FProg := AProg;
   FCodeArr := Copy(AProg.Code);   { a copy: the peephole passes rewrite it }
   FProg.Code := nil;
   FProg.CharClasses := Copy(AProg.CharClasses);
   FUnicode := FProg.FullUnicode;
-  FSlotCount := (FProg.CaptureCount + 1) * 2;
   SetLength(FSlots, FSlotCount);
   FEmpty := APattern = EMPTY_REGEX;
-  Peephole;
+  SynthesizedRangeBytes := 0;
+  Peephole(WorkspaceBytes, SynthesizedRangeBytes);
+  CheckRegExpWorkspace(WorkspaceBytes + SynthesizedRangeBytes +
+    Int64(Length(FProg.CharClasses)) * (SizeOf(TRegExpCharClass) + SizeOf(TClassBits)));
   FCodeLen := Length(FCodeArr);
   if FCodeLen > 0 then FCode := @FCodeArr[0] else FCode := nil;
   SetLength(FClassBits, Length(FProg.CharClasses));
@@ -494,8 +498,7 @@ begin
     Int64(Length(FProg.CharClasses)) * SizeOf(TRegExpCharClass) + Int64(Length(FClassBits)) * SizeOf(TClassBits) +
     Int64(FCodeLen + 1) * (3 * SizeOf(Boolean) + SizeOf(Integer)) +
     Int64(Length(FLits)) * SizeOf(UnicodeString) + Int64(Length(FLitFrom)) * SizeOf(Integer);
-  for I := Length(AProg.CharClasses) to High(FProg.CharClasses) do
-    Inc(Bytes, Int64(Length(FProg.CharClasses[I].Ranges)) * SizeOf(TRegExpCharRange));
+  Inc(Bytes, SynthesizedRangeBytes);
   for I := 0 to High(FLits) do Inc(Bytes, Int64(Length(FLits[I])) * SizeOf(WideChar));
   if not FCharge.TryGrow(Bytes) then RaiseRegExpMemoryLimit;
   if GetEnvironmentVariable('GOCCIA_REDBG') <> '' then
@@ -558,7 +561,7 @@ end;
      at MATCH the slots are the same.
   Then the dead instructions are removed and every target is renumbered; a jump to the next live
   instruction goes too, unless it lands on a split (the VM's empty-loop exit looks at jumps to splits). }
-procedure TRegexMatcher.Peephole;
+procedure TRegexMatcher.Peephole(WorkspaceBytes: Int64; var SynthesizedRangeBytes: Int64);
 var
   N, P, X, E, I, K, Depth, NewLen, T, Changes: Integer;
   Dead: array of Boolean;
@@ -599,6 +602,11 @@ var
   function IsSingle(I: Integer): Boolean; inline;
   begin
     Result := (I < N) and not Dead[I] and (OpAt(I) in [RX_CHAR, RX_CHAR_CLASS]);
+  end;
+  function RangeCountAt(I: Integer): Integer; inline;
+  begin
+    if OpAt(I) = RX_CHAR then Exit(1);
+    Result := Length(FProg.CharClasses[BxAt(I)].Ranges);
   end;
   procedure AddRangesOf(I: Integer);
   var J, L: Integer;
@@ -702,16 +710,21 @@ begin
          not IsGuardWord(X + 1))) then Continue;
       if (Targets[P + 1] <> 0) or (Targets[P + 2] <> 0) or (Targets[X] <> 1) then Continue;
       if (E <> X + 1) and (Targets[X + 1] <> 0) then Continue;
+      K := Length(FProg.CharClasses);
+      if K > REGEXP_MAX_OPERAND then Continue;
+      { Count retained synthesized ranges, both class tables during resize, and the source and replacement
+        range buffers during normalization (an output grow can briefly keep the old output as well). }
+      CheckRegExpWorkspace(WorkspaceBytes + SynthesizedRangeBytes + Int64(2 * K + 1) * SizeOf(TRegExpCharClass) +
+        (Int64(RangeCountAt(P + 1)) + RangeCountAt(X)) * 3 * SizeOf(TRegExpCharRange));
       Ranges := nil;
       AddRangesOf(P + 1);
       AddRangesOf(X);
       Normalize;
       Cls.Ranges := Ranges;
       Cls.PageFirstRange := nil;
-      K := Length(FProg.CharClasses);
-      if K > REGEXP_MAX_OPERAND then Continue;
       SetLength(FProg.CharClasses, K + 1);
       FProg.CharClasses[K] := Cls;
+      Inc(SynthesizedRangeBytes, Int64(Length(Ranges)) * SizeOf(TRegExpCharRange));
       FCodeArr[P] := UInt32(Ord(RX_CHAR_CLASS)) or (UInt32(K) shl 8);
       FCodeArr[P + 1] := UInt32(Ord(RX_JUMP)) or (UInt32(E) shl 8);
       Dead[P + 2] := True;

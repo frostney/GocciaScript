@@ -121,6 +121,18 @@ type
     StringCount: Integer;
   end;
 
+  TRegExpCompiler = class;
+
+  TRegExpNameIndex = class(TOrderedStringMap<Integer>)
+  private
+    FCompiler: TRegExpCompiler;
+  protected
+    procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
+      const APendingValue: Integer); override;
+  public
+    constructor Create(const ACompiler: TRegExpCompiler);
+  end;
+
   TRegExpCompiler = class
   private
     FPattern: string;
@@ -156,7 +168,7 @@ type
     FPathNodeCount: Integer;
     // Name -> index into FNameEntries, so a name is found, and a duplicate
     // name checked, without scanning every group.
-    FNameIndex: TOrderedStringMap<Integer>;
+    FNameIndex: TRegExpNameIndex;
     FNameEntries: array of TRegExpNameEntry;
     FNameEntryCount: Integer;
     FAltStack: array of Integer;
@@ -181,6 +193,7 @@ type
     function Match(C: Char): Boolean;
     procedure Emit(AInstr: UInt32);
     procedure CheckWorkspace(const AAdditionalBytes: Int64);
+    procedure CheckTableResize(const AOldCapacity, ANewCapacity, AItemSize: Integer);
     procedure GrowCode(const ACapacity: Integer);
     function EmitHole: Integer;
     procedure PatchHole(AIndex: Integer; ATarget: Integer);
@@ -398,6 +411,19 @@ begin
   end;
 end;
 
+constructor TRegExpNameIndex.Create(const ACompiler: TRegExpCompiler);
+begin
+  inherited Create;
+  FCompiler := ACompiler;
+end;
+
+procedure TRegExpNameIndex.RequireStorageBytes(const ABytes, ANewBytes: Int64;
+  const APendingValue: Integer);
+begin
+  // CheckWorkspace also counts both arrays currently held by this map.
+  FCompiler.CheckWorkspace(ANewBytes);
+end;
+
 constructor TRegExpCompiler.Create(const APattern, AFlags: string;
   const ACheckWorkspace: TRegExpWorkspaceCheck);
 begin
@@ -417,7 +443,7 @@ begin
   SetLength(FPathParent, 0);
   SetLength(FPathIsGroup, 0);
   FPathNodeCount := 0;
-  FNameIndex := TOrderedStringMap<Integer>.Create;
+  FNameIndex := TRegExpNameIndex.Create(Self);
   SetLength(FNameEntries, 0);
   FNameEntryCount := 0;
   SetLength(FAltStack, 64);
@@ -535,9 +561,21 @@ begin
 end;
 
 procedure TRegExpCompiler.CheckWorkspace(const AAdditionalBytes: Int64);
+var
+  Bytes: Int64;
 begin
   if Assigned(FCheckWorkspace) then
-    FCheckWorkspace(Int64(Length(FCode)) * SizeOf(UInt32) + FTableBytes + AAdditionalBytes);
+  begin
+    Bytes := Int64(Length(FCode)) * SizeOf(UInt32) + FTableBytes + AAdditionalBytes;
+    if FNameIndex <> nil then Inc(Bytes, FNameIndex.StorageBytes);
+    FCheckWorkspace(Bytes);
+  end;
+end;
+
+procedure TRegExpCompiler.CheckTableResize(const AOldCapacity, ANewCapacity, AItemSize: Integer);
+begin
+  CheckWorkspace(Int64(ANewCapacity) * AItemSize);
+  Inc(FTableBytes, Int64(ANewCapacity - AOldCapacity) * AItemSize);
 end;
 
 procedure TRegExpCompiler.GrowCode(const ACapacity: Integer);
@@ -3642,7 +3680,7 @@ end;
 
 procedure TRegExpCompiler.PreScanNamedGroups;
 var
-  I, GroupIndex, CloseAngle: Integer;
+  I, GroupIndex, CloseAngle, Capacity: Integer;
   InCharClass: Boolean;
   GroupName: string;
   // The tree node of each open level's group and of the alternative it is in,
@@ -3650,6 +3688,7 @@ var
   GroupNodes, AltNodes: array of Integer;
   AltStackDepth: Integer;
 begin
+  CheckTableResize(0, 64, 2 * SizeOf(Integer));
   SetLength(GroupNodes, 64);
   SetLength(AltNodes, 64);
   AltStackDepth := 0;
@@ -3710,7 +3749,9 @@ begin
         RaiseRegExpNestingLimit(AltStackDepth);
       if AltStackDepth >= Length(GroupNodes) then
       begin
-        SetLength(GroupNodes, AltStackDepth * 2 + 4);
+        Capacity := AltStackDepth * 2 + 4;
+        CheckTableResize(Length(GroupNodes), Capacity, 2 * SizeOf(Integer));
+        SetLength(GroupNodes, Capacity);
         SetLength(AltNodes, Length(GroupNodes));
       end;
       GroupNodes[AltStackDepth] := -1;
@@ -3732,6 +3773,8 @@ begin
           if CloseAngle <= Length(FPattern) then
           begin
             Inc(GroupIndex);
+            // The source slice and the decoded name can coexist during decoding.
+            CheckWorkspace(Int64(CloseAngle - I - 3) * 3 * SizeOf(Char));
             GroupName := DecodeRegExpGroupName(
               Copy(FPattern, I + 3, CloseAngle - I - 3));
             AddNamedGroup(GroupName, GroupIndex, GroupNodes, AltNodes,
@@ -3747,6 +3790,12 @@ begin
     end;
     Inc(I);
   end;
+  Dec(FTableBytes, Int64(Length(GroupNodes)) * 2 * SizeOf(Integer));
+  GroupNodes := nil;
+  AltNodes := nil;
+  if FNamedGroupCount < Length(FNamedGroups) then
+    CheckTableResize(Length(FNamedGroups), FNamedGroupCount,
+      SizeOf(TGocciaRegExpNamedGroup) + 2 * SizeOf(Integer));
   SetLength(FNamedGroups, FNamedGroupCount);
   SetLength(FNamedGroupNext, FNamedGroupCount);
   SetLength(FNamedGroupPathNode, FNamedGroupCount);
@@ -3755,10 +3804,14 @@ end;
 
 function TRegExpCompiler.NewPathNode(AParent: Integer;
   AIsGroup: Boolean): Integer;
+var
+  Capacity: Integer;
 begin
   if FPathNodeCount >= Length(FPathParent) then
   begin
-    SetLength(FPathParent, FPathNodeCount * 2 + 16);
+    Capacity := FPathNodeCount * 2 + 16;
+    CheckTableResize(Length(FPathParent), Capacity, SizeOf(Integer) + SizeOf(Boolean));
+    SetLength(FPathParent, Capacity);
     SetLength(FPathIsGroup, Length(FPathParent));
   end;
   FPathParent[FPathNodeCount] := AParent;
@@ -3777,8 +3830,9 @@ procedure TRegExpCompiler.AddNamedGroup(const AName: string;
   AGroupIndex: Integer; var AGroupNodes, AAltNodes: array of Integer;
   ADepth: Integer);
 var
-  EntryIndex, Position, Level, Node: Integer;
+  EntryIndex, Position, Level, Node, Capacity: Integer;
 begin
+  Inc(FTableBytes, Int64(Length(AName)) * SizeOf(Char));
   Level := ADepth - 1;
   while (Level >= 0) and (AAltNodes[Level] < 0) do
     Dec(Level);
@@ -3800,7 +3854,9 @@ begin
 
   if FNamedGroupCount >= Length(FNamedGroups) then
   begin
-    SetLength(FNamedGroups, FNamedGroupCount * 2 + 8);
+    Capacity := FNamedGroupCount * 2 + 8;
+    CheckTableResize(Length(FNamedGroups), Capacity, SizeOf(TGocciaRegExpNamedGroup) + 2 * SizeOf(Integer));
+    SetLength(FNamedGroups, Capacity);
     SetLength(FNamedGroupNext, Length(FNamedGroups));
     SetLength(FNamedGroupPathNode, Length(FNamedGroups));
   end;
@@ -3819,7 +3875,11 @@ begin
   else
   begin
     if FNameEntryCount >= Length(FNameEntries) then
-      SetLength(FNameEntries, FNameEntryCount * 2 + 8);
+    begin
+      Capacity := FNameEntryCount * 2 + 8;
+      CheckTableResize(Length(FNameEntries), Capacity, SizeOf(TRegExpNameEntry));
+      SetLength(FNameEntries, Capacity);
+    end;
     FNameEntries[FNameEntryCount].First := Position;
     FNameEntries[FNameEntryCount].Last := Position;
     FNameEntries[FNameEntryCount].Count := 1;
@@ -3861,6 +3921,7 @@ begin
       Continue;
     if Length(Reached) = 0 then
     begin
+      CheckWorkspace(Int64(FPathNodeCount) * 2 * SizeOf(Integer));
       SetLength(Reached, FPathNodeCount);
       SetLength(IsGroupOfName, FPathNodeCount);
       FillChar(Reached[0], FPathNodeCount * SizeOf(Integer), 0);
