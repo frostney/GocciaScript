@@ -10,7 +10,7 @@
  *   bun run scripts/check-test-structure.ts --verbose
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -506,6 +506,38 @@ for (const path of files) {
           "parser rejection via Function/eval belongs in scripts/test-cli-parser.ts or test-cli-lexer.ts",
       });
     }
+  }
+}
+
+// Every prelude (source/engine/prelude) has a tripwire test that runs its built-ins with every replaceable
+// intrinsic instrumented (tests/built-ins/prelude-intrinsics, docs/adding-built-in-types.md#captured-intrinsics):
+// one named after it, one listed here as covering it, or a reason the test runner cannot run it.
+const PRELUDE_DIRECTORY = join(ROOT, "source", "engine", "prelude");
+const PRELUDE_TRIPWIRE_DIRECTORY = join(TEST_ROOT, "built-ins", "prelude-intrinsics");
+const PRELUDE_TRIPWIRE_COVERED_BY = new Map<string, string>([
+  ["datatree.js", "data-modules.js"],
+  ["delimited.js", "data-modules.js"],
+  ["json5.js", "data-modules.js"],
+  ["jsonl.js", "data-modules.js"],
+  ["semver.js", "data-modules.js"],
+]);
+const PRELUDE_TRIPWIRE_EXEMPT = new Map<string, AllowlistEntry>([
+  ["microbench.js", { reason: "installed only by GocciaBenchmarkRunner" }],
+  ["sandbox.js", { reason: "installed only in GocciaRunner's sandbox mode" }],
+  ["test262host.js", { reason: "a test262 harness script, installed only by the test262 runner" }],
+]);
+for (const entry of readdirSync(PRELUDE_DIRECTORY)) {
+  if (!entry.endsWith(".js")) continue;
+  if (PRELUDE_TRIPWIRE_EXEMPT.has(entry)) {
+    allowlistedChecks++;
+    continue;
+  }
+  const test = PRELUDE_TRIPWIRE_COVERED_BY.get(entry) ?? entry;
+  if (!existsSync(join(PRELUDE_TRIPWIRE_DIRECTORY, test))) {
+    findings.push({
+      file: toRepositoryPath(join(PRELUDE_TRIPWIRE_DIRECTORY, test)),
+      message: `the ${entry} prelude has no tripwire test; add one that runs each of its built-ins under installTripwire()`,
+    });
   }
 }
 
