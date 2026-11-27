@@ -106,8 +106,12 @@ function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: 
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
-{ drops work after a run aborts, while its limits are still in force }
-procedure DiscardAbortedRunWork(WeakMark: Int64);
+{ drops the work a run that failed or aborted left pending, while its limits are still in force: its jobs, the
+  rejections it left, its timers and intervals, fetch completions, Atomics.waitAsync waits and the FinalizationRegistry
+  cleanup and registrations since WeakMark, so none of it runs in the engine's next run. The module evaluations it
+  started after ModuleMark fail first (Goccia.Modules FailModuleEvaluationsSince), with the abort's error, or with
+  Thrown, the value the run failed with, or for an entry point that kept only its text (FailText) an Error of it. }
+procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString = '');
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 { the test file's vi.mock directives (Goccia.Vitest.MockHoist): each mock's module, served at the address its
@@ -2582,8 +2586,16 @@ begin
   Result := RunEventLoopIn(False);
 end;
 
-procedure DiscardAbortedRunWork(WeakMark: Int64);
+procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString);
 begin
+  if ModuleEvaluationsPendingSince(ModuleMark) then
+  begin
+    { an abort's own error: a job that met the limit may have taken the one it threw. Pending stays the run's. }
+    if AbortKind = 3 then Thrown := MakeError(RangeErrorProto, AbortErrorMessage)
+    else if AbortKind <> 0 then Thrown := MakeError(ErrorProto, AbortErrorMessage)
+    else if FailText <> '' then Thrown := MakeError(ErrorProto, FailText);
+    FailModuleEvaluationsSince(ModuleMark, Thrown);
+  end;
   DiscardJobs;
   DiscardRejections;
   TakeJobErrors;

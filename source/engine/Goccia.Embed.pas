@@ -127,6 +127,8 @@ type
     FModuleMark: Integer;
     { registrations made during the entry and its test or benchmark suites }
     FWeakCleanupMark: Int64;
+    { the asynchronous module evaluations started before the run (Goccia.Modules ModuleEvaluationMark) }
+    FModuleEvaluationMark: Int64;
     FAuditSink: TGocciaCapabilityAuditSink;
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
@@ -972,13 +974,15 @@ begin
 end;
 
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
-var WeakMark: Int64;
+var WeakMark, ModuleMark: Int64;
 begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
+  ModuleMark := ModuleEvaluationMark;
+  Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
@@ -989,7 +993,8 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
-    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark);
+    { the work a globals module that failed left goes with it; a module that loads leaves its jobs to the entry }
+    if (FSetupAborted <> gaNone) or not Result then DiscardFailedRunWork(WeakMark, ModuleMark, VUndefined, Err);
     LimitsDisarm;
   end;
 end;
@@ -1173,6 +1178,7 @@ begin
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
+  FModuleEvaluationMark := ModuleEvaluationMark;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   NurseryFitCeiling;
   SetActiveProfile(FProfile);
@@ -1202,11 +1208,13 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions);
+      Compiled := False;
       try
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+        if (EnvAbort <> 0) or not Compiled then
+          DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, Pending);
         LimitsDisarm;
       end;
     end
@@ -1362,11 +1370,16 @@ begin
       Result.Ok := False;
       Thrown := Pending;
       PushRoot(Thrown);
-      Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
+      { an abort reports its own error: a job that met the limit may have taken the one it threw (its reaction
+        rejects with it), leaving nothing pending }
+      if AbortKind <> 0 then Result.ErrorMessage := AbortErrorName + ': ' + AbortErrorMessage
+      else Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
       if AbortKind = 0 then DescribeThrown(RootAt(TempTop - 1), Result);
+      { the value the run failed with, kept in the completion's root for the finally's discard }
+      TempRoots[TempTop - 2] := RootAt(TempTop - 1);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
@@ -1401,21 +1414,19 @@ begin
     case AbortKind of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;
-      3:
-        begin
-          Result.Aborted := gaMemoryLimit;
-          Result.ErrorName := 'RangeError';
-          Result.ErrorText := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Result.Aborted := gaHostAbort;
-          Result.ErrorName := 'Error';
-          Result.ErrorText := HostAbortMessage;
-        end;
+      3: Result.Aborted := gaMemoryLimit;
+      4: Result.Aborted := gaHostAbort;
+    end;
+    if AbortKind <> 0 then
+    begin
+      Result.ErrorName := AbortErrorName;
+      Result.ErrorText := AbortErrorMessage;
     end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    { a run that failed or aborted takes the work it left pending with it: the engine's next run is not blamed for
+      it, and an aborted script never runs again }
+    if (AbortKind <> 0) or not Result.Ok then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, RootAt(TempTop - 1));
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
@@ -1439,6 +1450,7 @@ begin
   SetModuleContentCheck(FModuleContentCheck);
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
+  Result := False;
   try
     Result := RunTestSuites(Json, Err);
     case AbortKind of
@@ -1457,7 +1469,9 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    { suites that did not finish take their pending work with them, as a failed run does }
+    if (AbortKind <> 0) or not Result then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err);
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1468,7 +1482,7 @@ end;
 
 procedure TGocciaEngine.EndTests;
 begin
-  if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+  if AbortKind <> 0 then DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined);
   LimitsDisarm;
 end;
 
@@ -1501,6 +1515,7 @@ begin
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
+  Result := False;
   try
     Result := RunBenchmarkSuites(Deterministic, Entries, Total, DurationNanoseconds, Err);
     case AbortKind of
@@ -1519,7 +1534,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if (AbortKind <> 0) or not Result then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err);
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);

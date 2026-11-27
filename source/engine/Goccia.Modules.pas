@@ -29,6 +29,15 @@ function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
 { whether the entry RunModuleFile ran is still evaluating: its top-level await waits on what nothing settled }
 function EntryEvaluationPending: Boolean;
+{ the asynchronous module evaluations started so far, a mark for the next two }
+function ModuleEvaluationMark: Int64;
+{ whether a module whose asynchronous evaluation started after Mark has not finished it }
+function ModuleEvaluationsPendingSince(Mark: Int64): Boolean;
+{ a run that failed or aborted ends the asynchronous module evaluations it started: each still waiting fails with E
+  as its [[EvaluationError]], and so do the modules waiting on it (ES2026 §16.2.1.6.1.3.5
+  AsyncModuleExecutionRejected(module, error)), so a later import gets E rather than a promise nothing will
+  settle. Their promises' reactions are queued for the run's discard (DiscardFailedRunWork) to drop. }
+procedure FailModuleEvaluationsSince(Mark: Int64; E: TValue);
 { the error a host's resolution refused a request with (its hook returning -2): the import throws it }
 procedure SetResolveError(V: TValue);
 { whether a module record of this thread is keyed Key (it was loaded, by the host or the script) }
@@ -1879,6 +1888,31 @@ function EntryEvaluationPending: Boolean;
 var R: TValue;
 begin
   Result := IsObject(EntryEvalPromise) and (PromiseStatus(EntryEvalPromise, R) = 0);
+end;
+
+function ModuleEvaluationMark: Int64;
+begin
+  Result := AsyncEvalCount;
+end;
+
+function ModuleEvaluationsPendingSince(Mark: Int64): Boolean;
+var I: Integer;
+begin
+  Result := False;
+  if Mods = nil then Exit;
+  for I := 0 to Mods.Count - 1 do
+    if (Mods[I].Status = msEvaluatingAsync) and (Mods[I].AsyncOrder > Mark) then Exit(True);
+end;
+
+procedure FailModuleEvaluationsSince(Mark: Int64; E: TValue);
+var I: Integer;
+begin
+  if Mods = nil then Exit;
+  PushRoot(E);
+  for I := 0 to Mods.Count - 1 do
+    if (Mods[I].Status = msEvaluatingAsync) and (Mods[I].AsyncOrder > Mark) then
+      AsyncRejected(Mods[I], RootAt(TempTop - 1));
+  PopRoots(1);
 end;
 
 function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;

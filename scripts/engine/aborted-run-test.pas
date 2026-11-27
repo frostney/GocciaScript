@@ -124,6 +124,133 @@ begin
   end;
 end;
 
+function NewWhileEngine: TGocciaEngine;
+var Profile: TLangProfile; ErrorText: UnicodeString;
+begin
+  Result := TGocciaEngine.Create;
+  Profile := Result.Profile;
+  Profile.WhileLoop := True;
+  Result.Profile := Profile;
+  if not Result.PrepareHost(ErrorText) then Check(False, 'host setup: ' + ErrorText);
+  Result.ResultForm := grfString;
+end;
+
+{ a run that fails with an uncaught exception takes the jobs and timers it queued with it, as an aborted run does;
+  the next run neither runs them nor is blamed for them. AHostWork: a job and a timer the host queued before the
+  run, which go with it too. }
+procedure CheckFailedRun(const ALabel, AFileName, ASource, AExpected: UnicodeString; AHostWork: Boolean = True);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := NewWhileEngine;
+  try
+    RunResult := Engine.Run('setup.js', 'globalThis.log = [];');
+    Check(RunResult.Ok, ALabel + ' setup: ' + RunResult.ErrorMessage);
+    CallbackCount := 0;
+    if AHostWork then QueueCallbacks;
+    RunResult := Engine.Run(AFileName, ASource);
+    Check(not RunResult.Ok and (RunResult.Aborted = gaNone) and (RunResult.ErrorMessage = AExpected),
+      ALabel + ' should fail with ' + AExpected + ', got ' + RunResult.ErrorMessage);
+    Check(PendingJobCount = 0, ALabel + ' should discard its queued jobs');
+    RunResult := Engine.Run('next.js', 'log.push("next"); log.join();');
+    Check(RunResult.Ok and (RunResult.ResultText = 'next'),
+      ALabel + ': the next run should run only its own code, got ' + RunResult.ResultText + RunResult.ErrorMessage);
+    Check(CallbackCount = 0, ALabel + ' should discard the host''s job and timer');
+    QueueCallbacks;
+    RunResult := Engine.Run('normal.js', '1 + 1;');
+    Check(RunResult.Ok and (CallbackCount = 2), ALabel + ' should allow new work to drain');
+  finally
+    Engine.Free;
+  end;
+end;
+
+{ a limit met inside a promise job reports its own error, as one met in the entry's code or a timer does }
+procedure CheckAbortMessage(const ALabel, AFileName, ASource: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := NewWhileEngine;
+  try
+    Engine.MaxInstructions := 100000;
+    RunResult := Engine.Run(AFileName, ASource);
+    Check(RunResult.Aborted = gaInstructionLimit, ALabel + ' should meet the instruction limit');
+    Check(RunResult.ErrorMessage = 'Error: Execution exceeded instruction limit of 100000',
+      ALabel + ' reported ' + RunResult.ErrorMessage);
+    Check((RunResult.ErrorName = 'Error') and (RunResult.ErrorText = 'Execution exceeded instruction limit of 100000'),
+      ALabel + ' reported the name ' + RunResult.ErrorName + ' and the text ' + RunResult.ErrorText);
+  finally
+    Engine.Free;
+  end;
+end;
+
+procedure WriteModule(const APath, ASource: string);
+var F: TextFile;
+begin
+  AssignFile(F, APath);
+  Rewrite(F);
+  Write(F, ASource);
+  CloseFile(F);
+end;
+
+{ a module whose evaluation a failed or aborted run started records the run's error, as a module that threw does:
+  a later import rejects with it, whether the module was synchronous or waiting after a top-level await, and its
+  code does not run again }
+procedure CheckModuleRecords(const ADir: string);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+
+  procedure CheckImport(const AModule, AFirst, AExpected: string; ALimit: Boolean);
+  var LabelText: string;
+  begin
+    LabelText := 'module ' + AModule;
+    if ALimit then Engine.MaxInstructions := 100000;
+    RunResult := Engine.Run(ADir + 'first-' + AModule, UnicodeString(AFirst));
+    Check(not RunResult.Ok, LabelText + ': the first run should fail');
+    Engine.MaxInstructions := 0;
+    RunResult := Engine.Run(ADir + 'again-' + AModule,
+      UnicodeString('try { await import("./' + AModule + '"); "imported" } catch (e) { String(e) + " runs=" + runs }'));
+    Check(RunResult.Ok and (RunResult.ResultText = UnicodeString(AExpected + ' runs=1')),
+      LabelText + ': a later import gave ' + RunResult.ResultText + RunResult.ErrorMessage);
+  end;
+
+const
+  LIMIT = 'Error: Execution exceeded instruction limit of 100000';
+begin
+  WriteModule(ADir + 'sync-loop.mjs', 'globalThis.runs = (globalThis.runs ?? 0) + 1; while (true) {}');
+  WriteModule(ADir + 'await-loop.mjs',
+    'globalThis.runs = (globalThis.runs ?? 0) + 1; await Promise.resolve(); while (true) {}');
+  WriteModule(ADir + 'await-timer.mjs',
+    'globalThis.runs = (globalThis.runs ?? 0) + 1; await new Promise((r) => setTimeout(r, 0));' +
+    'globalThis.done = true;');
+  Engine := NewWhileEngine;
+  try
+    CheckImport('sync-loop.mjs', 'import "./sync-loop.mjs";', LIMIT, True);
+  finally
+    Engine.Free;
+  end;
+  Engine := NewWhileEngine;
+  try
+    CheckImport('await-loop.mjs', 'import "./await-loop.mjs";', LIMIT, True);
+  finally
+    Engine.Free;
+  end;
+  { a run that fails while a module it imported waits for a timer: the timer goes with the run. The module starts
+    in the import's job, before the run's own timer fails it. }
+  Engine := NewWhileEngine;
+  try
+    CheckImport('await-timer.mjs', 'import("./await-timer.mjs");' +
+      'setTimeout(() => queueMicrotask(() => { throw new Error("left by the failed run"); }), 0);',
+      'Error: left by the failed run', False);
+    RunResult := Engine.Run('done.js', 'globalThis.done === undefined;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true'), 'the failed run''s module should not finish later');
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure CheckSyncWaitTimeout;
 var
   Engine: TGocciaEngine;
@@ -318,6 +445,20 @@ begin
     CheckSyncWaitTimeout;
     CheckAsyncWaitTimeout;
     CheckFinalizationAbort;
+    CheckFailedRun('a script that throws', 'thrown.js',
+      'Promise.resolve().then(() => log.push("job")); setTimeout(() => log.push("timer"), 0);' +
+      'throw new Error("boom");', 'Error: boom');
+    CheckFailedRun('a module that throws', 'thrown.mjs',
+      'Promise.resolve().then(() => log.push("job")); setTimeout(() => log.push("timer"), 0);' +
+      'throw new Error("boom");', 'Error: boom');
+    CheckFailedRun('a microtask that throws', 'microtask-throws.js',
+      'queueMicrotask(() => { Promise.resolve().then(() => log.push("job")); setTimeout(() => log.push("timer"), 0);' +
+      'throw new Error("from a microtask"); });', 'Error: from a microtask', False);
+    CheckAbortMessage('a limit met in the entry', 'entry.js', 'while (true) {}');
+    CheckAbortMessage('a limit met in a timer', 'timer.js', 'setTimeout(() => { while (true) {} }, 0);');
+    CheckAbortMessage('a limit met in a promise job', 'job.js', 'Promise.resolve().then(() => { while (true) {} });');
+    CheckAbortMessage('a limit met after a top-level await', 'tla.mjs', 'await Promise.resolve(); while (true) {}');
+    CheckModuleRecords(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
     if ParamCount = 1 then
     begin
       CheckFetchAbort(ParamStr(1));
