@@ -212,6 +212,9 @@ const
   RS = 7; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4; rDNS = 5; rCap = 6;
 
 threadvar
+  { A Script's imports form their own module for each entry. A REPL can reuse the same entry name. }
+  ScriptImportRuns: Integer;
+  ScriptImportKey: UnicodeString;
   Mods: TList<TModRec>;
   { (SetEntryModuleMark) and, while a host-owned module's import loads, True: the records it makes are the host's }
   EntryModuleMark: Integer;
@@ -1301,9 +1304,22 @@ begin
   Result := False;
 end;
 
-function NoSourceFail(L: TList<TModRec>): Boolean;
+procedure ThrowLinkSyntaxError(const AModule: TModRec; const AEntry: TModEntry; const AMessage: UnicodeString);
+var Path, Location: UnicodeString;
 begin
-  ThrowError('SyntaxError', 'A source text module has no source phase representation');
+  ThrowError('SyntaxError', AMessage);
+  if AEntry.SourceLine = 0 then Exit;
+  Path := AModule.Address.Path;
+  if (ScriptImportKey <> '') and (Path = ScriptImportKey) then
+    SetLength(Path, Pos(ScriptImportsSuffix, Path) - 1);
+  Location := Path + ':' + IntToStr(AEntry.SourceLine) + ':' + IntToStr(AEntry.SourceColumn);
+  SetEngineErrorStack(Pending, 'SyntaxError: ' + AMessage + #10'    at <module link> (' + Location + ')',
+    ProfileStackTraces);
+end;
+
+function NoSourceFail(L: TList<TModRec>; const AModule: TModRec; const AEntry: TModEntry): Boolean;
+begin
+  ThrowLinkSyntaxError(AModule, AEntry, 'A source text module has no source phase representation');
   Result := LinkFail(L);
 end;
 
@@ -1354,13 +1370,14 @@ begin
           (M.Info.IndirectExports[I].ImportName = ModDeferNamespace) then Continue;
         if M.Info.IndirectExports[I].ImportName = ModSource then
         begin
-          if not HasModuleSource(DepOf(M, M.Info.IndirectExports[I].Request)) then Exit(NoSourceFail(L));
+          if not HasModuleSource(DepOf(M, M.Info.IndirectExports[I].Request)) then
+            Exit(NoSourceFail(L, M, M.Info.IndirectExports[I]));
           Continue;
         end;
         R := Resolve(DepOf(M, M.Info.IndirectExports[I].Request), M.Info.IndirectExports[I].ImportName);
         if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
         begin
-          ThrowError('SyntaxError', MissingExportMessage(M.Info.IndirectExports[I].Request,
+          ThrowLinkSyntaxError(M, M.Info.IndirectExports[I], MissingExportMessage(M.Info.IndirectExports[I].Request,
             M.Info.IndirectExports[I].ImportName));
           Exit(LinkFail(L));
         end;
@@ -1373,20 +1390,22 @@ begin
         if M.Info.Imports[I].ImportName = ModSource then
         begin
           { GetModuleSource of the module: a SyntaxError when it has no source representation }
-          if not HasModuleSource(D) then Exit(NoSourceFail(L));
+          if not HasModuleSource(D) then Exit(NoSourceFail(L, M, M.Info.Imports[I]));
           R.Kind := rkSource; R.Module := D; R.Slot := -1;
         end
         else
         begin
           R := Resolve(D, M.Info.Imports[I].ImportName);
-          if (R.Kind = rkSource) and not HasModuleSource(R.Module) then Exit(NoSourceFail(L));
+          if (R.Kind = rkSource) and not HasModuleSource(R.Module) then Exit(NoSourceFail(L, M, M.Info.Imports[I]));
           if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
           begin
             if R.Kind = rkAmbiguous then
-              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName) +
+              ThrowLinkSyntaxError(M, M.Info.Imports[I],
+                MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName) +
                 ' (its star exports provide conflicting bindings for it)')
             else
-              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
+              ThrowLinkSyntaxError(M, M.Info.Imports[I],
+                MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
             Exit(LinkFail(L));
           end;
         end;
@@ -1819,12 +1838,6 @@ begin
     end;
 end;
 
-threadvar
-  { the runs of this engine's Script entries with imports, and the companion module's key of the latest: each run's
-    imports are a module of their own (a REPL runs one input after another under one name) }
-  ScriptImportRuns: Integer;
-  ScriptImportKey: UnicodeString;
-
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
 begin
@@ -2009,8 +2022,9 @@ begin
     if IsObject(R) and (I <= High(ImportStacks)) and (ImportStacks[I] <> '') then
     begin
       PushRoot(R);
-      if not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
-         (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0) then
+      if (not ErrorStackProvenance(RootAt(TempTop - 1), Text) or (Pos(#10'    at ', Text) = 0)) and
+         (not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
+          (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0)) then
       begin
         Pending := VUndefined;
         if IsString(St) then Text := StrToUnicode(StrOf(St)) else Text := 'Error';

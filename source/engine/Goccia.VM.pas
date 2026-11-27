@@ -395,7 +395,7 @@ procedure AttachStack(E: TValue);
 function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
 { an engine-made error's stack replaced by the engine (an import() failure takes its call's frames): the
   property and the provenance both; E rooted by the caller }
-procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString);
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; AExposeToGuest: Boolean = True);
 { the frames running now as an error's stack lists them (the lines after its first), for an error made later on
   their behalf (a dynamic import's failure, made in a job) }
 function StackFramesNow: UnicodeString;
@@ -2331,11 +2331,11 @@ begin
   PopRoots(2);
 end;
 
-procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString);
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; AExposeToGuest: Boolean);
 begin
   PushRoot(E);
   PushRoot(StrFromUnicode(Text));
-  DefineOwn(RootAt(TempTop - 2), AtomStack, RootAt(TempTop - 1), pfHidden);
+  if AExposeToGuest then DefineOwn(RootAt(TempTop - 2), AtomStack, RootAt(TempTop - 1), pfHidden);
   if ObjOf(RootAt(TempTop - 2))^.OKind = okError then
   begin
     ObjOf(RootAt(TempTop - 2))^.Aux2 := RootAt(TempTop - 1);

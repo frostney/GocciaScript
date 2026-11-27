@@ -8,7 +8,7 @@
 - **Register bytecode** — 64-bit instructions (8-bit opcode, 16-bit A and B, 24-bit C), one value stack per thread, a frame's registers holding `this`, parameters, locals and temporaries; captured variables are Lua-style upvalues
 - **Three ways to run a function** — the interpreter (`Execute`, with `FastLoop` for the hot instructions), the baseline JIT (`Goccia.Jit.inc`) and the optimizing tier (`Goccia.Opt.inc`); the two compiled tiers exist only on Linux x86-64
 - **Call bounds** — at most 200,000 nested calls below the entry's frame unless `--max-stack` sets fewer; native re-entry is bounded by the thread's native stack; proper tail calls reuse a frame past a depth floor ([ADR 0187](adr/0187-g2-reuses-a-frame-for-a-tail-call-only-past-a-depth-floor.md))
-- **Binary format** — `.gbc` files (`Goccia.Artifact`) with `GBC\0` magic, format version 200, an instruction-set fingerprint and a verifier (`Goccia.ArtifactVerify.inc`); see [Precompiled bytecode modules](bytecode-loading.md)
+- **Binary format** — `.gbc` files (`Goccia.Artifact`) with `GBC\0` magic, format version 201, an instruction-set fingerprint and a verifier (`Goccia.ArtifactVerify.inc`); see [Precompiled bytecode modules](bytecode-loading.md)
 
 ## Overview
 

@@ -31,7 +31,7 @@ uses
   SysUtils, Classes, Goccia.Core, Goccia.Instructions, Goccia.Compiler, Goccia.Bytecode.Profile;
 
 const
-  GOCCIA_GBC_VERSION = 200;
+  GOCCIA_GBC_VERSION = 201;
   GOCCIA_GBC_RUNTIME_TAG = 'goccia-engine';
   { the old engine's reader's bounds (Goccia.Bytecode.Binary) }
   GOCCIA_GBC_MAX_FILE_BYTES = 64 * 1024 * 1024;
@@ -329,6 +329,8 @@ procedure WriteModuleInfo(W: TWriter; Info: TModuleInfo);
       W.Text(E[I].Request);
       W.Text(E[I].ImportName);
       W.I32(E[I].Slot);
+      W.I32(E[I].SourceLine);
+      W.I32(E[I].SourceColumn);
     end;
   end;
 var I: Integer;
@@ -646,6 +648,8 @@ function ReadModuleInfo(var R: TReader): TModuleInfo;
       E[I].Request := R.Text;
       E[I].ImportName := R.Text;
       E[I].Slot := R.I32;
+      E[I].SourceLine := R.I32;
+      E[I].SourceColumn := R.I32;
     end;
   end;
 var I, N: Integer; B: Byte;
@@ -662,11 +666,11 @@ begin
       Result.RequestLines[I] := R.I32;
       Result.RequestColumns[I] := R.I32;
     end;
-    SetLength(Result.Imports, R.Count(20));
+    SetLength(Result.Imports, R.Count(28));
     Entries(Result.Imports);
-    SetLength(Result.LocalExports, R.Count(20));
+    SetLength(Result.LocalExports, R.Count(28));
     Entries(Result.LocalExports);
-    SetLength(Result.IndirectExports, R.Count(20));
+    SetLength(Result.IndirectExports, R.Count(28));
     Entries(Result.IndirectExports);
     SetLength(Result.StarExports, R.Count(4));
     for I := 0 to High(Result.StarExports) do Result.StarExports[I] := R.Text;
@@ -759,17 +763,24 @@ begin
 end;
 
 procedure VerifyModuleInfo(const A: TGocciaArtifact);
-var I: Integer;
-  procedure Slot(S: Integer);
+  procedure Entries(const AEntries: array of TModEntry);
+  var Entry: TModEntry;
   begin
-    if (S < -1) or (S >= A.Info.SlotCount) then Reject(A.Top, -1, Format('module cell %d outside 0..%d', [S, A.Info.SlotCount - 1]));
+    for Entry in AEntries do
+    begin
+      if (Entry.Slot < -1) or (Entry.Slot >= A.Info.SlotCount) then
+        Reject(A.Top, -1, Format('module cell %d outside 0..%d', [Entry.Slot, A.Info.SlotCount - 1]));
+      if (Entry.SourceLine < 0) or (Entry.SourceColumn < 0) or
+         ((Entry.SourceLine = 0) <> (Entry.SourceColumn = 0)) then
+        Reject(A.Top, -1, 'invalid module declaration location');
+    end;
   end;
 begin
   if A.Info = nil then Exit;
   if (A.Info.SlotCount < 0) or (A.Info.SlotCount > MAX_REGS) then Reject(A.Top, -1, 'module cell count');
-  for I := 0 to High(A.Info.Imports) do Slot(A.Info.Imports[I].Slot);
-  for I := 0 to High(A.Info.LocalExports) do Slot(A.Info.LocalExports[I].Slot);
-  for I := 0 to High(A.Info.IndirectExports) do Slot(A.Info.IndirectExports[I].Slot);
+  Entries(A.Info.Imports);
+  Entries(A.Info.LocalExports);
+  Entries(A.Info.IndirectExports);
 end;
 
 var

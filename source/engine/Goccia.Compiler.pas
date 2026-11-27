@@ -49,6 +49,7 @@ type
   TModEntry = record
     ExportName, LocalName, Request, ImportName: UnicodeString;
     Slot: Integer;
+    SourceLine, SourceColumn: Integer;
   end;
   { 16.2.1.6 the parts of a Source Text Module Record the compiler finds (goal 3): the cell table holds one slot
     per import (0 .. imports - 1) and one per exported local binding }
@@ -9040,6 +9041,7 @@ var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList
     with MI.Imports[High(MI.Imports)] do
     begin
       LocalName := Local; Request := Req; ImportName := Imported; ExportName := ''; Slot := C.ModImportNames.Count - 1;
+      SourceLine := N.Line; SourceColumn := N.Column;
     end;
   end;
   procedure AddExport(const Exp, Local: UnicodeString);
@@ -9057,6 +9059,7 @@ var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList
     with MI.IndirectExports[High(MI.IndirectExports)] do
     begin
       ExportName := Exp; Request := Req; ImportName := Imported; LocalName := ''; Slot := -1;
+      SourceLine := N.Line; SourceColumn := N.Column;
     end;
   end;
 begin
@@ -9167,10 +9170,12 @@ begin
         begin
           ExportName := ExpNames[I]; Request := MI.Imports[K].Request; ImportName := MI.Imports[K].ImportName;
           LocalName := ''; Slot := -1;
+          SourceLine := MI.Imports[K].SourceLine; SourceColumn := MI.Imports[K].SourceColumn;
         end;
         Continue;
       end;
-      E.ExportName := ExpNames[I]; E.LocalName := ExpLocals[I]; E.Request := ''; E.ImportName := '';
+      E := Default(TModEntry);
+      E.ExportName := ExpNames[I]; E.LocalName := ExpLocals[I];
       if K >= 0 then E.Slot := K
       else
       begin
