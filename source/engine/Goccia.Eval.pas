@@ -14,7 +14,7 @@ uses
 { 16.2.1.7.1 ParseModule + compile (goal 3): the template, and the module info (the caller owns it); Err /
   ErrName on failure }
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
-  var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
+  var Info: TModuleInfo; var Err, ErrName: UnicodeString; ScriptCompanion: Boolean = False): Boolean;
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer = 0): Boolean;
 procedure InitEval;
@@ -63,7 +63,7 @@ threadvar
 implementation
 
 uses
-  Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.Scan,
+  Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.OriginMap, Goccia.Scan,
   Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
 
 function ParseFailureName(E: Exception): UnicodeString;
@@ -235,9 +235,31 @@ begin
   if Module then Result := HostPipelineOptions(stModule) else Result := HostPipelineOptions(stScript);
 end;
 
+type PModuleDeclarationLocations = ^TModuleDeclarationLocations;
+
+{ The JSX origin map identifies unchanged ranges by offset, including text after
+  an expansion on the same line. The diagnostic source map is line-oriented. }
+procedure MapModuleDeclarationLocations(Prog: TGocciaProgram; Origin: TGocciaOriginMap;
+  const Source: string; out Locations: TModuleDeclarationLocations);
+var Coordinates: IGocciaSourceCoordinates; I, Offset: Integer; N: TGocciaStatement; Span: TGocciaSourceSpan;
+begin
+  if Origin = nil then Exit;
+  Coordinates := TGocciaSourceCoordinates.Create(Source);
+  SetLength(Locations, Prog.Body.Count);
+  for I := 0 to Prog.Body.Count - 1 do
+  begin
+    N := Prog.Body[I];
+    if not ((N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration)) then Continue;
+    Span := N.Span;
+    if (Span.Length = 0) or not Origin.MapVerbatim(Span.StartOffset, Span.EndOffset, Offset) then Continue;
+    Coordinates.PositionAtOffset(Offset, Locations[I].Line, Locations[I].Column);
+    Coordinates.PositionAtOffset(Offset + Span.Length - 1, Locations[I].EndLine, Locations[I].EndColumn);
+  end;
+end;
+
 { Source parsed by the CLIs' front end; Settled the goal it was parsed with }
 function HostParse(const Source, FileName: UnicodeString; SourceType: TGocciaSourceType;
-  out Settled: TGocciaSourceType): TGocciaProgram;
+  out Settled: TGocciaSourceType; Locations: PModuleDeclarationLocations = nil): TGocciaProgram;
 var Lines: TStringList; R: TGocciaSourcePipelineResult; I: Integer;
 begin
   EntryWarningCount := 0;
@@ -258,6 +280,8 @@ begin
         EntryWarningColumns[I] := R.Warnings[I].Column;
       end;
       Settled := R.SourceType;
+      if (Locations <> nil) and (R.OriginMap <> nil) then
+        MapModuleDeclarationLocations(R.ProgramNode, R.OriginMap, StringListToSourceText(Lines), Locations^);
       Result := R.TakeProgramNode;
     finally
       R.Free;
@@ -345,90 +369,37 @@ begin
   end;
 end;
 
-{ S as a JavaScript string literal }
-function QuoteJS(const S: UnicodeString): UnicodeString;
-var I: Integer;
-begin
-  Result := '"';
-  for I := 1 to Length(S) do
-    case S[I] of
-      '"', '\': Result := Result + '\' + S[I];
-      #10: Result := Result + '\n';
-      #13: Result := Result + '\r';
-      #$2028: Result := Result + ' ';
-      #$2029: Result := Result + ' ';
-    else
-      Result := Result + S[I];
-    end;
-  Result := Result + '"';
-end;
-
-{ the import declarations and re-exports of a Script's top level taken out of it, and written as the source of a
-  module of only them (ScriptImportSource), each where it stood (a link error is located at its declaration); the
-  nodes taken out are freed }
-function ScriptImportsAsModule(Prog: TGocciaProgram): UnicodeString;
-var I, Line, Col, AtLine: Integer; N: TGocciaStatement; Decl, From: UnicodeString; Pair: TStringStringMap.TKeyValuePair;
-  Found: Boolean;
+{ Keep each original declaration in its place in the companion module. The parser's span includes its
+  full text, so a combined import and two imports on the same line keep their original coordinates. }
+function ScriptImportsAsModule(Prog: TGocciaProgram; const Locations: TModuleDeclarationLocations): UnicodeString;
+var I, AtLine, AtColumn: Integer; N: TGocciaStatement; Location: TModuleDeclarationLocation;
 begin
   Result := '';
   AtLine := 1;
-  Found := False;
+  AtColumn := 1;
   for I := 0 to Prog.Body.Count - 1 do
   begin
     N := Prog.Body[I];
-    if N is TGocciaImportDeclaration then
-      with TGocciaImportDeclaration(N) do
-      begin
-        From := QuoteJS(ModulePath);
-        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
-        Decl := '';
-        if Phase = icpSource then
-        begin
-          for Pair in Imports do Decl := Decl + 'import source ' + UnicodeString(Pair.Key) + ' from ' + From + ';';
-        end
-        else if Phase = icpDefer then
-          Decl := 'import defer * as ' + NamespaceName + ' from ' + From + ';'
-        else
-        begin
-          if NamespaceName <> '' then Decl := 'import * as ' + NamespaceName + ' from ' + From + ';';
-          if Imports.Count > 0 then
-          begin
-            Decl := Decl + 'import { ';
-            for Pair in Imports do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + UnicodeString(Pair.Key) + ', ';
-            Decl := Decl + '} from ' + From + ';';
-          end;
-          if Decl = '' then Decl := 'import ' + From + ';';
-        end;
-      end
-    else if N is TGocciaReExportDeclaration then
-      with TGocciaReExportDeclaration(N) do
-      begin
-        From := QuoteJS(ModulePath);
-        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
-        if IsStarExport and (NamespaceName = '') then Decl := 'export * from ' + From + ';'
-        else if IsStarExport then Decl := 'export * as ' + QuoteJS(NamespaceName) + ' from ' + From + ';'
-        else
-        begin
-          Decl := 'export { ';
-          for Pair in ExportsTable do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + QuoteJS(Pair.Key) + ', ';
-          Decl := Decl + '} from ' + From + ';';
-        end;
-      end
-    else Continue;
-    Line := N.Line;
-    Col := N.Column;
-    if Line < AtLine then Line := AtLine;
-    while AtLine < Line do
+    if not ((N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration)) then Continue;
+    if (I < Length(Locations)) and (Locations[I].Line > 0) then
+      Location := Locations[I]
+    else
     begin
-      Result := Result + #10;
-      Inc(AtLine);
+      Location.Line := N.Line;
+      Location.Column := N.Column;
+      Location.EndLine := N.Span.EndLine;
+      Location.EndColumn := N.Span.EndColumn;
     end;
-    if Col > 1 then Result := Result + StringOfChar(' ', Col - 1);
-    Result := Result + Decl + #10;
-    Inc(AtLine);
-    Found := True;
+    if Location.Line > AtLine then
+    begin
+      Result := Result + StringOfChar(#10, Location.Line - AtLine);
+      AtColumn := 1;
+    end;
+    if Location.Column > AtColumn then Result := Result + StringOfChar(' ', Location.Column - AtColumn);
+    Result := Result + N.Span.Text;
+    AtLine := Location.EndLine;
+    AtColumn := Location.EndColumn + 1;
   end;
-  if not Found then Exit;
   for I := Prog.Body.Count - 1 downto 0 do
     if (Prog.Body[I] is TGocciaImportDeclaration) or (Prog.Body[I] is TGocciaReExportDeclaration) then
       Prog.Body.Delete(I);
@@ -436,7 +407,7 @@ end;
 
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean): Boolean;
-var Prog: TGocciaProgram; Goal: TGocciaSourceType; NoInfo: TModuleInfo;
+var Prog: TGocciaProgram; Goal: TGocciaSourceType; NoInfo: TModuleInfo; Locations: TModuleDeclarationLocations;
 begin
   Result := False;
   IsModule := False;
@@ -450,7 +421,7 @@ begin
       else
         Goal := stDetect;
       end;
-      Prog := HostParse(Source, FileName, Goal, Goal);
+      Prog := HostParse(Source, FileName, Goal, Goal, @Locations);
       if Goal = stModule then
       begin
         IsModule := True;
@@ -460,7 +431,7 @@ begin
         type): each declares its binding as it would without export, and an export list declares nothing }
       if SourceType = 1 then
       begin
-        ScriptImportSource := ScriptImportsAsModule(Prog);
+        ScriptImportSource := ScriptImportsAsModule(Prog, Locations);
         ScriptExportsAsDeclarations(Prog);
       end;
       { detection reads a top-level for await as Script; it is top-level await, so the entry is a Module }
@@ -845,19 +816,31 @@ begin
 end;
 
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
-  var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
+  var Info: TModuleInfo; var Err, ErrName: UnicodeString; ScriptCompanion: Boolean): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
+  Locations: TModuleDeclarationLocations; N: TGocciaStatement;
 begin
   Info := nil;
   ExcludeHostSource(FileName);
-  if LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
+  if not ScriptCompanion and LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
   Result := False;
   L := nil; P := nil; Prog := nil;
   try
     try
-      if ActiveProfile.Restricted then
+      if ScriptCompanion then
       begin
-        Prog := HostParse(Source, FileName, stModule, Settled);
+        { Parse the explicit Script's declarations with its original goal. The parser's binding map
+          already coalesced repeated specifiers in the same import. The module compiler still checks
+          duplicate names across declarations. }
+        Prog := HostParse(Source, FileName, stScript, Settled, @Locations);
+        for N in Prog.Body do
+          if N is TGocciaImportDeclaration then TGocciaImportDeclaration(N).DuplicateBinding := ''
+          else if not (N is TGocciaReExportDeclaration) then
+            raise EEarlySyntaxError.Create('Expected a Script import or re-export declaration');
+      end
+      else if ActiveProfile.Restricted then
+      begin
+        Prog := HostParse(Source, FileName, stModule, Settled, @Locations);
         ReportModuleWarnings(FileName);
       end
       else
@@ -870,7 +853,7 @@ begin
         L.Tokens.Clear;
       end;
       CompilingModuleId := Id;
-      T := CompileProgram(Prog, FileName, ModuleReturnLast, 3);
+      T := CompileProgram(Prog, FileName, ModuleReturnLast, 3, Locations);
       Info := LastModuleInfo;
       LastModuleInfo := nil;
       if RoundTripOn then RoundTrip(T, Info, FileName, Id);

@@ -40,6 +40,7 @@ function ModuleRecordExists(const Key: UnicodeString): Boolean;
   loop when a top-level await waits on more. Finish, once it fulfilled, binds each name it imports as a const global
   lexical binding on the binding it imports, for the Script to run against; False with the error pending. }
 const ScriptImportsSuffix = '#script-imports';
+
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
@@ -170,6 +171,8 @@ type
     Path: UnicodeString;      { resolver spelling for diagnostics, coverage and import.meta }
     RealPath: UnicodeString;  { canonical load address and relative import base of a host file }
     ModuleType: UnicodeString;
+    { A Script's privately compiled imports are never a normal file or host module. }
+    ScriptOrigin: UnicodeString;
     VirtualKey: Boolean;
     function FilePath: UnicodeString;
   end;
@@ -217,6 +220,9 @@ const
   RS = 7; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4; rDNS = 5; rCap = 6;
 
 threadvar
+  { A Script's imports form their own module for each entry. A REPL can reuse the same entry name. }
+  ScriptImportRuns: Integer;
+  ScriptImportsRecord: TModRec;
   Mods: TList<TModRec>;
   { (SetEntryModuleMark) and, while a host-owned module's import loads, True: the records it makes are the host's }
   EntryModuleMark: Integer;
@@ -241,7 +247,9 @@ threadvar
 
 function TModuleAddress.FilePath: UnicodeString;
 begin
-  if RealPath <> '' then Result := RealPath else Result := Path;
+  if ScriptOrigin <> '' then Result := ScriptOrigin
+  else if RealPath <> '' then Result := RealPath
+  else Result := Path;
 end;
 
 constructor TModRec.Create;
@@ -663,7 +671,7 @@ begin
   for M in Mods do
   begin
     if M.Superseded or (M.Realm <> CurRealm) or (M.Address.ModuleType <> Address.ModuleType) or
-       (M.Address.VirtualKey <> Address.VirtualKey) then Continue;
+       (M.Address.VirtualKey <> Address.VirtualKey) or (M.Address.ScriptOrigin <> Address.ScriptOrigin) then Continue;
     if Address.RealPath = '' then
     begin
       if (M.Address.RealPath = '') and (M.Address.Path = Address.Path) then Exit(M);
@@ -888,7 +896,14 @@ begin
   ProvidedArtifactBytes := Bytes;
 end;
 
-function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
+function LoadModule(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString = ''): Boolean; forward;
+
+function DiagnosticSource(M: TModRec): UnicodeString;
+begin
+  Result := M.Address.ScriptOrigin;
+  if Result = '' then Result := M.Address.Path;
+end;
 
 function NativeModuleHasNoSource(const Address: TModuleAddress): Boolean;
 var Hook: THostModuleKeyHook;
@@ -903,7 +918,7 @@ const NoSourcePhaseRepresentation = 'A source text module has no source phase re
 function LinkRequests(M: TModRec): Boolean;
 var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec; SourceOnly: Boolean;
 begin
-  Path := M.Address.Path;
+  Path := DiagnosticSource(M);
   M.RequestsState := 1;
   Result := False;
   SetLength(M.Deps, Length(M.Info.Requests));
@@ -1037,7 +1052,8 @@ begin
   Result := LoadArtifactRecord(Address, Gbc.Path, B, M);
 end;
 
-function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean;
+function LoadModule(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString): Boolean;
 var Path, Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
   Modified: TDateTime;
 begin
@@ -1059,7 +1075,8 @@ begin
      SameText(ExtractFileExt(string(Path)), '.gbc') then
     Exit(LoadArtifactModule(Address, M));
   M := FindModule(Address);
-  if (M = nil) and (Address.ModuleType = '') and (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
+  if (M = nil) and (Address.ScriptOrigin = '') and (Address.ModuleType = '') and
+    (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
     Exit(LoadArtifactRecord(Address, Path, ProvidedArtifactBytes, M));
   { a settled record whose file changed since it was read loads again (ADR 0139: a newer version, or a retry of
     one that failed): what imported it keeps it, this request and later ones get the new one }
@@ -1094,22 +1111,30 @@ begin
     M.Status := msEvaluated;
     Exit(True);
   end;
-  Src := '';
-  I := 0;
-  if Assigned(HostModules) then
-    if Address.VirtualKey then I := CallHostModules(Path, '', False, V)
-    else I := CallHostModules(Path, Address.FilePath, False, V);
-  case I of
-    1: Exit(MakeHostModule(Address, V, M));
-    2: Src := StrToUnicode(StrOf(V));
-    -1: Exit(False);
+  if Address.ScriptOrigin <> '' then
+  begin
+    Src := CompanionSource;
+    FromFile := False;
+  end
+  else
+  begin
+    Src := '';
+    I := 0;
+    if Assigned(HostModules) then
+      if Address.VirtualKey then I := CallHostModules(Path, '', False, V)
+      else I := CallHostModules(Path, Address.FilePath, False, V);
+    case I of
+      1: Exit(MakeHostModule(Address, V, M));
+      2: Src := StrToUnicode(StrOf(V));
+      -1: Exit(False);
+    end;
+    if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
+    { a file's modification time, taken before it is read: a change while it loads makes the next request load it
+      again }
+    Prov := ProvidedPath;
+    FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Address.FilePath, Modified);
+    if (I <> 2) and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Path));
   end;
-  if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
-  { a file's modification time, taken before it is read: a change while it loads makes the next request load it
-    again }
-  Prov := ProvidedPath;
-  FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Address.FilePath, Modified);
-  if (I <> 2) and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Path));
   M := TModRec.Create;
   M.Address := Address;
   M.Id := Mods.Count;
@@ -1121,7 +1146,7 @@ begin
   SetRoot(M, rError, VUndefined);
   ModuleReturnLast := IsCompletionEntry(M);
   try
-    Compiled := ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName);
+    Compiled := ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName, Address.ScriptOrigin <> '');
   finally
     ModuleReturnLast := False;
   end;
@@ -1130,7 +1155,7 @@ begin
     M.Errored := True;
     if (ParseFailPath = '') and (ParseErrorLine > 0) then
     begin
-      ParseFailPath := Path;
+      ParseFailPath := DiagnosticSource(M);
       ParseFailName := ErrName;
       ParseFailLine := ParseErrorLine;
       ParseFailColumn := ParseErrorColumn;
@@ -1361,9 +1386,20 @@ begin
   Result := False;
 end;
 
-function NoSourceFail(L: TList<TModRec>): Boolean;
+procedure ThrowLinkSyntaxError(const AModule: TModRec; const AEntry: TModEntry; const AMessage: UnicodeString);
+var Path, Location: UnicodeString;
 begin
-  ThrowError('SyntaxError', NoSourcePhaseRepresentation);
+  ThrowError('SyntaxError', AMessage);
+  if AEntry.SourceLine = 0 then Exit;
+  Path := DiagnosticSource(AModule);
+  Location := Path + ':' + IntToStr(AEntry.SourceLine) + ':' + IntToStr(AEntry.SourceColumn);
+  SetEngineErrorStack(Pending, 'SyntaxError: ' + AMessage + #10'    at <module link> (' + Location + ')',
+    ProfileStackTraces, Path, AEntry.SourceLine, AEntry.SourceColumn);
+end;
+
+function NoSourceFail(L: TList<TModRec>; const AModule: TModRec; const AEntry: TModEntry): Boolean;
+begin
+  ThrowLinkSyntaxError(AModule, AEntry, NoSourcePhaseRepresentation);
   Result := LinkFail(L);
 end;
 
@@ -1414,13 +1450,14 @@ begin
           (M.Info.IndirectExports[I].ImportName = ModDeferNamespace) then Continue;
         if M.Info.IndirectExports[I].ImportName = ModSource then
         begin
-          if not HasModuleSource(DepOf(M, M.Info.IndirectExports[I].Request)) then Exit(NoSourceFail(L));
+          if not HasModuleSource(DepOf(M, M.Info.IndirectExports[I].Request)) then
+            Exit(NoSourceFail(L, M, M.Info.IndirectExports[I]));
           Continue;
         end;
         R := Resolve(DepOf(M, M.Info.IndirectExports[I].Request), M.Info.IndirectExports[I].ImportName);
         if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
         begin
-          ThrowError('SyntaxError', MissingExportMessage(M.Info.IndirectExports[I].Request,
+          ThrowLinkSyntaxError(M, M.Info.IndirectExports[I], MissingExportMessage(M.Info.IndirectExports[I].Request,
             M.Info.IndirectExports[I].ImportName));
           Exit(LinkFail(L));
         end;
@@ -1433,20 +1470,22 @@ begin
         if M.Info.Imports[I].ImportName = ModSource then
         begin
           { GetModuleSource of the module: a SyntaxError when it has no source representation }
-          if not HasModuleSource(D) then Exit(NoSourceFail(L));
+          if not HasModuleSource(D) then Exit(NoSourceFail(L, M, M.Info.Imports[I]));
           R.Kind := rkSource; R.Module := D; R.Slot := -1;
         end
         else
         begin
           R := Resolve(D, M.Info.Imports[I].ImportName);
-          if (R.Kind = rkSource) and not HasModuleSource(R.Module) then Exit(NoSourceFail(L));
+          if (R.Kind = rkSource) and not HasModuleSource(R.Module) then Exit(NoSourceFail(L, M, M.Info.Imports[I]));
           if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
           begin
             if R.Kind = rkAmbiguous then
-              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName) +
+              ThrowLinkSyntaxError(M, M.Info.Imports[I],
+                MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName) +
                 ' (its star exports provide conflicting bindings for it)')
             else
-              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
+              ThrowLinkSyntaxError(M, M.Info.Imports[I],
+                MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
             Exit(LinkFail(L));
           end;
         end;
@@ -1812,9 +1851,10 @@ begin
   end;
 end;
 
-function LoadAndLink(const Address: TModuleAddress; var M: TModRec): Boolean;
+function LoadAndLink(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString = ''): Boolean;
 begin
-  Result := LoadModule(Address, M);
+  Result := LoadModule(Address, M, CompanionSource);
   if Result and (M.Status = msNew) then Result := Link(M);
 end;
 
@@ -1849,8 +1889,8 @@ var M: TModRec;
 begin
   if Mods <> nil then
     for M in Mods do
-      if (M.Address.Path = Path) and (M.Address.ModuleType = '') and (M.Realm = CurRealm) and
-         not M.Superseded then Exit(M);
+      if (M.Address.Path = Path) and (M.Address.ModuleType = '') and (M.Address.ScriptOrigin = '') and
+         (M.Realm = CurRealm) and not M.Superseded then Exit(M);
   Result := nil;
 end;
 
@@ -1879,31 +1919,18 @@ begin
     end;
 end;
 
-threadvar
-  { the runs of this engine's Script entries with imports, and the companion module's key of the latest: each run's
-    imports are a module of their own (a REPL runs one input after another under one name) }
-  ScriptImportRuns: Integer;
-  ScriptImportKey: UnicodeString;
-
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
-var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
+var M: TModRec; R: TValue; Address: TModuleAddress;
 begin
   Evaluation := VUndefined;
+  ScriptImportsRecord := nil;
   Inc(ScriptImportRuns);
-  Key := EntryPath + ScriptImportsSuffix;
-  if ScriptImportRuns > 1 then Key := Key + UnicodeString(IntToStr(ScriptImportRuns));
-  ScriptImportKey := Key;
-  SavedPath := ProvidedPath;
-  SavedSrc := ProvidedSrc;
-  SetProvidedSource(Key, Source);
-  try
-    Address := Default(TModuleAddress);
-    Address.Path := Key;
-    Ok := LoadAndLink(Address, M);
-  finally
-    SetProvidedSource(SavedPath, SavedSrc);
-  end;
-  if not Ok then Exit(False);
+  Address := Default(TModuleAddress);
+  Address.Path := EntryPath + ScriptImportsSuffix;
+  if ScriptImportRuns > 1 then Address.Path := Address.Path + UnicodeString(IntToStr(ScriptImportRuns));
+  Address.ScriptOrigin := EntryPath;
+  if not LoadAndLink(Address, M, Source) then Exit(False);
+  ScriptImportsRecord := M;
   PushRoot(EvaluateModule(M));
   if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
     if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
@@ -1921,7 +1948,7 @@ begin
   else
     Exit(ThrowTypeError('await: Promise did not settle'));
   end;
-  M := FindModuleByPath(ScriptImportKey);
+  M := ScriptImportsRecord;
   if (M = nil) or (M.Info = nil) then Exit(ThrowTypeError('The Script entry''s imports did not load'));
   for I := 0 to High(M.Info.Imports) do
     if M.Info.Imports[I].LocalName <> '' then
@@ -2024,8 +2051,8 @@ end;
 { the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var I, J, Data: Integer; M: TModRec; Ref, Spec, Text: UnicodeString; G: TList<TModRec>; R, St: TValue;
-  Loaded, SavedHostLoading: Boolean; Address: TModuleAddress;
+var I, J, Data: Integer; M: TModRec; Ref, Spec, Text, LinkSource: UnicodeString; G: TList<TModRec>; R, St: TValue;
+  Loaded, SavedHostLoading: Boolean; Address: TModuleAddress; LinkLine, LinkColumn: Integer;
 begin
   Res := VUndefined;
   Result := True;
@@ -2073,8 +2100,14 @@ begin
     if IsObject(R) and (I <= High(ImportStacks)) and (ImportStacks[I] <> '') then
     begin
       PushRoot(R);
-      if not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
-         (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0) then
+      { a link error names its declaration in its one frame: the import() call's frames follow it }
+      if ErrorSourceLocation(RootAt(TempTop - 1), LinkSource, LinkLine, LinkColumn) and
+         ErrorStackProvenance(RootAt(TempTop - 1), Text) then
+        SetEngineErrorStack(RootAt(TempTop - 1), Text + ImportStacks[I], ProfileStackTraces, LinkSource, LinkLine,
+          LinkColumn)
+      else if (not ErrorStackProvenance(RootAt(TempTop - 1), Text) or (Pos(#10'    at ', Text) = 0)) and
+         (not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
+          (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0)) then
       begin
         Pending := VUndefined;
         if IsString(St) then Text := StrToUnicode(StrOf(St)) else Text := 'Error';
@@ -2499,7 +2532,7 @@ begin
   ParseFailSuggestion := '';
   SitePath := '';
   ProvidedArtifactPath := '';
-  ScriptImportKey := '';
+  ScriptImportsRecord := nil;
 end;
 
 initialization
