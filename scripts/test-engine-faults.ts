@@ -12,7 +12,7 @@
  *
  *   GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS=-dGOCCIA_FAULT_INJECTION \
  *     ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness \
- *       tomlcompliancerunner
+ *       tomlcompliancerunner yamlcompliancerunner
  *
  * writes build/GocciaRunnerFaultInjection and the others. The shipped binaries
  * in build/ are read too, to show that they carry no trace of the hook.
@@ -38,6 +38,7 @@ const F = {
   test262Runner: faultBuild("GocciaTest262Runner"),
   fuzzHarness: faultBuild("GocciaFuzzHarness"),
   tomlRunner: faultBuild("GocciaTOMLComplianceRunner"),
+  yamlRunner: faultBuild("GocciaYAMLComplianceRunner"),
 };
 const SHIPPED = [RUNNER, TESTRUNNER, BENCHRUNNER, BUNDLER, REPL, BARE, TEST262RUNNER];
 
@@ -389,8 +390,9 @@ await section("GocciaTestRunner: no file starts while a fault's report is still 
   }
 });
 
-await section("GocciaTOMLComplianceRunner: a fault in the coordinator stops it", () => {
+await section("GocciaTOMLComplianceRunner and GocciaYAMLComplianceRunner: a fault in the coordinator stops it", () => {
   expectFault(run([F.tomlRunner, "--suite-dir", "."], { env: STARTUP }), "EAccessViolation", "GocciaTOMLComplianceRunner");
+  expectFault(run([F.yamlRunner, "--suite-dir", "."], { env: STARTUP }), "EAccessViolation", "GocciaYAMLComplianceRunner");
 });
 
 await section("GocciaFuzzHarness: a fault is a finding, exit 1 with its class (the fuzzer's contract)", () => {

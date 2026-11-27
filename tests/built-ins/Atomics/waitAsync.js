@@ -51,6 +51,24 @@ describe("Atomics.waitAsync", () => {
     expect(await result.value).toBe("timed-out");
   });
 
+  test("a timeout past 32 bits of milliseconds still waits", async () => {
+    const sab = new SharedArrayBuffer(4);
+    const i32 = new Int32Array(sab);
+
+    const order = [];
+    const long = Atomics.waitAsync(i32, 0, 0, 2 ** 32);
+    const short = Atomics.waitAsync(i32, 0, 0, 1);
+    expect(long.async).toBe(true);
+    expect(short.async).toBe(true);
+    const longDone = long.value.then((r) => order.push(`long ${r}`));
+    await short.value.then((r) => {
+      order.push(`short ${r}`);
+      Atomics.notify(i32, 0);
+    });
+    await longDone;
+    expect(order).toEqual(["short timed-out", "long ok"]);
+  });
+
   test("compares against the current block after the value's valueOf grew the buffer", () => {
     const sab = new SharedArrayBuffer(4, { maxByteLength: 64 });
     const i32 = new Int32Array(sab);

@@ -20,12 +20,13 @@ type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner,
+    btYAMLComplianceRunner,
     btBenchmarkRunner, btBundler, btREPL, btEngine);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
-    'test262runner', 'tomlcompliancerunner',
+    'test262runner', 'tomlcompliancerunner', 'yamlcompliancerunner',
     'benchmarkrunner', 'bundler', 'repl', 'engine');
 
   { The JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
@@ -1272,32 +1273,30 @@ begin
     end;
 end;
 
-{ GOCCIA_VARIANT builds a variant of the runner, as it does an engine program's (BuildEngineProgram):
-  build/GocciaTOMLComplianceRunner<variant>, compiled in a unit cache of its own with GOCCIA_FPC_FLAGS after the
-  defaults. CI's fault build makes GocciaTOMLComplianceRunnerFaultInjection that way. }
-procedure BuildTOMLComplianceRunner;
+{ A compliance runner (source/app/compliance/AProgram.dpr, build.pas target ATarget). GOCCIA_VARIANT builds a
+  variant of it, as it does of an engine program (BuildEngineProgram): build/AProgram<variant>, compiled in a unit
+  cache of its own with GOCCIA_FPC_FLAGS after the defaults. CI's fault build makes
+  GocciaTOMLComplianceRunnerFaultInjection and GocciaYAMLComplianceRunnerFaultInjection that way. }
+procedure BuildComplianceRunner(const AProgram, ATarget: string);
 var
-  Output, Variant, Extra, Word: string;
+  Output, Source, Variant, Extra, Word: string;
   Args: TStringArray;
   J: Integer;
 begin
+  Source := 'source/app/compliance/' + AProgram + '.dpr';
   Variant := GetEnvironmentVariable('GOCCIA_VARIANT');
-  WriteLn('Building GocciaTOMLComplianceRunner', Variant, '...');
+  WriteLn('Building ', AProgram, Variant, '...');
   if Variant = '' then
   begin
-    if not CompileWithStaleRetry(
-        'source/app/compliance/GocciaTOMLComplianceRunner.dpr',
-        TargetUnitOutputDirectory('tomlcompliancerunner'),
-        'tomlcompliancerunner', Output) then
-      PrintBuildFailureAndExit(Output, 'GocciaTOMLComplianceRunner build failed');
+    if not CompileWithStaleRetry(Source, TargetUnitOutputDirectory(ATarget), ATarget, Output) then
+      PrintBuildFailureAndExit(Output, AProgram + ' build failed');
   end
   else
   begin
-    Args := FPCArgs('source/app/compliance/GocciaTOMLComplianceRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('tomlcompliancerunner') + '-' + LowerCase(Variant)));
+    Args := FPCArgs(Source, EnsureUnitOutputDirectory(TargetUnitOutputDirectory(ATarget) + '-' +
+      LowerCase(Variant)));
     SetLength(Args, Length(Args) + 1);
-    Args[High(Args)] := '-o' + GocciaExecutable('build' + DirectorySeparator + 'GocciaTOMLComplianceRunner' +
-      Variant, False);
+    Args[High(Args)] := '-o' + GocciaExecutable('build' + DirectorySeparator + AProgram + Variant, False);
     Extra := GetEnvironmentVariable('GOCCIA_FPC_FLAGS') + ' ';
     Word := '';
     for J := 1 to Length(Extra) do
@@ -1313,10 +1312,20 @@ begin
       else
         Word := Word + Extra[J];
     if not CompileProgram(Args, Output) then
-      PrintBuildFailureAndExit(Output, 'GocciaTOMLComplianceRunner' + Variant + ' build failed');
+      PrintBuildFailureAndExit(Output, AProgram + Variant + ' build failed');
   end;
   WriteLn(Output);
-  WriteLn('GocciaTOMLComplianceRunner', Variant, ' built successfully');
+  WriteLn(AProgram, Variant, ' built successfully');
+end;
+
+procedure BuildTOMLComplianceRunner;
+begin
+  BuildComplianceRunner('GocciaTOMLComplianceRunner', 'tomlcompliancerunner');
+end;
+
+procedure BuildYAMLComplianceRunner;
+begin
+  BuildComplianceRunner('GocciaYAMLComplianceRunner', 'yamlcompliancerunner');
 end;
 
 procedure BuildFFIFixture;
@@ -1386,6 +1395,7 @@ begin
       end;
     btTest262Runner: BuildTest262Runner;
     btTOMLComplianceRunner: BuildTOMLComplianceRunner;
+    btYAMLComplianceRunner: BuildYAMLComplianceRunner;
     btBenchmarkRunner: BuildBenchmarkRunner;
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;

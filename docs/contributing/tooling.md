@@ -87,6 +87,10 @@ The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not ope
 
 All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
 
+## Markdown Lint
+
+The pre-commit `lint-markdown` check runs `markdownlint-cli2` on the staged Markdown files only, each passed as a literal path, and skips a staged symlink, so it never reports a file you did not stage. The other pre-commit doc checks still read Markdown nobody staged: `check-doc-links`, `check-doc-length` and `check-doc-duplication` read every file git would add, untracked ones included, and `check-doc-symbols` reads every Markdown file in the directories it covers. CI's docs job lints the whole tree from the `globs` in `.markdownlint-cli2.jsonc` and skips what `.gitignore` excludes; `npx markdownlint-cli2` with no files runs that check locally.
+
 ## Platform-Specific Pitfalls
 
 ### Focused Builds and Tests
@@ -531,7 +535,7 @@ JavaScript suite under two tools that answer different questions:
 (`build/compiled/targets/testrunner-dev-heaptrc`, or `testrunner-heaptrc` with `--prod`), since FPC does not
 recompile a unit for new options, and `GOCCIA_FPC_FLAGS` comes after
 `build.pas`'s own options, so its flags win. It applies to the engine programs (every application under
-`source/app`) and to `tomlcompliancerunner`; CI's fault build uses it with `-dGOCCIA_FAULT_INJECTION`
+`source/app`) and to `tomlcompliancerunner` and `yamlcompliancerunner`; CI's fault build uses it with `-dGOCCIA_FAULT_INJECTION`
 ([Testing](../testing.md#cli-behavior-tests-ci-integration)). `HEAPTRC=log=FILE` matters: FPC
 3.3.1's heaptrc leaves its report unflushed when stderr is a regular file, so
 `2> FILE` can capture nothing.

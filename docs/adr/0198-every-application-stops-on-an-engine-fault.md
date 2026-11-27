@@ -31,8 +31,8 @@ test, because reaching it needed a fault on request in the runner.
 **Every application stops on an engine fault and exits `70`.** That covers
 `GocciaRunner` (host and sandbox mode), `GocciaTestRunner`,
 `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`,
-`GocciaScriptLoaderBare`, and the coordinators of `GocciaTest262Runner` and
-`GocciaTOMLComplianceRunner`, from the application's construction to its
+`GocciaScriptLoaderBare`, and the coordinators of `GocciaTest262Runner`,
+`GocciaTOMLComplianceRunner` and `GocciaYAMLComplianceRunner`, from the application's construction to its
 destruction (the build's prelude snapshot stage included), in each worker
 thread from its first statement to its last cleanup (the sandbox's run
 threads, fetch workers, `$262.agent` threads and test262 case threads
@@ -122,8 +122,9 @@ handler:
   outcome, naming the exception's class ([test262](../test262.md)). On POSIX
   each case runs in a forked worker process, so the fault cannot reach the
   coordinator. A fault in the coordinator itself exits `70`.
-- `GocciaTOMLComplianceRunner` runs each case in a worker process, whose exit
-  status `2` the coordinator records as an infrastructure result.
+- `GocciaTOMLComplianceRunner` and `GocciaYAMLComplianceRunner` run each case
+  in a worker process, whose unexpected-exception exit status the coordinator
+  records as an infrastructure result.
 
 **The fault build.** The contract is tested with real faults: a build with
 `-dGOCCIA_FAULT_INJECTION` (`GOCCIA_VARIANT=FaultInjection`) has a
@@ -136,8 +137,8 @@ application against it on every CI platform and checks the exit
 code, both diagnostic lines and the absence of any summary or report, and, on
 POSIX, that a closed or full stderr pipe still ends the process with `70`. It
 also checks that the shipped binaries carry neither name. build.pas builds a
-`GOCCIA_VARIANT` of `GocciaTOMLComplianceRunner` as it does of the engine
-programs, so its coordinator is tested the same way. ADR 0109 decided against a fault hook
+`GOCCIA_VARIANT` of the TOML and YAML compliance runners as it does of the
+engine programs, so their coordinators are tested the same way. ADR 0109 decided against a fault hook
 in the runner because it would ship in the production binary. A hook that only
 a build no shipped target makes can contain does not ship.
 
