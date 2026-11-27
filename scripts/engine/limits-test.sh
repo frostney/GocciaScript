@@ -23,6 +23,9 @@ check() {
   fi
 }
 
+check typed-fill-budget --max-instructions=50 'Fatal error: Execution exceeded instruction limit of 50' \
+  'const a = new Int32Array(256); a.fill(42); console.log(a[13]);'
+
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
 check do-while --timeout=200 "$T" 'let n = 0; do { n++; } while (true);'
