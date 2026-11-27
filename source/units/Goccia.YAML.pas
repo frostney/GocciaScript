@@ -1,10 +1,16 @@
 unit Goccia.YAML;
 
-{ YAML 1.2 (yaml.org/spec/1.2.2) into a Goccia.DataTree tree. An anchor names
-  the node it is on, and an alias is that node again, so the tree shares it
-  wherever an alias stands, its own content included. A tag outside the core
-  schema, and the !!timestamp and !!binary tags, keep their tag on the node as
-  a tagged node. }
+{ YAML 1.2.2 (yaml.org/spec/1.2.2) into a Goccia.DataTree tree, composed from
+  the events of Goccia.YAML.Events. An anchor names the node it is on, and an
+  alias is that node again, so the tree shares it wherever an alias stands,
+  its own content included.
+
+  Plain scalars resolve by the YAML 1.2 core schema (10.3), with the
+  extensions Bun's YAML also reads: digit separators ("1_000"), "0b" binary
+  integers and "<<" merge keys. A tag outside the core schema, and the
+  !!timestamp and !!binary tags, keep their tag on the node as a tagged node.
+  A mapping's keys become strings: a scalar key its ECMAScript string, an
+  empty plain key "", and a collection key a canonical JSON-like string. }
 
 {$I Goccia.inc}
 
@@ -15,104 +21,36 @@ uses
 
   OrderedStringMap,
 
-  Goccia.DataTree;
+  Goccia.DataTree,
+  Goccia.YAML.Events,
+  Goccia.YAML.Scanner;
 
 type
-  EGocciaYAMLParseError = class(Exception);
-
-  TGocciaYAMLLine = record
-    RawText: string;
-    Number: Integer;
-    Indent: Integer;
-    IsIgnorable: Boolean;
-    Text: string;
-  end;
+  EGocciaYAMLParseError = Goccia.YAML.Scanner.EGocciaYAMLParseError;
 
   TGocciaYAMLParser = class
   private
     FAnchors: TGocciaDataNodeMap;
-    FExplicitTagHandles: TStringStringMap;
-    FTagHandles: TStringStringMap;
-    FLines: array of TGocciaYAMLLine;
-    FLineCount: Integer;
-    FIndex: Integer;
+    FEvents: TGocciaYAMLEventParser;
     FTree: TGocciaDataTree;
-    FYAMLVersion: string;
 
-    procedure InitializeTagHandles;
-    procedure ParseDirectiveLine(const ALineText: string; const ALineNumber: Integer);
-    function TryParseAnchorPrefix(const AText: string; out AAnchorName: string;
-      out ARemainingText: string): Boolean;
-    function TryParseTagPrefix(const AText: string; out ATagName: string;
-      out ARemainingText: string; const ALineNumber: Integer = 0): Boolean;
-    procedure ParseNodeProperties(const AText: string; out ATagName,
-      AAnchorName, ARemainingText: string; const ALineNumber: Integer = 0);
-    function ApplyTag(const ATagName: string; const AValue: TGocciaDataNode;
-      const ALineNumber: Integer = 0): TGocciaDataNode;
-    procedure RegisterAnchor(const AAnchorName: string; const AValue: TGocciaDataNode;
-      const ALineNumber: Integer = 0);
-    function ResolveAliasValue(const AAliasName: string;
-      const ALineNumber: Integer = 0): TGocciaDataNode;
-    procedure MergeMappingValue(const ATarget: TGocciaDataNode;
-      const AValue: TGocciaDataNode; const ALineNumber: Integer);
-    procedure SkipIgnorableLines;
-    procedure Reset;
-    procedure AddLine(const ALineNumber, AIndent: Integer; const ARawText,
-      AText: string; const AIsIgnorable: Boolean);
-    procedure LoadLines(const AText: string);
-    function CurrentLine: TGocciaYAMLLine;
-    function HasCurrentLine: Boolean;
-    procedure RaiseParseError(const AMessage: string; const ALineNumber: Integer = 0);
-    function IsBlockScalarHeader(const AText: string): Boolean;
-    function ParseBlockScalar(const AParentIndent: Integer;
-      const AHeaderText: string; const ALineNumber: Integer): TGocciaDataNode;
-    function ParseNode(const AIndent: Integer): TGocciaDataNode;
-    function ParseNestedNode(const AParentIndent: Integer): TGocciaDataNode;
-    function ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaDataNode;
-    procedure ParseMappingInto(const AIndent: Integer;
-      const AObject: TGocciaDataNode);
-    procedure ParseSequenceInto(const AIndent: Integer;
-      const AArray: TGocciaDataNode);
-    procedure ParseSequenceEntry(const AEntryText: string;
-      const AIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
-    function ParseMappingValueText(const AValueText: string; const ALineIndent,
-      ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
-    procedure ParseMappingEntry(const AContainer: TGocciaDataNode;
-      const ALineText: string; const ALineIndent, ALineNumber: Integer);
-    procedure ParseExplicitMappingEntry(const AContainer: TGocciaDataNode;
-      const ALineText: string; const ALineIndent, ALineNumber: Integer);
-    procedure ParseCompactMappingInto(const AMappingIndent: Integer;
-      const AEntryText: string; const ALineNumber: Integer;
-      const AObject: TGocciaDataNode);
-    function ParseNodeValue(const AValueText: string; const ALineIndent,
-      ACompactIndent, ALineNumber: Integer; const ATagName, AAnchorName: string;
-      const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
-      ARequireIndentedQuotedContinuation,
-      AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
-    function ParseInlineValue(const AText: string): TGocciaDataNode;
-    function ParseInlineValueWithContinuations(const AText: string;
-      const AParentIndent, ALineNumber: Integer;
-      const AStopAtIndentedSequenceEntry: Boolean = False;
-      const ARequireIndentedQuotedContinuations: Boolean = False;
-      const AAllowSameIndentScalarContinuations: Boolean = False): TGocciaDataNode;
-    procedure ParseFlowSequenceInto(const AText: string;
-      const AArray: TGocciaDataNode);
-    procedure ParseFlowMappingEntry(const AObject: TGocciaDataNode;
-      const AItemText: string; const ALineNumber: Integer = 0);
-    procedure ParseFlowMappingInto(const AText: string;
-      const AObject: TGocciaDataNode);
-    procedure ParseInlineSequenceInto(const AFirstEntryText: string;
-      const ASequenceIndent, ALineNumber: Integer;
-      const AArray: TGocciaDataNode);
-    function CollectFlowCollectionText(const AInitialText: string;
-      const ALineNumber: Integer): string;
-    function CanonicalizeKeyValue(const AValue: TGocciaDataNode;
-      const AInComposite: Boolean = False): string;
-    function ParseKeyName(const AText: string;
-      const ALineNumber: Integer = 0): string;
-    function ParseSingleDocument(const AText: string): TGocciaDataNode;
-    procedure ParseDocumentsInto(const AText: string;
-      const ADocuments: TGocciaDataNode);
+    procedure RaiseError(const AMark: TGocciaYAMLMarker; const AMessage: string);
+    function NextEvent: TGocciaYAMLEvent;
+    procedure RegisterAnchor(const AEvent: TGocciaYAMLEvent;
+      const ANode: TGocciaDataNode);
+    function ResolvePlainScalar(const AText: string): TGocciaDataNode;
+    function ComposeScalar(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+    function ApplyCollectionTag(const AEvent: TGocciaYAMLEvent;
+      const ANode: TGocciaDataNode): TGocciaDataNode;
+    function ComposeSequence(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+    function ComposeMapping(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+    function ComposeNode(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+    procedure MergeMappingValue(const ATarget, AValue: TGocciaDataNode;
+      const AMark: TGocciaYAMLMarker);
+    function KeyName(const AEvent: TGocciaYAMLEvent;
+      const AKey: TGocciaDataNode): string;
+    function ParseStream(const AText: string;
+      out AExplicitDocumentStart: Boolean): TGocciaDataTree;
   public
     constructor Create;
     destructor Destroy; override;
@@ -127,24 +65,15 @@ type
 implementation
 
 uses
-  Classes,
   Math,
 
   NumericText,
-  TextEncoding,
-  TextSemantics,
 
   Goccia.Base64,
   Goccia.Temporal.Utils;
 
 const
-  NO_COMPACT_INDENT = -1;
-  DOCUMENT_START_MARKER = '---';
-  DOCUMENT_END_MARKER = '...';
-  DOUBLE_QUOTE = '"';
-  SINGLE_QUOTE = '''';
-  TAG_HANDLE_LOCAL = '!';
-  TAG_HANDLE_STANDARD = '!!';
+  TAG_NON_SPECIFIC = '!';
   TAG_PREFIX_STANDARD = 'tag:yaml.org,2002:';
   TAG_STANDARD_NULL = TAG_PREFIX_STANDARD + 'null';
   TAG_STANDARD_BOOL = TAG_PREFIX_STANDARD + 'bool';
@@ -155,547 +84,9 @@ const
   TAG_STANDARD_MAP = TAG_PREFIX_STANDARD + 'map';
   TAG_STANDARD_TIMESTAMP = TAG_PREFIX_STANDARD + 'timestamp';
   TAG_STANDARD_BINARY = TAG_PREFIX_STANDARD + 'binary';
-
-function IsWhitespace(const AChar: Char): Boolean;
-begin
-  Result := (AChar = ' ') or (AChar = #9);
-end;
-
-function IsEscapedByBackslashes(const AText: string; const AIndex: Integer): Boolean;
-var
-  BackslashCount, Cursor: Integer;
-begin
-  BackslashCount := 0;
-  Cursor := AIndex - 1;
-  while (Cursor >= 1) and (AText[Cursor] = '\') do
-  begin
-    Inc(BackslashCount);
-    Dec(Cursor);
-  end;
-  Result := (BackslashCount mod 2) = 1;
-end;
-
-function IsFlowDelimiter(const AChar: Char): Boolean;
-begin
-  Result := (AChar = ',') or (AChar = ']') or (AChar = '}');
-end;
-
-function CanStartQuotedScalar(const AText: string; const AIndex: Integer): Boolean;
-var
-  PreviousChar: Char;
-begin
-  if (AIndex < 1) or (AIndex > Length(AText)) then
-    Exit(False);
-
-  if AIndex = 1 then
-    Exit(True);
-
-  PreviousChar := AText[AIndex - 1];
-  Result := IsWhitespace(PreviousChar) or
-    (PreviousChar in ['[', '{', ',', ':']);
-end;
-
-function CountIndentation(const AText: string): Integer;
-begin
-  Result := 0;
-  while (Result < Length(AText)) and (AText[Result + 1] = ' ') do
-    Inc(Result);
-end;
-
-function HasInvalidTabAfterBlockIndicator(const AText: string): Boolean;
-var
-  Cursor: Integer;
-begin
-  Result := False;
-  if (AText = '') or not (AText[1] in ['-', '?', ':']) then
-    Exit;
-
-  if (Length(AText) > 1) and not (AText[2] in [' ', #9]) then
-    Exit;
-
-  Cursor := 2;
-  while (Cursor <= Length(AText)) and (AText[Cursor] in [' ', #9]) do
-  begin
-    if AText[Cursor] = #9 then
-      Exit(True);
-    Inc(Cursor);
-  end;
-end;
-
-function StripComment(const AText: string): string;
-var
-  I, BracketDepth, BraceDepth: Integer;
-  InSingleQuote, InDoubleQuote, InVerbatimTag: Boolean;
-begin
-  InSingleQuote := False;
-  InDoubleQuote := False;
-  InVerbatimTag := False;
-  BracketDepth := 0;
-  BraceDepth := 0;
-  I := 1;
-
-  while I <= Length(AText) do
-  begin
-    case AText[I] of
-      SINGLE_QUOTE:
-        if not InDoubleQuote then
-        begin
-          if InSingleQuote and (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-            Inc(I)
-          else if not InSingleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else
-            InSingleQuote := not InSingleQuote;
-        end;
-      DOUBLE_QUOTE:
-        if not InSingleQuote then
-        begin
-          if not InDoubleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else if not IsEscapedByBackslashes(AText, I) then
-            InDoubleQuote := not InDoubleQuote;
-        end;
-      '<':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (I > 1) and (AText[I - 1] = '!') then
-          InVerbatimTag := True;
-      '>':
-        if InVerbatimTag then
-          InVerbatimTag := False;
-      '[':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BracketDepth);
-      ']':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth > 0) then
-          Dec(BracketDepth);
-      '{':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BraceDepth);
-      '}':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BraceDepth > 0) then
-          Dec(BraceDepth);
-      '#':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth = 0) and
-           (BraceDepth = 0) and ((I = 1) or IsWhitespace(AText[I - 1])) then
-          Exit(TrimRight(Copy(AText, 1, I - 1)));
-    end;
-    Inc(I);
-  end;
-
-  Result := TrimRight(AText);
-end;
-
-function FindTopLevelMappingSeparator(const AText: string): Integer;
-var
-  I, BracketDepth, BraceDepth: Integer;
-  InSingleQuote, InDoubleQuote, InVerbatimTag: Boolean;
-begin
-  Result := 0;
-  InSingleQuote := False;
-  InDoubleQuote := False;
-  InVerbatimTag := False;
-  BracketDepth := 0;
-  BraceDepth := 0;
-  I := 1;
-
-  while I <= Length(AText) do
-  begin
-    case AText[I] of
-      SINGLE_QUOTE:
-        if not InDoubleQuote then
-        begin
-          if InSingleQuote and (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-            Inc(I)
-          else if not InSingleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else
-            InSingleQuote := not InSingleQuote;
-        end;
-      DOUBLE_QUOTE:
-        if not InSingleQuote then
-        begin
-          if not InDoubleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else if not IsEscapedByBackslashes(AText, I) then
-            InDoubleQuote := not InDoubleQuote;
-        end;
-      '<':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (I > 1) and (AText[I - 1] = '!') then
-          InVerbatimTag := True;
-      '>':
-        if InVerbatimTag then
-          InVerbatimTag := False;
-      '[':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BracketDepth);
-      ']':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth > 0) then
-          Dec(BracketDepth);
-      '{':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BraceDepth);
-      '}':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BraceDepth > 0) then
-          Dec(BraceDepth);
-      ':':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth = 0) and
-           (BraceDepth = 0) and
-           ((I = Length(AText)) or IsWhitespace(AText[I + 1]) or
-            IsFlowDelimiter(AText[I + 1])) then
-          Exit(I);
-    end;
-    Inc(I);
-  end;
-end;
-
-function FindTopLevelFlowMappingSeparator(const AText: string): Integer;
-var
-  I, BracketDepth, BraceDepth: Integer;
-  InSingleQuote, InDoubleQuote, InVerbatimTag: Boolean;
-  KeyText: string;
-begin
-  Result := 0;
-  InSingleQuote := False;
-  InDoubleQuote := False;
-  InVerbatimTag := False;
-  BracketDepth := 0;
-  BraceDepth := 0;
-  I := 1;
-
-  while I <= Length(AText) do
-  begin
-    case AText[I] of
-      SINGLE_QUOTE:
-        if not InDoubleQuote then
-        begin
-          if InSingleQuote and (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-            Inc(I)
-          else if not InSingleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else
-            InSingleQuote := not InSingleQuote;
-        end;
-      DOUBLE_QUOTE:
-        if not InSingleQuote then
-        begin
-          if not InDoubleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else if not IsEscapedByBackslashes(AText, I) then
-            InDoubleQuote := not InDoubleQuote;
-        end;
-      '<':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (I > 1) and (AText[I - 1] = '!') then
-          InVerbatimTag := True;
-      '>':
-        if InVerbatimTag then
-          InVerbatimTag := False;
-      '[':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BracketDepth);
-      ']':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth > 0) then
-          Dec(BracketDepth);
-      '{':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BraceDepth);
-      '}':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BraceDepth > 0) then
-          Dec(BraceDepth);
-      ':':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth = 0) and
-           (BraceDepth = 0) then
-        begin
-          if (I = Length(AText)) or IsWhitespace(AText[I + 1]) or
-             IsFlowDelimiter(AText[I + 1]) then
-            Exit(I);
-
-          KeyText := Trim(Copy(AText, 1, I - 1));
-          if (KeyText <> '') and (KeyText[1] in [SINGLE_QUOTE, DOUBLE_QUOTE, '[', '{',
-              '!', '&', '*']) then
-            Exit(I);
-        end;
-    end;
-    Inc(I);
-  end;
-end;
-
-function FindTopLevelFlowCollectionClose(const AText: string): Integer;
-var
-  BracketDepth, BraceDepth, I: Integer;
-  InSingleQuote, InDoubleQuote, InVerbatimTag: Boolean;
-  RootDelimiter: Char;
-begin
-  Result := 0;
-  if AText = '' then
-    Exit;
-
-  RootDelimiter := AText[1];
-  if (RootDelimiter <> '[') and (RootDelimiter <> '{') then
-    Exit;
-
-  InSingleQuote := False;
-  InDoubleQuote := False;
-  InVerbatimTag := False;
-  BracketDepth := 0;
-  BraceDepth := 0;
-  if RootDelimiter = '[' then
-    BracketDepth := 1
-  else
-    BraceDepth := 1;
-  I := 2;
-
-  while I <= Length(AText) do
-  begin
-    case AText[I] of
-      SINGLE_QUOTE:
-        if not InDoubleQuote then
-        begin
-          if InSingleQuote and (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-            Inc(I)
-          else if not InSingleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else
-            InSingleQuote := not InSingleQuote;
-        end;
-      DOUBLE_QUOTE:
-        if not InSingleQuote then
-        begin
-          if not InDoubleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else if not IsEscapedByBackslashes(AText, I) then
-            InDoubleQuote := not InDoubleQuote;
-        end;
-      '<':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (I > 1) and (AText[I - 1] = '!') then
-          InVerbatimTag := True;
-      '>':
-        if InVerbatimTag then
-          InVerbatimTag := False;
-      '[':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BracketDepth);
-      ']':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-        begin
-          Dec(BracketDepth);
-          if (BracketDepth = 0) and (BraceDepth = 0) and (RootDelimiter = '[') then
-            Exit(I);
-        end;
-      '{':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BraceDepth);
-      '}':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-        begin
-          Dec(BraceDepth);
-          if (BracketDepth = 0) and (BraceDepth = 0) and (RootDelimiter = '{') then
-            Exit(I);
-        end;
-    end;
-    Inc(I);
-  end;
-end;
-
-function StartsWithDocumentMarkerToken(const AText: string): Boolean;
-var
-  MarkerLength: Integer;
-begin
-  if Copy(AText, 1, Length(DOCUMENT_START_MARKER)) = DOCUMENT_START_MARKER then
-    MarkerLength := Length(DOCUMENT_START_MARKER)
-  else if Copy(AText, 1, Length(DOCUMENT_END_MARKER)) = DOCUMENT_END_MARKER then
-    MarkerLength := Length(DOCUMENT_END_MARKER)
-  else
-    Exit(False);
-
-  Result := (Length(AText) = MarkerLength) or
-    IsWhitespace(AText[MarkerLength + 1]) or
-    IsFlowDelimiter(AText[MarkerLength + 1]);
-end;
-
-function DocumentMarkerRemainder(const AText: string): string;
-var
-  MarkerLength: Integer;
-begin
-  if Copy(AText, 1, Length(DOCUMENT_START_MARKER)) = DOCUMENT_START_MARKER then
-    MarkerLength := Length(DOCUMENT_START_MARKER)
-  else if Copy(AText, 1, Length(DOCUMENT_END_MARKER)) = DOCUMENT_END_MARKER then
-    MarkerLength := Length(DOCUMENT_END_MARKER)
-  else
-    Exit(AText);
-
-  Result := TrimLeft(Copy(AText, MarkerLength + 1, MaxInt));
-end;
-
-function StartsSequenceEntry(const AText: string): Boolean;
-begin
-  Result := (AText <> '') and (AText[1] = '-') and
-    ((Length(AText) = 1) or IsWhitespace(AText[2]));
-end;
-
-function StartsExplicitKeyEntry(const AText: string): Boolean;
-begin
-  Result := (AText <> '') and (AText[1] = '?') and
-    ((Length(AText) = 1) or IsWhitespace(AText[2]));
-end;
-
-function StartsExplicitValueEntry(const AText: string): Boolean;
-begin
-  Result := (AText <> '') and (AText[1] = ':') and
-    ((Length(AText) = 1) or IsWhitespace(AText[2]));
-end;
-
-function LooksLikeBlockMapping(const AText: string): Boolean;
-begin
-  Result := (AText <> '') and (AText[1] <> '[') and (AText[1] <> '{') and
-    (FindTopLevelMappingSeparator(AText) > 0);
-end;
-
-function StartsBlockMappingEntry(const AText: string): Boolean;
-begin
-  Result := StartsExplicitKeyEntry(AText) or LooksLikeBlockMapping(AText);
-end;
-
-function IsBlockScalarHeaderText(const AText: string): Boolean;
-var
-  HeaderText: string;
-  I: Integer;
-begin
-  HeaderText := Trim(AText);
-  if (HeaderText = '') or ((HeaderText[1] <> '|') and (HeaderText[1] <> '>')) then
-    Exit(False);
-
-  for I := 2 to Length(HeaderText) do
-    if not (HeaderText[I] in ['+', '-', '1'..'9']) then
-      Exit(False);
-  Result := True;
-end;
-
-function TryParseAnchorPrefixText(const AText: string; out ARemainingText: string): Boolean;
-var
-  I: Integer;
-  TrimmedText: string;
-begin
-  TrimmedText := Trim(AText);
-  ARemainingText := TrimmedText;
-
-  if (TrimmedText = '') or (TrimmedText[1] <> '&') then
-    Exit(False);
-
-  I := 2;
-  while (I <= Length(TrimmedText)) and not IsWhitespace(TrimmedText[I]) do
-    Inc(I);
-
-  if Copy(TrimmedText, 2, I - 2) = '' then
-    Exit(False);
-
-  ARemainingText := Trim(Copy(TrimmedText, I, MaxInt));
-  Result := True;
-end;
-
-function TryParseTagPrefixText(const AText: string; out ARemainingText: string): Boolean;
-var
-  HandleEnd, PrefixEnd, WhitespaceIndex: Integer;
-  TrimmedText: string;
-begin
-  TrimmedText := Trim(AText);
-  ARemainingText := TrimmedText;
-  if (TrimmedText = '') or (TrimmedText[1] <> '!') then
-    Exit(False);
-
-  if (Length(TrimmedText) >= 3) and (TrimmedText[2] = '<') then
-  begin
-    PrefixEnd := Pos('>', TrimmedText);
-    if PrefixEnd = 0 then
-      Exit(False);
-    ARemainingText := Trim(Copy(TrimmedText, PrefixEnd + 1, MaxInt));
-    Exit(True);
-  end;
-
-  if (Length(TrimmedText) = 1) or IsWhitespace(TrimmedText[2]) then
-  begin
-    ARemainingText := Trim(Copy(TrimmedText, 2, MaxInt));
-    Exit(True);
-  end;
-
-  if TrimmedText[2] = '!' then
-  begin
-    HandleEnd := 2;
-    while (HandleEnd < Length(TrimmedText)) and not IsWhitespace(TrimmedText[HandleEnd + 1]) do
-      Inc(HandleEnd);
-    ARemainingText := Trim(Copy(TrimmedText, HandleEnd + 1, MaxInt));
-    Exit(True);
-  end;
-
-  HandleEnd := 2;
-  while (HandleEnd <= Length(TrimmedText)) and not IsWhitespace(TrimmedText[HandleEnd]) do
-  begin
-    if TrimmedText[HandleEnd] = '!' then
-    begin
-      WhitespaceIndex := HandleEnd + 1;
-      while (WhitespaceIndex <= Length(TrimmedText)) and
-            not IsWhitespace(TrimmedText[WhitespaceIndex]) do
-        Inc(WhitespaceIndex);
-      ARemainingText := Trim(Copy(TrimmedText, WhitespaceIndex, MaxInt));
-      Exit(True);
-    end;
-    Inc(HandleEnd);
-  end;
-
-  ARemainingText := Trim(Copy(TrimmedText, HandleEnd, MaxInt));
-  Result := True;
-end;
-
-function StartsBlockScalarLine(const AText: string): Boolean;
-var
-  CandidateText, RemainingText: string;
-  SeparatorIndex: Integer;
-begin
-  CandidateText := Trim(AText);
-  if CandidateText = '' then
-    Exit(False);
-
-  if StartsSequenceEntry(CandidateText) then
-    CandidateText := Trim(Copy(CandidateText, 2, MaxInt));
-
-  SeparatorIndex := FindTopLevelMappingSeparator(CandidateText);
-  if (SeparatorIndex > 0) and (CandidateText[1] <> '[') and (CandidateText[1] <> '{') then
-    CandidateText := Trim(Copy(CandidateText, SeparatorIndex + 1, MaxInt));
-
-  while True do
-  begin
-    if TryParseAnchorPrefixText(CandidateText, RemainingText) or
-       TryParseTagPrefixText(CandidateText, RemainingText) then
-    begin
-      if RemainingText = '' then
-        Exit(False);
-      CandidateText := RemainingText;
-      Continue;
-    end;
-    Break;
-  end;
-
-  Result := IsBlockScalarHeaderText(CandidateText);
-end;
+  MERGE_KEY = '<<';
+  BASE64_BLOCK_LENGTH = 4;
+  DATA_DEPTH_OPERATION = 'YAML parsing';
 
 function RemoveNumericSeparators(const AText: string): string;
 var
@@ -946,394 +337,6 @@ begin
   Result := not IsNan(AValue);
 end;
 
-function IsHexDigitChar(const AChar: Char): Boolean;
-begin
-  Result := AChar in ['0'..'9', 'a'..'f', 'A'..'F'];
-end;
-
-function UnescapeDoubleQuotedString(const AText: string): string;
-var
-  CodePoint: Cardinal;
-  DigitCount, I, J: Integer;
-  HexDigits: string;
-  ParsedCodePoint: UInt64;
-begin
-  Result := '';
-  I := 1;
-  while I <= Length(AText) do
-  begin
-    if (AText[I] = '\') and (I < Length(AText)) then
-    begin
-      Inc(I);
-      case AText[I] of
-        '"', '\', '/':
-          Result := Result + AText[I];
-        '0':
-          Result := Result + #0;
-        'a':
-          Result := Result + #7;
-        'b':
-          Result := Result + #8;
-        't':
-          Result := Result + #9;
-        'n':
-          Result := Result + #10;
-        'v':
-          Result := Result + #11;
-        'f':
-          Result := Result + #12;
-        'r':
-          Result := Result + #13;
-        'e':
-          Result := Result + #27;
-        ' ':
-          Result := Result + ' ';
-        #9:
-          Result := Result + #9;
-        'N':
-          Result := Result + TextEncoding.CodePointToUTF16($85);
-        '_':
-          Result := Result + TextEncoding.CodePointToUTF16($A0);
-        'L':
-          Result := Result + TextEncoding.CodePointToUTF16($2028);
-        'P':
-          Result := Result + TextEncoding.CodePointToUTF16($2029);
-        'x', 'u', 'U':
-          begin
-            case AText[I] of
-              'x':
-                DigitCount := 2;
-              'u':
-                DigitCount := 4;
-            else
-              DigitCount := 8;
-            end;
-
-            if I + DigitCount > Length(AText) then
-              raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
-            HexDigits := Copy(AText, I + 1, DigitCount);
-            for J := 1 to Length(HexDigits) do
-              if not IsHexDigitChar(HexDigits[J]) then
-                raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
-            if not TryTextToUInt64('$' + HexDigits, ParsedCodePoint) then
-              raise EGocciaYAMLParseError.Create('Invalid Unicode escape in double-quoted scalar.');
-            CodePoint := ParsedCodePoint;
-            if CodePoint > $10FFFF then
-              raise EGocciaYAMLParseError.Create('Invalid Unicode code point in double-quoted scalar.');
-            Result := Result + TextEncoding.CodePointToUTF16(CodePoint);
-            Inc(I, Length(HexDigits));
-          end;
-        #10, #13:
-          while (I < Length(AText)) and ((AText[I + 1] in [#10, #13]) or
-                IsWhitespace(AText[I + 1])) do
-            Inc(I);
-      else
-        raise EGocciaYAMLParseError.Create('Invalid escape sequence in double-quoted scalar.');
-      end;
-    end
-    else
-      Result := Result + AText[I];
-    Inc(I);
-  end;
-end;
-
-function UnescapeSingleQuotedString(const AText: string): string;
-var
-  I: Integer;
-begin
-  Result := '';
-  I := 1;
-  while I <= Length(AText) do
-  begin
-    if (AText[I] = SINGLE_QUOTE) and (I < Length(AText)) and
-       (AText[I + 1] = SINGLE_QUOTE) then
-    begin
-      Result := Result + SINGLE_QUOTE;
-      Inc(I, 2);
-      Continue;
-    end;
-    Result := Result + AText[I];
-    Inc(I);
-  end;
-end;
-
-function SplitTopLevelItems(const AText: string): TStringList;
-var
-  I, ItemStart, BracketDepth, BraceDepth: Integer;
-  InSingleQuote, InDoubleQuote, InVerbatimTag: Boolean;
-  ItemText: string;
-begin
-  Result := TStringList.Create;
-  InSingleQuote := False;
-  InDoubleQuote := False;
-  InVerbatimTag := False;
-  BracketDepth := 0;
-  BraceDepth := 0;
-  ItemStart := 1;
-  I := 1;
-
-  while I <= Length(AText) do
-  begin
-    case AText[I] of
-      SINGLE_QUOTE:
-        if not InDoubleQuote then
-        begin
-          if InSingleQuote and (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-            Inc(I)
-          else if not InSingleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else
-            InSingleQuote := not InSingleQuote;
-        end;
-      DOUBLE_QUOTE:
-        if not InSingleQuote then
-        begin
-          if not InDoubleQuote and not CanStartQuotedScalar(AText, I) then
-          begin
-          end
-          else if not IsEscapedByBackslashes(AText, I) then
-            InDoubleQuote := not InDoubleQuote;
-        end;
-      '<':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (I > 1) and (AText[I - 1] = '!') then
-          InVerbatimTag := True;
-      '>':
-        if InVerbatimTag then
-          InVerbatimTag := False;
-      '[':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BracketDepth);
-      ']':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth > 0) then
-          Dec(BracketDepth);
-      '{':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag then
-          Inc(BraceDepth);
-      '}':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BraceDepth > 0) then
-          Dec(BraceDepth);
-      ',':
-        if not InSingleQuote and not InDoubleQuote and not InVerbatimTag and
-           (BracketDepth = 0) and
-           (BraceDepth = 0) then
-        begin
-          ItemText := Trim(Copy(AText, ItemStart, I - ItemStart));
-          if ItemText = '' then
-          begin
-            Result.Free;
-            raise EGocciaYAMLParseError.Create('Invalid flow collection entry.');
-          end;
-          Result.Add(ItemText);
-          ItemStart := I + 1;
-        end;
-    end;
-    Inc(I);
-  end;
-
-  ItemText := Trim(Copy(AText, ItemStart, MaxInt));
-  if ItemText <> '' then
-    Result.Add(ItemText);
-end;
-
-function SplitYAMLDocuments(const AText: string): TStringList;
-var
-  DocumentOpen, HasContent, InBlockScalar: Boolean;
-  BlockScalarIndent, I, LineIndent: Integer;
-  LineText, MarkerText: string;
-  Source, CurrentDocument: TStringList;
-
-  procedure FlushCurrentDocument(const AForce: Boolean);
-  begin
-    if AForce or HasContent then
-      Result.Add(StringListToLFText(CurrentDocument));
-    CurrentDocument.Clear;
-    DocumentOpen := False;
-    HasContent := False;
-  end;
-
-begin
-  Result := TStringList.Create;
-  Source := CreateTextLines(AText);
-  CurrentDocument := TStringList.Create;
-  try
-    DocumentOpen := False;
-    HasContent := False;
-    InBlockScalar := False;
-    BlockScalarIndent := 0;
-
-    for I := 0 to Source.Count - 1 do
-    begin
-      LineText := Source[I];
-      if (I = 0) and (LineText <> '') and (LineText[1] = #$FEFF) then
-        Delete(LineText, 1, 1);
-
-      LineIndent := CountIndentation(LineText);
-      if InBlockScalar then
-      begin
-        if (Trim(LineText) = '') or (LineIndent > BlockScalarIndent) then
-        begin
-          CurrentDocument.Add(LineText);
-          if Trim(LineText) <> '' then
-          begin
-            DocumentOpen := True;
-            HasContent := True;
-          end;
-          Continue;
-        end;
-        InBlockScalar := False;
-      end;
-
-      MarkerText := Trim(StripComment(LineText));
-      if (LineIndent = 0) and (MarkerText <> '') and (MarkerText[1] = '%') then
-      begin
-        if not HasContent and (DocumentOpen or HasContent) then
-          FlushCurrentDocument(True);
-        CurrentDocument.Add(LineText);
-        Continue;
-      end;
-
-      if (LineIndent = 0) and StartsWithDocumentMarkerToken(MarkerText) and
-         (Copy(MarkerText, 1, Length(DOCUMENT_START_MARKER)) = DOCUMENT_START_MARKER) then
-      begin
-        if DocumentOpen or HasContent then
-          FlushCurrentDocument(True);
-        DocumentOpen := True;
-        MarkerText := DocumentMarkerRemainder(MarkerText);
-        if MarkerText <> '' then
-        begin
-          CurrentDocument.Add(MarkerText);
-          HasContent := True;
-        end;
-        Continue;
-      end;
-
-      if (LineIndent = 0) and StartsWithDocumentMarkerToken(MarkerText) and
-         (Copy(MarkerText, 1, Length(DOCUMENT_END_MARKER)) = DOCUMENT_END_MARKER) then
-      begin
-        if DocumentOpen or HasContent then
-          FlushCurrentDocument(True);
-        Continue;
-      end;
-
-      CurrentDocument.Add(LineText);
-      if Trim(MarkerText) <> '' then
-      begin
-        DocumentOpen := True;
-        HasContent := True;
-        if StartsBlockScalarLine(MarkerText) then
-        begin
-          InBlockScalar := True;
-          BlockScalarIndent := LineIndent;
-        end;
-      end;
-    end;
-
-    if DocumentOpen or HasContent then
-      FlushCurrentDocument(DocumentOpen);
-  finally
-    CurrentDocument.Free;
-    Source.Free;
-  end;
-end;
-
-function HasExplicitDocumentStartMarker(const AText: string): Boolean;
-var
-  I, BlockScalarIndent, LineIndent: Integer;
-  InBlockScalar: Boolean;
-  LineText: string;
-  Source: TStringList;
-begin
-  Source := CreateTextLines(AText);
-  try
-    InBlockScalar := False;
-    BlockScalarIndent := 0;
-    for I := 0 to Source.Count - 1 do
-    begin
-      LineText := Source[I];
-      if (I = 0) and (LineText <> '') and (LineText[1] = #$FEFF) then
-        Delete(LineText, 1, 1);
-
-      LineIndent := CountIndentation(LineText);
-      if InBlockScalar then
-      begin
-        if (Trim(LineText) = '') or (LineIndent > BlockScalarIndent) then
-          Continue;
-        InBlockScalar := False;
-      end;
-
-      LineText := Trim(StripComment(LineText));
-      if (LineIndent = 0) and (LineText <> '') and (LineText[1] = '%') then
-        Continue;
-      if StartsWithDocumentMarkerToken(LineText) and
-         (Copy(LineText, 1, Length(DOCUMENT_START_MARKER)) = DOCUMENT_START_MARKER) then
-        Exit(True);
-      if StartsBlockScalarLine(LineText) then
-      begin
-        InBlockScalar := True;
-        BlockScalarIndent := LineIndent;
-      end;
-    end;
-    Result := False;
-  finally
-    Source.Free;
-  end;
-end;
-
-function EndsWithLineFeed(const AText: string): Boolean;
-begin
-  Result := (AText <> '') and (AText[Length(AText)] = #10);
-end;
-
-function TrimTrailingLineFeeds(const AText: string): string;
-begin
-  Result := AText;
-  while EndsWithLineFeed(Result) do
-    Delete(Result, Length(Result), 1);
-end;
-
-function RemoveAllWhitespace(const AText: string): string;
-var
-  I: Integer;
-begin
-  Result := '';
-  for I := 1 to Length(AText) do
-    if not IsWhitespace(AText[I]) and (AText[I] <> #10) and (AText[I] <> #13) then
-      Result := Result + AText[I];
-end;
-
-function IsValidTagHandle(const AHandleName: string): Boolean;
-var
-  I: Integer;
-begin
-  Result := (AHandleName = TAG_HANDLE_LOCAL) or
-    ((Length(AHandleName) >= 2) and (AHandleName[1] = '!') and
-    (AHandleName[Length(AHandleName)] = '!'));
-  if not Result then
-    Exit(False);
-
-  for I := 2 to Length(AHandleName) - 1 do
-    if IsWhitespace(AHandleName[I]) then
-      Exit(False);
-end;
-
-function IsValidYAMLVersion(const AVersion: string): Boolean;
-var
-  DotIndex, MajorVersion, MinorVersion: Integer;
-begin
-  DotIndex := Pos('.', AVersion);
-  if (DotIndex <= 1) or (DotIndex >= Length(AVersion)) then
-    Exit(False);
-  if not TryStrToInt(Copy(AVersion, 1, DotIndex - 1), MajorVersion) then
-    Exit(False);
-  if not TryStrToInt(Copy(AVersion, DotIndex + 1, MaxInt), MinorVersion) then
-    Exit(False);
-  Result := (MajorVersion = 1) and (MinorVersion >= 0);
-end;
-
 function IsValidYAMLTimestamp(const AText: string): Boolean;
 var
   DateRec: TTemporalDateRecord;
@@ -1342,16 +345,30 @@ begin
   Result := TryParseISODate(AText, DateRec) or TryParseISODateTime(AText, DateRec, TimeRec);
 end;
 
+function IsValidBase64Text(const AText: string): Boolean;
+var
+  Bytes: TBytes;
+  Compact: string;
+  I: Integer;
+begin
+  Compact := '';
+  for I := 1 to Length(AText) do
+    if not CharInSet(AText[I], [' ', #9, #10, #13]) then
+      Compact := Compact + AText[I];
+  Result := (Compact <> '') and ((Length(Compact) mod BASE64_BLOCK_LENGTH) = 0) and
+    TryDecodeBase64Standard(Compact, Bytes);
+end;
+
 function EscapeCompositeKeyString(const AText: string): string;
 var
   I: Integer;
 begin
-  Result := DOUBLE_QUOTE;
+  Result := '"';
   for I := 1 to Length(AText) do
     case AText[I] of
       '\':
         Result := Result + '\\';
-      DOUBLE_QUOTE:
+      '"':
         Result := Result + '\"';
       #10:
         Result := Result + '\n';
@@ -1362,180 +379,65 @@ begin
     else
       Result := Result + AText[I];
     end;
-  Result := Result + DOUBLE_QUOTE;
+  Result := Result + '"';
 end;
 
-function IsQuotedScalarText(const AText: string; out AQuoteChar: Char): Boolean;
-begin
-  Result := AText <> '';
-  if not Result then
-    Exit(False);
-  AQuoteChar := AText[1];
-  Result := (AQuoteChar = DOUBLE_QUOTE) or (AQuoteChar = SINGLE_QUOTE);
-end;
-
-function FindClosingQuotePosition(const AText: string; const AQuoteChar: Char): Integer;
+{ a key that is a collection as a stable JSON-like string }
+function CanonicalizeKeyValue(const AValue: TGocciaDataNode;
+  const AInComposite: Boolean = False): string;
 var
   I: Integer;
+  KeyNames: TArray<string>;
 begin
-  Result := 0;
-  I := 2;
-  while I <= Length(AText) do
+  if AValue.Kind = dnkTagged then
+    Exit(CanonicalizeKeyValue(AValue.TaggedValue, AInComposite));
+
+  if AValue.IsContainer then
   begin
-    if AText[I] = AQuoteChar then
-    begin
-      if AQuoteChar = DOUBLE_QUOTE then
+    // a key that contains itself has no string: the depth guard stops it
+    EnterDataDepth(DATA_DEPTH_OPERATION);
+    try
+      if AValue.Kind = dnkArray then
       begin
-        if not IsEscapedByBackslashes(AText, I) then
+        Result := '[';
+        for I := 0 to AValue.Count - 1 do
         begin
-          Result := I;
-          Exit;
+          if I > 0 then
+            Result := Result + ', ';
+          Result := Result + CanonicalizeKeyValue(AValue.Items[I], True);
         end;
+        Result := Result + ']';
       end
       else
       begin
-        if (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-          Inc(I)
-        else
+        Result := '{';
+        KeyNames := AValue.OwnKeys;
+        for I := 0 to Length(KeyNames) - 1 do
         begin
-          Result := I;
-          Exit;
+          if I > 0 then
+            Result := Result + ', ';
+          Result := Result + EscapeCompositeKeyString(KeyNames[I]) + ': ' +
+            CanonicalizeKeyValue(AValue.GetProperty(KeyNames[I]), True);
         end;
+        Result := Result + '}';
       end;
+    finally
+      LeaveDataDepth;
     end;
-    Inc(I);
+    Exit;
   end;
+
+  Result := AValue.ToText;
+  if AInComposite and (AValue.Kind = dnkString) then
+    Result := EscapeCompositeKeyString(Result);
 end;
 
-function FindContinuationQuotePosition(const AText: string;
-  const AQuoteChar: Char): Integer;
-var
-  I: Integer;
+function IsCoreScalarTag(const ATag: string): Boolean;
 begin
-  Result := 0;
-  I := 1;
-  while I <= Length(AText) do
-  begin
-    if AText[I] = AQuoteChar then
-    begin
-      if AQuoteChar = DOUBLE_QUOTE then
-      begin
-        if not IsEscapedByBackslashes(AText, I) then
-          Exit(I);
-      end
-      else
-      begin
-        if (I < Length(AText)) and (AText[I + 1] = SINGLE_QUOTE) then
-          Inc(I)
-        else
-          Exit(I);
-      end;
-    end;
-    Inc(I);
-  end;
-end;
-
-function IsValidQuotedContinuationTail(const AText: string;
-  const AQuotePosition: Integer): Boolean;
-var
-  RawTail, RemainingText: string;
-begin
-  RawTail := Copy(AText, AQuotePosition + 1, MaxInt);
-  if RawTail = '' then
-    Exit(True);
-
-  if RawTail[1] = '#' then
-    Exit(False);
-
-  if not IsWhitespace(RawTail[1]) then
-    Exit(False);
-
-  RemainingText := TrimLeft(RawTail);
-  Result := (RemainingText = '') or (RemainingText[1] = '#');
-end;
-
-function FoldMultilineScalarFragments(const AFragments: TStringList): string;
-var
-  Fragment: string;
-  FragmentIndex, PendingBlankLines: Integer;
-begin
-  Result := '';
-  PendingBlankLines := 0;
-  for FragmentIndex := 0 to AFragments.Count - 1 do
-  begin
-    Fragment := Trim(AFragments[FragmentIndex]);
-    if Fragment = '' then
-    begin
-      Inc(PendingBlankLines);
-      Continue;
-    end;
-
-    if Result <> '' then
-    begin
-      if PendingBlankLines > 0 then
-        Result := Result + StringOfChar(#10, PendingBlankLines)
-      else
-        Result := Result + ' ';
-    end;
-    Result := Result + Fragment;
-    PendingBlankLines := 0;
-  end;
-end;
-
-function EndsWithEscapedLineBreakMarker(const AText: string): Boolean;
-var
-  BackslashCount, Cursor: Integer;
-begin
-  BackslashCount := 0;
-  Cursor := Length(AText);
-  while (Cursor >= 1) and (AText[Cursor] = '\') do
-  begin
-    Inc(BackslashCount);
-    Dec(Cursor);
-  end;
-  Result := (BackslashCount mod 2) = 1;
-end;
-
-function FoldMultilineDoubleQuotedFragments(const AFragments: TStringList): string;
-var
-  Fragment: string;
-  FragmentIndex, PendingBlankLines: Integer;
-  SuppressSeparator: Boolean;
-begin
-  Result := '';
-  PendingBlankLines := 0;
-  SuppressSeparator := False;
-  for FragmentIndex := 0 to AFragments.Count - 1 do
-  begin
-    Fragment := Trim(AFragments[FragmentIndex]);
-    if Fragment = '' then
-    begin
-      Inc(PendingBlankLines);
-      Continue;
-    end;
-
-    if Result <> '' then
-    begin
-      if not SuppressSeparator then
-      begin
-        if PendingBlankLines > 0 then
-          Result := Result + StringOfChar(#10, PendingBlankLines)
-        else
-          Result := Result + ' ';
-      end;
-    end;
-
-    if EndsWithEscapedLineBreakMarker(Fragment) then
-    begin
-      Delete(Fragment, Length(Fragment), 1);
-      SuppressSeparator := True;
-    end
-    else
-      SuppressSeparator := False;
-
-    Result := Result + Fragment;
-    PendingBlankLines := 0;
-  end;
+  Result := SameText(ATag, TAG_STANDARD_STR) or SameText(ATag, TAG_STANDARD_NULL) or
+    SameText(ATag, TAG_STANDARD_BOOL) or SameText(ATag, TAG_STANDARD_INT) or
+    SameText(ATag, TAG_STANDARD_FLOAT) or SameText(ATag, TAG_STANDARD_TIMESTAMP) or
+    SameText(ATag, TAG_STANDARD_BINARY);
 end;
 
 { TGocciaYAMLParser }
@@ -1544,497 +446,289 @@ constructor TGocciaYAMLParser.Create;
 begin
   inherited Create;
   FAnchors := TGocciaDataNodeMap.Create;
-  FExplicitTagHandles := TStringStringMap.Create;
-  FTagHandles := TStringStringMap.Create;
-  InitializeTagHandles;
 end;
 
 destructor TGocciaYAMLParser.Destroy;
 begin
-  FTagHandles.Free;
-  FExplicitTagHandles.Free;
   FAnchors.Free;
   inherited;
 end;
 
-procedure TGocciaYAMLParser.InitializeTagHandles;
+procedure TGocciaYAMLParser.RaiseError(const AMark: TGocciaYAMLMarker;
+  const AMessage: string);
 begin
-  FExplicitTagHandles.Clear;
-  FTagHandles.Clear;
-  FTagHandles.AddOrSetValue(TAG_HANDLE_LOCAL, TAG_HANDLE_LOCAL);
-  FTagHandles.AddOrSetValue(TAG_HANDLE_STANDARD, TAG_PREFIX_STANDARD);
-  FYAMLVersion := '';
+  raise EGocciaYAMLParseError.CreateFmt('Line %d, column %d: %s',
+    [AMark.Line, AMark.Column + 1, AMessage]);
 end;
 
-procedure TGocciaYAMLParser.ParseDirectiveLine(const ALineText: string;
-  const ALineNumber: Integer);
-var
-  DirectiveName, DirectiveText, DirectiveValue, HandleName, PrefixText: string;
-  SpaceIndex: Integer;
+function TGocciaYAMLParser.NextEvent: TGocciaYAMLEvent;
 begin
-  DirectiveText := Trim(StripComment(ALineText));
-  if (DirectiveText = '') or (DirectiveText[1] <> '%') then
-    Exit;
-
-  Delete(DirectiveText, 1, 1);
-  SpaceIndex := Pos(' ', DirectiveText);
-  if SpaceIndex > 0 then
-  begin
-    DirectiveName := UpperCase(Copy(DirectiveText, 1, SpaceIndex - 1));
-    DirectiveValue := Trim(Copy(DirectiveText, SpaceIndex + 1, MaxInt));
-  end
-  else
-  begin
-    DirectiveName := UpperCase(DirectiveText);
-    DirectiveValue := '';
-  end;
-
-  if DirectiveName = 'YAML' then
-  begin
-    if FYAMLVersion <> '' then
-      RaiseParseError('The %YAML directive may only appear once per document.',
-        ALineNumber);
-    if DirectiveValue = '' then
-      RaiseParseError('The %YAML directive requires a version number.', ALineNumber);
-    if not IsValidYAMLVersion(DirectiveValue) then
-      RaiseParseError('Unsupported YAML version "' + DirectiveValue + '".',
-        ALineNumber);
-    FYAMLVersion := DirectiveValue;
-    Exit;
-  end;
-
-  if DirectiveName = 'TAG' then
-  begin
-    SpaceIndex := Pos(' ', DirectiveValue);
-    if SpaceIndex = 0 then
-      RaiseParseError('The %TAG directive requires a handle and prefix.', ALineNumber);
-    HandleName := Copy(DirectiveValue, 1, SpaceIndex - 1);
-    PrefixText := Trim(Copy(DirectiveValue, SpaceIndex + 1, MaxInt));
-    if (HandleName = '') or (PrefixText = '') then
-      RaiseParseError('The %TAG directive requires a handle and prefix.', ALineNumber);
-    if not IsValidTagHandle(HandleName) then
-      RaiseParseError('Invalid YAML tag handle "' + HandleName + '".',
-        ALineNumber);
-    if FExplicitTagHandles.ContainsKey(HandleName) then
-      RaiseParseError('The %TAG directive may only appear once per handle in the same document.',
-        ALineNumber);
-    FExplicitTagHandles.AddOrSetValue(HandleName, PrefixText);
-    FTagHandles.AddOrSetValue(HandleName, PrefixText);
-    Exit;
-  end;
+  CheckDataWork;
+  Result := FEvents.NextEvent;
 end;
 
-function TGocciaYAMLParser.TryParseAnchorPrefix(const AText: string;
-  out AAnchorName: string; out ARemainingText: string): Boolean;
-var
-  I: Integer;
-  TrimmedText: string;
+procedure TGocciaYAMLParser.RegisterAnchor(const AEvent: TGocciaYAMLEvent;
+  const ANode: TGocciaDataNode);
 begin
-  TrimmedText := Trim(AText);
-  AAnchorName := '';
-  ARemainingText := TrimmedText;
-
-  if (TrimmedText = '') or (TrimmedText[1] <> '&') then
-    Exit(False);
-
-  I := 2;
-  while (I <= Length(TrimmedText)) and not IsWhitespace(TrimmedText[I]) do
-    Inc(I);
-
-  AAnchorName := Copy(TrimmedText, 2, I - 2);
-  if AAnchorName = '' then
-    RaiseParseError('Anchor names cannot be empty.');
-
-  ARemainingText := Trim(Copy(TrimmedText, I, MaxInt));
-  Result := True;
+  if AEvent.Anchor <> '' then
+    FAnchors.AddOrSetValue(AEvent.Anchor, ANode);
 end;
 
-function TGocciaYAMLParser.TryParseTagPrefix(const AText: string; out ATagName: string;
-  out ARemainingText: string; const ALineNumber: Integer): Boolean;
+{ a plain scalar by the core schema and its extensions }
+function TGocciaYAMLParser.ResolvePlainScalar(const AText: string): TGocciaDataNode;
 var
-  HandleName, PrefixText, SuffixText, TrimmedText: string;
-  HandleEnd, PrefixEnd, WhitespaceIndex: Integer;
-begin
-  TrimmedText := Trim(AText);
-  ATagName := '';
-  ARemainingText := TrimmedText;
-  if (TrimmedText = '') or (TrimmedText[1] <> '!') then
-    Exit(False);
-
-  if (Length(TrimmedText) >= 3) and (TrimmedText[2] = '<') then
-  begin
-    PrefixEnd := Pos('>', TrimmedText);
-    if PrefixEnd = 0 then
-      RaiseParseError('Verbatim tags must end with ">".', ALineNumber);
-    ATagName := Copy(TrimmedText, 3, PrefixEnd - 3);
-    ARemainingText := Trim(Copy(TrimmedText, PrefixEnd + 1, MaxInt));
-    Exit(True);
-  end;
-
-  if (Length(TrimmedText) = 1) or IsWhitespace(TrimmedText[2]) then
-  begin
-    ATagName := TAG_HANDLE_LOCAL;
-    ARemainingText := Trim(Copy(TrimmedText, 2, MaxInt));
-    Exit(True);
-  end;
-
-  HandleName := TAG_HANDLE_LOCAL;
-  SuffixText := '';
-  if TrimmedText[2] = '!' then
-  begin
-    WhitespaceIndex := 3;
-    while (WhitespaceIndex <= Length(TrimmedText)) and
-          not IsWhitespace(TrimmedText[WhitespaceIndex]) do
-      Inc(WhitespaceIndex);
-    HandleName := TAG_HANDLE_STANDARD;
-    SuffixText := Copy(TrimmedText, 3, WhitespaceIndex - 3);
-    ARemainingText := Trim(Copy(TrimmedText, WhitespaceIndex, MaxInt));
-  end
-  else
-  begin
-    HandleEnd := 2;
-    while (HandleEnd <= Length(TrimmedText)) and not IsWhitespace(TrimmedText[HandleEnd]) do
-    begin
-      if TrimmedText[HandleEnd] = '!' then
-      begin
-        HandleName := Copy(TrimmedText, 1, HandleEnd);
-        WhitespaceIndex := HandleEnd + 1;
-        while (WhitespaceIndex <= Length(TrimmedText)) and
-              not IsWhitespace(TrimmedText[WhitespaceIndex]) do
-          Inc(WhitespaceIndex);
-        SuffixText := Copy(TrimmedText, HandleEnd + 1, WhitespaceIndex - HandleEnd - 1);
-        ARemainingText := Trim(Copy(TrimmedText, WhitespaceIndex, MaxInt));
-        Break;
-      end;
-      Inc(HandleEnd);
-    end;
-
-	    if SuffixText = '' then
-	    begin
-	      WhitespaceIndex := 2;
-	      while (WhitespaceIndex <= Length(TrimmedText)) and
-	            not IsWhitespace(TrimmedText[WhitespaceIndex]) do
-	        Inc(WhitespaceIndex);
-	      SuffixText := Copy(TrimmedText, 2, WhitespaceIndex - 2);
-	      ARemainingText := Trim(Copy(TrimmedText, WhitespaceIndex, MaxInt));
-	    end;
-	  end;
-
-  if not FTagHandles.TryGetValue(HandleName, PrefixText) then
-    RaiseParseError('Unknown tag handle ' + HandleName + '.', ALineNumber);
-  ATagName := PrefixText + SuffixText;
-  Result := True;
-end;
-
-procedure TGocciaYAMLParser.ParseNodeProperties(const AText: string; out ATagName,
-  AAnchorName, ARemainingText: string; const ALineNumber: Integer);
-var
-  ParsedTagName, ParsedAnchorName, RemainingText: string;
-begin
-  ATagName := '';
-  AAnchorName := '';
-  ARemainingText := Trim(AText);
-  while ARemainingText <> '' do
-  begin
-    if TryParseAnchorPrefix(ARemainingText, ParsedAnchorName, RemainingText) then
-    begin
-      if AAnchorName <> '' then
-        RaiseParseError('Duplicate anchor property on the same YAML node.', ALineNumber);
-      AAnchorName := ParsedAnchorName;
-      ARemainingText := RemainingText;
-      Continue;
-    end;
-
-    if TryParseTagPrefix(ARemainingText, ParsedTagName, RemainingText, ALineNumber) then
-    begin
-      if ATagName <> '' then
-        RaiseParseError('Duplicate tag property on the same YAML node.', ALineNumber);
-      ATagName := ParsedTagName;
-      ARemainingText := RemainingText;
-      Continue;
-    end;
-    Break;
-  end;
-end;
-
-function TGocciaYAMLParser.ApplyTag(const ATagName: string; const AValue: TGocciaDataNode;
-  const ALineNumber: Integer): TGocciaDataNode;
-var
-  DecodedBytes: TBytes;
-  I: Integer;
-  ScalarText: string;
   NumericValue: Double;
 begin
-  if (ATagName = '') or (ATagName = TAG_HANDLE_LOCAL) then
-    Exit(AValue);
+  if (AText = '') or SameText(AText, 'null') or (AText = '~') then
+    Result := FTree.NewNull
+  else if SameText(AText, 'true') then
+    Result := FTree.NewBoolean(True)
+  else if SameText(AText, 'false') then
+    Result := FTree.NewBoolean(False)
+  else if TryParseYAMLInteger(AText, NumericValue) or
+          TryParseYAMLFloat(AText, NumericValue) then
+    Result := FTree.NewNumber(NumericValue)
+  else
+    Result := FTree.NewString(AText);
+end;
 
-  if not SameText(ATagName, TAG_STANDARD_SEQ) and
-     not SameText(ATagName, TAG_STANDARD_MAP) and
-     not SameText(ATagName, TAG_STANDARD_STR) and
-     not SameText(ATagName, TAG_STANDARD_NULL) and
-     not SameText(ATagName, TAG_STANDARD_BOOL) and
-     not SameText(ATagName, TAG_STANDARD_INT) and
-     not SameText(ATagName, TAG_STANDARD_FLOAT) and
-     not SameText(ATagName, TAG_STANDARD_TIMESTAMP) and
-     not SameText(ATagName, TAG_STANDARD_BINARY) then
-    Exit(FTree.NewTagged(ATagName, AValue));
-
-  if SameText(ATagName, TAG_STANDARD_SEQ) then
+function TGocciaYAMLParser.ComposeScalar(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+var
+  NumericValue: Double;
+  Tag, Text: string;
+begin
+  Text := AEvent.Value;
+  if not AEvent.HasTag then
   begin
-    if AValue.Kind <> dnkArray then
-      RaiseParseError('The !!seq tag requires a sequence value.', ALineNumber);
-    Exit(AValue);
+    if AEvent.Style = yssPlain then
+      Exit(ResolvePlainScalar(Text));
+    Exit(FTree.NewString(Text));
   end;
 
-  if SameText(ATagName, TAG_STANDARD_MAP) then
+  Tag := AEvent.Tag;
+  // the non-specific tag "!" makes any scalar a string (6.9.1)
+  if (Tag = TAG_NON_SPECIFIC) or SameText(Tag, TAG_STANDARD_STR) then
+    Exit(FTree.NewString(Text));
+
+  if SameText(Tag, TAG_STANDARD_NULL) then
   begin
-    if AValue.Kind <> dnkObject then
-      RaiseParseError('The !!map tag requires a mapping value.', ALineNumber);
-    Exit(AValue);
-  end;
-
-  if AValue.IsContainer then
-    RaiseParseError('Scalar tags cannot be applied to mappings or sequences.',
-      ALineNumber);
-
-  ScalarText := AValue.ToText;
-
-  if SameText(ATagName, TAG_STANDARD_STR) then
-    Exit(FTree.NewString(ScalarText));
-
-  if SameText(ATagName, TAG_STANDARD_NULL) then
-  begin
-    if (ScalarText <> '') and not SameText(ScalarText, 'null') and (ScalarText <> '~') then
-      RaiseParseError('The !!null tag requires an empty scalar, "null", or "~".',
-        ALineNumber);
+    if (Text <> '') and not SameText(Text, 'null') and (Text <> '~') then
+      RaiseError(AEvent.StartMark,
+        'The !!null tag requires an empty scalar, "null", or "~".');
     Exit(FTree.NewNull);
   end;
 
-  if SameText(ATagName, TAG_STANDARD_BOOL) then
+  if SameText(Tag, TAG_STANDARD_BOOL) then
   begin
-    if SameText(ScalarText, 'true') then
+    if SameText(Text, 'true') then
       Exit(FTree.NewBoolean(True));
-    if SameText(ScalarText, 'false') then
+    if SameText(Text, 'false') then
       Exit(FTree.NewBoolean(False));
-    RaiseParseError('The !!bool tag requires "true" or "false".', ALineNumber);
+    RaiseError(AEvent.StartMark, 'The !!bool tag requires "true" or "false".');
   end;
 
-  if SameText(ATagName, TAG_STANDARD_INT) then
+  if SameText(Tag, TAG_STANDARD_INT) then
   begin
-    if not TryParseYAMLInteger(ScalarText, NumericValue) then
-      RaiseParseError('The !!int tag requires a valid integer scalar.', ALineNumber);
+    if not TryParseYAMLInteger(Text, NumericValue) then
+      RaiseError(AEvent.StartMark, 'The !!int tag requires a valid integer scalar.');
     Exit(FTree.NewNumber(NumericValue));
   end;
 
-  if SameText(ATagName, TAG_STANDARD_FLOAT) then
+  if SameText(Tag, TAG_STANDARD_FLOAT) then
   begin
-    if not (TryParseYAMLInteger(ScalarText, NumericValue) or
-            TryParseYAMLFloat(ScalarText, NumericValue)) then
-      RaiseParseError('The !!float tag requires a valid numeric scalar.',
-        ALineNumber);
+    if not (TryParseYAMLInteger(Text, NumericValue) or
+            TryParseYAMLFloat(Text, NumericValue)) then
+      RaiseError(AEvent.StartMark, 'The !!float tag requires a valid numeric scalar.');
     Exit(FTree.NewNumber(NumericValue));
   end;
 
-  if SameText(ATagName, TAG_STANDARD_TIMESTAMP) then
+  if SameText(Tag, TAG_STANDARD_TIMESTAMP) then
   begin
-    if not IsValidYAMLTimestamp(ScalarText) then
-      RaiseParseError('The !!timestamp tag requires a valid ISO date or date-time scalar.',
-        ALineNumber);
-    Exit(FTree.NewTagged(ATagName,
-      FTree.NewString(ScalarText)));
+    if not IsValidYAMLTimestamp(Text) then
+      RaiseError(AEvent.StartMark,
+        'The !!timestamp tag requires a valid ISO date or date-time scalar.');
+    Exit(FTree.NewTagged(Tag, FTree.NewString(Text)));
   end;
 
-  if SameText(ATagName, TAG_STANDARD_BINARY) then
+  // the base64 text itself: decoded bytes have no string form
+  if SameText(Tag, TAG_STANDARD_BINARY) then
   begin
-    ScalarText := RemoveAllWhitespace(ScalarText);
-    if (ScalarText = '') or ((Length(ScalarText) mod 4) <> 0) or
-       not TryDecodeBase64Standard(ScalarText, DecodedBytes) then
-      RaiseParseError('The !!binary tag requires valid base64 content.',
-        ALineNumber);
-    SetLength(ScalarText, Length(DecodedBytes));
-    for I := 0 to High(DecodedBytes) do
-      ScalarText[I + 1] := Char(DecodedBytes[I]);
-    Exit(FTree.NewTagged(ATagName,
-      FTree.NewString(ScalarText)));
+    if not IsValidBase64Text(Text) then
+      RaiseError(AEvent.StartMark, 'The !!binary tag requires valid base64 content.');
+    Exit(FTree.NewTagged(Tag, FTree.NewString(Text)));
   end;
 
-  Result := AValue;
+  if SameText(Tag, TAG_STANDARD_SEQ) then
+    RaiseError(AEvent.StartMark, 'The !!seq tag requires a sequence value.');
+  if SameText(Tag, TAG_STANDARD_MAP) then
+    RaiseError(AEvent.StartMark, 'The !!map tag requires a mapping value.');
+
+  if AEvent.Style = yssPlain then
+    Result := FTree.NewTagged(Tag, ResolvePlainScalar(Text))
+  else
+    Result := FTree.NewTagged(Tag, FTree.NewString(Text));
 end;
 
-procedure TGocciaYAMLParser.RegisterAnchor(const AAnchorName: string;
-  const AValue: TGocciaDataNode; const ALineNumber: Integer);
+function TGocciaYAMLParser.ApplyCollectionTag(const AEvent: TGocciaYAMLEvent;
+  const ANode: TGocciaDataNode): TGocciaDataNode;
 begin
-  if AAnchorName = '' then
-    Exit;
-  if not Assigned(AValue) then
-    RaiseParseError('Anchors must reference a value.', ALineNumber);
-  FAnchors.AddOrSetValue(AAnchorName, AValue);
+  if not AEvent.HasTag or (AEvent.Tag = TAG_NON_SPECIFIC) then
+    Exit(ANode);
+  if SameText(AEvent.Tag, TAG_STANDARD_SEQ) then
+  begin
+    if ANode.Kind <> dnkArray then
+      RaiseError(AEvent.StartMark, 'The !!seq tag requires a sequence value.');
+    Exit(ANode);
+  end;
+  if SameText(AEvent.Tag, TAG_STANDARD_MAP) then
+  begin
+    if ANode.Kind <> dnkObject then
+      RaiseError(AEvent.StartMark, 'The !!map tag requires a mapping value.');
+    Exit(ANode);
+  end;
+  if IsCoreScalarTag(AEvent.Tag) then
+    RaiseError(AEvent.StartMark,
+      'Scalar tags cannot be applied to mappings or sequences.');
+  Result := FTree.NewTagged(AEvent.Tag, ANode);
 end;
 
-function TGocciaYAMLParser.ResolveAliasValue(const AAliasName: string;
-  const ALineNumber: Integer): TGocciaDataNode;
+function TGocciaYAMLParser.ComposeSequence(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+var
+  Item: TGocciaYAMLEvent;
 begin
-  if not FAnchors.TryGetValue(AAliasName, Result) then
-    RaiseParseError('Unknown alias *' + AAliasName + '.', ALineNumber);
+  EnterDataDepth(DATA_DEPTH_OPERATION);
+  try
+    Result := FTree.NewArray;
+    // the anchor names the sequence before its entries, which may alias it
+    RegisterAnchor(AEvent, Result);
+    while True do
+    begin
+      Item := NextEvent;
+      if Item.Kind = yekSequenceEnd then
+        Break;
+      Result.Add(ComposeNode(Item));
+    end;
+    Result := ApplyCollectionTag(AEvent, Result);
+    RegisterAnchor(AEvent, Result);
+  finally
+    LeaveDataDepth;
+  end;
 end;
 
-procedure TGocciaYAMLParser.MergeMappingValue(const ATarget: TGocciaDataNode;
-  const AValue: TGocciaDataNode; const ALineNumber: Integer);
+function TGocciaYAMLParser.ComposeMapping(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+var
+  KeyEvent: TGocciaYAMLEvent;
+  Key, Value: TGocciaDataNode;
+begin
+  EnterDataDepth(DATA_DEPTH_OPERATION);
+  try
+    Result := FTree.NewObject;
+    RegisterAnchor(AEvent, Result);
+    while True do
+    begin
+      KeyEvent := NextEvent;
+      if KeyEvent.Kind = yekMappingEnd then
+        Break;
+      Key := ComposeNode(KeyEvent);
+      Value := ComposeNode(NextEvent);
+      if (KeyEvent.Kind = yekScalar) and (KeyEvent.Style = yssPlain) and
+         not KeyEvent.HasTag and (KeyEvent.Value = MERGE_KEY) then
+        MergeMappingValue(Result, Value, KeyEvent.StartMark)
+      else
+        Result.SetProperty(KeyName(KeyEvent, Key), Value);
+    end;
+    Result := ApplyCollectionTag(AEvent, Result);
+    RegisterAnchor(AEvent, Result);
+  finally
+    LeaveDataDepth;
+  end;
+end;
+
+function TGocciaYAMLParser.ComposeNode(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+begin
+  case AEvent.Kind of
+    yekAlias:
+      if not FAnchors.TryGetValue(AEvent.Value, Result) then
+        RaiseError(AEvent.StartMark, 'Unknown alias *' + AEvent.Value + '.');
+    yekScalar:
+      begin
+        Result := ComposeScalar(AEvent);
+        RegisterAnchor(AEvent, Result);
+      end;
+    yekSequenceStart:
+      Result := ComposeSequence(AEvent);
+    yekMappingStart:
+      Result := ComposeMapping(AEvent);
+  else
+    RaiseError(AEvent.StartMark, 'Expected a YAML node.');
+  end;
+end;
+
+{ "<<": the mapping, or each mapping of a sequence, adds the keys the target
+  does not have yet (yaml.org/type/merge.html) }
+procedure TGocciaYAMLParser.MergeMappingValue(const ATarget, AValue: TGocciaDataNode;
+  const AMark: TGocciaYAMLMarker);
 var
   I: Integer;
   Key: string;
+  Source: TGocciaDataNode;
 begin
-  if AValue.Kind = dnkArray then
+  Source := AValue;
+  if Source.Kind = dnkTagged then
+    Source := Source.TaggedValue;
+  if Source.Kind = dnkArray then
   begin
-    for I := 0 to AValue.Count - 1 do
-      MergeMappingValue(ATarget, AValue.Items[I], ALineNumber);
+    for I := 0 to Source.Count - 1 do
+      MergeMappingValue(ATarget, Source.Items[I], AMark);
     Exit;
   end;
-
-  if AValue.Kind <> dnkObject then
-    RaiseParseError('Merge keys must reference a mapping or a sequence of mappings.',
-      ALineNumber);
-
-  for Key in AValue.OwnKeys do
+  if Source.Kind <> dnkObject then
+    RaiseError(AMark, 'Merge keys must reference a mapping or a sequence of mappings.');
+  for Key in Source.OwnKeys do
     if not ATarget.HasProperty(Key) then
-      ATarget.SetProperty(Key, AValue.GetProperty(Key));
+      ATarget.SetProperty(Key, Source.GetProperty(Key));
 end;
 
-procedure TGocciaYAMLParser.Reset;
+function TGocciaYAMLParser.KeyName(const AEvent: TGocciaYAMLEvent;
+  const AKey: TGocciaDataNode): string;
 begin
-  FAnchors.Clear;
-  InitializeTagHandles;
-  SetLength(FLines, 0);
-  FLineCount := 0;
-  FIndex := 0;
+  if (AEvent.Kind = yekScalar) and (AEvent.Style = yssPlain) and
+     not AEvent.HasTag and (AEvent.Value = '') then
+    Exit('');
+  Result := CanonicalizeKeyValue(AKey);
 end;
 
-procedure TGocciaYAMLParser.SkipIgnorableLines;
-begin
-  while HasCurrentLine and CurrentLine.IsIgnorable do
-    Inc(FIndex);
-end;
-
-procedure TGocciaYAMLParser.AddLine(const ALineNumber, AIndent: Integer;
-  const ARawText, AText: string; const AIsIgnorable: Boolean);
-begin
-  if FLineCount = Length(FLines) then
-    SetLength(FLines, FLineCount + 32);
-  FLines[FLineCount].RawText := ARawText;
-  FLines[FLineCount].Number := ALineNumber;
-  FLines[FLineCount].Indent := AIndent;
-  FLines[FLineCount].IsIgnorable := AIsIgnorable;
-  FLines[FLineCount].Text := AText;
-  Inc(FLineCount);
-end;
-
-procedure TGocciaYAMLParser.LoadLines(const AText: string);
+function TGocciaYAMLParser.ParseStream(const AText: string;
+  out AExplicitDocumentStart: Boolean): TGocciaDataTree;
 var
-  I, Indent: Integer;
-  ContentText, LineText, ParsedLine, TrimmedLine: string;
-  SeenContent: Boolean;
-  Source: TStringList;
+  Event: TGocciaYAMLEvent;
 begin
-  Reset;
-  Source := CreateTextLines(AText);
-  try
-    SeenContent := False;
-    for I := 0 to Source.Count - 1 do
-    begin
-      LineText := Source[I];
-      if (I = 0) and (LineText <> '') and (LineText[1] = #$FEFF) then
-        Delete(LineText, 1, 1);
-
-      if (LineText <> '') and (LineText[1] = #9) then
-        RaiseParseError('Tabs are not allowed in YAML indentation.', I + 1);
-
-      ParsedLine := StripComment(LineText);
-      TrimmedLine := TrimRight(ParsedLine);
-      Indent := CountIndentation(LineText);
-      ContentText := Copy(TrimmedLine, Indent + 1, MaxInt);
-      if HasInvalidTabAfterBlockIndicator(ContentText) then
-        RaiseParseError('Tabs are not allowed in YAML indentation.', I + 1);
-
-      if (Indent = 0) and (Trim(TrimmedLine) <> '') and (Trim(TrimmedLine)[1] = '%') then
-      begin
-        if SeenContent then
-          RaiseParseError('YAML directives must appear before document content.',
-            I + 1);
-        ParseDirectiveLine(LineText, I + 1);
-        Continue;
-      end;
-
-      if Trim(TrimmedLine) = '' then
-        AddLine(I + 1, Indent, LineText, '', True)
-      else
-      begin
-        AddLine(I + 1, Indent, LineText, ContentText, False);
-        SeenContent := True;
-      end;
-    end;
-  finally
-    Source.Free;
-  end;
-end;
-
-function TGocciaYAMLParser.CurrentLine: TGocciaYAMLLine;
-begin
-  Result := FLines[FIndex];
-end;
-
-function TGocciaYAMLParser.HasCurrentLine: Boolean;
-begin
-  Result := FIndex < FLineCount;
-end;
-
-procedure TGocciaYAMLParser.RaiseParseError(const AMessage: string;
-  const ALineNumber: Integer);
-begin
-  if ALineNumber > 0 then
-    raise EGocciaYAMLParseError.CreateFmt('Line %d: %s', [ALineNumber, AMessage]);
-  raise EGocciaYAMLParseError.Create(AMessage);
-end;
-
-function TGocciaYAMLParser.ParseSingleDocument(const AText: string): TGocciaDataNode;
-var
-  RootIndent: Integer;
-begin
-  LoadLines(AText);
-  SkipIgnorableLines;
-  if FLineCount = 0 then
-    Exit(FTree.NewNull);
-  if not HasCurrentLine then
-    Exit(FTree.NewNull);
-
-  RootIndent := CurrentLine.Indent;
-  Result := ParseNode(RootIndent);
-  SkipIgnorableLines;
-  if HasCurrentLine then
-    RaiseParseError('Unexpected trailing content.', CurrentLine.Number);
-end;
-
-function TGocciaYAMLParser.Parse(const AText: string): TGocciaDataTree;
-var
-  Documents: TGocciaDataNode;
-begin
-  Result := ParseDocuments(AText);
-  Documents := Result.Root;
-  if Documents.Count = 0 then
-    Result.Root := Result.NewNull
-  else if not HasExplicitDocumentStartMarker(AText) then
-    Result.Root := Documents.Items[0];
-end;
-
-function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaDataTree;
-begin
+  AExplicitDocumentStart := False;
   Result := TGocciaDataTree.Create;
   try
     Result.Root := Result.NewArray;
     FTree := Result;
+    FEvents := TGocciaYAMLEventParser.Create(AText);
     try
-      ParseDocumentsInto(AText, Result.Root);
+      NextEvent;
+      while True do
+      begin
+        Event := NextEvent;
+        if Event.Kind = yekStreamEnd then
+          Break;
+        if Event.Explicit then
+          AExplicitDocumentStart := True;
+        // anchors name nodes of their own document only
+        FAnchors.Clear;
+        Result.Root.Add(ComposeNode(NextEvent));
+        NextEvent;
+      end;
     finally
+      FreeAndNil(FEvents);
       FTree := nil;
+      // the last document's anchors would otherwise name nodes of a tree the
+      // caller may free
+      FAnchors.Clear;
     end;
   except
     Result.Free;
@@ -2042,832 +736,24 @@ begin
   end;
 end;
 
-procedure TGocciaYAMLParser.ParseDocumentsInto(const AText: string;
-  const ADocuments: TGocciaDataNode);
+function TGocciaYAMLParser.Parse(const AText: string): TGocciaDataTree;
 var
-  DocumentIndex: Integer;
-  DocumentText: TStringList;
+  Documents: TGocciaDataNode;
+  ExplicitDocumentStart: Boolean;
 begin
-  try
-    DocumentText := SplitYAMLDocuments(AText);
-    try
-      for DocumentIndex := 0 to DocumentText.Count - 1 do
-        ADocuments.Add(ParseSingleDocument(DocumentText[DocumentIndex]));
-    finally
-      DocumentText.Free;
-    end;
-  finally
-    // Anchors are per-document (Reset clears them in LoadLines); the last
-    // document's would otherwise name nodes of a freed tree.
-    FAnchors.Clear;
-  end;
+  Result := ParseStream(AText, ExplicitDocumentStart);
+  Documents := Result.Root;
+  if Documents.Count = 0 then
+    Result.Root := Result.NewNull
+  else if not ExplicitDocumentStart then
+    Result.Root := Documents.Items[0];
 end;
 
-function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaDataNode;
+function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaDataTree;
 var
-  AnchorName, RemainingText, TagName: string;
-  LineNumber: Integer;
+  ExplicitDocumentStart: Boolean;
 begin
-  EnterDataDepth('YAML parsing');
-  try
-    CheckDataWork;
-    SkipIgnorableLines;
-    if not HasCurrentLine then
-      Exit(FTree.NewNull);
-
-    if CurrentLine.Indent <> AIndent then
-      RaiseParseError('Invalid indentation.', CurrentLine.Number);
-    LineNumber := CurrentLine.Number;
-
-    ParseNodeProperties(CurrentLine.Text, TagName, AnchorName, RemainingText, LineNumber);
-    Result := ParseNodeValue(RemainingText, AIndent,
-      NO_COMPACT_INDENT, LineNumber, TagName,
-      AnchorName, True, False, (RemainingText = '') and
-      ((TagName <> '') or (AnchorName <> '')), False, True);
-  finally
-    LeaveDataDepth;
-  end;
-end;
-
-function TGocciaYAMLParser.ParseNestedNode(const AParentIndent: Integer): TGocciaDataNode;
-begin
-  SkipIgnorableLines;
-  if not HasCurrentLine or (CurrentLine.Indent <= AParentIndent) then
-    Exit(FTree.NewNull);
-  Result := ParseNode(CurrentLine.Indent);
-end;
-
-function TGocciaYAMLParser.ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaDataNode;
-begin
-  SkipIgnorableLines;
-  if not HasCurrentLine or (CurrentLine.Indent < AParentIndent) then
-    Exit(FTree.NewNull);
-  if (CurrentLine.Indent = AParentIndent) and
-     not StartsSequenceEntry(CurrentLine.Text) and
-     ((CurrentLine.Text = '') or
-      ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{'))) then
-    Exit(FTree.NewNull);
-  Result := ParseNode(CurrentLine.Indent);
-end;
-
-function TGocciaYAMLParser.IsBlockScalarHeader(const AText: string): Boolean;
-begin
-  Result := IsBlockScalarHeaderText(AText);
-end;
-
-function TGocciaYAMLParser.ParseBlockScalar(const AParentIndent: Integer;
-  const AHeaderText: string; const ALineNumber: Integer): TGocciaDataNode;
-var
-  BuiltText: string;
-  ChompMode, Style: Char;
-  Content, HeaderText: string;
-  ContentIndent, HeaderIndex, I, LineIndex: Integer;
-  HasContentLines: Boolean;
-  IndentIndicator: Integer;
-  IsBlankLine: Boolean;
-  Lines: TStringList;
-  PendingBlankLines: Integer;
-begin
-  HeaderText := Trim(AHeaderText);
-  Style := HeaderText[1];
-  ChompMode := #0;
-  IndentIndicator := 0;
-  for HeaderIndex := 2 to Length(HeaderText) do
-    if HeaderText[HeaderIndex] in ['+', '-'] then
-      ChompMode := HeaderText[HeaderIndex]
-    else if HeaderText[HeaderIndex] in ['1'..'9'] then
-      IndentIndicator := Ord(HeaderText[HeaderIndex]) - Ord('0')
-    else
-      RaiseParseError('Invalid block scalar header.', ALineNumber);
-
-  Inc(FIndex);
-  Lines := TStringList.Create;
-  try
-    while HasCurrentLine do
-    begin
-      if not CurrentLine.IsIgnorable and (CurrentLine.Indent <= AParentIndent) then
-        Break;
-      Lines.AddObject(CurrentLine.RawText, TObject(NativeInt(CurrentLine.Number)));
-      Inc(FIndex);
-    end;
-
-    if IndentIndicator > 0 then
-      ContentIndent := AParentIndent + IndentIndicator
-    else
-    begin
-      ContentIndent := MaxInt;
-      for LineIndex := 0 to Lines.Count - 1 do
-      begin
-        Content := Lines[LineIndex];
-        if Trim(Content) = '' then
-          Continue;
-        I := CountIndentation(Content);
-        if I < ContentIndent then
-          ContentIndent := I;
-      end;
-      if ContentIndent = MaxInt then
-        ContentIndent := AParentIndent + 1;
-    end;
-
-    BuiltText := '';
-    HasContentLines := Lines.Count > 0;
-    PendingBlankLines := 0;
-    for LineIndex := 0 to Lines.Count - 1 do
-    begin
-      Content := Lines[LineIndex];
-      if Trim(Content) = '' then
-        Content := ''
-      else
-      begin
-        I := CountIndentation(Content);
-        if I < ContentIndent then
-          RaiseParseError('Block scalar content must be indented.',
-            NativeInt(Lines.Objects[LineIndex]));
-        Content := Copy(Content, ContentIndent + 1, MaxInt);
-      end;
-
-      IsBlankLine := Content = '';
-      if Style = '|' then
-      begin
-        if LineIndex > 0 then
-          BuiltText := BuiltText + #10
-      end
-      else
-      begin
-        if IsBlankLine then
-          Inc(PendingBlankLines)
-        else
-        begin
-          if BuiltText <> '' then
-          begin
-            if PendingBlankLines > 0 then
-              BuiltText := BuiltText + StringOfChar(#10, PendingBlankLines)
-            else
-              BuiltText := BuiltText + ' ';
-          end
-          else if PendingBlankLines > 0 then
-            BuiltText := BuiltText + StringOfChar(#10, PendingBlankLines);
-          PendingBlankLines := 0;
-        end;
-      end;
-
-      if Style = '|' then
-        BuiltText := BuiltText + Content
-      else if not IsBlankLine then
-        BuiltText := BuiltText + Content;
-    end;
-
-    if (Style = '>') and (PendingBlankLines > 0) then
-      BuiltText := BuiltText + StringOfChar(#10, PendingBlankLines);
-
-    case ChompMode of
-      '-':
-        BuiltText := TrimTrailingLineFeeds(BuiltText);
-      '+':
-        if HasContentLines and not EndsWithLineFeed(BuiltText) then
-          BuiltText := BuiltText + #10;
-    else
-      begin
-        BuiltText := TrimTrailingLineFeeds(BuiltText);
-        if HasContentLines then
-          BuiltText := BuiltText + #10;
-      end;
-    end;
-    Result := FTree.NewString(BuiltText);
-  finally
-    Lines.Free;
-  end
-end;
-
-function TGocciaYAMLParser.CanonicalizeKeyValue(const AValue: TGocciaDataNode;
-  const AInComposite: Boolean): string;
-var
-  I: Integer;
-  KeyNames: TArray<string>;
-begin
-  if AValue.Kind = dnkTagged then
-    Exit(CanonicalizeKeyValue(AValue.TaggedValue, AInComposite));
-
-  if AValue.Kind = dnkArray then
-  begin
-    Result := '[';
-    for I := 0 to AValue.Count - 1 do
-    begin
-      if I > 0 then
-        Result := Result + ', ';
-      Result := Result + CanonicalizeKeyValue(AValue.Items[I], True);
-    end;
-    Exit(Result + ']');
-  end;
-
-  if AValue.Kind = dnkObject then
-  begin
-    Result := '{';
-    KeyNames := AValue.OwnKeys;
-    for I := 0 to Length(KeyNames) - 1 do
-    begin
-      if I > 0 then
-        Result := Result + ', ';
-      Result := Result + EscapeCompositeKeyString(KeyNames[I]) + ': ' +
-        CanonicalizeKeyValue(AValue.GetProperty(KeyNames[I]), True);
-    end;
-    Exit(Result + '}');
-  end;
-
-  Result := AValue.ToText;
-  if AInComposite and (AValue.Kind = dnkString) then
-    Result := EscapeCompositeKeyString(Result);
-end;
-
-function TGocciaYAMLParser.ParseKeyName(const AText: string;
-  const ALineNumber: Integer): string;
-var
-  AnchorName, KeyText, RemainingText, TagName: string;
-  KeyValue: TGocciaDataNode;
-begin
-  KeyText := Trim(AText);
-  ParseNodeProperties(KeyText, TagName, AnchorName, RemainingText);
-  if RemainingText = '' then
-    KeyValue := FTree.NewString('')
-  else
-    KeyValue := ParseInlineValue(RemainingText);
-
-  KeyValue := ApplyTag(TagName, KeyValue);
-  RegisterAnchor(AnchorName, KeyValue, ALineNumber);
-  Result := CanonicalizeKeyValue(KeyValue);
-end;
-
-function TGocciaYAMLParser.ParseMappingValueText(const AValueText: string;
-  const ALineIndent, ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
-var
-  AnchorName, RemainingText, TagName: string;
-begin
-  ParseNodeProperties(AValueText, TagName, AnchorName, RemainingText, ALineNumber);
-  if (ACompactIndent = NO_COMPACT_INDENT) and not StartsSequenceEntry(RemainingText) and
-     StartsBlockMappingEntry(RemainingText) then
-    RaiseParseError('A compact block mapping requires an explicit key.', ALineNumber);
-  Result := ParseNodeValue(RemainingText, ALineIndent, ACompactIndent,
-    ALineNumber, TagName,
-    AnchorName, True, False, False, True, False);
-end;
-
-procedure TGocciaYAMLParser.ParseMappingEntry(const AContainer: TGocciaDataNode;
-  const ALineText: string; const ALineIndent, ALineNumber: Integer);
-var
-  KeyText, ValueText: string;
-  SeparatorIndex: Integer;
-  Value: TGocciaDataNode;
-begin
-  SeparatorIndex := FindTopLevelMappingSeparator(ALineText);
-  if SeparatorIndex = 0 then
-    RaiseParseError('Expected a mapping entry.', ALineNumber);
-
-  KeyText := Trim(Copy(ALineText, 1, SeparatorIndex - 1));
-  ValueText := Trim(Copy(ALineText, SeparatorIndex + 1, MaxInt));
-  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber, NO_COMPACT_INDENT);
-  KeyText := ParseKeyName(KeyText, ALineNumber);
-  if KeyText = '<<' then
-    MergeMappingValue(AContainer, Value, ALineNumber)
-  else
-    AContainer.SetProperty(KeyText, Value);
-end;
-
-procedure TGocciaYAMLParser.ParseExplicitMappingEntry(
-  const AContainer: TGocciaDataNode; const ALineText: string;
-  const ALineIndent, ALineNumber: Integer);
-var
-  KeyAnchorName, KeyRemainingText, KeyTagName: string;
-  KeyLineText, ValueLineText: string;
-  KeyValue, Value: TGocciaDataNode;
-begin
-  KeyLineText := Copy(ALineText, 2, MaxInt);
-  if Trim(KeyLineText) = '' then
-  begin
-    Inc(FIndex);
-    KeyValue := ParseExplicitNestedNode(ALineIndent);
-  end
-  else
-  begin
-    ParseNodeProperties(KeyLineText, KeyTagName, KeyAnchorName, KeyRemainingText,
-      ALineNumber);
-    if KeyRemainingText = '' then
-    begin
-      KeyValue := FTree.NewString('');
-      Inc(FIndex);
-    end
-    else if not StartsSequenceEntry(KeyRemainingText) and
-            StartsBlockMappingEntry(KeyRemainingText) then
-    begin
-      KeyValue := FTree.NewObject;
-      ParseCompactMappingInto(ALineIndent + 1 + CountIndentation(KeyLineText),
-        KeyRemainingText, ALineNumber, KeyValue);
-    end
-    else
-      KeyValue := ParseInlineValueWithContinuations(KeyRemainingText,
-        ALineIndent, ALineNumber, False, True);
-    KeyValue := ApplyTag(KeyTagName, KeyValue, ALineNumber);
-    RegisterAnchor(KeyAnchorName, KeyValue, ALineNumber);
-  end;
-
-  SkipIgnorableLines;
-  if not HasCurrentLine or (CurrentLine.Indent <> ALineIndent) or
-     not StartsExplicitValueEntry(CurrentLine.Text) then
-  begin
-    Value := FTree.NewNull;
-    KeyLineText := CanonicalizeKeyValue(KeyValue);
-    if KeyLineText = '<<' then
-      MergeMappingValue(AContainer, Value, ALineNumber)
-    else
-      AContainer.SetProperty(KeyLineText, Value);
-    Exit;
-  end;
-
-  ValueLineText := Copy(CurrentLine.Text, 2, MaxInt);
-  if Trim(ValueLineText) = '' then
-  begin
-    Inc(FIndex);
-    Value := ParseExplicitNestedNode(ALineIndent);
-  end
-  else
-    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number,
-      ALineIndent + 1 + CountIndentation(ValueLineText));
-  KeyLineText := CanonicalizeKeyValue(KeyValue);
-  if KeyLineText = '<<' then
-    MergeMappingValue(AContainer, Value, CurrentLine.Number)
-  else
-    AContainer.SetProperty(KeyLineText, Value);
-end;
-
-procedure TGocciaYAMLParser.ParseMappingInto(const AIndent: Integer;
-  const AObject: TGocciaDataNode);
-begin
-  while True do
-  begin
-    SkipIgnorableLines;
-    if not (HasCurrentLine and (CurrentLine.Indent = AIndent) and
-            StartsBlockMappingEntry(CurrentLine.Text)) then
-      Break;
-    if StartsExplicitKeyEntry(CurrentLine.Text) then
-      ParseExplicitMappingEntry(AObject, CurrentLine.Text, CurrentLine.Indent,
-        CurrentLine.Number)
-    else
-      ParseMappingEntry(AObject, CurrentLine.Text, CurrentLine.Indent,
-        CurrentLine.Number);
-  end;
-end;
-
-procedure TGocciaYAMLParser.ParseCompactMappingInto(
-  const AMappingIndent: Integer; const AEntryText: string;
-  const ALineNumber: Integer; const AObject: TGocciaDataNode);
-begin
-  if StartsExplicitKeyEntry(AEntryText) then
-    ParseExplicitMappingEntry(AObject, AEntryText, AMappingIndent, ALineNumber)
-  else
-    ParseMappingEntry(AObject, AEntryText, AMappingIndent, ALineNumber);
-  ParseMappingInto(AMappingIndent, AObject);
-end;
-
-function TGocciaYAMLParser.ParseNodeValue(const AValueText: string;
-  const ALineIndent, ACompactIndent, ALineNumber: Integer;
-  const ATagName, AAnchorName: string;
-  const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
-  ARequireIndentedQuotedContinuation,
-  AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
-var
-  FlowText: string;
-  Arr, Obj: TGocciaDataNode;
-begin
-  // An anchor names its collection before the collection is filled, so an
-  // alias inside it is the collection itself.
-  if AValueText = '' then
-  begin
-    if AAdvanceBeforeNested then
-      Inc(FIndex);
-    SkipIgnorableLines;
-    if not HasCurrentLine or (CurrentLine.Indent < ALineIndent) or
-       ((CurrentLine.Indent = ALineIndent) and
-        (((not AAllowSameIndentNestedNode) and
-          not StartsSequenceEntry(CurrentLine.Text) and
-          ((CurrentLine.Text = '') or
-           ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{')))) or
-         (AStopAtIndentedSequenceEntry and StartsSequenceEntry(CurrentLine.Text)))) then
-      Result := FTree.NewNull
-    else if StartsSequenceEntry(CurrentLine.Text) then
-    begin
-      Arr := FTree.NewArray;
-      RegisterAnchor(AAnchorName, Arr, ALineNumber);
-      ParseSequenceInto(CurrentLine.Indent, Arr);
-      Result := Arr;
-    end
-    else if StartsBlockMappingEntry(CurrentLine.Text) then
-    begin
-      Obj := FTree.NewObject;
-      RegisterAnchor(AAnchorName, Obj, ALineNumber);
-      ParseMappingInto(CurrentLine.Indent, Obj);
-      Result := Obj;
-    end
-    else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '[') then
-    begin
-      Arr := FTree.NewArray;
-      RegisterAnchor(AAnchorName, Arr, ALineNumber);
-      FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
-      ParseFlowSequenceInto(FlowText, Arr);
-      Result := Arr;
-    end
-    else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '{') then
-    begin
-      Obj := FTree.NewObject;
-      RegisterAnchor(AAnchorName, Obj, ALineNumber);
-      FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
-      ParseFlowMappingInto(FlowText, Obj);
-      Result := Obj;
-    end
-    else
-      Result := ParseNode(CurrentLine.Indent);
-  end
-  else if StartsSequenceEntry(AValueText) then
-  begin
-    Arr := FTree.NewArray;
-    RegisterAnchor(AAnchorName, Arr, ALineNumber);
-    if ACompactIndent <> NO_COMPACT_INDENT then
-    begin
-      ParseSequenceEntry(AValueText, ACompactIndent, ALineNumber, Arr);
-      ParseSequenceInto(ACompactIndent, Arr);
-    end
-    else
-      ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
-    Result := Arr;
-  end
-  else if StartsBlockMappingEntry(AValueText) then
-  begin
-    Obj := FTree.NewObject;
-    RegisterAnchor(AAnchorName, Obj, ALineNumber);
-    if ACompactIndent <> NO_COMPACT_INDENT then
-      ParseCompactMappingInto(ACompactIndent, AValueText, ALineNumber, Obj)
-    else
-      ParseMappingInto(ALineIndent, Obj);
-    Result := Obj;
-  end
-  else if IsBlockScalarHeader(AValueText) then
-    Result := ParseBlockScalar(ALineIndent, AValueText, ALineNumber)
-  else if AValueText[1] = '[' then
-  begin
-    Arr := FTree.NewArray;
-    RegisterAnchor(AAnchorName, Arr, ALineNumber);
-    FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
-    ParseFlowSequenceInto(FlowText, Arr);
-    Result := Arr;
-  end
-  else if AValueText[1] = '{' then
-  begin
-    Obj := FTree.NewObject;
-    RegisterAnchor(AAnchorName, Obj, ALineNumber);
-    FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
-    ParseFlowMappingInto(FlowText, Obj);
-    Result := Obj;
-  end
-  else
-    Result := ParseInlineValueWithContinuations(AValueText, ALineIndent,
-      ALineNumber, AStopAtIndentedSequenceEntry,
-      ARequireIndentedQuotedContinuation,
-      AAllowSameIndentScalarContinuation);
-
-  Result := ApplyTag(ATagName, Result, ALineNumber);
-  RegisterAnchor(AAnchorName, Result, ALineNumber);
-end;
-
-procedure TGocciaYAMLParser.ParseSequenceInto(const AIndent: Integer;
-  const AArray: TGocciaDataNode);
-begin
-  while True do
-  begin
-    SkipIgnorableLines;
-    if not (HasCurrentLine and (CurrentLine.Indent = AIndent) and
-            StartsSequenceEntry(CurrentLine.Text)) then
-      Break;
-    ParseSequenceEntry(CurrentLine.Text, AIndent, CurrentLine.Number, AArray);
-  end;
-end;
-
-procedure TGocciaYAMLParser.ParseSequenceEntry(const AEntryText: string;
-  const AIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
-var
-  AnchorName, ContentText, RemainingText, TagName: string;
-  ContentIndent: Integer;
-  Value: TGocciaDataNode;
-begin
-  ContentText := Copy(AEntryText, 2, MaxInt);
-  // YAML 1.2.2 §8.2.1 counts the dash and following spaces as indentation
-  // for a compact block collection.
-  ContentIndent := AIndent + 1 + CountIndentation(ContentText);
-  ParseNodeProperties(ContentText, TagName, AnchorName, RemainingText, ALineNumber);
-  Value := ParseNodeValue(RemainingText, AIndent, ContentIndent, ALineNumber,
-    TagName, AnchorName, True, True, False, True, False);
-  AArray.Add(Value);
-end;
-
-procedure TGocciaYAMLParser.ParseInlineSequenceInto(const AFirstEntryText: string;
-  const ASequenceIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
-begin
-  ParseSequenceEntry(AFirstEntryText, ASequenceIndent, ALineNumber, AArray);
-  SkipIgnorableLines;
-  if HasCurrentLine and (CurrentLine.Indent >= ASequenceIndent) and
-     StartsSequenceEntry(CurrentLine.Text) then
-    ParseSequenceInto(CurrentLine.Indent, AArray);
-end;
-
-function TGocciaYAMLParser.CollectFlowCollectionText(const AInitialText: string;
-  const ALineNumber: Integer): string;
-var
-  FragmentText: string;
-begin
-  Result := Trim(AInitialText);
-  Inc(FIndex);
-
-  while FindTopLevelFlowCollectionClose(Result) = 0 do
-  begin
-    if not HasCurrentLine then
-      RaiseParseError('Unterminated flow collection.', ALineNumber);
-    if CurrentLine.IsIgnorable then
-    begin
-      Inc(FIndex);
-      Continue;
-    end;
-
-    FragmentText := Trim(CurrentLine.Text);
-    if StartsWithDocumentMarkerToken(FragmentText) then
-      RaiseParseError('Document markers are not allowed inside flow collections.',
-        CurrentLine.Number);
-    if Result <> '' then
-      Result := Result + ' ';
-    Result := Result + FragmentText;
-    Inc(FIndex);
-  end;
-end;
-
-procedure TGocciaYAMLParser.ParseFlowSequenceInto(const AText: string;
-  const AArray: TGocciaDataNode);
-var
-  InnerText: string;
-  ItemIndex: Integer;
-  Items: TStringList;
-  Obj: TGocciaDataNode;
-begin
-  if (Length(AText) < 2) or (AText[1] <> '[') or
-     (AText[Length(AText)] <> ']') then
-    RaiseParseError('Invalid flow sequence.');
-
-  InnerText := Trim(Copy(AText, 2, Length(AText) - 2));
-  if InnerText = '' then
-    Exit;
-
-  Items := SplitTopLevelItems(InnerText);
-  try
-    for ItemIndex := 0 to Items.Count - 1 do
-      if FindTopLevelFlowMappingSeparator(Items[ItemIndex]) > 0 then
-      begin
-        Obj := FTree.NewObject;
-        ParseFlowMappingEntry(Obj, Items[ItemIndex]);
-        AArray.Add(Obj);
-      end
-      else
-        AArray.Add(ParseInlineValue(Items[ItemIndex]));
-  finally
-    Items.Free;
-  end;
-end;
-
-procedure TGocciaYAMLParser.ParseFlowMappingEntry(
-  const AObject: TGocciaDataNode; const AItemText: string;
-  const ALineNumber: Integer);
-var
-  KeyText, ValueText: string;
-  SeparatorIndex: Integer;
-  Value: TGocciaDataNode;
-begin
-  SeparatorIndex := FindTopLevelFlowMappingSeparator(AItemText);
-  if SeparatorIndex = 0 then
-  begin
-    KeyText := ParseKeyName(Trim(AItemText), ALineNumber);
-    if KeyText = '<<' then
-      RaiseParseError('Merge keys must include a value in flow mappings.',
-        ALineNumber);
-    AObject.SetProperty(KeyText, FTree.NewNull);
-    Exit;
-  end;
-
-  KeyText := Trim(Copy(AItemText, 1, SeparatorIndex - 1));
-  ValueText := Trim(Copy(AItemText, SeparatorIndex + 1, MaxInt));
-  KeyText := ParseKeyName(KeyText, ALineNumber);
-  Value := ParseInlineValue(ValueText);
-  if KeyText = '<<' then
-    MergeMappingValue(AObject, Value, ALineNumber)
-  else
-    AObject.SetProperty(KeyText, Value);
-end;
-
-procedure TGocciaYAMLParser.ParseFlowMappingInto(const AText: string;
-  const AObject: TGocciaDataNode);
-var
-  InnerText: string;
-  ItemIndex: Integer;
-  Items: TStringList;
-begin
-  if (Length(AText) < 2) or (AText[1] <> '{') or
-     (AText[Length(AText)] <> '}') then
-    RaiseParseError('Invalid flow mapping.');
-  InnerText := Trim(Copy(AText, 2, Length(AText) - 2));
-  if InnerText = '' then
-    Exit;
-
-  Items := SplitTopLevelItems(InnerText);
-  try
-    for ItemIndex := 0 to Items.Count - 1 do
-      ParseFlowMappingEntry(AObject, Items[ItemIndex]);
-  finally
-    Items.Free;
-  end;
-end;
-
-function TGocciaYAMLParser.ParseInlineValue(const AText: string): TGocciaDataNode;
-var
-  AliasName: string;
-  AnchorName, TagName: string;
-  Arr: TGocciaDataNode;
-  NumericValue: Double;
-  Obj: TGocciaDataNode;
-  RemainingText: string;
-  TrimmedText: string;
-begin
-  EnterDataDepth('YAML parsing');
-  try
-    CheckDataWork;
-    TrimmedText := Trim(AText);
-    if TrimmedText = '' then
-      Exit(FTree.NewNull);
-
-  ParseNodeProperties(TrimmedText, TagName, AnchorName, RemainingText);
-  if (AnchorName <> '') or (TagName <> '') then
-  begin
-    if RemainingText = '' then
-      RaiseParseError('Inline node properties must be followed by a value.');
-    TrimmedText := RemainingText;
-  end;
-
-  if TrimmedText[1] = '*' then
-  begin
-    AliasName := Trim(Copy(TrimmedText, 2, MaxInt));
-    if AliasName = '' then
-      RaiseParseError('Aliases must reference an anchor name.');
-    Result := ResolveAliasValue(AliasName);
-  end
-  else if TrimmedText[1] = '[' then
-  begin
-    Arr := FTree.NewArray;
-    RegisterAnchor(AnchorName, Arr);
-    ParseFlowSequenceInto(TrimmedText, Arr);
-    Result := Arr;
-  end
-  else if TrimmedText[1] = '{' then
-  begin
-    Obj := FTree.NewObject;
-    RegisterAnchor(AnchorName, Obj);
-    ParseFlowMappingInto(TrimmedText, Obj);
-    Result := Obj;
-  end
-  else if (Length(TrimmedText) >= 2) and (TrimmedText[1] = DOUBLE_QUOTE) and
-          (TrimmedText[Length(TrimmedText)] = DOUBLE_QUOTE) then
-    Result := FTree.NewString(
-      UnescapeDoubleQuotedString(Copy(TrimmedText, 2, Length(TrimmedText) - 2)))
-  else if (Length(TrimmedText) >= 2) and (TrimmedText[1] = SINGLE_QUOTE) and
-          (TrimmedText[Length(TrimmedText)] = SINGLE_QUOTE) then
-    Result := FTree.NewString(
-      UnescapeSingleQuotedString(Copy(TrimmedText, 2, Length(TrimmedText) - 2)))
-  else if SameText(TrimmedText, 'null') or (TrimmedText = '~') then
-    Result := FTree.NewNull
-  else if SameText(TrimmedText, 'true') then
-    Result := FTree.NewBoolean(True)
-  else if SameText(TrimmedText, 'false') then
-    Result := FTree.NewBoolean(False)
-  else if TryParseYAMLInteger(TrimmedText, NumericValue) or
-          TryParseYAMLFloat(TrimmedText, NumericValue) then
-    Result := FTree.NewNumber(NumericValue)
-  else
-    Result := FTree.NewString(TrimmedText);
-
-  Result := ApplyTag(TagName, Result);
-    RegisterAnchor(AnchorName, Result);
-  finally
-    LeaveDataDepth;
-  end;
-end;
-
-function TGocciaYAMLParser.ParseInlineValueWithContinuations(const AText: string;
-  const AParentIndent, ALineNumber: Integer;
-  const AStopAtIndentedSequenceEntry,
-  ARequireIndentedQuotedContinuations,
-  AAllowSameIndentScalarContinuations: Boolean): TGocciaDataNode;
-var
-  ClosingQuoteIndex: Integer;
-  FoldedText, FragmentText, InitialText: string;
-  Fragments: TStringList;
-  QuoteChar: Char;
-  QuotedScalarClosed: Boolean;
-begin
-  InitialText := Trim(AText);
-  Fragments := TStringList.Create;
-  try
-    Fragments.Add(InitialText);
-    if IsQuotedScalarText(InitialText, QuoteChar) then
-    begin
-      Inc(FIndex);
-      ClosingQuoteIndex := FindClosingQuotePosition(InitialText, QuoteChar);
-      QuotedScalarClosed := (ClosingQuoteIndex > 0) and
-        IsValidQuotedContinuationTail(InitialText, ClosingQuoteIndex);
-      while not QuotedScalarClosed do
-      begin
-        if not HasCurrentLine then
-          RaiseParseError('Unterminated quoted scalar.', ALineNumber);
-        if CurrentLine.IsIgnorable then
-        begin
-          Fragments.Add('');
-          Inc(FIndex);
-          Continue;
-        end;
-        if ARequireIndentedQuotedContinuations and
-           (CurrentLine.Indent <= AParentIndent) then
-          RaiseParseError('Unterminated quoted scalar.', ALineNumber);
-        FragmentText := CurrentLine.Text;
-        ClosingQuoteIndex := FindContinuationQuotePosition(FragmentText, QuoteChar);
-        if ClosingQuoteIndex > 0 then
-        begin
-          if not IsValidQuotedContinuationTail(FragmentText, ClosingQuoteIndex) then
-            RaiseParseError('Unexpected trailing content after quoted scalar.',
-              CurrentLine.Number);
-          Fragments.Add(Copy(FragmentText, 1, ClosingQuoteIndex - 1));
-          QuotedScalarClosed := True;
-        end
-        else
-          Fragments.Add(FragmentText);
-        Inc(FIndex);
-      end;
-
-      Fragments[0] := Copy(Fragments[0], 2, MaxInt);
-      if Fragments.Count = 1 then
-      begin
-        ClosingQuoteIndex := FindClosingQuotePosition(Fragments[0], QuoteChar);
-        Fragments[0] := Copy(Fragments[0], 1, ClosingQuoteIndex - 1);
-      end;
-      if QuoteChar = DOUBLE_QUOTE then
-        FoldedText := FoldMultilineDoubleQuotedFragments(Fragments)
-      else
-        FoldedText := FoldMultilineScalarFragments(Fragments);
-      if QuoteChar = DOUBLE_QUOTE then
-        Result := FTree.NewString(
-          UnescapeDoubleQuotedString(FoldedText))
-      else
-        Result := FTree.NewString(
-          UnescapeSingleQuotedString(FoldedText));
-      Exit;
-    end;
-
-    Inc(FIndex);
-    while HasCurrentLine do
-    begin
-      if CurrentLine.IsIgnorable then
-      begin
-        Fragments.Add('');
-        Inc(FIndex);
-        Continue;
-      end;
-      if CurrentLine.Indent < AParentIndent then
-        Break;
-      if not AAllowSameIndentScalarContinuations and
-         (CurrentLine.Indent = AParentIndent) then
-        Break;
-      if AStopAtIndentedSequenceEntry and StartsSequenceEntry(CurrentLine.Text) then
-        Break;
-      Fragments.Add(Trim(CurrentLine.Text));
-      Inc(FIndex);
-    end;
-
-    while Fragments.Count > 1 do
-    begin
-      if Trim(Fragments[Fragments.Count - 1]) <> '' then
-        Break;
-      Fragments.Delete(Fragments.Count - 1);
-    end;
-
-    if Fragments.Count = 1 then
-      Result := ParseInlineValue(InitialText)
-    else
-    begin
-      FoldedText := FoldMultilineScalarFragments(Fragments);
-      Result := FTree.NewString(FoldedText);
-    end;
-  finally
-    Fragments.Free;
-  end;
+  Result := ParseStream(AText, ExplicitDocumentStart);
 end;
 
 end.

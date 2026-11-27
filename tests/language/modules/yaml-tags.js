@@ -12,6 +12,6 @@ describe("YAML import with tags and directives", () => {
     expect(created.tagName).toBe("tag:yaml.org,2002:timestamp");
     expect(created.value).toBe("2026-04-02T10:30:00");
     expect(payload.tagName).toBe("tag:yaml.org,2002:binary");
-    expect(payload.value).toBe("Hello");
+    expect(payload.value).toBe("SGVsbG8=");
   });
 });

@@ -204,3 +204,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0192 — History reads ask for the strong ETag and project raw pointers](0192-history-reads-ask-for-the-strong-etag-and-project-raw-pointers.md)
 - [0193 — fetch requests past the worker cap wait their turn](0193-fetch-requests-past-the-worker-cap-wait-their-turn.md)
 - [0194 — JIT code mappings are sealed read-execute](0194-jit-code-mappings-are-sealed-read-execute.md)
+- [0195 — YAML is parsed by a port of saphyr's scanner and event parser](0195-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
