@@ -55,7 +55,10 @@ others), which FPC calls through a register; a new hook called directly fails th
 
 The engine builds for every target GocciaScript ships: Linux and macOS on x86-64 and aarch64, Windows on x86-64 and
 i386. Only Linux x86-64 has the JIT (`GOCCIA_JIT` in `Goccia.Checks.inc`): it emits code for the System V calling convention
-and reads threadvars `%fs`-relative. The other targets run the interpreter. With `FPC_TARGET_CPU` and
+and reads threadvars `%fs`-relative. Each JIT publication is written to a private writable mapping and sealed
+read-execute before use. Shared stubs live for the process and an engine frees its own compiled code when it ends.
+See [ADR 0194](../adr/0194-jit-code-mappings-are-sealed-read-execute.md).
+The other targets run the interpreter. With `FPC_TARGET_CPU` and
 `FPC_TARGET_OS` naming another platform, `build.pas` builds a program for the host first (`build/engine/host`) to
 make its prelude snapshot, which holds the same bytes on every platform, then builds the target once with it;
 `GOCCIA_FPC_FLAGS` adds the target's library options. aarch64 needs 3.3.1+7: earlier builds form a `tbz` or `tbnz`

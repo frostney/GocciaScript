@@ -438,7 +438,8 @@ end;
 
 { 25.4.13 Atomics.wait }
 function Atomics_Wait(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O: PObj; P: PByte; ByteIdx: Int64; D, T: Double; Cell: TWaitCell; R: TWaitResult; Buf: TValue;
+var O: PObj; P: PByte; ByteIdx: Int64; T: Double; Cell: TWaitCell; R: TWaitResult; Buf: TValue;
+  InterruptWord, WaitInterrupt: PLongInt;
 begin
   if not ValidateIntTA(Arg(Args, Argc, 1), True, O) then Exit(False);
   Buf := O^.Aux1;
@@ -450,7 +451,12 @@ begin
   if AgentCannotSuspend then Exit(ThrowTypeError('Atomics.wait cannot be called in this agent'));
   O := ObjOf(Args[1]);
   Cell.P := TAData(O) + (ByteIdx - O^.Pad);
-  R := SharedWait(SharedBlockOf(O^.Aux1), ByteIdx, @CellStillHolds, @Cell, T);
+  InterruptWord := CurrentInterruptWord;
+  if InterruptWord^ <> 0 then Exit(AbortInterrupted);
+  WaitInterrupt := nil;
+  if LimitRemainingMs > 0 then WaitInterrupt := InterruptWord;
+  R := SharedWait(SharedBlockOf(O^.Aux1), ByteIdx, @CellStillHolds, @Cell, T, WaitInterrupt);
+  if InterruptWord^ <> 0 then Exit(AbortInterrupted);
   case R of
     wrOk: Res := StrFromUnicode('ok');
     wrNotEqual: Res := StrFromUnicode('not-equal');

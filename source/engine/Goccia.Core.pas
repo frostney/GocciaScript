@@ -263,6 +263,7 @@ threadvar
   { the objects NewObject made on this thread while CountObjects is set (the profiler's allocations) }
   ObjectsMade: Int64;
 
+function CurrentInterruptWord: PLongInt; noinline;
 procedure HeapInit(NurseryBytes: SizeInt);
 { The engines a thread has had: once-per-engine set-up (registering a root) keeps the generation it ran for, so a
   thread's next engine (after EngineDone) runs it again. FirstInEngine: whether Gen is not this engine's yet (and
@@ -1014,6 +1015,11 @@ var GCMajorFloor: Int64 = 64 * 1024 * 1024; GCMajorGrowthPct: Int64 = 100;
 
 threadvar
   EngineGen: Integer;
+
+function CurrentInterruptWord: PLongInt;
+begin
+  Result := @Interrupt;
+end;
 
 function FirstInEngine(var Gen: Integer): Boolean;
 var G: Integer;
