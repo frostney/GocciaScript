@@ -71,13 +71,18 @@ type
   { counts the entries that started, from any thread }
   TStartCounter = class
   public
-    Started: Integer;
+    Started, Expected: Integer;
     procedure Console(const AMethod, ALine: UnicodeString);
   end;
 
+{ every entry waits here until both have started, so both hold a reserve of the budget at the same time }
 procedure TStartCounter.Console(const AMethod, ALine: UnicodeString);
+var Deadline: QWord;
 begin
-  if ALine = 'started' then InterLockedIncrement(Started);
+  if ALine <> 'started' then Exit;
+  InterLockedIncrement(Started);
+  Deadline := GetTickCount64 + 5000;
+  while (InterLockedCompareExchange(Started, 0, 0) < Expected) and (GetTickCount64 < Deadline) do Sleep(1);
 end;
 
 var
@@ -129,6 +134,7 @@ var
   First, Second: TEntryThread;
 begin
   Starts.Started := 0;
+  Starts.Expected := 2;
   Shared := NewInstructionBudget(ASharedLimit);
   First := TEntryThread.Create(Shared);
   Second := TEntryThread.Create(Shared);
@@ -153,6 +159,29 @@ begin
   end;
 end;
 
+var
+  { the budget a native refuses as another engine of the job would }
+  PeerBudget: IGocciaInstructionBudget;
+
+function ExhaustPeer(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  PeerBudget.TryCharge(QWord(High(Int64)));
+  AResult := VUndefined;
+  Result := True;
+end;
+
+function ZeroCharge(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  AResult := VUndefined;
+  Result := PollInstructionUnits(0);
+end;
+
+function ChargeUnits(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  AResult := VUndefined;
+  if AArgc >= 1 then Result := PollInstructionUnits(QWord(Trunc(NumOf(AArgs[1])))) else Result := True;
+end;
+
 function NativeWork(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
 begin
   Result := PollInstructionUnits(1000);
@@ -165,16 +194,37 @@ var
   RunResult: TGocciaRunResult;
   ErrorText: UnicodeString;
   Shared: IGocciaInstructionBudget;
+  Baseline: QWord;
 begin
   Engine := TGocciaEngine.Create;
   try
     Check(Engine.PrepareHost(ErrorText), ErrorText);
-    Check(InjectGlobalBinding('nativeWork', NewNativeFunction(@NativeWork, 'nativeWork', 0)), 'could not install native test work');
+    Check(InjectGlobalBinding('nativeWork', NewNativeFunction(@NativeWork, 'nativeWork', 0)) and
+      InjectGlobalBinding('exhaustPeer', NewNativeFunction(@ExhaustPeer, 'exhaustPeer', 0)) and
+      InjectGlobalBinding('zeroCharge', NewNativeFunction(@ZeroCharge, 'zeroCharge', 0)) and
+      InjectGlobalBinding('chargeUnits', NewNativeFunction(@ChargeUnits, 'chargeUnits', 1)),
+      'could not install native test work');
     Shared := NewInstructionBudget(500);
     Engine.InstructionBudget := Shared;
     RunResult := Engine.Run('native.mjs', 'nativeWork();');
     Check((RunResult.Aborted = gaInstructionLimit) and (Shared.Count = 501) and
       RunResult.HasInstructionCount and (RunResult.InstructionCount = 501), 'native work did not charge the shared cap');
+    { a zero charge sees a cap another holder spent while this engine still holds units of its own }
+    PeerBudget := NewInstructionBudget(1000000);
+    Engine.InstructionBudget := PeerBudget;
+    RunResult := Engine.Run('zero-charge.mjs', 'exhaustPeer(); zeroCharge(); 1;');
+    Check(RunResult.Aborted = gaInstructionLimit, 'a zero charge did not see the shared cap spent elsewhere');
+    { an accepted native charge adds its whole amount to the job's count }
+    Shared := NewInstructionBudget(0);
+    Engine.InstructionBudget := Shared;
+    RunResult := Engine.Run('charge-none.mjs', 'chargeUnits(0); 1;');
+    Check(RunResult.Ok, 'an empty native charge failed: ' + RunResult.ErrorMessage);
+    Baseline := Shared.Count;
+    Shared := NewInstructionBudget(0);
+    Engine.InstructionBudget := Shared;
+    RunResult := Engine.Run('charge-some.mjs', 'chargeUnits(5000); 1;');
+    Check(RunResult.Ok and (Shared.Count = Baseline + 5000),
+      'a native charge did not add its units: ' + IntToStr(Shared.Count) + ' after ' + IntToStr(Baseline));
   finally
     Engine.Free;
   end;
@@ -202,6 +252,65 @@ begin
   Check(Budget.Count = 24, 'an uncapped refund did not return unspent units');
 end;
 
+{ A negative limit is refused by the factory, and the caller catches the exception. }
+procedure CheckNegativeLimit;
+var Refused: Boolean;
+begin
+  Refused := False;
+  try
+    NewInstructionBudget(-1);
+  except
+    on E: EArgumentOutOfRangeException do Refused := True;
+  end;
+  Check(Refused, 'a negative limit was accepted');
+end;
+
+{ An uncapped count stays exact next to its saturation point: a refund there still counts. }
+procedure CheckUncappedBoundary;
+var Budget: IGocciaInstructionBudget;
+begin
+  Budget := NewInstructionBudget(0);
+  Check(Budget.TryCharge(QWord(High(Int64)) - 1), 'a large uncapped charge failed');
+  Check(Budget.Reserve(2, 2) = 2, 'an uncapped reserve past High(Int64) failed');
+  Budget.Refund(2);
+  Check(Budget.Count = QWord(High(Int64)) - 1, 'a refund near saturation was lost: ' + IntToStr(Budget.Count));
+end;
+
+{ A host environment refused by the shared cap reports the job's count with the abort. }
+procedure CheckProviderCount;
+var
+  Engine: TGocciaEngine;
+  Shared: IGocciaInstructionBudget;
+  RunResult: TGocciaRunResult;
+  Lines: TStringList;
+  Directory, ProviderPath: string;
+begin
+  Directory := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-shared-budget-' + IntToStr(GetProcessID) +
+    '-' + IntToStr(GetTickCount64);
+  Check(ForceDirectories(Directory), 'could not create ' + UnicodeString(Directory));
+  ProviderPath := Directory + PathDelim + 'provider.mjs';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'new Array(4096).fill(0);' +
+      'export const epochNanoseconds = () => 0n; export const monotonicNanoseconds = () => 0n;' +
+      'export const timeZoneIdentifier = () => "UTC"; export const random = () => 0.25;';
+    Lines.SaveToFile(ProviderPath);
+    Shared := NewInstructionBudget(500);
+    Engine.InstructionBudget := Shared;
+    Engine.HostEnvironment := UnicodeString(ProviderPath);
+    RunResult := Engine.Run('provider-entry.mjs', '1;');
+    Check((RunResult.Aborted = gaInstructionLimit) and RunResult.HasInstructionCount and
+      (RunResult.InstructionCount = 501) and (Shared.Count = 501),
+      'a host environment refused by the shared cap did not report the count: ' + IntToStr(RunResult.InstructionCount));
+  finally
+    Engine.Free;
+    Lines.Free;
+    DeleteFile(ProviderPath);
+    RemoveDir(Directory);
+  end;
+end;
+
 { An engine's reported count leaves out the units it still holds in reserve. }
 procedure CheckReportedCount(const AExpected: QWord);
 var
@@ -219,7 +328,10 @@ var
   OneEntry: TGocciaRunResult;
 begin
   Starts := TStartCounter.Create;
+  Starts.Expected := 1;
+  CheckNegativeLimit;
   CheckReserves;
+  CheckUncappedBoundary;
   CheckConcurrentCharges(12000, 12000, 12001);
   CheckConcurrentCharges(0, 48000, 48000);
   Budget := NewInstructionBudget(High(Int64));
@@ -237,5 +349,6 @@ begin
   CheckSharedEntries(Int64(OneEntry.InstructionCount + OneEntry.InstructionCount div 2),
     OneEntry.InstructionCount + OneEntry.InstructionCount div 2 + 1, True);
   CheckNativeCharges;
+  CheckProviderCount;
   WriteLn('Shared instruction budget: passed');
 end.

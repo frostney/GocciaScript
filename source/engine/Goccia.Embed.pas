@@ -76,7 +76,8 @@ type
     ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
-    { Dispatch and native work charged while running this entry and its event loop. }
+    { Dispatch and native work charged while running this entry and its event loop; with a shared
+      InstructionBudget attached, the job's count so far instead (do not add those up across engines) }
     HasInstructionCount: Boolean;
     InstructionCount: QWord;
     { ResultForm: the entry's completion value as String(value) or JSON (a module's too: the value of its last
@@ -1232,6 +1233,12 @@ begin
       2: Result.Aborted := gaInstructionLimit;
       3: Result.Aborted := gaMemoryLimit;
       4: Result.Aborted := gaHostAbort;
+    end;
+    { the host environment ran under a shared budget: the job's count so far, as an entry reports it }
+    if FInstructionBudget <> nil then
+    begin
+      Result.HasInstructionCount := True;
+      Result.InstructionCount := FInstructionBudget.Count;
     end;
     DescribeThrown(RootAt(TempTop - 1), Result);
     PopRoots(1);

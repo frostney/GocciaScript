@@ -8,7 +8,7 @@
 - **Host surface** — The first run (or `PrepareHost`) installs the CLI hosts' globals and `goccia:` modules; `Bare` leaves only the core language, and settings such as `ExposeTimers`, `ConfigJson`, `Profile` and `Capabilities` choose what else a script sees
 - **Sandboxing** — An optional immutable [capability set](permissions.md) judges module reads, `fetch` and `FFI`; an `AuditSink` receives every decision; `TimeoutMs`, `MaxInstructions`, `MaxMemory` and `MaxFrames` bound a run; `TGocciaSandboxHost` runs scripts over an in-memory filesystem
 - **Globals and modules** — Inject globals from JSON, data files or Pascal natives; resolve imports through a `TGocciaModuleResolver` with aliases and import maps; define virtual modules; receive parse warnings through `OnWarning` and `OnModuleWarning`
-- **One engine per thread** — Every piece of engine state is a threadvar (`Goccia.Engine`), so engines on different threads run side by side and share nothing
+- **One engine per thread** — Every piece of engine state is a threadvar (`Goccia.Engine`), so engines on different threads run side by side and share nothing but what the host gives them, such as a [shared instruction budget](#sharing-an-instruction-budget)
 
 Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). The engine ([overview](engine/README.md), [design](engine/design.md)): `Goccia.Compiler` compiles the front end's syntax tree (`Goccia.Parser`, `Goccia.SourcePipeline`) to register bytecode, `Goccia.VM` runs it in an interpreter, and on Linux x86-64 a baseline JIT and an optimizing tier compile hot code. `TGocciaEngine` in `Goccia.Embed` is the API the applications in `source/app` build on, and the one this page describes.
 
@@ -419,7 +419,7 @@ Engine.AuditSink := Log.Record_;
 | `Ok` | The run completed |
 | `Compiled` | The entry compiled; False for a syntax error |
 | `Aborted` | `gaNone`, or the limit or host abort that ended the run ([Execution Limits](#execution-limits)) |
-| `HasInstructionCount`, `InstructionCount` | Whether the entry's execution was counted and the number of units charged in that entry and its event loop |
+| `HasInstructionCount`, `InstructionCount` | Whether the entry's execution was counted and the number of units charged in that entry and its event loop; with a shared [instruction budget](#sharing-an-instruction-budget), the whole job's count so far |
 | `ErrorMessage` | The uncaught value as text (`TypeError: bad input`), or the limit's message |
 | `ErrorIsError` | The thrown value had a string `name` or `message`, or the source did not compile |
 | `ErrorName`, `ErrorText` | Its name and message |
@@ -469,7 +469,8 @@ Engine.MaxFrames := 5000;
 
 A capped entry reports its count in `TGocciaRunResult`, including the charge that found an exhausted cap.
 Set `MeasureInstructions` to count the same units in an uncapped entry. Both modes count the entry and its event
-loop on that engine thread, including native work charged there. Set neither setting to keep the ordinary fast
+loop on that engine thread, including native work charged there. Engines that share one job count against a
+[shared budget](#sharing-an-instruction-budget) instead. Set neither setting to keep the ordinary fast
 path and leave `HasInstructionCount` false. Counter-enabled entries run in the interpreter.
 
 ### Memory Limit
@@ -490,13 +491,15 @@ the engine's own `MaxInstructions` and `MeasureInstructions` are ignored; setup 
 module, the host environment) is charged to it as well. Set a fresh budget for each job.
 
 Each engine takes units from the budget in reserves and spends them on its own counter, so the
-dispatch loop does no shared write per instruction. A reserve is at most 1,024 units and, under a
-cap, at most an eighth of what is left, so the units other engines hold unspent when one is
-refused are a small part of the cap. The job never spends more than the limit. An engine learns
+dispatch loop does no shared write per instruction. A reserve is normally at most 1,024 units
+and, under a cap, at most an eighth of what is left; a native charge larger than that reserves
+what it needs. So the units other engines hold unspent when one is refused are a small part of
+the cap. The job never spends more than the limit. An engine learns
 of a cap another engine spent when its own units run out, or at a zero charge. An engine returns
 what it did not spend when its run ends. For a job that was never refused, `Budget.Count` is
 exact once every engine has ended; a refused job reports `Limit + 1`. A run's reported count is
-the job's count so far without that engine's unspent units.
+the job's count so far without that engine's unspent units: read `Budget.Count` for the job
+rather than adding up the engines' counts.
 [ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) records the design.
 
 Native code on an engine's thread can call `PollInstructionUnits(N)` in `Goccia.VM` before a

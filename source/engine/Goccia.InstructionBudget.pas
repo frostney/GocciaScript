@@ -1,6 +1,7 @@
 unit Goccia.InstructionBudget;
 
 {$mode delphiunicode}{$H+}
+{$I Goccia.Checks.inc}
 
 interface
 
@@ -10,19 +11,23 @@ type
   IGocciaInstructionBudget = interface
     function Limit: Int64;
     { A capped counter includes the first refused unit and then stays fixed at Limit + 1. Otherwise it includes units
-      engines hold in reserve, so it is exact once every engine of the job has ended. }
+      engines hold in reserve, so it is exact once every engine of the job has ended; an uncapped count saturates at
+      High(Int64). }
     function Count: QWord;
+    { Count without Units an engine still holds in reserve: what that engine reports while others may still run }
+    function CountWithout(Units: QWord): QWord;
     { A nonzero charge succeeds in full or is refused. A zero charge checks whether a cap has been exceeded. }
-    function TryCharge(AUnits: QWord): Boolean;
-    { At least AMin and at most AMax units; under a cap also at most an eighth of what is left (but AMin when that is
-      less), so engines that share a nearly spent cap are refused late, not early. 0 and the cap spent when fewer than
-      AMin are left. AMin is at least 1. }
-    function Reserve(AMin, AMax: QWord): QWord;
+    function TryCharge(Units: QWord): Boolean;
+    { At least MinUnits and at most MaxUnits; under a cap also at most an eighth of what is left, but MinUnits when that
+      is more, so engines that share a nearly spent cap are refused late, not early. 0 and the cap spent when fewer than
+      MinUnits are left. MinUnits is at least 1. }
+    function Reserve(MinUnits, MaxUnits: QWord): QWord;
     { returns reserved units an engine did not spend; nothing once a cap was refused }
-    procedure Refund(AUnits: QWord);
+    procedure Refund(Units: QWord);
   end;
 
-function NewInstructionBudget(ALimit: Int64): IGocciaInstructionBudget;
+{ a budget for one job; Limit 0 measures without a cap, and a negative Limit raises EArgumentOutOfRangeException }
+function NewInstructionBudget(Limit: Int64): IGocciaInstructionBudget;
 
 implementation
 
@@ -35,27 +40,29 @@ type
   TInstructionBudget = class(TInterfacedObject, IGocciaInstructionBudget)
   private
     FLimit: Int64;
-    { Remaining units for a capped job (-1 after refusal), accumulated units otherwise. }
-    FState: Int64;
+    { a capped job: the units left, -1 once refused }
+    FLeft: Int64;
+    { an uncapped job: the units charged and reserved, saturating at High(QWord) }
+    FUsed: QWord;
     FLock: TRTLCriticalSection;
-    function ReadState: Int64;
   public
     constructor Create(ALimit: Int64);
     destructor Destroy; override;
     function Limit: Int64;
     function Count: QWord;
-    function TryCharge(AUnits: QWord): Boolean;
-    function Reserve(AMin, AMax: QWord): QWord;
-    procedure Refund(AUnits: QWord);
+    function CountWithout(Units: QWord): QWord;
+    function TryCharge(Units: QWord): Boolean;
+    function Reserve(MinUnits, MaxUnits: QWord): QWord;
+    procedure Refund(Units: QWord);
   end;
 
 constructor TInstructionBudget.Create(ALimit: Int64);
 begin
   inherited Create;
-  if ALimit < 0 then raise EArgumentOutOfRangeException.Create('Instruction budget cannot be negative');
-  FLimit := ALimit;
-  FState := ALimit;
   InitCriticalSection(FLock);
+  FLimit := ALimit;
+  FLeft := ALimit;
+  FUsed := 0;
 end;
 
 destructor TInstructionBudget.Destroy;
@@ -64,84 +71,102 @@ begin
   inherited Destroy;
 end;
 
-function TInstructionBudget.ReadState: Int64;
-begin
-  EnterCriticalSection(FLock);
-  Result := FState;
-  LeaveCriticalSection(FLock);
-end;
-
 function TInstructionBudget.Limit: Int64;
 begin
   Result := FLimit;
 end;
 
-function TInstructionBudget.Count: QWord;
-var State: Int64;
+function TInstructionBudget.CountWithout(Units: QWord): QWord;
 begin
-  State := ReadState;
-  if FLimit = 0 then Result := QWord(State)
-  else if State >= 0 then Result := QWord(FLimit - State)
-  else Result := QWord(FLimit) + 1;
-end;
-
-function TInstructionBudget.TryCharge(AUnits: QWord): Boolean;
-begin
-  if AUnits = 0 then Exit(ReadState >= 0);
-  Result := Reserve(AUnits, AUnits) = AUnits;
-end;
-
-function TInstructionBudget.Reserve(AMin, AMax: QWord): QWord;
-begin
-  if AMin = 0 then AMin := 1;
-  if AMax < AMin then AMax := AMin;
   EnterCriticalSection(FLock);
   try
-    if FState < 0 then Exit(0);
     if FLimit > 0 then
     begin
-      if AMin > QWord(FState) then
+      if FLeft < 0 then Exit(QWord(FLimit) + 1);
+      Result := QWord(FLimit - FLeft);
+    end
+    else Result := FUsed;
+    if Result >= Units then Dec(Result, Units) else Result := 0;
+    if (FLimit = 0) and (Result > QWord(High(Int64))) then Result := QWord(High(Int64));
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TInstructionBudget.Count: QWord;
+begin
+  Result := CountWithout(0);
+end;
+
+function TInstructionBudget.TryCharge(Units: QWord): Boolean;
+begin
+  if Units = 0 then
+  begin
+    EnterCriticalSection(FLock);
+    try
+      Result := (FLimit = 0) or (FLeft >= 0);
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+    Exit;
+  end;
+  Result := Reserve(Units, Units) = Units;
+end;
+
+function TInstructionBudget.Reserve(MinUnits, MaxUnits: QWord): QWord;
+begin
+  if MinUnits = 0 then MinUnits := 1;
+  if MaxUnits < MinUnits then MaxUnits := MinUnits;
+  EnterCriticalSection(FLock);
+  try
+    if FLimit > 0 then
+    begin
+      if FLeft < 0 then Exit(0);
+      if MinUnits > QWord(FLeft) then
       begin
-        FState := -1;
+        FLeft := -1;
         Exit(0);
       end;
-      Result := QWord(FState) div 8;
-      if Result > AMax then Result := AMax;
-      if Result < AMin then Result := AMin;
-      Dec(FState, Int64(Result));
+      Result := QWord(FLeft) div 8;
+      if Result > MaxUnits then Result := MaxUnits;
+      if Result < MinUnits then Result := MinUnits;
+      Dec(FLeft, Int64(Result));
     end
     else
     begin
-      Result := AMax;
-      if AMax <= QWord(High(Int64) - FState) then Inc(FState, Int64(AMax)) else FState := High(Int64);
+      Result := MaxUnits;
+      if MaxUnits <= High(QWord) - FUsed then Inc(FUsed, MaxUnits) else FUsed := High(QWord);
     end;
   finally
     LeaveCriticalSection(FLock);
   end;
 end;
 
-procedure TInstructionBudget.Refund(AUnits: QWord);
+procedure TInstructionBudget.Refund(Units: QWord);
 begin
-  if AUnits = 0 then Exit;
+  if Units = 0 then Exit;
   EnterCriticalSection(FLock);
   try
-    if FState < 0 then Exit;
     if FLimit > 0 then
     begin
-      if AUnits > QWord(FLimit - FState) then AUnits := QWord(FLimit - FState);
-      Inc(FState, Int64(AUnits));
+      if FLeft < 0 then Exit;
+      if Units > QWord(FLimit - FLeft) then Units := QWord(FLimit - FLeft);
+      Inc(FLeft, Int64(Units));
     end
-    else if FState = High(Int64) then Exit
-    else if AUnits >= QWord(FState) then FState := 0
-    else Dec(FState, Int64(AUnits));
+    { a saturated total lost track of what it held, so it stays saturated }
+    else if FUsed = High(QWord) then Exit
+    else if Units >= FUsed then FUsed := 0
+    else Dec(FUsed, Units);
   finally
     LeaveCriticalSection(FLock);
   end;
 end;
 
-function NewInstructionBudget(ALimit: Int64): IGocciaInstructionBudget;
+function NewInstructionBudget(Limit: Int64): IGocciaInstructionBudget;
 begin
-  Result := TInstructionBudget.Create(ALimit);
+  { checked before the object exists: a constructor that raised would free a lock it never made }
+  if Limit < 0 then raise EArgumentOutOfRangeException.Create('Instruction budget cannot be negative');
+  Result := TInstructionBudget.Create(Limit);
 end;
 
 end.

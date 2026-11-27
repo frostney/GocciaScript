@@ -330,7 +330,7 @@ function AbortInterrupted: Boolean;
   element (the chokepoint rule of Goccia.Timeout): a budget ends the loop as a deadline does }
 function PollInterrupt: Boolean; inline;
 { Charges a bounded amount of native work and checks the run's interrupt. Zero only checks the limits. }
-function PollInstructionUnits(AUnits: QWord): Boolean;
+function PollInstructionUnits(Units: QWord): Boolean;
 { the poll's charge of a spent instruction limit: the abort pending, False }
 function AbortInstructions: Boolean;
 const
@@ -752,17 +752,18 @@ begin
 end;
 
 function ReadInstructionCount(out Count: QWord): Boolean;
-var Initial: Int64;
+var Initial, Left: Int64; Shared: IGocciaInstructionBudget;
 begin
   Count := 0;
   Result := InstrCounted;
   if not Result then Exit;
-  if SharedInstructionBudget <> nil then
+  { each threadvar read in a statement of its own (docs/core-patterns.md) }
+  Shared := SharedInstructionBudget;
+  if Shared <> nil then
   begin
     { the job's count, without the units this engine holds in reserve (others' are exact once they end) }
-    Count := SharedInstructionBudget.Count;
-    if (InstrLeft > 0) and ((SharedInstructionBudget.Limit = 0) or (Count <= QWord(SharedInstructionBudget.Limit)))
-      and (Count >= QWord(InstrLeft)) then Dec(Count, QWord(InstrLeft));
+    Left := InstrLeft;
+    if Left > 0 then Count := Shared.CountWithout(QWord(Left)) else Count := Shared.Count;
     Exit;
   end;
   if InstrMax > 0 then Initial := InstrMax else Initial := High(Int64);
@@ -823,14 +824,19 @@ begin
   Result := ChargeInstructionsSlow(Units);
 end;
 
-function PollInstructionUnits(AUnits: QWord): Boolean;
+function PollInstructionUnits(Units: QWord): Boolean;
+var Shared: IGocciaInstructionBudget;
 begin
-  if InstrCounted and not ChargeInstructions(AUnits) then Exit(AbortInstructions);
+  if InstrCounted and not ChargeInstructions(Units) then Exit(AbortInstructions);
   { a zero charge also sees a shared cap another engine spent, which the local units do not show }
-  if (AUnits = 0) and (SharedInstructionBudget <> nil) and not SharedInstructionBudget.TryCharge(0) then
+  if Units = 0 then
   begin
-    InstrLeft := -1;
-    Exit(AbortInstructions);
+    Shared := SharedInstructionBudget;
+    if (Shared <> nil) and not Shared.TryCharge(0) then
+    begin
+      InstrLeft := -1;
+      Exit(AbortInstructions);
+    end;
   end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;
@@ -1019,6 +1025,7 @@ begin
 end;
 
 procedure LimitsDisarm;
+var Shared: IGocciaInstructionBudget; Left: Int64;
 begin
   if LimitTimer <> nil then StopLimitTimer;
   Interrupt := 0;
@@ -1027,7 +1034,12 @@ begin
   FrameLimit := FrameLimitBase;
   InstrCounted := False;
   { the reserve this engine did not spend goes back to the job }
-  if (SharedInstructionBudget <> nil) and (InstrLeft > 0) then SharedInstructionBudget.Refund(QWord(InstrLeft));
+  Shared := SharedInstructionBudget;
+  if Shared <> nil then
+  begin
+    Left := InstrLeft;
+    if Left > 0 then Shared.Refund(QWord(Left));
+  end;
   InstrLeft := 0;
   SharedInstructionBudget := nil;
   { a refusal the run did not reach a back edge or call for goes with it }
@@ -1058,7 +1070,9 @@ end;
 
 procedure StopInstructionMeasurement;
 begin
-  if (SharedInstructionBudget <> nil) or (InstrMax > 0) or not InstrCounted then Exit;
+  if SharedInstructionBudget <> nil then Exit;
+  if InstrMax > 0 then Exit;
+  if not InstrCounted then Exit;
   InstrCounted := False;
   InstrLeft := 0;
   JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil);

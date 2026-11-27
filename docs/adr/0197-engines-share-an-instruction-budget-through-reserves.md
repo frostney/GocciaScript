@@ -19,7 +19,8 @@ them on its own counter.**
 
 - The dispatch loop's fast path stays the per-engine counter; only an exhausted reserve reaches the budget.
 - A reserve is at most 1,024 units and, under a cap, at most an eighth of what is left, so engines sharing a nearly
-  spent cap are refused close to it rather than with thousands of units still held elsewhere.
+  spent cap are refused close to it rather than with thousands of units still held elsewhere. A native charge larger
+  than that reserves what it needs.
 - An engine returns its unspent reserve when its limits disarm. A refusal fixes the count at `Limit + 1`, as an
   engine's own cap does, and later refunds do not change it.
 - The budget uses a lock, not 64-bit atomics, which 32-bit targets lack. The lock is taken once per reserve.
