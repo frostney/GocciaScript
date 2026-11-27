@@ -18,6 +18,7 @@ type
     procedure TestNegativeOperandRaises;
     procedure TestBackReferencePastIndexBitsRaises;
     procedure TestWorkspaceLimitCountsNamedGroupStorage;
+    procedure TestWorkspaceLimitCountsNestedClassStorage;
   public
     procedure SetupTests; override;
   end;
@@ -28,6 +29,12 @@ procedure CheckTestWorkspace(const ABytes: Int64);
 begin
   if ABytes > 3 * 1024 then
     raise ETestWorkspaceLimit.Create('test workspace limit');
+end;
+
+procedure CheckClassWorkspace(const ABytes: Int64);
+begin
+  if ABytes > 24 * 1024 then
+    raise ETestWorkspaceLimit.Create('test class workspace limit');
 end;
 
 function RaisesConvertError(const AOp: TRegExpOpCode;
@@ -53,6 +60,23 @@ begin
     TestBackReferencePastIndexBitsRaises);
   Test('the workspace limit includes named-group bookkeeping',
     TestWorkspaceLimitCountsNamedGroupStorage);
+  Test('the workspace limit counts class contents that are live together',
+    TestWorkspaceLimitCountsNestedClassStorage);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNestedClassStorage;
+var
+  Refused: Boolean;
+begin
+  Expect<Boolean>(Length(CompileRegExp('[a][b]', 'v', @CheckClassWorkspace).Code) > 0).ToBe(True);
+  Refused := False;
+  try
+    CompileRegExp('[[\q{ab|cd}]]', 'v', @CheckClassWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
 end;
 
 procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNamedGroupStorage;

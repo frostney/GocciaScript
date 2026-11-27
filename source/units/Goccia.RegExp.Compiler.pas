@@ -119,6 +119,7 @@ type
     RangeCount: Integer;
     Strings: array of TRegExpStringSequence;
     StringCount: Integer;
+    CodePointBytes: Int64;
   end;
 
   TRegExpCompiler = class;
@@ -201,8 +202,9 @@ type
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
     procedure AddCapture;
-    function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
-    function AddStringSet(const AContents: TRegExpClassContents): Integer;
+    function AddCharClass(const ARanges: array of TRegExpCharRange;
+      const ACount: Integer = -1): Integer;
+    function AddStringSet(var AContents: TRegExpClassContents): Integer;
     procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
       ANegated: Boolean);
     procedure CompilePattern;
@@ -220,6 +222,16 @@ type
     function ParseClassSetCharacter: Cardinal;
     procedure ParseStringDisjunction(var AContents: TRegExpClassContents;
       out AMayContainStrings: Boolean);
+    procedure InitClassContents(var AContents: TRegExpClassContents);
+    procedure ClearClassContents(var AContents: TRegExpClassContents);
+    procedure EnsureClassStringCapacity(var AContents: TRegExpClassContents);
+    procedure AddClassString(var AContents: TRegExpClassContents;
+      const ACodePoints: array of Cardinal; const ACount: Integer = -1);
+    procedure MergeClassContents(var ADest, ASrc: TRegExpClassContents);
+    procedure FilterClassStrings(var ADest: TRegExpClassContents;
+      const ARight: TRegExpClassContents; AKeepMatched: Boolean);
+    procedure ApplyClassSetOp(var ADest: TRegExpClassContents;
+      const ARight: TRegExpClassContents; AIsIntersect: Boolean);
     procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
@@ -233,7 +245,7 @@ type
     procedure EmitCharMatch(ACodePoint: Cardinal);
     procedure EmitCharClassRanges(const ARanges: array of TRegExpCharRange;
       ARangeCount: Integer; ANegated: Boolean);
-    procedure EmitClassContents(const AContents: TRegExpClassContents;
+    procedure EmitClassContents(var AContents: TRegExpClassContents;
       ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddWordCharacterRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
@@ -635,7 +647,7 @@ begin
 end;
 
 function TRegExpCompiler.AddCharClass(
-  const ARanges: array of TRegExpCharRange): Integer;
+  const ARanges: array of TRegExpCharRange; const ACount: Integer): Integer;
 var
   I: Integer;
   Page: Integer;
@@ -646,9 +658,10 @@ var
   ClassBytes: Int64;
 begin
   Result := Length(FCharClasses);
-  RangeCount := Length(ARanges);
+  if ACount < 0 then RangeCount := Length(ARanges) else RangeCount := ACount;
+  CheckWorkspace(Int64(RangeCount) * SizeOf(TRegExpCharRange));
   SetLength(Normalized, RangeCount);
-  for I := 0 to High(ARanges) do
+  for I := 0 to RangeCount - 1 do
     Normalized[I] := ARanges[I];
   NormalizeRanges(Normalized, RangeCount);
   ClassBytes := SizeOf(TRegExpCharClass) + Int64(RangeCount) * SizeOf(TRegExpCharRange);
@@ -679,24 +692,18 @@ begin
 end;
 
 function TRegExpCompiler.AddStringSet(
-  const AContents: TRegExpClassContents): Integer;
+  var AContents: TRegExpClassContents): Integer;
 var
   I, StringIndex: Integer;
-  Ranges: TRegExpCharRangeArray;
   SetBytes: Int64;
 begin
   Result := Length(FStringSets);
   SetBytes := SizeOf(TRegExpStringSet) + Int64(AContents.StringCount) * SizeOf(TRegExpStringSequence);
-  for I := 0 to AContents.StringCount - 1 do
-    Inc(SetBytes, Int64(Length(AContents.Strings[I].CodePoints)) * SizeOf(Cardinal));
   CheckWorkspace(SetBytes + Int64(Result) * SizeOf(TRegExpStringSet));
   Inc(FTableBytes, SetBytes);
   SetLength(FStringSets, Result + 1);
 
-  SetLength(Ranges, AContents.RangeCount);
-  for I := 0 to AContents.RangeCount - 1 do
-    Ranges[I] := AContents.Ranges[I];
-  FStringSets[Result].CharClassIndex := AddCharClass(Ranges);
+  FStringSets[Result].CharClassIndex := AddCharClass(AContents.Ranges, AContents.RangeCount);
 
   SetLength(FStringSets[Result].Strings, AContents.StringCount);
   StringIndex := 0;
@@ -704,8 +711,12 @@ begin
     if Length(AContents.Strings[I].CodePoints) > 1 then
     begin
       FStringSets[Result].Strings[StringIndex] := AContents.Strings[I];
+      // The program keeps this array when the parser's contents are cleared.
+      Dec(AContents.CodePointBytes, Int64(Length(AContents.Strings[I].CodePoints)) * SizeOf(Cardinal));
       Inc(StringIndex);
     end;
+  if StringIndex < AContents.StringCount then
+    CheckTableResize(AContents.StringCount, StringIndex, SizeOf(TRegExpStringSequence));
   SetLength(FStringSets[Result].Strings, StringIndex);
 end;
 
@@ -1371,12 +1382,22 @@ begin
       ComplementRanges[I].Hi);
 end;
 
-procedure InitClassContents(var AContents: TRegExpClassContents);
+procedure TRegExpCompiler.InitClassContents(var AContents: TRegExpClassContents);
 begin
+  ClearClassContents(AContents);
+  CheckTableResize(0, MAX_CHAR_RANGES, SizeOf(TRegExpCharRange));
   SetLength(AContents.Ranges, MAX_CHAR_RANGES);
   AContents.RangeCount := 0;
-  SetLength(AContents.Strings, 0);
   AContents.StringCount := 0;
+  AContents.CodePointBytes := 0;
+end;
+
+procedure TRegExpCompiler.ClearClassContents(var AContents: TRegExpClassContents);
+begin
+  if Length(AContents.Ranges) = 0 then Exit;
+  Dec(FTableBytes, Int64(Length(AContents.Ranges)) * SizeOf(TRegExpCharRange) +
+    Int64(Length(AContents.Strings)) * SizeOf(TRegExpStringSequence) + AContents.CodePointBytes);
+  AContents := Default(TRegExpClassContents);
 end;
 
 procedure AddClassRange(var AContents: TRegExpClassContents;
@@ -1390,46 +1411,68 @@ begin
   end;
 end;
 
-procedure AddClassString(var AContents: TRegExpClassContents;
-  const ACodePoints: array of Cardinal);
+procedure TRegExpCompiler.EnsureClassStringCapacity(var AContents: TRegExpClassContents);
 var
-  Seq: TRegExpStringSequence;
-  I: Integer;
+  Capacity: Integer;
 begin
-  SetLength(Seq.CodePoints, Length(ACodePoints));
-  for I := 0 to High(ACodePoints) do
-    Seq.CodePoints[I] := ACodePoints[I];
-  if AContents.StringCount >= Length(AContents.Strings) then
-    SetLength(AContents.Strings, AContents.StringCount + 16);
-  AContents.Strings[AContents.StringCount] := Seq;
-  Inc(AContents.StringCount);
+  if AContents.StringCount < Length(AContents.Strings) then Exit;
+  Capacity := AContents.StringCount + 16;
+  CheckTableResize(Length(AContents.Strings), Capacity, SizeOf(TRegExpStringSequence));
+  SetLength(AContents.Strings, Capacity);
 end;
 
-procedure MergeClassContents(var ADest: TRegExpClassContents;
-  const ASrc: TRegExpClassContents);
+procedure TRegExpCompiler.AddClassString(var AContents: TRegExpClassContents;
+  const ACodePoints: array of Cardinal; const ACount: Integer);
+var
+  Seq: TRegExpStringSequence;
+  I, Count: Integer;
+  Bytes: Int64;
+begin
+  if ACount < 0 then Count := Length(ACodePoints) else Count := ACount;
+  EnsureClassStringCapacity(AContents);
+  Bytes := Int64(Count) * SizeOf(Cardinal);
+  CheckWorkspace(Bytes);
+  SetLength(Seq.CodePoints, Count);
+  for I := 0 to Count - 1 do
+    Seq.CodePoints[I] := ACodePoints[I];
+  AContents.Strings[AContents.StringCount] := Seq;
+  Inc(AContents.StringCount);
+  Inc(AContents.CodePointBytes, Bytes);
+  Inc(FTableBytes, Bytes);
+end;
+
+// The caller discards the source after the merge. Only its sequence records
+// are copied. The code-point arrays move to the destination's accounting.
+procedure TRegExpCompiler.MergeClassContents(var ADest, ASrc: TRegExpClassContents);
 var
   I: Integer;
+  Bytes: Int64;
 begin
   for I := 0 to ASrc.RangeCount - 1 do
     AddClassRange(ADest, ASrc.Ranges[I].Lo, ASrc.Ranges[I].Hi);
   for I := 0 to ASrc.StringCount - 1 do
   begin
-    if ADest.StringCount >= Length(ADest.Strings) then
-      SetLength(ADest.Strings, ADest.StringCount + 16);
+    EnsureClassStringCapacity(ADest);
     ADest.Strings[ADest.StringCount] := ASrc.Strings[I];
     Inc(ADest.StringCount);
+    Bytes := Int64(Length(ASrc.Strings[I].CodePoints)) * SizeOf(Cardinal);
+    Inc(ADest.CodePointBytes, Bytes);
+    Dec(ASrc.CodePointBytes, Bytes);
   end;
 end;
 
-procedure FilterClassStrings(var ADest: TRegExpClassContents;
+procedure TRegExpCompiler.FilterClassStrings(var ADest: TRegExpClassContents;
   const ARight: TRegExpClassContents; AKeepMatched: Boolean);
 var
   I, J: Integer;
   Found: Boolean;
   ResultStrings: array of TRegExpStringSequence;
   ResultStringCount: Integer;
+  KeptBytes: Int64;
 begin
   ResultStringCount := 0;
+  KeptBytes := 0;
+  CheckWorkspace(Int64(ADest.StringCount) * 2 * SizeOf(TRegExpStringSequence));
   SetLength(ResultStrings, ADest.StringCount);
   for I := 0 to ADest.StringCount - 1 do
   begin
@@ -1451,15 +1494,19 @@ begin
     begin
       ResultStrings[ResultStringCount] := ADest.Strings[I];
       Inc(ResultStringCount);
+      Inc(KeptBytes, Int64(Length(ADest.Strings[I].CodePoints)) * SizeOf(Cardinal));
     end;
   end;
   ADest.StringCount := ResultStringCount;
+  Dec(FTableBytes, Int64(Length(ADest.Strings) - ResultStringCount) * SizeOf(TRegExpStringSequence) +
+    ADest.CodePointBytes - KeptBytes);
+  ADest.CodePointBytes := KeptBytes;
   SetLength(ADest.Strings, ResultStringCount);
   for I := 0 to ResultStringCount - 1 do
     ADest.Strings[I] := ResultStrings[I];
 end;
 
-procedure ApplyClassSetOp(var ADest: TRegExpClassContents;
+procedure TRegExpCompiler.ApplyClassSetOp(var ADest: TRegExpClassContents;
   const ARight: TRegExpClassContents; AIsIntersect: Boolean);
 var
   ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
@@ -1485,18 +1532,6 @@ begin
   for I := 0 to ResultCount - 1 do
     ADest.Ranges[I] := ResultRanges[I];
   FilterClassStrings(ADest, ARight, AIsIntersect);
-end;
-
-procedure IntersectClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
-begin
-  ApplyClassSetOp(ADest, ARight, True);
-end;
-
-procedure SubtractClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
-begin
-  ApplyClassSetOp(ADest, ARight, False);
 end;
 
 procedure ComplementContents(var AContents: TRegExpClassContents);
@@ -1530,17 +1565,26 @@ procedure TRegExpCompiler.GetStringPropertySequences(
 var
   I: Integer;
   Sequences: TUnicodeStringSequenceArray;
+  Bytes: Int64;
 begin
   if TryGetUnicodeStringPropertySequences('strings/' + APropertyName,
-     Sequences) then
+     Sequences, CheckWorkspace) then
   begin
+    Bytes := Int64(Length(Sequences)) * SizeOf(TUnicodeStringSequence);
     for I := 0 to High(Sequences) do
-    begin
-      if Length(Sequences[I].CodePoints) = 1 then
-        AddClassRange(AContents, Sequences[I].CodePoints[0],
-          Sequences[I].CodePoints[0])
-      else if Length(Sequences[I].CodePoints) > 1 then
-        AddClassString(AContents, Sequences[I].CodePoints);
+      Inc(Bytes, Int64(Length(Sequences[I].CodePoints)) * SizeOf(Cardinal));
+    Inc(FTableBytes, Bytes);
+    try
+      for I := 0 to High(Sequences) do
+      begin
+        if Length(Sequences[I].CodePoints) = 1 then
+          AddClassRange(AContents, Sequences[I].CodePoints[0],
+            Sequences[I].CodePoints[0])
+        else if Length(Sequences[I].CodePoints) > 1 then
+          AddClassString(AContents, Sequences[I].CodePoints);
+      end;
+    finally
+      Dec(FTableBytes, Bytes);
     end;
     Exit;
   end;
@@ -1890,27 +1934,35 @@ var
   CodePoints: array of Cardinal;
   CodePointCount: Integer;
 begin
-  AMayContainStrings := False;
-  SetLength(CodePoints, 16);
-  repeat
-    // ClassString :: [empty] | NonEmptyClassString
-    CodePointCount := 0;
-    while not AtEnd and (Peek <> '|') and (Peek <> '}') do
-    begin
-      if CodePointCount >= Length(CodePoints) then
-        SetLength(CodePoints, CodePointCount * 2);
-      CodePoints[CodePointCount] := ParseClassSetCharacter;
-      Inc(CodePointCount);
-    end;
-    if CodePointCount <> 1 then
-      AMayContainStrings := True;
-    if CodePointCount = 1 then
-      AddClassRange(AContents, CodePoints[0], CodePoints[0])
-    else if CodePointCount > 0 then
-      AddClassString(AContents, Copy(CodePoints, 0, CodePointCount));
-  until not Match('|');
-  if not Match('}') then
-    raise EConvertError.Create('Unterminated string disjunction \\q{}');
+  try
+    AMayContainStrings := False;
+    CheckTableResize(0, 16, SizeOf(Cardinal));
+    SetLength(CodePoints, 16);
+    repeat
+      // ClassString :: [empty] | NonEmptyClassString
+      CodePointCount := 0;
+      while not AtEnd and (Peek <> '|') and (Peek <> '}') do
+      begin
+        if CodePointCount >= Length(CodePoints) then
+        begin
+          CheckTableResize(Length(CodePoints), CodePointCount * 2, SizeOf(Cardinal));
+          SetLength(CodePoints, CodePointCount * 2);
+        end;
+        CodePoints[CodePointCount] := ParseClassSetCharacter;
+        Inc(CodePointCount);
+      end;
+      if CodePointCount <> 1 then
+        AMayContainStrings := True;
+      if CodePointCount = 1 then
+        AddClassRange(AContents, CodePoints[0], CodePoints[0])
+      else if CodePointCount > 0 then
+        AddClassString(AContents, CodePoints, CodePointCount);
+    until not Match('|');
+    if not Match('}') then
+      raise EConvertError.Create('Unterminated string disjunction \\q{}');
+  finally
+    Dec(FTableBytes, Int64(Length(CodePoints)) * SizeOf(Cardinal));
+  end;
 end;
 
 // ES2026 §22.2.1 ClassSetOperand, or in a ClassUnion a ClassSetRange.
@@ -1931,25 +1983,29 @@ begin
   begin
     // NestedClass :: [ [lookahead ≠ ^] ClassContents ] | [^ ClassContents ]
     Inc(FPos);
-    if Match('^') then
-    begin
-      ParseClassSetExpression(Nested, NestedMayContainStrings);
-      if not Match(']') then
-        raise EConvertError.Create('Unterminated character class');
-      // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
-      if NestedMayContainStrings then
-        raise EConvertError.Create(SErrorNegatedClassStrings);
-      NormalizeRanges(Nested.Ranges, Nested.RangeCount);
-      ComplementContents(Nested);
-    end
-    else
-    begin
-      ParseClassSetExpression(Nested, NestedMayContainStrings);
-      if not Match(']') then
-        raise EConvertError.Create('Unterminated character class');
-      AMayContainStrings := NestedMayContainStrings;
+    try
+      if Match('^') then
+      begin
+        ParseClassSetExpression(Nested, NestedMayContainStrings);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
+        if NestedMayContainStrings then
+          raise EConvertError.Create(SErrorNegatedClassStrings);
+        NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+        ComplementContents(Nested);
+      end
+      else
+      begin
+        ParseClassSetExpression(Nested, NestedMayContainStrings);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        AMayContainStrings := NestedMayContainStrings;
+      end;
+      MergeClassContents(AContents, Nested);
+    finally
+      ClearClassContents(Nested);
     end;
-    MergeClassContents(AContents, Nested);
     Exit;
   end;
   if (Peek = '\') and CharInSet(PeekAt(1),
@@ -1987,12 +2043,16 @@ begin
           end
           else if C = 'P' then
           begin
-            InitClassContents(Nested);
-            GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
-              Nested.RangeCount);
-            NormalizeRanges(Nested.Ranges, Nested.RangeCount);
-            ComplementContents(Nested);
-            MergeClassContents(AContents, Nested);
+            try
+              InitClassContents(Nested);
+              GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
+                Nested.RangeCount);
+              NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+              ComplementContents(Nested);
+              MergeClassContents(AContents, Nested);
+            finally
+              ClearClassContents(Nested);
+            end;
           end
           else
             GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
@@ -2057,20 +2117,24 @@ begin
       Inc(FPos, 2);
       if (SetOperator = '&') and (Peek = '&') then
         raise EConvertError.Create(SErrorClassSetOperation);
-      InitClassContents(Operand);
-      if ParseClassSetOperand(Operand, OperandMayContainStrings) then
-        raise EConvertError.Create(SErrorClassSetOperation);
-      if SetOperator = '&' then
-      begin
-        IntersectClassContents(AContents, Operand);
-        // §22.2.1.8: an intersection may contain strings only when every
-        // operand may.
-        AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
-      end
-      else
-        // §22.2.1.8: a subtraction may contain strings when its first
-        // operand may.
-        SubtractClassContents(AContents, Operand);
+      try
+        InitClassContents(Operand);
+        if ParseClassSetOperand(Operand, OperandMayContainStrings) then
+          raise EConvertError.Create(SErrorClassSetOperation);
+        if SetOperator = '&' then
+        begin
+          ApplyClassSetOp(AContents, Operand, True);
+          // §22.2.1.8: an intersection may contain strings only when every
+          // operand may.
+          AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
+        end
+        else
+          // §22.2.1.8: a subtraction may contain strings when its first
+          // operand may.
+          ApplyClassSetOp(AContents, Operand, False);
+      finally
+        ClearClassContents(Operand);
+      end;
     end;
     if not AtEnd and (Peek <> ']') then
       raise EConvertError.Create(SErrorClassSetOperation);
@@ -2090,7 +2154,7 @@ begin
 end;
 
 procedure TRegExpCompiler.EmitClassContents(
-  const AContents: TRegExpClassContents; ANegated: Boolean);
+  var AContents: TRegExpClassContents; ANegated: Boolean);
 var
   I, J: Integer;
   SplitHoles: array of Integer;
@@ -2110,39 +2174,44 @@ begin
     EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, ANegated);
     Exit;
   end;
-  SplitCount := 0;
-  JumpCount := 0;
-  SetLength(SplitHoles, AContents.StringCount + 1);
-  SetLength(JumpHoles, AContents.StringCount + 1);
-  for I := AContents.StringCount - 1 downto 0 do
-  begin
-    if Length(AContents.Strings[I].CodePoints) > 1 then
+  CheckTableResize(0, AContents.StringCount + 1, 2 * SizeOf(Integer));
+  try
+    SplitCount := 0;
+    JumpCount := 0;
+    SetLength(SplitHoles, AContents.StringCount + 1);
+    SetLength(JumpHoles, AContents.StringCount + 1);
+    for I := AContents.StringCount - 1 downto 0 do
     begin
-      SplitHoles[SplitCount] := CurrentPC;
-      Inc(SplitCount);
-      Emit(EncodeOpBx(RX_SPLIT, 0));
-      if FBackward then
+      if Length(AContents.Strings[I].CodePoints) > 1 then
       begin
-        for J := High(AContents.Strings[I].CodePoints) downto 0 do
-          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
-      end
-      else
-      begin
-        for J := 0 to High(AContents.Strings[I].CodePoints) do
-          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        SplitHoles[SplitCount] := CurrentPC;
+        Inc(SplitCount);
+        Emit(EncodeOpBx(RX_SPLIT, 0));
+        if FBackward then
+        begin
+          for J := High(AContents.Strings[I].CodePoints) downto 0 do
+            EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        end
+        else
+        begin
+          for J := 0 to High(AContents.Strings[I].CodePoints) do
+            EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        end;
+        JumpHoles[JumpCount] := CurrentPC;
+        Inc(JumpCount);
+        Emit(EncodeOpBx(RX_JUMP, 0));
+        PatchHole(SplitHoles[SplitCount - 1], CurrentPC);
       end;
-      JumpHoles[JumpCount] := CurrentPC;
-      Inc(JumpCount);
-      Emit(EncodeOpBx(RX_JUMP, 0));
-      PatchHole(SplitHoles[SplitCount - 1], CurrentPC);
     end;
+    if AContents.RangeCount > 0 then
+      EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, False)
+    else
+      Emit(EncodeOp(RX_FAIL));
+    for I := 0 to JumpCount - 1 do
+      FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  finally
+    Dec(FTableBytes, Int64(Length(SplitHoles) + Length(JumpHoles)) * SizeOf(Integer));
   end;
-  if AContents.RangeCount > 0 then
-    EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, False)
-  else
-    Emit(EncodeOp(RX_FAIL));
-  for I := 0 to JumpCount - 1 do
-    FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
 end;
 
 // ES2026 §22.2.1 CharacterClass[+UnicodeMode, +UnicodeSetsMode], after `[`
@@ -2151,14 +2220,18 @@ var
   Contents: TRegExpClassContents;
   Negated, MayContainStrings: Boolean;
 begin
-  Negated := Match('^');
-  ParseClassSetExpression(Contents, MayContainStrings);
-  if not Match(']') then
-    raise EConvertError.Create('Unterminated character class');
-  // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
-  if Negated and MayContainStrings then
-    raise EConvertError.Create(SErrorNegatedClassStrings);
-  EmitClassContents(Contents, Negated);
+  try
+    Negated := Match('^');
+    ParseClassSetExpression(Contents, MayContainStrings);
+    if not Match(']') then
+      raise EConvertError.Create('Unterminated character class');
+    // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
+    if Negated and MayContainStrings then
+      raise EConvertError.Create(SErrorNegatedClassStrings);
+    EmitClassContents(Contents, Negated);
+  finally
+    ClearClassContents(Contents);
+  end;
 end;
 
 procedure TRegExpCompiler.EmitCharClassRanges(
@@ -2517,9 +2590,13 @@ begin
             if Negated then
               raise EConvertError.Create(
                 'Negated \\P{} cannot be used with properties of strings');
-            InitClassContents(Contents);
-            GetStringPropertySequences(PropertyName, Contents);
-            EmitClassContents(Contents, False);
+            try
+              InitClassContents(Contents);
+              GetStringPropertySequences(PropertyName, Contents);
+              EmitClassContents(Contents, False);
+            finally
+              ClearClassContents(Contents);
+            end;
           end
           else
             EmitUnicodePropertyClass(PropertyName, Negated);
