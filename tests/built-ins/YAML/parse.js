@@ -20,6 +20,206 @@ nested:
     expect(value.nested.retries).toBe(3);
   });
 
+  test("parses compact mappings in a root sequence", () => {
+    const value = YAML.parse(`
+- a: 1
+  b: 2
+- a: 3
+  b: 4
+`);
+
+    expect(value).toEqual([{ a: 1, b: 2 }, { a: 3, b: 4 }]);
+  });
+
+  test("parses compact mappings in an indented sequence", () => {
+    const value = YAML.parse(`
+items:
+  - a: 1
+    b: 2
+`);
+
+    expect(value).toEqual({ items: [{ a: 1, b: 2 }] });
+  });
+
+  test("parses compact mappings in an indentless sequence", () => {
+    const value = YAML.parse(`
+items:
+- a: 1
+  b: 2
+count: 1
+`);
+
+    expect(value).toEqual({ items: [{ a: 1, b: 2 }], count: 1 });
+  });
+
+  test("parses compact mapping keys after comments and blank lines", () => {
+    const value = YAML.parse(`
+items:
+  - a: 1 # first key
+# comment outside the collection's indentation
+
+    env:
+      K: v
+    flags: [one, { enabled: true }]
+  - a: 2
+`);
+
+    expect(value).toEqual({
+      items: [
+        { a: 1, env: { K: "v" }, flags: ["one", { enabled: true }] },
+        { a: 2 },
+      ],
+    });
+  });
+
+  test("parses compact mapping keys after a flow value and dedented comment", () => {
+    const value = YAML.parse(`
+- a: [
+    1,
+    2
+  ]
+# between keys
+  b: "two"
+`);
+
+    expect(value).toEqual([{ a: [1, 2], b: "two" }]);
+  });
+
+  test("parses compact mappings with single keys alongside scalar entries", () => {
+    const value = YAML.parse(`
+items:
+  - a: 1
+  - plain
+  - a: 2
+`);
+
+    expect(value).toEqual({ items: [{ a: 1 }, "plain", { a: 2 }] });
+  });
+
+  test("parses compact mapping merge keys and ordinary mapping merge keys", () => {
+    const value = YAML.parse(`
+d: &d
+  x: 1
+items:
+  - a: 1
+    <<: *d
+m:
+  a: 2
+  <<: *d
+`);
+
+    expect(value).toEqual({
+      d: { x: 1 },
+      items: [{ a: 1, x: 1 }],
+      m: { a: 2, x: 1 },
+    });
+  });
+
+  test("parses compact mappings inside nested compact sequences", () => {
+    const value = YAML.parse(`
+- - a: 1
+    b: { x: 2 }
+  - - c: 3
+      d: 4
+    - tail
+- outside
+`);
+
+    expect(value).toEqual([
+      [{ a: 1, b: { x: 2 } }, [{ c: 3, d: 4 }, "tail"]],
+      "outside",
+    ]);
+  });
+
+  test("parses compact mappings with an indentless sequence and empty values", () => {
+    const value = YAML.parse(`
+- children:
+  - a: 1
+    b: 2
+  optional:
+  name: outer
+- optional:
+  name: next
+`);
+
+    expect(value).toEqual([
+      { children: [{ a: 1, b: 2 }], optional: null, name: "outer" },
+      { optional: null, name: "next" },
+    ]);
+  });
+
+  test("parses compact mappings with extra spaces after the dash", () => {
+    const value = YAML.parse(`
+-   title: first
+      second
+    enabled: true
+-   description: |2-
+      third
+    enabled: false
+`);
+
+    expect(value).toEqual([
+      { title: "first second", enabled: true },
+      { description: "third", enabled: false },
+    ]);
+  });
+
+  test("parses compact mappings that start with an explicit key", () => {
+    const value = YAML.parse(`
+- ? id
+  : 1
+  label: demo
+`);
+
+    expect(value).toEqual([{ id: 1, label: "demo" }]);
+  });
+
+  test("parses compact mappings within explicit keys and values", () => {
+    const value = YAML.parse(`
+- sun: yellow
+- ? earth: blue
+  : moon: white
+`);
+
+    expect(value).toEqual([
+      { sun: "yellow" },
+      { '{"earth": "blue"}': { moon: "white" } },
+    ]);
+  });
+
+  test("parses compact mappings with an omitted explicit key", () => {
+    const value = YAML.parse(`
+- ?
+  : named
+  b: two
+- outside
+`);
+
+    expect(value).toEqual([{ null: "named", b: "two" }, "outside"]);
+  });
+
+  test("parses compact mappings with an omitted explicit value", () => {
+    const value = YAML.parse(`
+- ? a
+  :
+  b: two
+  ? child
+  :
+  - nested
+  c: three
+- outside
+`);
+
+    expect(value).toEqual([
+      { a: null, b: "two", child: ["nested"], c: "three" },
+      "outside",
+    ]);
+  });
+
+  test("rejects compact mappings as values of implicit keys", () => {
+    expect(() => YAML.parse("- outer: inner: value")).toThrow(SyntaxError);
+  });
+
   test("parses flow collections, comments, and scalar values", () => {
     const value = YAML.parse(`
 items: [1, 2, { ok: true }, foo: bar]

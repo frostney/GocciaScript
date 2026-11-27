@@ -73,19 +73,20 @@ type
       const AObject: TGocciaDataNode);
     procedure ParseSequenceInto(const AIndent: Integer;
       const AArray: TGocciaDataNode);
+    procedure ParseSequenceEntry(const AEntryText: string;
+      const AIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
     function ParseMappingValueText(const AValueText: string; const ALineIndent,
-      ALineNumber: Integer): TGocciaDataNode;
+      ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
     procedure ParseMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
     procedure ParseExplicitMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
-    procedure ParseSequenceEntryMappingInto(const ASequenceIndent: Integer;
+    procedure ParseCompactMappingInto(const AMappingIndent: Integer;
       const AEntryText: string; const ALineNumber: Integer;
       const AObject: TGocciaDataNode);
     function ParseNodeValue(const AValueText: string; const ALineIndent,
-      ALineNumber: Integer; const ATagName, AAnchorName: string;
-      const AAdvanceBeforeNested, ASequenceEntryInlineMapping,
-      AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
+      ACompactIndent, ALineNumber: Integer; const ATagName, AAnchorName: string;
+      const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
       ARequireIndentedQuotedContinuation,
       AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
     function ParseInlineValue(const AText: string): TGocciaDataNode;
@@ -137,6 +138,7 @@ uses
   Goccia.Temporal.Utils;
 
 const
+  NO_COMPACT_INDENT = -1;
   DOCUMENT_START_MARKER = '---';
   DOCUMENT_END_MARKER = '...';
   DOUBLE_QUOTE = '"';
@@ -2078,8 +2080,9 @@ begin
     LineNumber := CurrentLine.Number;
 
     ParseNodeProperties(CurrentLine.Text, TagName, AnchorName, RemainingText, LineNumber);
-    Result := ParseNodeValue(RemainingText, AIndent, LineNumber, TagName,
-      AnchorName, True, False, False, (RemainingText = '') and
+    Result := ParseNodeValue(RemainingText, AIndent,
+      NO_COMPACT_INDENT, LineNumber, TagName,
+      AnchorName, True, False, (RemainingText = '') and
       ((TagName <> '') or (AnchorName <> '')), False, True);
   finally
     LeaveDataDepth;
@@ -2101,7 +2104,6 @@ begin
     Exit(FTree.NewNull);
   if (CurrentLine.Indent = AParentIndent) and
      not StartsSequenceEntry(CurrentLine.Text) and
-     not StartsBlockMappingEntry(CurrentLine.Text) and
      ((CurrentLine.Text = '') or
       ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{'))) then
     Exit(FTree.NewNull);
@@ -2296,14 +2298,17 @@ begin
 end;
 
 function TGocciaYAMLParser.ParseMappingValueText(const AValueText: string;
-  const ALineIndent, ALineNumber: Integer): TGocciaDataNode;
+  const ALineIndent, ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
 var
-  AnchorName, RemainingText, TagName, ValueText: string;
+  AnchorName, RemainingText, TagName: string;
 begin
-  ValueText := AValueText;
-  ParseNodeProperties(ValueText, TagName, AnchorName, RemainingText, ALineNumber);
-  Result := ParseNodeValue(RemainingText, ALineIndent, ALineNumber, TagName,
-    AnchorName, True, False, False, False, True, False);
+  ParseNodeProperties(AValueText, TagName, AnchorName, RemainingText, ALineNumber);
+  if (ACompactIndent = NO_COMPACT_INDENT) and not StartsSequenceEntry(RemainingText) and
+     StartsBlockMappingEntry(RemainingText) then
+    RaiseParseError('A compact block mapping requires an explicit key.', ALineNumber);
+  Result := ParseNodeValue(RemainingText, ALineIndent, ACompactIndent,
+    ALineNumber, TagName,
+    AnchorName, True, False, False, True, False);
 end;
 
 procedure TGocciaYAMLParser.ParseMappingEntry(const AContainer: TGocciaDataNode;
@@ -2319,7 +2324,7 @@ begin
 
   KeyText := Trim(Copy(ALineText, 1, SeparatorIndex - 1));
   ValueText := Trim(Copy(ALineText, SeparatorIndex + 1, MaxInt));
-  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber);
+  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber, NO_COMPACT_INDENT);
   KeyText := ParseKeyName(KeyText, ALineNumber);
   if KeyText = '<<' then
     MergeMappingValue(AContainer, Value, ALineNumber)
@@ -2335,8 +2340,8 @@ var
   KeyLineText, ValueLineText: string;
   KeyValue, Value: TGocciaDataNode;
 begin
-  KeyLineText := Trim(Copy(ALineText, 2, MaxInt));
-  if KeyLineText = '' then
+  KeyLineText := Copy(ALineText, 2, MaxInt);
+  if Trim(KeyLineText) = '' then
   begin
     Inc(FIndex);
     KeyValue := ParseExplicitNestedNode(ALineIndent);
@@ -2349,6 +2354,13 @@ begin
     begin
       KeyValue := FTree.NewString('');
       Inc(FIndex);
+    end
+    else if not StartsSequenceEntry(KeyRemainingText) and
+            StartsBlockMappingEntry(KeyRemainingText) then
+    begin
+      KeyValue := FTree.NewObject;
+      ParseCompactMappingInto(ALineIndent + 1 + CountIndentation(KeyLineText),
+        KeyRemainingText, ALineNumber, KeyValue);
     end
     else
       KeyValue := ParseInlineValueWithContinuations(KeyRemainingText,
@@ -2370,14 +2382,15 @@ begin
     Exit;
   end;
 
-  ValueLineText := Trim(Copy(CurrentLine.Text, 2, MaxInt));
-  if ValueLineText = '' then
+  ValueLineText := Copy(CurrentLine.Text, 2, MaxInt);
+  if Trim(ValueLineText) = '' then
   begin
     Inc(FIndex);
     Value := ParseExplicitNestedNode(ALineIndent);
   end
   else
-    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number);
+    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number,
+      ALineIndent + 1 + CountIndentation(ValueLineText));
   KeyLineText := CanonicalizeKeyValue(KeyValue);
   if KeyLineText = '<<' then
     MergeMappingValue(AContainer, Value, CurrentLine.Number)
@@ -2403,39 +2416,21 @@ begin
   end;
 end;
 
-procedure TGocciaYAMLParser.ParseSequenceEntryMappingInto(
-  const ASequenceIndent: Integer; const AEntryText: string;
+procedure TGocciaYAMLParser.ParseCompactMappingInto(
+  const AMappingIndent: Integer; const AEntryText: string;
   const ALineNumber: Integer; const AObject: TGocciaDataNode);
-var
-  MappingIndent: Integer;
 begin
   if StartsExplicitKeyEntry(AEntryText) then
-    ParseExplicitMappingEntry(AObject, AEntryText, ASequenceIndent, ALineNumber)
+    ParseExplicitMappingEntry(AObject, AEntryText, AMappingIndent, ALineNumber)
   else
-    ParseMappingEntry(AObject, AEntryText, ASequenceIndent, ALineNumber);
-  if HasCurrentLine and (CurrentLine.Indent > ASequenceIndent) then
-  begin
-    MappingIndent := CurrentLine.Indent;
-    while True do
-    begin
-      SkipIgnorableLines;
-      if not (HasCurrentLine and (CurrentLine.Indent = MappingIndent) and
-              StartsBlockMappingEntry(CurrentLine.Text)) then
-        Break;
-      if StartsExplicitKeyEntry(CurrentLine.Text) then
-        ParseExplicitMappingEntry(AObject, CurrentLine.Text, CurrentLine.Indent,
-          CurrentLine.Number)
-      else
-        ParseMappingEntry(AObject, CurrentLine.Text, CurrentLine.Indent,
-          CurrentLine.Number);
-    end;
-  end;
+    ParseMappingEntry(AObject, AEntryText, AMappingIndent, ALineNumber);
+  ParseMappingInto(AMappingIndent, AObject);
 end;
 
 function TGocciaYAMLParser.ParseNodeValue(const AValueText: string;
-  const ALineIndent, ALineNumber: Integer; const ATagName, AAnchorName: string;
-  const AAdvanceBeforeNested, ASequenceEntryInlineMapping,
-  AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
+  const ALineIndent, ACompactIndent, ALineNumber: Integer;
+  const ATagName, AAnchorName: string;
+  const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
   ARequireIndentedQuotedContinuation,
   AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
 var
@@ -2453,10 +2448,9 @@ begin
        ((CurrentLine.Indent = ALineIndent) and
         (((not AAllowSameIndentNestedNode) and
           not StartsSequenceEntry(CurrentLine.Text) and
-          not StartsBlockMappingEntry(CurrentLine.Text) and
           ((CurrentLine.Text = '') or
            ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{')))) or
-         (ASequenceEntryInlineMapping and StartsSequenceEntry(CurrentLine.Text)))) then
+         (AStopAtIndentedSequenceEntry and StartsSequenceEntry(CurrentLine.Text)))) then
       Result := FTree.NewNull
     else if StartsSequenceEntry(CurrentLine.Text) then
     begin
@@ -2495,15 +2489,21 @@ begin
   begin
     Arr := FTree.NewArray;
     RegisterAnchor(AAnchorName, Arr, ALineNumber);
-    ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
+    if ACompactIndent <> NO_COMPACT_INDENT then
+    begin
+      ParseSequenceEntry(AValueText, ACompactIndent, ALineNumber, Arr);
+      ParseSequenceInto(ACompactIndent, Arr);
+    end
+    else
+      ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
     Result := Arr;
   end
   else if StartsBlockMappingEntry(AValueText) then
   begin
     Obj := FTree.NewObject;
     RegisterAnchor(AAnchorName, Obj, ALineNumber);
-    if ASequenceEntryInlineMapping then
-      ParseSequenceEntryMappingInto(ALineIndent, AValueText, ALineNumber, Obj)
+    if ACompactIndent <> NO_COMPACT_INDENT then
+      ParseCompactMappingInto(ACompactIndent, AValueText, ALineNumber, Obj)
     else
       ParseMappingInto(ALineIndent, Obj);
     Result := Obj;
@@ -2538,11 +2538,6 @@ end;
 
 procedure TGocciaYAMLParser.ParseSequenceInto(const AIndent: Integer;
   const AArray: TGocciaDataNode);
-var
-  AnchorName, RemainingText, TagName: string;
-  EntryText: string;
-  LineNumber: Integer;
-  Value: TGocciaDataNode;
 begin
   while True do
   begin
@@ -2550,27 +2545,31 @@ begin
     if not (HasCurrentLine and (CurrentLine.Indent = AIndent) and
             StartsSequenceEntry(CurrentLine.Text)) then
       Break;
-    LineNumber := CurrentLine.Number;
-    EntryText := Trim(Copy(CurrentLine.Text, 2, MaxInt));
-    ParseNodeProperties(EntryText, TagName, AnchorName, RemainingText, LineNumber);
-    Value := ParseNodeValue(RemainingText, AIndent, LineNumber, TagName,
-      AnchorName, True, True, True, False, True, False);
-    AArray.Add(Value);
+    ParseSequenceEntry(CurrentLine.Text, AIndent, CurrentLine.Number, AArray);
   end;
+end;
+
+procedure TGocciaYAMLParser.ParseSequenceEntry(const AEntryText: string;
+  const AIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
+var
+  AnchorName, ContentText, RemainingText, TagName: string;
+  ContentIndent: Integer;
+  Value: TGocciaDataNode;
+begin
+  ContentText := Copy(AEntryText, 2, MaxInt);
+  // YAML 1.2.2 §8.2.1 counts the dash and following spaces as indentation
+  // for a compact block collection.
+  ContentIndent := AIndent + 1 + CountIndentation(ContentText);
+  ParseNodeProperties(ContentText, TagName, AnchorName, RemainingText, ALineNumber);
+  Value := ParseNodeValue(RemainingText, AIndent, ContentIndent, ALineNumber,
+    TagName, AnchorName, True, True, False, True, False);
+  AArray.Add(Value);
 end;
 
 procedure TGocciaYAMLParser.ParseInlineSequenceInto(const AFirstEntryText: string;
   const ASequenceIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
-var
-  AnchorName, EntryText, RemainingText, TagName: string;
-  Value: TGocciaDataNode;
 begin
-  EntryText := Trim(Copy(AFirstEntryText, 2, MaxInt));
-  ParseNodeProperties(EntryText, TagName, AnchorName, RemainingText, ALineNumber);
-  Value := ParseNodeValue(RemainingText, ASequenceIndent, ALineNumber, TagName,
-    AnchorName, True, True, True, False, True, False);
-  AArray.Add(Value);
-
+  ParseSequenceEntry(AFirstEntryText, ASequenceIndent, ALineNumber, AArray);
   SkipIgnorableLines;
   if HasCurrentLine and (CurrentLine.Indent >= ASequenceIndent) and
      StartsSequenceEntry(CurrentLine.Text) then
