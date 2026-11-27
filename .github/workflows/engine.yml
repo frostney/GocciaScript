@@ -195,6 +195,12 @@ jobs:
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
+      - name: Embedders can opt in to Vitest with module-only tests
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/module-only-vitest-test scripts/engine/module-only-vitest-test.pas
+          timeout 20 build/module-only-vitest-test
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 

@@ -1,4 +1,4 @@
-# 0196 - An abort handle belongs to the next run and expires with it
+# 0198 - An abort handle belongs to the next run and expires with it
 
 **Date:** 2026-11-27
 **Area:** `runtime`, `embedding`

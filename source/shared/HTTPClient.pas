@@ -29,6 +29,7 @@ type
 
 const
   DEFAULT_MAX_RESPONSE_BODY_BYTES = HTTPTypes.DEFAULT_MAX_RESPONSE_BODY_BYTES;
+  HTTP_REQUEST_CANCELLED_MESSAGE = HTTPTypes.HTTP_REQUEST_CANCELLED_MESSAGE;
 
 function HTTPGet(const AURL: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings = nil;
@@ -93,6 +94,7 @@ uses
   {$ENDIF}
   CriticalSections,
   NetworkAddress,
+  NetworkCancellation,
   TextEncoding,
   TimingUtils,
   TransportSecurity;
@@ -157,13 +159,15 @@ type
     FPort: Integer;
     FState: THTTPConnectionState;
     FDeadlineNs: Int64;
+    FCancellation: TNetworkCancellation;
     FWorkerSlotAcquired: Boolean;
   protected
     procedure Execute; override;
   public
     constructor Create(const AHost: string; const APort: Integer;
       const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
-      const AState: THTTPConnectionState);
+      const AState: THTTPConnectionState;
+      const ACancellation: TNetworkCancellation);
     destructor Destroy; override;
   end;
 
@@ -209,7 +213,6 @@ type
   PSocketAddress4 = ^TSocketAddress4;
   TSocketAddress6 = TInetSockAddr6;
   PSocketAddress6 = ^TSocketAddress6;
-  THTTPPollFD = TPollFD;
 
 function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
   AHints: PHTTPAddrInfo; out ARes: PHTTPAddrInfo): Integer; cdecl;
@@ -229,22 +232,8 @@ type
   PSocketAddress4 = ^TSocketAddress4;
   TSocketAddress6 = TSockAddrIn6;
   PSocketAddress6 = ^TSocketAddress6;
-  PHTTPPollFD = ^THTTPPollFD;
-  {$IFDEF FPC}
-  {$PUSH}
-  {$PACKRECORDS C}
-  {$ENDIF}
-  THTTPPollFD = record
-    fd: TSocket;
-    events: SmallInt;
-    revents: SmallInt;
-  end;
-  {$IFDEF FPC}
-  {$POP}
-  {$ENDIF}
 
 const
-  POLLOUT = $0010; // Winsock POLLWRNORM
   POLL_FAILED = $0007; // POLLERR, POLLHUP or POLLNVAL
 
 function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
@@ -260,9 +249,6 @@ function HostInetNtop(AFamily: Integer; ASource: Pointer;
 function HostConnect(ASocket: TSocket; AAddress: PSockAddr;
   ALength: Integer): Integer; stdcall;
   external 'ws2_32.dll' name 'connect';
-function WSAPoll(ADescriptors: PHTTPPollFD; ACount: Cardinal;
-  ATimeoutMilliseconds: Integer): Integer; stdcall;
-  external 'ws2_32.dll' name 'WSAPoll';
 
 var
   GWinSockInitialized: Boolean = False;
@@ -583,21 +569,6 @@ begin
   {$ENDIF}
 end;
 
-function PollConnectSockets(var ADescriptors: array of THTTPPollFD;
-  const ACount, ATimeoutMilliseconds: Integer): Integer;
-begin
-  {$IFDEF UNIX}
-  Result := fpPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
-  if (Result < 0) and (fpGetErrNo = ESysEINTR) then
-    Result := 0; // Recalculate the remaining time before polling again.
-  {$ENDIF}
-  {$IFDEF MSWINDOWS}
-  Result := WSAPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
-  if (Result < 0) and (WSAGetLastError = WSAEINTR) then
-    Result := 0;
-  {$ENDIF}
-end;
-
 { Keep the resolver's first choice, then alternate families while both have
   candidates. Preserve the resolver's order within a family. A pending
   connection stays in the race as the next one starts. }
@@ -628,12 +599,18 @@ begin
   end;
 end;
 
+{ Races connections to AAddresses (RFC 8305) until one connects, every one
+  failed, the deadline (0: none) passed or ACancellation (nil: none) is
+  cancelled. With a cancellation no poll lasts longer than
+  NETWORK_CANCELLATION_POLL_MILLISECONDS, so a cancelled attempt closes its
+  sockets and raises within one. }
 function ConnectSocketBlocking(const AHost: string; const APort: Integer;
   const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
+  const ACancellation: TNetworkCancellation;
   out AConnectedIndex: Integer): TSocket;
 var
   Order, PendingIndices: TArray<Integer>;
-  Pending: array of THTTPPollFD;
+  Pending: array of TSocketPollDescriptor;
   Sock: TSocket;
   NowNs, NextAttemptNs, WakeNs, DelayNs: Int64;
   I, Next, Count, AddressIndex, LastAddressIndex, LastError, PollForMs, PollResult: Integer;
@@ -663,6 +640,8 @@ begin
   try
     while (Next < Length(Order)) or (Count > 0) do
     begin
+      if NetworkCancelled(ACancellation) then
+        raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
       NowNs := GetNanoseconds;
       if (ADeadlineNs <> 0) and (NowNs >= ADeadlineNs) then
         raise EHTTPError.Create('HTTP request timed out');
@@ -695,7 +674,7 @@ begin
           if SocketConnectInProgress(LastError) then
           begin
             Pending[Count].fd := Sock;
-            Pending[Count].events := POLLOUT;
+            Pending[Count].events := SOCKET_POLL_WRITABLE;
             Pending[Count].revents := 0;
             PendingIndices[Count] := AddressIndex;
             Inc(Count);
@@ -726,7 +705,9 @@ begin
           Continue;
         PollForMs := Integer((DelayNs + 999999) div 1000000);
       end;
-      PollResult := PollConnectSockets(Pending, Count, PollForMs);
+      PollForMs := Integer(CancellableWaitMilliseconds(ACancellation,
+        PollForMs));
+      PollResult := PollSockets(Pending, Count, PollForMs);
       if PollResult < 0 then
         raise EHTTPError.CreateFmt('Failed to wait for a connection to %s:%d (%s)',
           [AHost, APort, SysErrorMessage(SocketErrorCode)]);
@@ -738,7 +719,8 @@ begin
           Continue;
         LastAddressIndex := PendingIndices[I];
         LastError := ConnectionSocketError(Pending[I].fd);
-        if (LastError = 0) and ((Pending[I].revents and POLLOUT) <> 0) then
+        if (LastError = 0) and
+           ((Pending[I].revents and SOCKET_POLL_WRITABLE) <> 0) then
         begin
           {$IFDEF MSWINDOWS}
           { Windows may report POLLOUT alongside errors for a failed connect. }
@@ -901,7 +883,8 @@ end;
 
 constructor THTTPConnectionWorker.Create(const AHost: string;
   const APort: Integer; const AAddresses: THTTPAddresses;
-  const ADeadlineNs: Int64; const AState: THTTPConnectionState);
+  const ADeadlineNs: Int64; const AState: THTTPConnectionState;
+  const ACancellation: TNetworkCancellation);
 begin
   {$IFDEF FPC}
   inherited Create(True, HTTP_CONNECTION_WORKER_STACK_SIZE);
@@ -918,12 +901,19 @@ begin
   FDeadlineNs := ADeadlineNs;
   FState := AState;
   FState.AddRef;
+  { The attempt can outlive the request that started it by one poll: it
+    keeps the cancellation until it ends. }
+  FCancellation := ACancellation;
+  if Assigned(FCancellation) then
+    FCancellation.AddReference;
 end;
 
 destructor THTTPConnectionWorker.Destroy;
 begin
   if Assigned(FState) then
     FState.Release;
+  if Assigned(FCancellation) then
+    FCancellation.Release;
   if FWorkerSlotAcquired then
     ReleaseHTTPConnectionWorker;
   inherited;
@@ -941,10 +931,18 @@ begin
   try
     try
       Socket := ConnectSocketBlocking(FHost, FPort, FAddresses, FDeadlineNs,
-        ConnectedIndex);
+        FCancellation, ConnectedIndex);
     except
       on E: Exception do
         ErrorMessage := E.Message;
+    end;
+    { The slot goes back before the waiter learns the outcome: a request it
+      ends, such as a cancelled one, frees its own slot for the next request,
+      which must find this one free too. }
+    if FWorkerSlotAcquired then
+    begin
+      FWorkerSlotAcquired := False;
+      ReleaseHTTPConnectionWorker;
     end;
     FState.Complete(Socket, ConnectedIndex, ErrorMessage);
   except
@@ -955,7 +953,9 @@ end;
 
 function ConnectSocket(const AHost: string; const APort: Integer;
   const AAddresses: THTTPAddresses; const ADeadlineNs: Int64;
-  const ATimeoutMilliseconds: Integer; out AConnectedIndex: Integer): TSocket;
+  const ATimeoutMilliseconds: Integer;
+  const ACancellation: TNetworkCancellation;
+  out AConnectedIndex: Integer): TSocket;
 var
   ErrorMessage: string;
   State: THTTPConnectionState;
@@ -964,16 +964,19 @@ var
 begin
   if ATimeoutMilliseconds <= 0 then
     Exit(ConnectSocketBlocking(AHost, APort, AAddresses, ADeadlineNs,
-      AConnectedIndex));
+      ACancellation, AConnectedIndex));
 
   State := THTTPConnectionState.Create;
   Worker := nil;
   try
     Worker := THTTPConnectionWorker.Create(AHost, APort, AAddresses,
-      ADeadlineNs, State);
+      ADeadlineNs, State, ACancellation);
     Worker.Start;
     Worker := nil;
 
+    { A cancellation is not abandoned here: the attempt observes it within
+      one poll and completes with its error, having given its worker slot
+      back, so the request that starts next finds the slot free. }
     WaitResult := State.WaitFor(ATimeoutMilliseconds);
     if WaitResult = wrTimeout then
     begin
@@ -1246,7 +1249,8 @@ function ReadResponse(const ASock: TSocket;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
   const AMaxBodyBytes: Integer;
   const ASkipRedirectBody: Boolean;
-  const AReused: Boolean = False): TRawHTTPResponse;
+  const AReused: Boolean = False;
+  const ACancellation: TNetworkCancellation = nil): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -1306,10 +1310,23 @@ var
       and is reported as that rather than as whatever a short response would
       be taken for: a missing header terminator, or a complete body. }
     repeat
+      { A plain read that can be cancelled first waits for the socket in
+        polls that observe the cancellation, so a silent peer cannot hold
+        it; a TLS backend's own waits observe it (TransportSecurity). }
+      if Assigned(ACancellation) and not ATransport.Active and
+         not WaitForSocketBefore(ASock, False, ADeadlineNs, ACancellation) then
+      begin
+        if NetworkCancelled(ACancellation) then
+          raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
+        raise EHTTPError.Create('HTTP request timed out');
+      end;
       ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
       try
         Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
       except
+        { A cancelled TLS read ends with its backend's read error. }
+        if NetworkCancelled(ACancellation) then
+          raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
         { A TLS backend that cannot tell a timeout from a broken
           connection raises its read error when the socket timeout ends
           the read. Past the deadline that is the request timing out. }
@@ -1317,6 +1334,8 @@ var
           raise EHTTPError.Create('HTTP request timed out');
         raise;
       end;
+      if (Result < 0) and NetworkCancelled(ACancellation) then
+        raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
       Failure := srfOther;
       if Result < 0 then
         Failure := LastSocketReadFailure;
@@ -1846,6 +1865,15 @@ var
   { A connection is open (Sock, Transport); Reused: it carried the previous
     hop, a redirect within the same origin. }
   Connected, Reused: Boolean;
+  Cancellation: TNetworkCancellation;
+
+  { Between the steps that wait (a lookup, a connection, a handshake, a
+    send and read): a cancelled request goes no further. }
+  procedure CheckCancelled;
+  begin
+    if NetworkCancelled(Cancellation) then
+      raise EHTTPError.Create(HTTP_REQUEST_CANCELLED_MESSAGE);
+  end;
 
   function RemainingTimeoutMilliseconds: Integer;
   var
@@ -1987,12 +2015,14 @@ begin
   Result.Redirected := False;
   Method := UpperCase(AMethod);
   IsHead := (Method = 'HEAD');
+  Cancellation := APolicy.Cancellation;
 
   Connected := False;
   Reused := False;
   try
     while True do
     begin
+      CheckCancelled;
       Parsed := ParseHTTPURL(CurrentURL);
       if Reused then
       begin
@@ -2007,6 +2037,9 @@ begin
           redirect hop is resolved, validated, and pinned exactly like the
           initial request. }
         Addresses := ResolveAndValidateDestination(Parsed);
+      { The lookup cannot be interrupted: a request cancelled during it ends
+        here. }
+      CheckCancelled;
       ValidateHTTPRequestText(Parsed.Path, 'request target', False);
       if not Reused then
       begin
@@ -2014,9 +2047,10 @@ begin
         { The worker receives only the checked endpoints. The winning one
           stays pinned for same-origin redirects on this connection. }
         Sock := ConnectSocket(Parsed.Host, Parsed.Port, Addresses, DeadlineNs,
-          RemainingTimeoutMilliseconds, ConnectedIndex);
+          RemainingTimeoutMilliseconds, Cancellation, ConnectedIndex);
         ResolvedAddress := Addresses[ConnectedIndex].Text;
         Connected := True;
+        CheckCancelled;
         ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
         { TLS still verifies against the hostname. Pinning changes which
           address we dial, never which identity we require the peer to
@@ -2024,8 +2058,10 @@ begin
           validation and silently downgrade the connection's guarantees. }
         if Parsed.Scheme = 'https' then
           try
-            StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs);
+            StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs,
+              Cancellation);
           except
+            CheckCancelled;
             { A handshake the deadline ended is the request timing out. }
             if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
               raise EHTTPError.Create('HTTP request timed out');
@@ -2089,11 +2125,14 @@ begin
               raise;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
-          MaxBodyBytes, APolicy.RedirectMode = hrmError, Reused);
+          MaxBodyBytes, APolicy.RedirectMode = hrmError, Reused,
+          Cancellation);
       except
         on E: Exception do
         begin
           CloseConnection;
+          { A cancelled request is not retried, whatever its read reported. }
+          CheckCancelled;
           { A send or a read the deadline ended is the request timing out:
             the TLS backends end a send by it, as they end a read. }
           if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then

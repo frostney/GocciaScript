@@ -215,6 +215,7 @@ Settings choose the rest:
 | `ExposeTimers := False` | No timer globals and no `goccia:timers`; the timer queue still serves the host's own users, such as `AbortSignal.timeout` |
 | `ConfigJson` | The host config as a JSON object of strings (`goccia.json`'s keys), read by the preludes |
 | `TestMode` | The test framework's host: an uncaught error does not end the process; `InstallTestingAPI` (`Goccia.HostAPI`) then installs `describe`, `test`, `expect` and `goccia:test`, and `RunTests` runs the suites |
+| `ConfigJson` with `"vitest-compat": "true"` | Enables imports from `vitest` outside `TestMode`, with no testing globals. `goccia:test.runTests()` stays synchronous and tests are available by import. Requires the standard host with timers enabled; module mocks (`vi.mock`, `vi.unmock` and their helpers) throw, as nothing hoists them ([the `vitest` shim](testing-api.md#the-vitest-compatibility-shim)) |
 | `BenchMode` | The benchmark runner's host: `InstallBenchmarkAPI` installs `goccia:microbench`, and the limits `Run` armed stay armed for `RunBenchmarks` |
 | `Capabilities` granting `ffi` | Installs the `FFI` global; `FFI.open` judges each library by the `ffi` scopes |
 
@@ -495,7 +496,7 @@ A run with an armed handle runs in the interpreter, without the JIT. The handle 
 `RunBenchmarks` runs. A nested sandbox run another thread executes does not see the request; the caller observes it
 when that run returns.
 Compilation and custom blocking native functions can reach the abort only when they return or encounter an engine
-checkpoint. [ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design.
+checkpoint. [ADR 0198](adr/0198-an-abort-handle-belongs-to-the-next-run.md) records the design.
 
 ### Call Stack Depth Limit
 

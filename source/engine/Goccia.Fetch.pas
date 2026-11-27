@@ -9,7 +9,9 @@ unit Goccia.Fetch;
   most 16 requests of a thread are in flight at once, each on its own worker; the ones past that wait their turn, in
   the order they were made, with no thread of their own, and start as workers finish. A waiting request is the
   engine's as a running one is: its storage counts against the memory limit, its signal's deadline runs from the
-  call, the run waits for it, and an abort or an aborted run drops it before it starts. }
+  call, the run waits for it, and an abort or an aborted run drops it before it starts. A running request that is
+  aborted, dropped or detached has its worker's network cancellation cancelled: the worker stops waiting on its
+  socket within one poll (NETWORK_CANCELLATION_POLL_MILLISECONDS), closes it and finishes, and its slot frees. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}
@@ -43,7 +45,7 @@ procedure FetchDone;
 implementation
 
 uses
-  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Builtins, Goccia.Error.Messages,
+  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, NetworkCancellation, Goccia.Builtins, Goccia.Error.Messages,
   Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
 
 const
@@ -77,6 +79,8 @@ type
     Caps: TGocciaCapabilities;
     { set under Owner.Lock: the script no longer waits for the answer }
     Cancelled: Boolean;
+    { cancelled with Cancelled: the request ends wherever it waits on the network. The worker's own reference }
+    Cancellation: TNetworkCancellation;
     Ok: Boolean;
     Response: THTTPResponse;
     ErrorMessage, DeniedScope: string;
@@ -85,6 +89,9 @@ type
     function CheckDestination(const AHost: string; const APort: Integer; const AResolvedAddress: string;
       out AReason: string): Boolean;
     procedure Execute; override;
+    destructor Destroy; override;
+    { under Owner.Lock: the script no longer waits, and the request stops }
+    procedure Cancel;
   end;
 
   { a runtime thread's side of its requests: the workers that finished, under Lock; shared with the workers, freed
@@ -121,8 +128,8 @@ type
     Site: UnicodeString;
     Line, Column: Integer;
     { the script stopped waiting (fetchCancel): a running entry keeps its slot until its worker finishes, so at
-      most MAX_FETCH_WORKERS workers run, but the run no longer waits for it (FetchPending). A waiting entry is
-      removed instead }
+      most MAX_FETCH_WORKERS workers run, but the run no longer waits for it (FetchPending), and its request stops
+      within one poll, so the worker finishes then. A waiting entry is removed instead }
     Cancelled: Boolean;
   end;
 
@@ -198,6 +205,7 @@ begin
   Policy.MaxResponseBytes := MaxBytes;
   Policy.HostCheck := CheckDestination;
   Policy.RedirectMode := Redirect;
+  Policy.Cancellation := Cancellation;
   try
     if Method = 'HEAD' then Response := HTTPHead(URL, Headers, nil, TimeoutMs, Policy)
     else Response := HTTPGet(URL, Headers, nil, TimeoutMs, Policy);
@@ -224,6 +232,19 @@ begin
   end;
   RTLEventSetEvent(O.Wake);
   O.Release;
+end;
+
+destructor TFetchWorker.Destroy;
+begin
+  { nil when the thread could not be created }
+  if Cancellation <> nil then Cancellation.Release;
+  inherited Destroy;
+end;
+
+procedure TFetchWorker.Cancel;
+begin
+  Cancelled := True;
+  Cancellation.Cancel;
 end;
 
 { ---------------- the policy and the checks ---------------- }
@@ -378,6 +399,7 @@ begin
   W.TimeoutMs := Integer(Min(Timeout, High(Integer)));
   W.MaxBytes := MaxResponseBytes;
   W.Caps := Caps;
+  W.Cancellation := TNetworkCancellation.Create;
   P.Worker := W;
   { the worker has its own copies now }
   P.Headers := nil;
@@ -519,13 +541,13 @@ begin
   Request := @Pendings[I];
   EnterCriticalSection(Owner.Lock);
   try
-    Request^.Worker.Cancelled := True;
+    Request^.Worker.Cancel;
     { a worker that already posted its reply will not see the cancellation itself }
     if Owner.Done.IndexOf(Request^.Worker) >= 0 then Request^.Worker.Response := Default(THTTPResponse);
   finally
     LeaveCriticalSection(Owner.Lock);
   end;
-  { the slot stays taken until the worker finishes }
+  { the slot stays taken until the worker finishes, which its cancelled request makes it do at once }
   Request^.Cancelled := True;
   Request^.Deadline := 0;
 end;
@@ -784,7 +806,7 @@ begin
   try
     Owner.Detached := True;
     for I := 0 to High(Pendings) do
-      if Pendings[I].Worker <> nil then Pendings[I].Worker.Cancelled := True;
+      if Pendings[I].Worker <> nil then Pendings[I].Worker.Cancel;
     for I := 0 to Owner.Done.Count - 1 do
     begin
       W := TFetchWorker(Owner.Done[I]);
