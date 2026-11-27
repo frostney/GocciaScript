@@ -351,6 +351,18 @@ m:
     });
   });
 
+  test("rejects malformed tag handles and escapes", () => {
+    // a named handle is word characters, without "_" (YAML 1.2.2 6.8.2.1)
+    expect(() =>
+      YAML.parse("%TAG !foo_bar! tag:example.com,2026:\n---\n!foo_bar!x value\n"),
+    ).toThrow(SyntaxError);
+    // an escape is UTF-8, and an overlong encoding is no UTF-8
+    expect(() => YAML.parse('!!%C1%A9nt "12"')).toThrow(SyntaxError);
+    expect(() => YAML.parse('!!%E0%81%A9nt "12"')).toThrow(SyntaxError);
+    expect(() => YAML.parse('!!%F0%80%81%A9nt "12"')).toThrow(SyntaxError);
+    expect(YAML.parse("!e%C3%A9 x").tagName).toBe("!e\u00e9");
+  });
+
   test("rejects verbatim tags that are no tag", () => {
     // YAML 1.2.2 6.9.1
     expect(() => YAML.parse("!<> x")).toThrow(SyntaxError);

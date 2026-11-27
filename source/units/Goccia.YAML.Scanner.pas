@@ -1369,7 +1369,8 @@ begin
   Buffer := TStringBuffer.Create;
   Buffer.AppendChar('!');
   SkipNonBlank;
-  while IsAlphaCharacter(Peek) do
+  // a named handle is word characters (ns-word-char, 6.8.2.1): no "_"
+  while IsWordCharacter(Peek) do
   begin
     Buffer.AppendChar(Peek);
     SkipNonBlank;
@@ -1486,11 +1487,14 @@ const
   UTF8_CONTINUATION = $80;
   UTF8_PAYLOAD_BITS = 6;
   UTF8_CONTINUATION_PAYLOAD_MASK = $3F;
+  { the least code point each width encodes; less is an overlong encoding }
+  UTF8_MINIMUM_CODE_POINTS: array[1..4] of Cardinal = (0, $80, $800, $10000);
 var
-  ByteValue, Width: Integer;
+  ByteValue, EncodedWidth, Width: Integer;
   CodePoint: Cardinal;
 begin
   Width := 0;
+  EncodedWidth := 0;
   CodePoint := 0;
   repeat
     if not ((Peek = '%') and IsHexCharacter(Peek(1)) and IsHexCharacter(Peek(2))) then
@@ -1520,6 +1524,7 @@ begin
       end
       else
         RaiseError(AMark, 'while parsing a tag, found an incorrect leading UTF-8 byte');
+      EncodedWidth := Width;
     end
     else
     begin
@@ -1531,6 +1536,8 @@ begin
     SkipNonBlanks(URI_ESCAPE_LENGTH);
     Dec(Width);
   until Width = 0;
+  if CodePoint < UTF8_MINIMUM_CODE_POINTS[EncodedWidth] then
+    RaiseError(AMark, 'while parsing a tag, found an overlong UTF-8 encoding');
   if (CodePoint > MAX_CODE_POINT) or
      ((CodePoint >= FIRST_SURROGATE) and (CodePoint <= LAST_SURROGATE)) then
     RaiseError(AMark, 'while parsing a tag, found an invalid UTF-8 codepoint');
