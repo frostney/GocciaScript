@@ -31,8 +31,6 @@ function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boo
 function EntryEvaluationPending: Boolean;
 { the error a host's resolution refused a request with (its hook returning -2): the import throws it }
 procedure SetResolveError(V: TValue);
-{ whether the module at Path (an import's referrer) was loaded for the host }
-function HostOwnedReferrer(const Path: UnicodeString): Boolean;
 { whether a module record of this thread is keyed Key (it was loaded, by the host or the script) }
 function ModuleRecordExists(const Key: UnicodeString): Boolean;
 { an explicit Script entry's import declarations and re-exports (GocciaScript accepts them, docs/language.md, Entry
@@ -50,11 +48,12 @@ type
     resolved file path), 1 with Exp an array of the module's export names and values, interleaved (a
     synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
     has no such module (a file is then read as JavaScript), -1 with an error pending }
-  THostModuleHook = function(const Key: UnicodeString; var Exp: TValue): Integer;
+  THostModuleHook = function(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
-    an absolute path), 0 to resolve it as the engine does, -1 with Resolved the message of the error it fails with }
-  THostResolveHook = function(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+    an absolute path) and RealPath the canonical file path checked by the host (empty for virtual files and host
+    keys), 0 to resolve it as the engine does, -1 with Resolved the message of the error it fails with }
+  THostResolveHook = function(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
 
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook);
@@ -68,13 +67,15 @@ var JSONExportsHook: function(V: TValue; var Exp: TValue): Boolean = nil;
 procedure SetHostResolveHook(Hook: THostResolveHook);
 { Spec as an import in Referrer resolves it: a host module's key, or an absolute path }
 function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
+{ Existing host file's canonical path, or empty for a host key or a custom file system. }
+function HostRealFilePath(const Path: UnicodeString): UnicodeString;
 { the source of the module at Path, as the host has it (a module entry read from stdin, or a section of a file):
   loading Path takes it instead of reading the file. An empty Path clears it. }
 procedure SetProvidedSource(const Path, Source: UnicodeString);
 { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source text
   module's source phase import gives one }
 procedure SetJSModuleSources(On: Boolean);
-{ this thread's module records so far: a mark ModuleLoadedSince counts from }
+{ this thread's module records so far: a mark ModuleSourcePathSince counts from }
 { heap snapshots (Goccia.HeapSnapshot): module record I's path and compiled code (nil for a host, JSON or source-phase
   record); False past the last }
 function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
@@ -83,10 +84,8 @@ function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTempl
   pending }
 function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 function ModuleCount: Integer;
-{ whether this thread's engine loaded a module from Path after Mark records (a host shows a code frame only of a
-  module the script's run loaded, never of one the host evaluated before it, nor of a path a thrown value's stack
-  names) }
-function ModuleLoadedSince(const Path: UnicodeString; Mark: Integer): Boolean;
+{ the file eligible for a code frame at Path, if a guest module loaded after Mark records came from it }
+function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
 { the entry's first module record (ModuleCount when the run starts): the records before it are the host's, and a
   module they import later is too (TModRec.HostOwned) }
 procedure SetEntryModuleMark(Mark: Integer);
@@ -119,6 +118,8 @@ type
 procedure SetFileTimeHook(Hook: TFileTimeHook);
 { the bytes of the file at Path through this thread's file reader; False when there is none }
 function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+{ reads the resolved file for a data module, with the same content check as other imports }
+function ReadModuleBytes(const Path, FilePath: UnicodeString; var B: RawByteString): Boolean;
 type
   { a host's check of a module file's bytes before they are compiled or exposed (a provider package file against
     its pin, ADR 0122): raises with the message the import fails with }
@@ -143,7 +144,7 @@ function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeSt
 function ResolvingSourcePhase: Boolean;
 { an entry module given as bytecode (a .gbc entry): Bytes load as the module keyed Path (its ArtifactModulePath)
   when RunModuleFile runs it; '' clears it }
-procedure SetProvidedArtifact(const Path: UnicodeString; const Bytes: RawByteString);
+procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
 
 implementation
 
@@ -158,9 +159,15 @@ const
 
 type
   TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluatingAsync, msEvaluated);
+  TModuleAddress = record
+    Path: UnicodeString;      { resolver spelling for diagnostics, coverage and import.meta }
+    RealPath: UnicodeString;  { canonical load address and relative import base of a host file }
+    ModuleType: UnicodeString;
+    function FilePath: UnicodeString;
+  end;
   TModRec = class
     Id: Integer;
-    Path: UnicodeString;
+    Address: TModuleAddress;
     { 16.2.1.5 [[Realm]]: the realm the record was made in. A module record is one realm's, so another realm that
       imports the same path (a ShadowRealm's importValue, a test262 realm's import) loads a record of its own: the
       records are found by realm and path (FindModule). }
@@ -208,7 +215,7 @@ threadvar
   HostLoading: Boolean;
   AsyncEvalCount: Int64;   { IncrementModuleAsyncEvaluationCount }
   ModRoots: TValue;     { a rooted array: RS slots per module }
-  PendingImports: TValue;   { a rooted array of [promise, referrer, specifier] per import() in flight }
+  PendingImports: TValue;   { a rooted array of [promise, referrer path or module id, specifier] per import() in flight }
   { per import() in flight, the frames of its call (StackFramesNow): its failure, found in a job, is located there }
   ImportStacks: array of UnicodeString;
   AMSCtor: TValue;        { the realm's %AbstractModuleSource% (made when first asked for) }
@@ -223,6 +230,11 @@ threadvar
   { the evaluation promise of the entry RunModuleFile ran last }
   EntryEvalPromise: TValue;
   ResolveErrorV: TValue;
+
+function TModuleAddress.FilePath: UnicodeString;
+begin
+  if RealPath <> '' then Result := RealPath else Result := Path;
+end;
 
 constructor TModRec.Create;
 begin
@@ -278,18 +290,18 @@ threadvar
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
-function CallHostModules(const Key: UnicodeString; var Exp: TValue): Integer;
+function CallHostModules(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
 var H: THostModuleHook;
 begin
   H := HostModules;
-  Result := H(Key, Exp);
+  Result := H(Key, FilePath, Exp);
 end;
 
-function CallHostResolve(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+function CallHostResolve(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
 var H: THostResolveHook;
 begin
   H := HostResolve;
-  Result := H(Spec, Referrer, Resolved);
+  Result := H(Spec, Referrer, Resolved, RealPath);
 end;
 
 function CallFileRead(const Path: UnicodeString; var B: RawByteString): Boolean;
@@ -378,10 +390,10 @@ begin
 end;
 
 { a module file's bytes, through the host's content check }
-function ReadModuleBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+function ReadModuleBytes(const Path, FilePath: UnicodeString; var B: RawByteString): Boolean;
 begin
   ContentRefused := False;
-  Result := ReadFileBytes(Path, B);
+  Result := ReadFileBytes(FilePath, B);
   if Result and LoadingUnsupported then
   begin
     B := '';
@@ -464,27 +476,47 @@ begin
   Result := True;
 end;
 
+{ a direct entry or a hostless resolver can name an on-disk file. A custom reader owns its namespace. }
+function HostRealFilePath(const Path: UnicodeString): UnicodeString;
+begin
+  Result := '';
+  if not Assigned(FileRead) and IsAbsoluteFilePath(Path) then
+    Result := UnicodeString(CanonicalHostPath(string(Path)));
+end;
+
+function HostFileAddress(const Path: UnicodeString): TModuleAddress;
+begin
+  Result := Default(TModuleAddress);
+  Result.Path := Path;
+  Result.RealPath := HostRealFilePath(Path);
+end;
+
 { a resolution failure travels as its key: #0 and the message (LoadModule throws it) }
-function ResolvePath(const Spec, Referrer: UnicodeString): UnicodeString;
+function ResolvePath(const Spec, Referrer: UnicodeString): TModuleAddress;
 var Base: UnicodeString;
 begin
+  Result := Default(TModuleAddress);
   if Assigned(HostResolve) then
-    case CallHostResolve(Spec, Referrer, Result) of
+    case CallHostResolve(Spec, Referrer, Result.Path, Result.RealPath) of
       1: Exit;
-      -1: Exit(#0 + Result);
+      -1: begin Result.Path := #0 + Result.Path; Exit; end;
       { the error the host made (ResolveError), not a message }
-      -2: Exit(#0#1);
+      -2: begin Result.Path := #0#1; Exit; end;
     end;
-  if Assigned(HostModules) and IsSchemeSpecifier(Spec) then Exit(Spec);
-  if IsAbsoluteFilePath(Spec) then Exit(UnicodeString(ExpandFileName(string(Spec))));
+  if Assigned(HostModules) and IsSchemeSpecifier(Spec) then
+  begin
+    Result.Path := Spec;
+    Exit;
+  end;
+  if IsAbsoluteFilePath(Spec) then Exit(HostFileAddress(UnicodeString(ExpandFileName(string(Spec)))));
   if (Referrer = '') or (Referrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
   else Base := UnicodeString(ExtractFilePath(ExpandFileName(string(Referrer))));
-  Result := UnicodeString(ExpandFileName(string(Base + Spec)));
+  Result := HostFileAddress(UnicodeString(ExpandFileName(string(Base + Spec))));
 end;
 
 function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
 begin
-  Result := ResolvePath(Spec, Referrer);
+  Result := ResolvePath(Spec, Referrer).Path;
 end;
 
 threadvar
@@ -554,7 +586,7 @@ function IsCompletionEntry(M: TModRec): Boolean;
 var P: UnicodeString;
 begin
   P := ProvidedPath;
-  Result := CompletionWanted and (P <> '') and (M.Path = P);
+  Result := CompletionWanted and (P <> '') and (M.Address.Path = P);
 end;
 
 procedure SetProvidedSource(const Path, Source: UnicodeString);
@@ -563,68 +595,81 @@ begin
   ProvidedSrc := Source;
 end;
 
-function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
+function ReadSource(const Address: TModuleAddress; var Src: UnicodeString): Boolean;
 var B: RawByteString; P: UnicodeString;
 begin
   P := ProvidedPath;
-  if (P <> '') and (P = Path) then
+  if (P <> '') and (P = Address.Path) then
   begin
     Src := ProvidedSrc;
     if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
     Exit(True);
   end;
-  Result := ReadModuleBytes(Path, B);
+  Result := ReadModuleBytes(Address.Path, Address.FilePath, B);
   if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
   Src := UnicodeString(UTF8Decode(B));
   if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
 end;
 
-{ a request key (ModuleRequestKey) resolved against its referrer: the resolved path, then its type suffix }
-function ResolveRequest(const Req, Referrer: UnicodeString): UnicodeString;
+{ a request key (ModuleRequestKey) resolved against its referrer, preserving its import type }
+function ResolveRequest(const Req, Referrer: UnicodeString): TModuleAddress;
 var P: Integer;
 begin
-  if Req = HostSourceSpecifier then Exit(Req);
+  if Req = HostSourceSpecifier then
+  begin
+    Result := Default(TModuleAddress);
+    Result.Path := Req;
+    Exit;
+  end;
   P := Pos(#1, Req);
   if P = 0 then Exit(ResolvePath(Req, Referrer));
-  Result := ResolvePath(Copy(Req, 1, P - 1), Referrer) + Copy(Req, P, MaxInt);
+  Result := ResolvePath(Copy(Req, 1, P - 1), Referrer);
+  Result.ModuleType := Copy(Req, P + 1, MaxInt);
 end;
 
-function ReadBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
-begin
-  Result := ReadModuleBytes(Path, B);
-end;
-
-{ the running realm's record of the module at Path }
-function FindModule(const Path: UnicodeString): TModRec;
+{ the running realm's record of a resolved address. Virtual and disk modules have separate identities. }
+function FindModule(const Address: TModuleAddress): TModRec;
 var M: TModRec;
 begin
   for M in Mods do
-    if (M.Path = Path) and (M.Realm = CurRealm) and not M.Superseded then Exit(M);
+  begin
+    if M.Superseded or (M.Realm <> CurRealm) or (M.Address.ModuleType <> Address.ModuleType) then Continue;
+    if Address.RealPath = '' then
+    begin
+      if (M.Address.RealPath = '') and (M.Address.Path = Address.Path) then Exit(M);
+    end
+    else if (M.Address.RealPath = Address.RealPath) or
+      (SameText(M.Address.RealPath, Address.RealPath) and
+        SameHostFileIdentity(string(M.Address.RealPath), string(Address.RealPath))) then Exit(M);
+  end;
   Result := nil;
+end;
+
+function IsHostOwnedModule(M: TModRec): Boolean;
+begin
+  Result := M.HostOwned or (M.Id < EntryModuleMark);
 end;
 
 function ClosedCell(V: TValue): TValue; forward;
 function HasModuleSource(M: TModRec): Boolean; forward;
 function ModuleSourceOf(M: TModRec): TValue; forward;
-function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean; forward;
+function MakeHostModule(const Address: TModuleAddress; Exp: TValue; var M: TModRec): Boolean; forward;
 
 { a module of a non-JavaScript type, a Synthetic Module Record with the one export default, evaluated at once:
   'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
   import bytes proposal: a Uint8Array over an immutable ArrayBuffer) }
-function LoadTypedModule(const Key: UnicodeString; var M: TModRec): Boolean;
-var P, K: Integer; Path, AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue; Virtual: Boolean;
+function LoadTypedModule(const Address: TModuleAddress; var M: TModRec): Boolean;
+var K: Integer; AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue; Virtual: Boolean;
 begin
-  P := Pos(#1, Key);
-  Path := Copy(Key, 1, P - 1);
-  AType := Copy(Key, P + 1, MaxInt);
+  AType := Address.ModuleType;
   if (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
     Exit(ThrowTypeError('Unsupported module type ''' + AType + ''''));
   { a host's virtual module (an address, not a path) reinterprets the source it stores }
   Virtual := False;
-  if Assigned(HostModules) and (Path <> '') and not IsAbsoluteFilePath(Path) then
+  if Assigned(HostModules) and (Address.Path <> '') and not IsAbsoluteFilePath(Address.Path) then
   begin
-    K := CallHostModules(Path, V);
+    K := CallHostModules(Address.Path, '', V);
     if K = -1 then Exit(False);
     if K = 2 then
     begin
@@ -635,23 +680,23 @@ begin
   end;
   if AType = 'bytes' then
   begin
-    if not Virtual and not ReadBytes(Path, B) then Exit(ModuleReadFailed(Path));
+    if not Virtual and not ReadModuleBytes(Address.Path, Address.FilePath, B) then Exit(ModuleReadFailed(Address.Path));
     if not BytesHook(B, V) then Exit(False);
   end
   else
   begin
-    if not Virtual and not ReadSource(Path, Src) then Exit(ModuleReadFailed(Path));
+    if not Virtual and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Address.Path));
     if AType = 'text' then V := StrFromUnicode(Src)
     else if not JSONTextHook(Src, V) then Exit(False);
   end;
   if (AType = 'json') and Assigned(JSONExportsHook) then
   begin
     if not JSONExportsHook(V, Tbl) then Exit(False);
-    if IsObject(Tbl) then Exit(MakeHostModule(Key, Tbl, M));
+    if IsObject(Tbl) then Exit(MakeHostModule(Address, Tbl, M));
   end;
   PushRoot(V);
   M := TModRec.Create;
-  M.Path := Key;
+  M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
   Mods.Add(M);
@@ -670,15 +715,15 @@ begin
 end;
 
 { a synthetic module (16.2.1.8) of the host's: Exp its names and values, interleaved }
-function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean;
+function MakeHostModule(const Address: TModuleAddress; Exp: TValue; var M: TModRec): Boolean;
 var I, N: Integer; V, Tbl: TValue; E: PValueArray;
 begin
   if not IsObject(Exp) or (ObjOf(Exp)^.OKind <> okArray) then
-    Exit(ThrowTypeError('host module ''' + Key + ''': exports are not a list'));
+    Exit(ThrowTypeError('host module ''' + Address.Path + ''': exports are not a list'));
   PushRoot(Exp);
   N := ObjOf(Exp)^.Elements^.Len div 2;
   M := TModRec.Create;
-  M.Path := Key;
+  M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
   Mods.Add(M);
@@ -691,7 +736,7 @@ begin
   for I := 0 to N - 1 do
   begin
     E := ObjOf(RootAt(TempTop - 1))^.Elements;
-    if not IsString(E^.Data[2 * I]) then begin PopRoots(1); Exit(ThrowTypeError('host module ''' + Key + ''': an export name is not a string')); end;
+    if not IsString(E^.Data[2 * I]) then begin PopRoots(1); Exit(ThrowTypeError('host module ''' + Address.Path + ''': an export name is not a string')); end;
     M.Info.LocalExports[I].ExportName := StrToUnicode(StrOf(E^.Data[2 * I]));
     M.Info.LocalExports[I].Slot := I;
     V := ClosedCell(E^.Data[2 * I + 1]);
@@ -703,18 +748,16 @@ begin
 end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
-{ whether a module the host loaded (before the entry's mark, or imported for the host) is the file at Path under
-  another name: by canonical path (a symbolic link or junction), else by file identity (a hard link, which no
-  canonical path resolves). GocciaScript's loader judges ownership by it. }
-function SameFileAsHostModule(const Path: UnicodeString): Boolean;
-var R: TModRec; Canon: string;
+{ hard links are distinct module addresses, but the host's source stays private through each of them }
+function SameFileAsHostModule(const Address: TModuleAddress): Boolean;
+var R: TModRec;
 begin
   Result := False;
-  Canon := CanonicalHostPath(string(Path));
-  if Canon = '' then Exit;
+  if Address.RealPath = '' then Exit;
   for R in Mods do
-    if (R.HostOwned or (R.Id < EntryModuleMark)) and (R.Path <> Path) and
-      ((CanonicalHostPath(string(R.Path)) = Canon) or SameHostFileIdentity(Canon, string(R.Path))) then
+    if IsHostOwnedModule(R) and (R.Address.RealPath <> '') and
+      ((R.Address.RealPath = Address.RealPath) or
+        SameHostFileIdentity(string(Address.RealPath), string(R.Address.RealPath))) then
       Exit(True);
 end;
 
@@ -722,6 +765,7 @@ threadvar
   SourcePhaseRequest: Boolean;
   ArtifactCheck: TArtifactCheck;
   ProvidedArtifactPath: UnicodeString;
+  ProvidedArtifactRealPath: UnicodeString;
   ProvidedArtifactBytes: RawByteString;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
@@ -752,9 +796,13 @@ begin
   ArtifactCheck := Check;
 end;
 
-procedure SetProvidedArtifact(const Path: UnicodeString; const Bytes: RawByteString);
+procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
+var Gbc: TModuleAddress;
 begin
   ProvidedArtifactPath := Path;
+  Gbc := HostFileAddress(GbcPath);
+  if Gbc.RealPath <> '' then ProvidedArtifactRealPath := ArtifactModulePath(Gbc.RealPath, Path)
+  else ProvidedArtifactRealPath := '';
   ProvidedArtifactBytes := Bytes;
 end;
 
@@ -766,13 +814,13 @@ begin
   Result := UnicodeString(ChangeFileExt(string(GbcPath), string(Ext)));
 end;
 
-function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean; forward;
+function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
 
 { M's requests resolved against its path and loaded, each in M.Deps }
 function LinkRequests(M: TModRec): Boolean;
-var Resolved, Path: UnicodeString; I: Integer; D: TModRec;
+var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec;
 begin
-  Path := M.Path;
+  Path := M.Address.Path;
   M.RequestsState := 1;
   Result := False;
   SetLength(M.Deps, Length(M.Info.Requests));
@@ -790,7 +838,7 @@ begin
     end;
     SourcePhaseRequest := not EvaluatedRequest(M, M.Info.Requests[I]);
     try
-      Resolved := ResolveRequest(M.Info.Requests[I], Path);
+      Resolved := ResolveRequest(M.Info.Requests[I], M.Address.FilePath);
     finally
       SitePath := '';
       SourcePhaseRequest := False;
@@ -814,11 +862,12 @@ end;
 
 { a module record keyed Key made from the bytecode file bytes B (read from From): read, verified, checked
   against the run's profile (ArtifactCheck), then its requests loaded }
-function LoadArtifactRecord(const Key, From: UnicodeString; const B: RawByteString; var M: TModRec): Boolean;
+function LoadArtifactRecord(const Address: TModuleAddress; const From: UnicodeString; const B: RawByteString;
+  var M: TModRec): Boolean;
 var A: TGocciaArtifact; Err: UnicodeString;
 begin
   M := TModRec.Create;
-  M.Path := Key;
+  M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
   M.HasModified := False;
@@ -826,7 +875,7 @@ begin
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   Err := '';
-  if LoadArtifact(PByte(B), Length(B), Key, M.Id + 1, A, Err) then
+  if LoadArtifact(PByte(B), Length(B), Address.Path, M.Id + 1, A, Err) then
   begin
     if A.Info = nil then
     begin
@@ -871,20 +920,22 @@ begin
   end;
 end;
 
-function LoadArtifactModule(const GbcPath: UnicodeString; var M: TModRec): Boolean;
-var B: RawByteString; Src, Err, Key: UnicodeString;
+function LoadArtifactModule(const Gbc: TModuleAddress; var M: TModRec): Boolean;
+var B: RawByteString; Src, Err: UnicodeString; Address: TModuleAddress;
 begin
   B := '';
   { an oversized file is refused before it is read }
-  if HostFileSize(GbcPath) > GOCCIA_GBC_MAX_FILE_BYTES then
-    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + GbcPath + ''': ' +
+  if HostFileSize(Gbc.FilePath) > GOCCIA_GBC_MAX_FILE_BYTES then
+    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + Gbc.Path + ''': ' +
       UnicodeString(Format('bytecode file exceeds the %d byte limit', [GOCCIA_GBC_MAX_FILE_BYTES]))));
-  if not ReadModuleBytes(GbcPath, B) then Exit(ModuleReadFailed(GbcPath));
+  if not ReadModuleBytes(Gbc.Path, Gbc.FilePath, B) then Exit(ModuleReadFailed(Gbc.Path));
   Err := '';
   if not ArtifactSourcePath(PByte(B), Length(B), Src, Err) then
-    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + GbcPath + ''': ' + Err));
-  Key := ArtifactModulePath(GbcPath, Src);
-  M := FindModule(Key);
+    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + Gbc.Path + ''': ' + Err));
+  Address := Default(TModuleAddress);
+  Address.Path := ArtifactModulePath(Gbc.Path, Src);
+  if Gbc.RealPath <> '' then Address.RealPath := ArtifactModulePath(Gbc.RealPath, Src);
+  M := FindModule(Address);
   if Assigned(M) then
   begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
@@ -894,13 +945,14 @@ begin
       Exit(LinkRequests(M));
     Exit(True);
   end;
-  Result := LoadArtifactRecord(Key, GbcPath, B, M);
+  Result := LoadArtifactRecord(Address, Gbc.Path, B, M);
 end;
 
-function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
+function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean;
+var Path, Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
   Modified: TDateTime;
 begin
+  Path := Address.Path;
   if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
   begin
     { a resolution the host refused with an error of its own }
@@ -910,18 +962,18 @@ begin
   end;
   if (Path <> '') and (Path[1] = #0) then
   begin
-    { a failed resolution (ResolvePath); a typed request carries its type after #1 }
-    if Pos(#1, Path) > 0 then Exit(ThrowError('Error', Copy(Path, 2, Pos(#1, Path) - 2)));
+    { a failed resolution (ResolvePath) }
     Exit(ThrowError('Error', Copy(Path, 2, MaxInt)));
   end;
   { bytecode: the provided entry, or a .gbc file }
-  if (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) and (FindModule(Path) = nil) then
-    Exit(LoadArtifactRecord(Path, Path, ProvidedArtifactBytes, M));
-  if SameText(ExtractFileExt(string(Path)), '.gbc') then Exit(LoadArtifactModule(Path, M));
-  M := FindModule(Path);
+  if (Address.ModuleType = '') and SameText(ExtractFileExt(string(Address.FilePath)), '.gbc') then
+    Exit(LoadArtifactModule(Address, M));
+  M := FindModule(Address);
+  if (M = nil) and (Address.ModuleType = '') and (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
+    Exit(LoadArtifactRecord(Address, Path, ProvidedArtifactBytes, M));
   { a settled record whose file changed since it was read loads again (ADR 0139: a newer version, or a retry of
     one that failed): what imported it keeps it, this request and later ones get the new one }
-  if Assigned(M) and M.HasModified and (M.Status in [msNew, msEvaluated]) and FileModified(Path, Modified) and
+  if Assigned(M) and M.HasModified and (M.Status in [msNew, msEvaluated]) and FileModified(Address.FilePath, Modified) and
      (Modified > M.Modified) then
   begin
     M.Superseded := True;
@@ -936,12 +988,12 @@ begin
       Exit(LinkRequests(M));
     Exit(True);
   end;
-  if Pos(#1, Path) > 0 then Exit(LoadTypedModule(Path, M));
+  if Address.ModuleType <> '' then Exit(LoadTypedModule(Address, M));
   if Path = HostSourceSpecifier then
   begin
     { a module record without exports or evaluation, only a source phase representation }
     M := TModRec.Create;
-    M.Path := Path;
+    M.Address := Address;
     M.Id := Mods.Count;
     M.HostOwned := HostLoading;
     Mods.Add(M);
@@ -954,25 +1006,23 @@ begin
   end;
   Src := '';
   I := 0;
-  if Assigned(HostModules) then I := CallHostModules(Path, V);
+  if Assigned(HostModules) then I := CallHostModules(Path, Address.RealPath, V);
   case I of
-    1: Exit(MakeHostModule(Path, V, M));
+    1: Exit(MakeHostModule(Address, V, M));
     2: Src := StrToUnicode(StrOf(V));
     -1: Exit(False);
   end;
   { a file's modification time, taken before it is read: a change while it loads makes the next request load it
     again }
   Prov := ProvidedPath;
-  FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Path, Modified);
-  if (I <> 2) and not ReadSource(Path, Src) then Exit(ModuleReadFailed(Path));
+  FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Address.FilePath, Modified);
+  if (I <> 2) and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Path));
   M := TModRec.Create;
-  M.Path := Path;
+  M.Address := Address;
   M.Id := Mods.Count;
-  { a file the host loaded already, reached under another name (a symbolic link), is the host's as well: what it
-    imports is loaded for the host, and its source stays withheld }
-  M.HostOwned := HostLoading or (FromFile and SameFileAsHostModule(Path));
+  M.HostOwned := HostLoading or (FromFile and SameFileAsHostModule(Address));
   M.HasModified := FromFile;
-  M.Modified := Modified;
+  if FromFile then M.Modified := Modified;
   M.Hash := SourceHashOf(Src);
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
@@ -1669,20 +1719,24 @@ begin
   end;
 end;
 
-function LoadAndLink(const Path: UnicodeString; var M: TModRec): Boolean;
+function LoadAndLink(const Address: TModuleAddress; var M: TModRec): Boolean;
 begin
-  Result := LoadModule(Path, M);
+  Result := LoadModule(Address, M);
   if Result and (M.Status = msNew) then Result := Link(M);
 end;
 
 { the host's entry point: the module loaded, linked and evaluated, its evaluation's jobs run until it settles }
 function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
-var M: TModRec; P, R: TValue; Entry: UnicodeString;
+var M: TModRec; P, R: TValue; Entry: TModuleAddress;
 begin
   Phase := 0;
-  { a provided entry has no file for a resolver to find: its path is its key }
-  Entry := ProvidedPath;
-  if (Entry = '') or (Entry <> Path) then Entry := ResolvePath(Path, '');
+  { a provided entry may have no file for the resolver to find }
+  if (ProvidedPath <> '') and (ProvidedPath = Path) then
+  begin
+    Entry := HostFileAddress(Path);
+    if ProvidedArtifactPath = Path then Entry.RealPath := ProvidedArtifactRealPath;
+  end
+  else Entry := ResolvePath(Path, '');
   EntryEvalPromise := VUndefined;
   if not LoadAndLink(Entry, M) then Exit(False);
   Phase := 1;
@@ -1696,9 +1750,20 @@ begin
   Result := True;
 end;
 
+{ a record by the name it was loaded under, for diagnostics and virtual module registration }
+function FindModuleByPath(const Path: UnicodeString): TModRec;
+var M: TModRec;
+begin
+  if Mods <> nil then
+    for M in Mods do
+      if (M.Address.Path = Path) and (M.Address.ModuleType = '') and (M.Realm = CurRealm) and
+         not M.Superseded then Exit(M);
+  Result := nil;
+end;
+
 function ModuleRecordExists(const Key: UnicodeString): Boolean;
 begin
-  Result := (Mods <> nil) and (FindModule(Key) <> nil);
+  Result := FindModuleByPath(Key) <> nil;
 end;
 
 { Goccia.VM's ModSlotNameHook: the import or local export of the module whose cell table is Table at Slot }
@@ -1726,7 +1791,7 @@ threadvar
   ScriptImportKey: UnicodeString;
 
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
-var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean;
+var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
 begin
   Evaluation := VUndefined;
   Inc(ScriptImportRuns);
@@ -1737,7 +1802,9 @@ begin
   SavedSrc := ProvidedSrc;
   SetProvidedSource(Key, Source);
   try
-    Ok := LoadAndLink(Key, M);
+    Address := Default(TModuleAddress);
+    Address.Path := Key;
+    Ok := LoadAndLink(Address, M);
   finally
     SetProvidedSource(SavedPath, SavedSrc);
   end;
@@ -1759,7 +1826,7 @@ begin
   else
     Exit(ThrowTypeError('await: Promise did not settle'));
   end;
-  M := FindModule(ScriptImportKey);
+  M := FindModuleByPath(ScriptImportKey);
   if (M = nil) or (M.Info = nil) then Exit(ThrowTypeError('The Script entry''s imports did not load'));
   for I := 0 to High(M.Info.Imports) do
     if M.Info.Imports[I].LocalName <> '' then
@@ -1863,24 +1930,41 @@ end;
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I, J, Data: Integer; M: TModRec; Ref, Spec, Text: UnicodeString; G: TList<TModRec>; R, St: TValue;
-  Loaded: Boolean;
+  Loaded, SavedHostLoading: Boolean; Address: TModuleAddress;
 begin
   Res := VUndefined;
   Result := True;
   { NativeData read once: the loading and linking below run other natives }
   Data := NativeData;
   I := Data and $1FFFFF;
-  Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
+  R := ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1];
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
   { a host module's import loads modules for the host }
-  HostLoading := HostOwnedReferrer(Ref);
+  SavedHostLoading := HostLoading;
+  if IsString(R) then
+  begin
+    Ref := StrToUnicode(StrOf(R));
+    HostLoading := False;
+  end
+  else
+  begin
+    M := Mods[IntOf(R) - 1];
+    Ref := M.Address.FilePath;
+    HostLoading := IsHostOwnedModule(M);
+  end;
   try
     ImportComputed := (Data and $400000) <> 0;
     { the source phase (Source Phase Imports, ContinueDynamicImport): the module loaded, not linked or evaluated }
-    if (Data and $200000) <> 0 then Loaded := LoadModule(ResolveRequest(Spec, Ref), M)
-    else Loaded := LoadAndLink(ResolveRequest(Spec, Ref), M);
+    SourcePhaseRequest := (Data and $200000) <> 0;
+    try
+      Address := ResolveRequest(Spec, Ref);
+    finally
+      SourcePhaseRequest := False;
+    end;
+    if (Data and $200000) <> 0 then Loaded := LoadModule(Address, M)
+    else Loaded := LoadAndLink(Address, M);
   finally
-    HostLoading := False;
+    HostLoading := SavedHostLoading;
   end;
   if not Loaded then
   begin
@@ -1941,7 +2025,7 @@ end;
 
 { 13.3.10.1 EvaluateImportCall from ToString(specifier) on: errors reject the promise }
 function DoImport(const Referrer: UnicodeString; ModuleId: Integer; Spec, Opts: TValue; var Res: TValue): Boolean;
-var P, S, W, Keys, V, F: TValue; I, N, Idx, Ph: Integer; Ref, AType, Key: UnicodeString;
+var P, S, W, Keys, V, F: TValue; I, N, Idx, Ph: Integer; AType, Key: UnicodeString;
   function Reject: Boolean;
   begin
     V := Pending;
@@ -2030,7 +2114,6 @@ begin
     PopRoots(1);
     PushRoot(S);
   end;
-  Ref := Referrer;
   Idx := ArrayLen(ObjOf(PendingImports)) div 3;
   if Length(ImportStacks) <= Idx then SetLength(ImportStacks, Idx + 16);
   ImportStacks[Idx] := StackFramesNow;
@@ -2039,7 +2122,9 @@ begin
   { a specifier computed at run time, for the host's read policy (Goccia.VM ImportComputed) }
   if ImportComputed then Idx := Idx or $400000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
-  ArrayPush(ObjOf(PendingImports), StrFromUnicode(Ref));
+  if (ModuleId > 0) and (ModuleId <= Mods.Count) then
+    ArrayPush(ObjOf(PendingImports), MkInt(ModuleId))
+  else ArrayPush(ObjOf(PendingImports), StrFromUnicode(Referrer));
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 1));
   F := NewNativeFunctionData(ImportJob, 'import', 0, Idx);
   EnqueueCallback(F);
@@ -2062,7 +2147,7 @@ begin
     SetRoot(M, rMeta, Res);
     if Assigned(ImportMetaInitHook) then
     begin
-      if not ImportMetaInitHook(Res, M.Path) then Exit(False);
+      if not ImportMetaInitHook(Res, M.Address.Path) then Exit(False);
       Res := GetRoot(M, rMeta);
     end;
   end;
@@ -2110,7 +2195,7 @@ end;
 function ModuleSourceOf(M: TModRec): TValue;
 var C, P: TValue; E: PValueArray;
 begin
-  if (M <> nil) and (M.Path <> HostSourceSpecifier) then
+  if (M <> nil) and (M.Address.Path <> HostSourceSpecifier) then
   begin
     { a source text module's own source object, made once }
     E := ObjOf(JSModSources)^.Elements;
@@ -2148,7 +2233,7 @@ begin
   T := nil;
   Hash := 0;
   if (Mods = nil) or (I < 0) or (I >= Mods.Count) then Exit(False);
-  Path := Mods[I].Path;
+  Path := Mods[I].Address.Path;
   T := Mods[I].Tpl;
   Hash := Mods[I].Hash;
   Result := True;
@@ -2159,7 +2244,7 @@ var M: TModRec;
 begin
   T := nil;
   Hash := 0;
-  Result := LoadModule(Path, M);
+  Result := LoadModule(HostFileAddress(Path), M);
   if Result then
   begin
     T := M.Tpl;
@@ -2172,14 +2257,19 @@ begin
   if Mods = nil then Result := 0 else Result := Mods.Count;
 end;
 
-function ModuleLoadedSince(const Path: UnicodeString; Mark: Integer): Boolean;
+function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
 var M: TModRec;
 begin
-  Result := False;
-  if Mods = nil then Exit;
-  M := FindModule(Path);
-  { a record made before the host's module loaded under its other name: ownership by canonical identity too }
-  Result := (M <> nil) and (M.Id >= Mark) and not M.HostOwned and not SameFileAsHostModule(Path);
+  Result := '';
+  M := FindModuleByPath(Path);
+  if (M = nil) or (M.Id < Mark) or M.HostOwned then Exit;
+  { Use the stored load path for the frame. The diagnostic spelling may now name a different file. }
+  if M.Address.RealPath <> '' then
+  begin
+    if (CanonicalHostPath(string(M.Address.RealPath)) = string(M.Address.RealPath)) and
+       not SameFileAsHostModule(M.Address) then Result := M.Address.RealPath;
+  end
+  else if not SameFileAsHostModule(HostFileAddress(Path)) then Result := Path;
 end;
 
 procedure SetEntryModuleMark(Mark: Integer);
@@ -2187,20 +2277,10 @@ begin
   EntryModuleMark := Mark;
 end;
 
-{ whether the module at Path (an import's referrer) was loaded for the host }
-function HostOwnedReferrer(const Path: UnicodeString): Boolean;
-var M: TModRec;
-begin
-  Result := False;
-  if Mods = nil then Exit;
-  M := FindModule(Path);
-  Result := (M <> nil) and ((M.Id < EntryModuleMark) or M.HostOwned);
-end;
-
 function HasModuleSource(M: TModRec): Boolean;
 begin
   { the host's source module, and with experimental JavaScript module sources every source text module }
-  Result := Assigned(M) and ((M.Path = HostSourceSpecifier) or (JSModuleSourcesOn and (M.Tpl <> nil)));
+  Result := Assigned(M) and ((M.Address.Path = HostSourceSpecifier) or (JSModuleSourcesOn and (M.Tpl <> nil)));
 end;
 
 procedure SetJSModuleSources(On: Boolean);

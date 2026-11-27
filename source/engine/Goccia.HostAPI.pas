@@ -624,11 +624,11 @@ begin
   Result := True;
 end;
 
-{ Goccia.Modules's host hook: shared.loadHostModule(Key) }
-function HostModule(const Key: UnicodeString; var Exp: TValue): Integer;
-var A: array[0..0] of TValue; S: TValue; I: Integer;
+{ Goccia.Modules's host hook: shared.loadHostModule(Key, FilePath) }
+function HostModule(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
+var A: array[0..1] of TValue; I: Integer;
 begin
-  if Assigned(MockModules) then
+  if (FilePath = '') and Assigned(MockModules) then
   begin
     I := MockModules.IndexOfName(string(Key));
     if I >= 0 then
@@ -638,12 +638,14 @@ begin
     end;
   end;
   if not IsObject(LoadHostModuleV) then Exit(0);
-  A[0] := StrFromUnicode(Key);
-  if not CallValue(LoadHostModuleV, SharedV, @A[0], 1, Exp) then Exit(-1);
+  PushRoot(StrFromUnicode(Key));
+  A[1] := StrFromUnicode(FilePath);
+  A[0] := RootAt(TempTop - 1);
+  PopRoots(1);
+  if not CallValue(LoadHostModuleV, SharedV, @A[0], 2, Exp) then Exit(-1);
   if Exp = VUndefined then Result := 0
   else if IsString(Exp) then Result := 2
   else Result := 1;
-  S := VUndefined;
 end;
 
 { Goccia.Modules's resolution hook: the host's own modules by their keys, a mock by its address, anything else by the
@@ -1174,6 +1176,7 @@ end;
 function IsHostModuleKey(const Key: UnicodeString): Boolean;
 var A: array[0..0] of TValue; R: TValue;
 begin
+  if Assigned(MockModules) and (MockModules.IndexOfName(string(Key)) >= 0) then Exit(True);
   Result := False;
   if not IsObject(HasHostModuleV) then Exit;
   A[0] := StrFromUnicode(Key);
@@ -1301,11 +1304,11 @@ end;
 function TReadPolicy.Verdict(const Canonical: string; Literal_: Boolean; out Denial: TReadDenial): Boolean;
 begin
   Denial := rdDenied;
-  if Caps.DeniesPath(gcRead, Canonical) then Exit(False);
+  if Caps.DeniesCanonicalPath(gcRead, Canonical) then Exit(False);
   if Literal_ and IsProjectGraph(Canonical) then Exit(True);
   if Literal_ and GuestLoads and (GuestScopeDir <> '') and IsPathWithinScope(Canonical, GuestScopeDir) then Exit(True);
   if Literal_ and (PackageDir <> '') and IsPathWithinScope(Canonical, PackageDir) then Exit(True);
-  if Caps.AllowsPath(gcRead, Canonical) then Exit(True);
+  if Caps.AllowsCanonicalPath(gcRead, Canonical) then Exit(True);
   if Literal_ then Denial := rdOutsideProject else Denial := rdComputedImport;
   Result := False;
 end;
@@ -1319,7 +1322,7 @@ begin
   { a provider package's own file: confined and verified, the import grant covers it }
   if Assigned(ProviderGraph) and Assigned(Resolver) and
      CallProviderGraph(ACandidatePath, Importer, Resolver.ProbePackageDirectory) and
-     not Caps.DeniesPath(gcRead, Canonical) then Exit;
+     not Caps.DeniesCanonicalPath(gcRead, Canonical) then Exit;
   if Verdict(Canonical, Literal, Denial) then Exit;
   E := EReadRefused.Create(Spec);
   E.Canonical := Canonical;
@@ -1375,11 +1378,13 @@ begin
   Result := DenyResolution('read', Spec, Suggestion);
 end;
 
-function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+function HostResolveSpec(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
 var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString; Guard: Boolean; Policy: TReadPolicy;
-  SavedGuard: TModuleResolverProbeGuard; Canonical: string; Denial: TReadDenial; Literal: Boolean;
+  SavedGuard: TModuleResolverProbeGuard; Canonical: string; Denial: TReadDenial;
+  Literal, Virtual, ProviderAllowed: Boolean;
   SavedPrefer: Boolean;
 begin
+  RealPath := '';
   { the import() being resolved: its specifier computed or not (the first resolution takes it) }
   Literal := not ImportComputed;
   ImportComputed := False;
@@ -1446,22 +1451,27 @@ begin
       refused as the file would be }
     if SameText(ExtractFileExt(UTF8Encode(Resolved)), '.gbc') and (Resolver.LastCompanionSourcePath <> '') then
       Resolver.ValidateCompanionSourcePath(Resolver.LastCompanionSourcePath);
-    if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) and
-       not (Assigned(ProviderGraph) and CallProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
-         not Policy.Caps.DeniesPath(gcRead, CanonicalCapabilityPath(UTF8Encode(Resolved)))) then
+    Virtual := IsVirtualModuleURI(Resolved) or IsHostModuleKey(Resolved);
+    { Pass the path judged by the final read check through to the loader, including on cache hits. }
+    if not Virtual then RealPath := HostRealFilePath(Resolved);
+    if Guard and not Virtual then
     begin
-      Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
+      Canonical := RealPath;
+      if Canonical = '' then Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
       { a literal bare import's package (the directory it resolved in) is part of the graph }
       Policy.PackageDir := '';
       if Literal and (Resolver.ProbePackageDirectory <> '') then
         Policy.PackageDir := CanonicalCapabilityPath(Resolver.ProbePackageDirectory);
-      if not Policy.Verdict(Canonical, Literal, Denial) then
+      ProviderAllowed := Assigned(ProviderGraph) and
+        CallProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
+        not Policy.Caps.DeniesCanonicalPath(gcRead, Canonical);
+      if not ProviderAllowed and not Policy.Verdict(Canonical, Literal, Denial) then
       begin
         if (ManifestPath <> '') and (Spec = ManifestPath) then
           Exit(DenyRead(UTF8Encode(ManifestWritten), Canonical, Denial));
         Exit(DenyRead(UTF8Encode(Spec), Canonical, Denial));
       end;
-      if Assigned(Policy.Audit) and not (Literal and Policy.IsProjectGraph(Canonical)) and
+      if Assigned(Policy.Audit) and not ProviderAllowed and not (Literal and Policy.IsProjectGraph(Canonical)) and
          not Policy.Audit(True, Canonical, 'a read grant covers the path') then
       begin
         SetResolveError(Pending);
@@ -1470,7 +1480,7 @@ begin
       end;
     end;
     { a virtual module at a path a file is at shadows it: warned once, as GocciaScript's loader warns }
-    if IsAbsoluteFilePath(Resolved) and IsHostModuleKey(Resolved) and FileExists(UTF8Encode(Resolved)) then
+    if Virtual and IsAbsoluteFilePath(Resolved) and FileExists(UTF8Encode(Resolved)) then
     begin
       if ShadowWarned = nil then ShadowWarned := TStringList.Create;
       if ShadowWarned.IndexOf(UTF8Encode(Resolved)) < 0 then
@@ -1543,12 +1553,14 @@ end;
 
 { readText(path): a file's text, decoded as UTF-8 without a BOM; undefined when it cannot be read }
 function Host_ReadText(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var B: RawByteString; Path: UnicodeString;
+var B: RawByteString; Path, FilePath: UnicodeString;
 begin
   Res := VUndefined;
   Result := True;
   Path := ArgStr(Args, Argc, 1);
-  if (Path = '') or not ReadFileBytes(Path, B) then Exit;
+  FilePath := ArgStr(Args, Argc, 2);
+  if Path = '' then Exit;
+  if not ReadModuleBytes(Path, FilePath, B) then Exit(Pending = VUndefined);
   if (Length(B) >= 3) and (B[1] = #$EF) and (B[2] = #$BB) and (B[3] = #$BF) then Delete(B, 1, 3);
   SetCodePage(B, CP_UTF8, False);
   Res := StrFromUnicode(UTF8Decode(B));
@@ -1979,7 +1991,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'inspectDepth', Host_InspectDepth, 0);
   DefineNative(RootAt(TempTop - 1), 'specifierOf', Host_SpecifierOf, 1);
   DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
-  DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
+  DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 2);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   DefineNative(RootAt(TempTop - 1), 'isAbsolutePath', Host_IsAbsolutePath, 1);
   DefineNative(RootAt(TempTop - 1), 'expandPath', Host_ExpandPath, 2);

@@ -36,6 +36,18 @@ TypeScript source candidates for a `.js`-style specifier, then each configured
 extension, then `<path>/index.<ext>`. A specifier therefore does not need a
 file extension, and a directory resolves to its `index` file.
 
+Within a realm, an on-disk module is loaded once per canonical file path and
+import type. A symlink or junction, a different spelling of the same name on
+a case-insensitive filesystem, and a specifier resolved through an import map
+or package can all reach the same module record. This also applies to the
+entry module. Relative imports in a file resolve from its canonical directory.
+Diagnostics, coverage, and `import.meta.url` use the path the module was first
+loaded under. `import.meta.resolve` computes its result lexically. The loader
+can reload an on-disk source module when it detects a newer version.
+
+Read permissions are checked for each import before the module cache is
+consulted. The check follows symlinks to the file being imported.
+
 ## Enabling `node_modules`
 
 ```bash

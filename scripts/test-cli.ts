@@ -33,9 +33,11 @@ import {
 import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { assertPeakRssBelow, runWithPeakRss } from "./test-cli/rss";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
+import { verifyModuleIdentity } from "./test-cli/module-identity";
 
 verifyOutputEncoding();
 verifyReporterEncoding();
+verifyModuleIdentity();
 
 // -- Stdin smoke (Loader) ------------------------------------------------------
 

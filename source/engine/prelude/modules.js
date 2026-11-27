@@ -29,24 +29,26 @@
   const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
     '.tsv': 'TSV', '.yaml': 'YAML', '.yml': 'YAML', '.toml': 'TOML' };
   shared.hasHostModule = (key) => registry[key] !== undefined;
-  shared.loadHostModule = (key) => {
-    const make = registry[key];
+  shared.loadHostModule = (key, realPath) => {
+    const make = realPath === '' ? registry[key] : undefined;
     let exports;
     if (make !== undefined) {
       exports = make();
       if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
     } else {
-      const format = n.isAbsolutePath(key) ? formats[extensionOf(key)] : undefined;
+      const path = realPath || key;
+      const extension = extensionOf(path);
+      const format = n.isAbsolutePath(path) ? formats[extension] : undefined;
       if (format === undefined) return undefined;
-      const text = n.readText(key);
+      const text = n.readText(key, path);
       if (text === undefined) return undefined;
       // a parse failure names the specifier the module was imported by, not the host path
       const specifier = n.specifierOf(key);
       let value;
       try {
-        value = format(text, key, specifier);
+        value = format(text, key, specifier, path);
       } catch (e) {
-        const kind = FORMAT_NAMES[extensionOf(key)];
+        const kind = FORMAT_NAMES[extension];
         if (kind !== undefined && e instanceof SyntaxError)
           throw new SyntaxError(`Failed to parse ${kind} module "${specifier}": ${e.message}`);
         throw e;
@@ -91,12 +93,12 @@
     }
     return out;
   };
-  const textAsset = (raw, path) => {
+  const textAsset = (raw, path, _specifier, readPath) => {
     const text = toLF(raw);
     const slash = lastSlash(path);
     const fileName = path.slice(slash + 1);
     const metadata = Object.freeze({ kind: 'text', path, fileName, extension: extensionOf(path),
-      byteLength: n.fileSize(path) });
+      byteLength: n.fileSize(readPath) });
     return exportList(['content', text, 'default', text, 'metadata', metadata]);
   };
   formats['.txt'] = textAsset;
