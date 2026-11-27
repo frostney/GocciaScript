@@ -35,12 +35,13 @@ procedure SetResolveError(V: TValue);
 function ModuleRecordExists(const Key: UnicodeString): Boolean;
 { an explicit Script entry's import declarations and re-exports (GocciaScript accepts them, docs/language.md, Entry
   source type), Source a module of only them (Goccia.Eval ScriptImportSource), keyed EntryPath + ScriptImportsSuffix,
-  whose requests resolve as the entry's own would. Start loads and links it as one graph (a link error evaluates no
+  whose requests resolve as the entry's own would: from the base of ScriptId (NewScriptReferrer). Start loads and links it as one graph (a link error evaluates no
   module), then evaluates it, its microtasks run: Evaluation its promise, which the host settles through its event
   loop when a top-level await waits on more. Finish, once it fulfilled, binds each name it imports as a const global
   lexical binding on the binding it imports, for the Script to run against; False with the error pending. }
 const ScriptImportsSuffix = '#script-imports';
-function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
+function StartScriptImports(const EntryPath: UnicodeString; ScriptId: Integer; const Source: UnicodeString;
+  var Evaluation: TValue): Boolean;
 function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
 type
@@ -148,10 +149,13 @@ function ResolvingSourcePhase: Boolean;
 { an entry module given as bytecode (a .gbc entry): Bytes load as the module keyed Path (its ArtifactModulePath)
   when RunModuleFile runs it; '' clears it }
 procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
-{ a Script entry given as bytecode, keyed Path (its ArtifactModulePath): its imports and import() calls, its
-  closures' in later runs too, resolve from the real address a bytecode module there would have, beside the real
-  bytecode file at GbcPath when no source is there. The engine keeps it until its modules are released. }
-procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
+{ a Script entry's identity for the imports its code makes: a negative ModuleId, which MarkScriptTemplates gives
+  its templates, so its import() calls (its closures' in later runs too) resolve from the real path of the file
+  Path names, or of the bytecode file at GbcPath as a bytecode module's would (Path then its ArtifactModulePath),
+  or from Path itself when it names no host file. The engine keeps it until its modules are released. }
+function NewScriptReferrer(const Path, GbcPath: UnicodeString): Integer;
+{ ModuleId on T and every template it contains that has none }
+procedure MarkScriptTemplates(T: PFuncTemplate; ModuleId: Integer);
 
 implementation
 
@@ -171,7 +175,10 @@ type
     RealPath: UnicodeString;  { canonical load address, relative import base and import.meta address of a host file }
     ModuleType: UnicodeString;
     VirtualKey: Boolean;
+    { the base its requests resolve from when it is not FilePath (a Script entry's imports: the entry's), '' none }
+    ImportBase: UnicodeString;
     function FilePath: UnicodeString;
+    function ReferrerPath: UnicodeString;
   end;
   TModRec = class
     Id: Integer;
@@ -242,6 +249,11 @@ threadvar
 function TModuleAddress.FilePath: UnicodeString;
 begin
   if RealPath <> '' then Result := RealPath else Result := Path;
+end;
+
+function TModuleAddress.ReferrerPath: UnicodeString;
+begin
+  if ImportBase <> '' then Result := ImportBase else Result := FilePath;
 end;
 
 constructor TModRec.Create;
@@ -849,31 +861,34 @@ begin
 end;
 
 threadvar
-  { the Script entries run from bytecode (SetScriptArtifact): each one's key and real address, the latest run's for
-    a key run twice }
-  ScriptArtifactPaths, ScriptArtifactRealPaths: array of UnicodeString;
+  { the base each Script's code resolves its imports from, by -ModuleId - 1 (NewScriptReferrer) }
+  ScriptBases: array of UnicodeString;
 
-procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
-var I: Integer;
+function NewScriptReferrer(const Path, GbcPath: UnicodeString): Integer;
+var Base: UnicodeString; N: Integer;
 begin
-  I := 0;
-  while (I < Length(ScriptArtifactPaths)) and (ScriptArtifactPaths[I] <> Path) do Inc(I);
-  if I = Length(ScriptArtifactPaths) then
-  begin
-    SetLength(ScriptArtifactPaths, I + 1);
-    SetLength(ScriptArtifactRealPaths, I + 1);
-    ScriptArtifactPaths[I] := Path;
-  end;
-  ScriptArtifactRealPaths[I] := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
+  if GbcPath <> '' then Base := ArtifactRealModulePath(HostFileAddress(GbcPath), Path)
+  else Base := HostRealFilePath(Path);
+  if Base = '' then Base := Path;
+  N := Length(ScriptBases);
+  SetLength(ScriptBases, N + 1);
+  ScriptBases[N] := Base;
+  Result := -(N + 1);
 end;
 
-{ the real path a Script entry keyed Path resolves its imports from: '' when it names no host file }
-function ScriptRealPath(const Path: UnicodeString): UnicodeString;
+{ the base of a Script's code with ModuleId Id (< 0), '' for none }
+function ScriptBaseOf(Id: Integer): UnicodeString;
+begin
+  if (Id < 0) and (-Id <= Length(ScriptBases)) then Result := ScriptBases[-Id - 1] else Result := '';
+end;
+
+procedure MarkScriptTemplates(T: PFuncTemplate; ModuleId: Integer);
 var I: Integer;
 begin
-  for I := 0 to High(ScriptArtifactPaths) do
-    if ScriptArtifactPaths[I] = Path then Exit(ScriptArtifactRealPaths[I]);
-  Result := HostRealFilePath(Path);
+  if (T = nil) or (T^.ModuleId <> 0) then Exit;
+  T^.ModuleId := ModuleId;
+  for I := 0 to High(T^.Children) do MarkScriptTemplates(T^.Children[I], ModuleId);
+  MarkScriptTemplates(T^.FieldInit, ModuleId);
 end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
@@ -900,7 +915,7 @@ begin
     end;
     SourcePhaseRequest := not EvaluatedRequest(M, M.Info.Requests[I]);
     try
-      Resolved := ResolveRequest(M.Info.Requests[I], M.Address.FilePath);
+      Resolved := ResolveRequest(M.Info.Requests[I], M.Address.ReferrerPath);
     finally
       SitePath := '';
       SourcePhaseRequest := False;
@@ -1858,7 +1873,8 @@ threadvar
   ScriptImportRuns: Integer;
   ScriptImportKey: UnicodeString;
 
-function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
+function StartScriptImports(const EntryPath: UnicodeString; ScriptId: Integer; const Source: UnicodeString;
+  var Evaluation: TValue): Boolean;
 var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
 begin
   Evaluation := VUndefined;
@@ -1872,10 +1888,8 @@ begin
   try
     Address := Default(TModuleAddress);
     Address.Path := Key;
-    { the entry's real path with the suffix: its requests resolve from the real directory, and the record never
-      matches the entry file's own }
-    Address.RealPath := ScriptRealPath(EntryPath);
-    if Address.RealPath <> '' then Address.RealPath := Address.RealPath + Copy(Key, Length(EntryPath) + 1, MaxInt);
+    { no file of its own (no RealPath, so it never matches one), its requests resolved from the entry's real file }
+    Address.ImportBase := ScriptBaseOf(ScriptId);
     Ok := LoadAndLink(Address, M);
   finally
     SetProvidedSource(SavedPath, SavedSrc);
@@ -1998,15 +2012,15 @@ begin
   PopRoots(3);
 end;
 
-{ the path an import() made by code with no module record of its own (a Script, a ShadowRealm's importValue)
-  resolves from: the real path of the module or Script file its code is in, Ref itself when it names none }
+{ the path an import() made by code known only by its source name (eval code) resolves from: the real path of the
+  module or file its code is in, Ref itself when it names none }
 function ReferrerFilePath(const Ref: UnicodeString): UnicodeString;
 var M, Found: TModRec; Real: UnicodeString;
 begin
   Result := Ref;
   if (Ref = '') or (Ref[1] = '<') then Exit;
-  { the record of the code's module, in any realm: a ShadowRealm's importValue runs in the realm it evaluates in,
-    and the address is the same in each. The running realm's comes first. }
+  { the record of the code's module, the running realm's first: a ShadowRealm's importValue runs in the realm it
+    evaluates in, and the address is the same in each }
   Found := nil;
   if Mods <> nil then
     for M in Mods do
@@ -2018,8 +2032,17 @@ begin
   if Found <> nil then Exit(Found.Address.FilePath);
   { a host module's key (goccia:, a URL) is never a file name, and a relative one is the script's as given }
   if not IsAbsoluteFilePath(Ref) and (Pos(':', Ref) > 0) then Exit;
-  Real := ScriptRealPath(UnicodeString(ExpandFileName(string(Ref))));
+  Real := HostRealFilePath(UnicodeString(ExpandFileName(string(Ref))));
   if Real <> '' then Result := Real;
+end;
+
+{ the base an import() resolves from, found when it is made: a module's code its record's, a Script's its
+  NewScriptReferrer base, other code (eval code) its source name's (ReferrerFilePath) }
+function ImportReferrerBase(const SourceName: UnicodeString; ModuleId: Integer): UnicodeString;
+begin
+  if (ModuleId > 0) and (ModuleId <= Mods.Count) then Exit(Mods[ModuleId - 1].Address.ReferrerPath);
+  Result := ScriptBaseOf(ModuleId);
+  if Result = '' then Result := ReferrerFilePath(SourceName);
 end;
 
 { the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
@@ -2039,13 +2062,20 @@ begin
   SavedHostLoading := HostLoading;
   if IsString(R) then
   begin
-    Ref := ReferrerFilePath(StrToUnicode(StrOf(R)));
+    { a base found when the import was made (#0 first), or the source name of the code that made it }
+    Ref := StrToUnicode(StrOf(R));
+    if (Ref <> '') and (Ref[1] = #0) then Delete(Ref, 1, 1) else Ref := ReferrerFilePath(Ref);
+    HostLoading := False;
+  end
+  else if IntOf(R) < 0 then
+  begin
+    Ref := ScriptBaseOf(IntOf(R));
     HostLoading := False;
   end
   else
   begin
     M := Mods[IntOf(R) - 1];
-    Ref := M.Address.FilePath;
+    Ref := M.Address.ReferrerPath;
     HostLoading := IsHostOwnedModule(M);
   end;
   try
@@ -2218,7 +2248,13 @@ begin
   { a specifier computed at run time, for the host's read policy (Goccia.VM ImportComputed) }
   if ImportComputed then Idx := Idx or $400000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
-  if (ModuleId > 0) and (ModuleId <= Mods.Count) then
+  { a ShadowRealm's importValue (#0 first): its caller's base, found now, by the caller's module record or Script
+    (ModuleId), loaded as a guest's import (HostLoading off) }
+  if (Referrer <> '') and (Referrer[1] = #0) then
+    ArrayPush(ObjOf(PendingImports), StrFromUnicode(#0 + ImportReferrerBase(Copy(Referrer, 2, MaxInt), ModuleId)))
+  else if (ModuleId > 0) and (ModuleId <= Mods.Count) then
+    ArrayPush(ObjOf(PendingImports), MkInt(ModuleId))
+  else if ScriptBaseOf(ModuleId) <> '' then
     ArrayPush(ObjOf(PendingImports), MkInt(ModuleId))
   else ArrayPush(ObjOf(PendingImports), StrFromUnicode(Referrer));
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 1));
@@ -2243,7 +2279,7 @@ begin
     SetRoot(M, rMeta, Res);
     if Assigned(ImportMetaInitHook) then
     begin
-      if not ImportMetaInitHook(Res, M.Address.FilePath) then Exit(False);
+      if not ImportMetaInitHook(Res, M.Address.ReferrerPath) then Exit(False);
       Res := GetRoot(M, rMeta);
     end;
   end;
@@ -2399,8 +2435,7 @@ begin
   if Mods <> nil then
     for I := 0 to Mods.Count - 1 do Mods[I].Free;
   FreeAndNil(Mods);
-  ScriptArtifactPaths := nil;
-  ScriptArtifactRealPaths := nil;
+  ScriptBases := nil;
 end;
 
 procedure InitModules;

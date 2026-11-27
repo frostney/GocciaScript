@@ -1,7 +1,8 @@
 program ScriptArtifactImportsTest;
 
 { A Script run from a bytecode file reached through a symlink, with no source beside it, resolves import() from
-  the real file's directory: during its run and from a closure a later Run on the same engine calls (ADR 0196).
+  the real file's directory: during its run and from a closure a later Run on the same engine calls (ADR 0196). A
+  later source Script with the bytecode Script's logical name resolves from its own directory.
   The fixture directory (script-artifact-imports-test.sh) holds real/sib.mjs, link/sib.mjs and
   link/standalone.gbc, a symlink to real/standalone.gbc, which this program writes. }
 
@@ -60,10 +61,12 @@ begin
     Check(R.Ok, 'the bytecode Script failed: ' + Failure(R));
     R := Engine.Run(ADir + '/later.js', 'load().then(m => { globalThis.later = m.who; });');
     Check(R.Ok, 'the later run failed: ' + Failure(R));
+    R := Engine.Run(ADir + '/link/standalone.js', 'import("./sib.mjs").then(m => { globalThis.source = m.who; });');
+    Check(R.Ok, 'the source Script failed: ' + Failure(R));
     Engine.ResultForm := grfString;
-    R := Engine.Run(ADir + '/check.js', 'during + " " + later;');
+    R := Engine.Run(ADir + '/check.js', '[during, later, source].join(" ");');
     Check(R.Ok and R.HasResult, 'the check failed: ' + Failure(R));
-    Check(R.ResultText = 'real real', 'import() resolved from the link directory: ' + R.ResultText);
+    Check(R.ResultText = 'real real link', 'import() resolved from another Script''s directory: ' + R.ResultText);
   finally
     Engine.Free;
   end;

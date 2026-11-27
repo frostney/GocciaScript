@@ -24,12 +24,16 @@ A module's `import.meta` gets the address its record resolves relative imports f
 path, the canonical source path or canonical-directory logical address of a bytecode file, and a virtual
 module's configured address. `import.meta.resolve` still computes its result lexically against that base.
 
-A Script entry's imports module, keyed by the entry's path plus `#script-imports`, carries the entry's real path
-plus the same suffix as its real address, so its requests resolve from the real directory and its record never
-matches the entry file's own. An `import()` made by code with no module record resolves from the real path of
-the module or Script file its code is in, found in any realm, since a ShadowRealm's `importValue` runs in the
-realm it evaluates in. A Script compiled to bytecode uses the same address a bytecode module there would, for as
-long as the engine keeps its modules, so a closure a later run calls resolves as it did in its own run.
+Each Script entry run gets an import base of its own: its file's real path, or for a Script compiled to bytecode
+the address a bytecode module there would have. Its code's templates carry it as a negative `ModuleId`, so its
+`import()` calls, its closures' in later runs included, resolve from that base, never from another Script that
+has the same name. The engine keeps the bases until it releases its modules. The Script's imports module, keyed
+by the entry's path plus `#script-imports`, has no file of its own: it resolves its requests from the same base
+and never matches a file's record, even a file named like it.
+
+A ShadowRealm's `importValue` resolves from its caller's base, found by the caller's module record or Script,
+which name it in whichever realm the import runs. Only code known by nothing but its source name, such as eval
+code, resolves from the real path of the module or file that name gives.
 
 Diagnostics and stack traces keep the spelling the module was first loaded under. Sandbox mode has no host
 paths to canonicalize and is unchanged.

@@ -1141,7 +1141,6 @@ begin
   begin
     T := A.Top;
     ScriptImportSource := A.ScriptImports;
-    SetScriptArtifact(EntryKey, EntryKeyOf(FileName));
   end;
   Result := True;
 end;
@@ -1160,7 +1159,7 @@ begin
 end;
 
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
-var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
+var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn, ScriptId: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
   Compiled: Boolean; EnvAbort: Integer;
@@ -1283,6 +1282,14 @@ begin
     Exit;
   end;
   Result.Compiled := True;
+  { a Script's code resolves its imports from its real file, a bytecode file's as a bytecode module would }
+  ScriptId := 0;
+  if not Result.IsModule then
+  begin
+    if FArtifactEntry then ScriptId := NewScriptReferrer(EntryKey, EntryKeyOf(FileName))
+    else ScriptId := NewScriptReferrer(EntryKey, '');
+    MarkScriptTemplates(T, ScriptId);
+  end;
   if FHeapSnapshots then
     if Result.IsModule then SnapshotSetEntry(UnicodeString(FileName), Source, Kind)
     else SnapshotNoteEntry(T, UnicodeString(FileName), Source, Kind);
@@ -1321,7 +1328,7 @@ begin
       { an explicit Script's imports: their graph linked and evaluated first, then bound as its globals }
       if ScriptImportSource <> '' then
       begin
-        Result.Ok := StartScriptImports(EntryKey, ScriptImportSource, Imports);
+        Result.Ok := StartScriptImports(EntryKey, ScriptId, ScriptImportSource, Imports);
         if Result.Ok then
         begin
           PushRoot(Imports);

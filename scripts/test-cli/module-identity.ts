@@ -161,6 +161,23 @@ export function verifyModuleIdentity() {
       );
       assert.ok(virtualOutput.includes("virtual imports: configured | configured | configured\n"), virtualOutput);
 
+      // importValue resolves from its caller's own record, even when the ShadowRealm holds a virtual module
+      // registered under the caller's path.
+      write("fb/who.mjs", ['export const who = "real directory";']);
+      write("fa/who.mjs", ['export const who = "link directory";']);
+      write("fb/realm-entry.mjs", [
+        "const realm = new ShadowRealm();",
+        `const preloaded = await realm.importValue(${JSON.stringify(join(project, "fa", "realm-entry.mjs"))}, "kind");`,
+        'const who = await realm.importValue("./who.mjs", "who");',
+        'console.log("realm caller:", preloaded, "|", who);',
+      ]);
+      symlinkSync(join(project, "fb", "realm-entry.mjs"), join(project, "fa", "realm-entry.mjs"));
+      const realmOutput = run(
+        RUNNER, "fa/realm-entry.mjs", "--unsafe-shadowrealm", "--allow-read=.",
+        "--module", `${join(project, "fa", "realm-entry.mjs")}=export const kind = "virtual";`,
+      );
+      assert.ok(realmOutput.includes("realm caller: virtual | real directory\n"), realmOutput);
+
       write("fb/script.js", [
         'import { who } from "./sib.mjs";',
         'console.log("script static:", who);',
@@ -221,6 +238,15 @@ export function verifyModuleIdentity() {
       const artifactLinkOutput = run(RUNNER, "artifact-link-main.mjs");
       assert.match(artifactLinkOutput, /^bytecode payload$/m);
     }
+
+    // A Script's imports module has no file of its own: a file named like it is a module of its own.
+    write("hash-script.js", [
+      'import { identity } from "./real/dep.mjs";',
+      'import("./hash-script.js#script-imports").then(m => console.log("suffix-named file:", m.value));',
+    ]);
+    writeFileSync(join(project, "hash-script.js#script-imports"), "export const value = 42;\n");
+    const hashOutput = run(RUNNER, "hash-script.js", "--source-type=script");
+    assert.ok(hashOutput.includes("suffix-named file: 42\n"), hashOutput);
 
     write("real/self.mjs", [
       'import "../linked/self.mjs";',

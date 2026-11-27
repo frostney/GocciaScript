@@ -216,20 +216,30 @@ end;
 
 { 3.4.2 ShadowRealm.prototype.importValue ( specifier, exportName ): ShadowRealmImportValue }
 function SR_ImportValue(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var EvalRealm, CallerRealm, Base: Integer; S, Inner, F: TValue; Referrer: UnicodeString;
+var EvalRealm, CallerRealm, Base, CallerModule: Integer; S, Inner, F: TValue; Referrer: UnicodeString;
 begin
   if not ThisRealm(Args[0], EvalRealm) then Exit(False);
   if not ToStringV(Arg(Args, Argc, 1), S) then Exit(False);
   if not IsString(Arg(Args, Argc, 2)) then Exit(ThrowTypeError('ShadowRealm.prototype.importValue requires an export name'));
   CallerRealm := CurRealm;
-  { the specifier resolves against the code that called importValue }
-  if FrameTop > 0 then Referrer := Frames[FrameTop - 1].Tpl^.SourceName else Referrer := '';
+  { the specifier resolves against the code that called importValue: #0 asks the loader for that code's base, by
+    its module record or Script (CallerModule), which name it in whichever realm the import runs }
+  if FrameTop > 0 then
+  begin
+    Referrer := #0 + Frames[FrameTop - 1].Tpl^.SourceName;
+    CallerModule := Frames[FrameTop - 1].Tpl^.ModuleId;
+  end
+  else
+  begin
+    Referrer := '';
+    CallerModule := 0;
+  end;
   Base := TempTop;
   PushRoot(S);
   { the loading runs in the evaluation realm (import()'s job is a function of the realm that made it) }
   SwitchRealm(EvalRealm);
   ImportPhase := 0;
-  if not ImportHook(Referrer, 0, RootAt(Base), VUndefined, Inner) then
+  if not ImportHook(Referrer, CallerModule, RootAt(Base), VUndefined, Inner) then
   begin
     SwitchRealm(CallerRealm);
     PopRoots(1);
