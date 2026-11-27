@@ -735,7 +735,7 @@ RegExp embeds this generated UCD resource by default through `source/units/Gocci
 
 ## CI/CD
 
-GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which checks every three hours whether a newer commit has passed `ci.yml` on `main` and publishes it as the nightly prerelease if so. The scheduled `fuzz.yml` and `gc-stress.yml` runs are described in [Tooling](contributing/tooling.md#fuzzing-and-memory-safety).
+GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which checks every three hours whether a newer commit has passed `ci.yml` on `main` and publishes it as the nightly prerelease if so. The scheduled `fuzz.yml` and `gc-stress.yml` runs are described in [Tooling](contributing/tooling.md#fuzzing-and-memory-safety). The daily `live-fetch.yml` run, which fetches the project's site with the nightly macOS build, is described in [Testing](testing.md#ci-integration).
 
 ### `ci.yml` — Push to main + tags
 

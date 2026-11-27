@@ -562,7 +562,17 @@ jobs:
           grep -q '"b":' branch-cov.json
           rm branch-cov.json
 
+      # HTTPClient.Test.pas resolves a loopback name only the hosts file lists,
+      # which the runner image does not have, to show fetch resolves through
+      # the system resolver. GOCCIA_HOSTS_FILE_FIXTURE makes that test fail,
+      # rather than skip, when the name is missing.
+      - name: Add hosts-file-only names
+        if: runner.os != 'Windows'
+        run: .github/scripts/add-hosts-file-fixtures.sh
+
       - name: Run Pascal unit tests
+        env:
+          GOCCIA_HOSTS_FILE_FIXTURE: ${{ runner.os != 'Windows' && 'goccia-hosts-file.test' || '' }}
         run: |
           found=0
           for test_bin in build/*.Test build/*.Test.exe; do
@@ -1575,19 +1585,22 @@ jobs:
 
       # test-cli-permissions.ts fetches a loopback name only the hosts file
       # lists, which the runner image does not have, to show fetch resolves
-      # through the system resolver.
-      - name: Add a hosts-file-only name
-        if: runner.os == 'Linux'
-        run: |
-          printf '%s\n' '127.0.0.2 goccia-hosts-file.test' '::1 goccia-hosts-ipv6.test' | sudo tee -a /etc/hosts
+      # through the system resolver; GOCCIA_HOSTS_FILE_FIXTURE makes it fail,
+      # rather than skip, when the name is missing. fetch-e2e.sh fetches an
+      # IPv6-only one.
+      - name: Add hosts-file-only names
+        if: runner.os != 'Windows'
+        run: .github/scripts/add-hosts-file-fixtures.sh
 
       - name: Check capability flags, limits, and permission defaults
+        env:
+          GOCCIA_HOSTS_FILE_FIXTURE: ${{ runner.os != 'Windows' && 'goccia-hosts-file.test' || '' }}
         run: bun run scripts/test-cli-permissions.ts
 
       - name: Check real fetch redirects and headers
         if: runner.os != 'Windows'
         env:
-          GOCCIA_FETCH_IPV6_HOST: ${{ runner.os == 'Linux' && 'goccia-hosts-ipv6.test' || '' }}
+          GOCCIA_FETCH_IPV6_HOST: goccia-hosts-ipv6.test
         run: bash scripts/fetch-e2e.sh
 
       - name: Check embedded resource CLI behaviour
