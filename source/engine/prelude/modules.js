@@ -28,7 +28,15 @@
   };
   const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
     '.tsv': 'TSV', '.yaml': 'YAML', '.yml': 'YAML', '.toml': 'TOML' };
-  shared.hasHostModule = (key) => registry[key] !== undefined;
+  let hasFileVirtualModules = false;
+  shared.findHostModule = (key) => {
+    if (registry[key] !== undefined) return key;
+    if (hasFileVirtualModules && n.isAbsolutePath(key)) {
+      const fileKey = n.virtualFileKey(key);
+      if (registry[fileKey] !== undefined) return fileKey;
+    }
+    return undefined;
+  };
   shared.loadHostModule = (key, filePath) => {
     const make = filePath === '' ? registry[key] : undefined;
     let exports;
@@ -146,7 +154,9 @@
         throw new TypeError(`Virtual module "${address}" must be an object with content`);
       const type = descriptor.type === undefined ? 'javascript' : descriptor.type;
       const content = descriptor.content;
-      const key = isRelative(address) && base ? joinPath(base, address) : address;
+      const path = isRelative(address) && base ? joinPath(base, address) : address;
+      const isFile = n.isAbsolutePath(path);
+      const key = isFile ? n.virtualFileKey(path) : path;
       if (n.moduleLoaded(key))
         throw new TypeError(`Virtual module "${key}" cannot be replaced after it has been loaded.`);
       if (registry[key] !== undefined && virtualKeys[key] === undefined)
@@ -179,6 +189,7 @@
       }
       registry[key] = make;
       virtualKeys[key] = true;
+      if (isFile) hasFileVirtualModules = true;
     }
   };
 })

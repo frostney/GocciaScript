@@ -1796,7 +1796,9 @@ end;
 
 function ModuleRecordExists(const Key: UnicodeString): Boolean;
 begin
-  Result := FindModuleByPath(Key) <> nil;
+  if Mods = nil then Exit(False);
+  if FindModuleByPath(Key) <> nil then Exit(True);
+  Result := IsAbsoluteFilePath(Key) and (FindModule(HostFileAddress(Key)) <> nil);
 end;
 
 { Goccia.VM's ModSlotNameHook: the import or local export of the module whose cell table is Table at Slot }

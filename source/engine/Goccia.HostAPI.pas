@@ -226,7 +226,7 @@ end;
 threadvar
   { the vi.mock modules: address, then source }
   MockModules: TStringList;
-  SharedV, LoadHostModuleV, HasHostModuleV: TValue;
+  SharedV, LoadHostModuleV, FindHostModuleV: TValue;
 
   FireNextV, DiscardTimersV: TValue;
   EventLoopRootedGen: Integer;
@@ -1172,16 +1172,30 @@ begin
   if not Result then Err := TakePendingText;
 end;
 
-{ whether Key names a host module (shared.hasHostModule) }
-function IsHostModuleKey(const Key: UnicodeString): Boolean;
+{ the registered key of a host module (shared.findHostModule) }
+function FindHostModuleKey(const Key: UnicodeString; out Registered: UnicodeString): Boolean;
 var A: array[0..0] of TValue; R: TValue;
 begin
-  if Assigned(MockModules) and (MockModules.IndexOfName(string(Key)) >= 0) then Exit(True);
+  if Assigned(MockModules) and (MockModules.IndexOfName(string(Key)) >= 0) then
+  begin
+    Registered := Key;
+    Exit(True);
+  end;
   Result := False;
-  if not IsObject(HasHostModuleV) then Exit;
+  if not IsObject(FindHostModuleV) then Exit;
   A[0] := StrFromUnicode(Key);
-  if CallValue(HasHostModuleV, SharedV, @A[0], 1, R) then Result := R = VTrue;
+  if CallValue(FindHostModuleV, SharedV, @A[0], 1, R) and IsString(R) then
+  begin
+    Registered := StrToUnicode(StrOf(R));
+    Result := True;
+  end;
   Pending := VUndefined;
+end;
+
+function IsHostModuleKey(const Key: UnicodeString): Boolean;
+var Registered: UnicodeString;
+begin
+  Result := FindHostModuleKey(Key, Registered);
 end;
 
 function CurrentResolver: TModuleResolver;
@@ -1378,6 +1392,15 @@ begin
   Result := DenyResolution('read', Spec, Suggestion);
 end;
 
+procedure WarnVirtualShadow(const Key, Path: UnicodeString);
+begin
+  if not IsAbsoluteFilePath(Path) or not FileExists(UTF8Encode(Path)) then Exit;
+  if ShadowWarned = nil then ShadowWarned := TStringList.Create;
+  if ShadowWarned.IndexOf(UTF8Encode(Key)) >= 0 then Exit;
+  ShadowWarned.Add(UTF8Encode(Key));
+  WriteLn(ErrOutput, 'Warning: virtual module "', UTF8Encode(Key), '" shadows module "', UTF8Encode(Path), '".');
+end;
+
 function HostResolveSpec(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
   out VirtualKey: Boolean): Integer;
 var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString; Guard: Boolean; Policy: TReadPolicy;
@@ -1390,32 +1413,22 @@ begin
   { the import() being resolved: its specifier computed or not (the first resolution takes it) }
   Literal := not ImportComputed;
   ImportComputed := False;
-  if IsHostModuleKey(Spec) then
-  begin
-    Resolved := Spec;
-    Exit(1);
-  end;
+  if FindHostModuleKey(Spec, Resolved) then Exit(1);
   { a relative specifier in a virtual module resolves against its address, hierarchically }
   if IsRelativeSpecifier(Spec) and (Referrer <> '') and IsVirtualKey(Referrer) then
   begin
     Candidate := ResolveRelativeVirtualAddress(Spec, Referrer);
-    if IsHostModuleKey(Candidate) then
-    begin
-      Resolved := Candidate;
-      Exit(1);
-    end;
+    if FindHostModuleKey(Candidate, Resolved) then Exit(1);
   end;
-  { a relative specifier in a file names a virtual module defined at that path (a config's or manifest's relative
-    address, docs/virtual-modules.md) even when no file is there; with a file there, the resolution below finds it
-    and warns that the virtual module shadows it }
+  { a registered relative address can name a module even when no file is there }
   if IsRelativeSpecifier(Spec) and (Referrer <> '') and (Referrer[1] <> '<') and not IsVirtualKey(Referrer) and
      not SandboxActive then
   begin
     Candidate := UnicodeString(ExpandFileName(IncludeTrailingPathDelimiter(ExtractFileDir(
       ExpandFileName(UTF8Encode(Referrer)))) + UTF8Encode(Spec)));
-    if not FileExists(UTF8Encode(Candidate)) and IsHostModuleKey(Candidate) then
+    if FindHostModuleKey(Candidate, Resolved) then
     begin
-      Resolved := Candidate;
+      WarnVirtualShadow(Resolved, Candidate);
       Exit(1);
     end;
   end;
@@ -1453,7 +1466,13 @@ begin
       refused as the file would be }
     if SameText(ExtractFileExt(UTF8Encode(Resolved)), '.gbc') and (Resolver.LastCompanionSourcePath <> '') then
       Resolver.ValidateCompanionSourcePath(Resolver.LastCompanionSourcePath);
-    VirtualKey := IsVirtualModuleURI(Resolved) or IsHostModuleKey(Resolved);
+    if FindHostModuleKey(Resolved, Candidate) then
+    begin
+      WarnVirtualShadow(Candidate, Resolved);
+      Resolved := Candidate;
+      VirtualKey := True;
+    end
+    else VirtualKey := IsVirtualModuleURI(Resolved);
     { Pass the path judged by the final read check through to the loader, including on cache hits. }
     if not VirtualKey then RealPath := HostRealFilePath(Resolved);
     if Guard and not VirtualKey then
@@ -1479,17 +1498,6 @@ begin
         SetResolveError(Pending);
         Pending := VUndefined;
         Exit(-2);
-      end;
-    end;
-    { a virtual module at a path a file is at shadows it: warned once, as GocciaScript's loader warns }
-    if VirtualKey and IsAbsoluteFilePath(Resolved) and FileExists(UTF8Encode(Resolved)) then
-    begin
-      if ShadowWarned = nil then ShadowWarned := TStringList.Create;
-      if ShadowWarned.IndexOf(UTF8Encode(Resolved)) < 0 then
-      begin
-        ShadowWarned.Add(UTF8Encode(Resolved));
-        WriteLn(ErrOutput, 'Warning: virtual module "', UTF8Encode(Resolved), '" shadows module "',
-          UTF8Encode(Resolved), '".');
       end;
     end;
     { the first specifier a module is imported by names it in its load errors (specifierOf) }
@@ -1586,6 +1594,21 @@ begin
 {$ELSE}
   Res := StrFromUnicode('');
 {$ENDIF}
+  Result := True;
+end;
+
+{ A virtual file can have no disk counterpart. Resolve its parent directory and keep its configured name. }
+function Host_VirtualFileKey(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Key: UnicodeString; Directory, Path: string;
+begin
+  Key := ArgStr(Args, Argc, 1);
+  if not SandboxActive and IsAbsoluteFilePath(Key) then
+  begin
+    Path := ExpandFileName(UTF8Encode(Key));
+    Directory := CanonicalCapabilityPath(ExtractFileDir(Path));
+    Key := UTF8Decode(IncludeTrailingPathDelimiter(Directory) + ExtractFileName(Path));
+  end;
+  Res := StrFromUnicode(Key);
   Result := True;
 end;
 
@@ -1997,6 +2020,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   DefineNative(RootAt(TempTop - 1), 'isAbsolutePath', Host_IsAbsolutePath, 1);
   DefineNative(RootAt(TempTop - 1), 'expandPath', Host_ExpandPath, 2);
+  DefineNative(RootAt(TempTop - 1), 'virtualFileKey', Host_VirtualFileKey, 1);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
   DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
@@ -2024,14 +2048,14 @@ begin
   HostRealm := CurRealm;
   if FirstInEngine(EventLoopRootedGen) then
   begin
-    AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
+    AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@FindHostModuleV);
     AddRoot(@DiscardTimersV);
   end;
   FireNextV := VUndefined;
   DiscardTimersV := VUndefined;
   SharedV := VUndefined;
   LoadHostModuleV := VUndefined;
-  HasHostModuleV := VUndefined;
+  FindHostModuleV := VUndefined;
   Base := TempTop;
   PushRoot(GlobalObj);
   PushRoot(HostNatives);
@@ -2095,7 +2119,7 @@ begin
       Result := GetV(R, AtomOf('fireNext'), FireNextV) and GetV(R, AtomOf('discard'), DiscardTimersV);
     SharedV := RootAt(Base + 2);
     if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV) and
-      GetV(SharedV, AtomOf('hasHostModule'), HasHostModuleV);
+      GetV(SharedV, AtomOf('findHostModule'), FindHostModuleV);
     if Result then
     begin
       SetHostModuleHook(@HostModule, @IsHostModuleKey);

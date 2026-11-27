@@ -118,6 +118,10 @@ virtual JavaScript module resolve from that module's address. `import.meta.url`
 returns the canonical address, and `import.meta.resolve()` uses the same loader
 resolution seam.
 
+For a virtual module named by a host file path, the loader resolves the parent
+directory through aliases such as symlinks, junctions and Windows short names.
+The configured filename can name a virtual module even when no file exists.
+
 Virtual definitions take precedence over import maps and filesystem modules.
 When both a virtual definition and filesystem resolution match, the loader
 emits a warning and uses the virtual definition. A collision with a registered

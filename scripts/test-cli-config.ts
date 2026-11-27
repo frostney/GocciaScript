@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdirSync,
   realpathSync,
+  symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -1713,16 +1714,28 @@ console.log("A manifest's relative address is a module even with no file at that
 {
   const tmp = makeTmp();
   try {
-    const manifest = join(tmp, "modules.mjs");
-    const entry = join(tmp, "entry.mjs");
+    const directory = join(tmp, "real");
+    const alias = join(tmp, "alias");
+    mkdirSync(directory);
+    symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
+    const manifest = join(directory, "modules.mjs");
+    const entry = join(directory, "entry.mjs");
     writeFileSync(
       manifest,
-      'export default {"./virt.js": {content: "export default 42;"}};\n',
+      'export default {"./nested/virt.js": {content: "export default 42;"}, "./overlay.js": {content: "export default 17;"}};\n',
     );
-    writeFileSync(entry, 'import value from "./virt.js"; console.log("virtual " + value);\n');
-    const out = runCwd(RUNNER, [entry, "--modules", manifest], tmp);
-    if (!out.stdout.includes("virtual 42"))
-      throw new Error(`A relative virtual address should resolve from the importing file: ${out.combined}`);
+    writeFileSync(join(directory, "overlay.js"), 'export default -1;\n');
+    writeFileSync(entry, [
+      'import * as relative from "./nested/virt.js";',
+      `import * as absolute from ${JSON.stringify(join(alias, "nested", "virt.js"))};`,
+      'import value from "./overlay.js";',
+      'console.log("virtual", relative === absolute, relative.default, value);',
+    ].join("\n"));
+    for (const root of [directory, alias]) {
+      const out = runCwd(RUNNER, [join(root, "entry.mjs"), "--modules", join(root, "modules.mjs")], tmp);
+      if (!containsLine(out.stdout, "virtual true 42 17") || !out.stderr.includes("shadows module"))
+        throw new Error(`Virtual module aliases should share a record and shadow files: ${out.combined}`);
+    }
   } finally {
     clean(tmp);
   }
