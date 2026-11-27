@@ -173,9 +173,11 @@ export const installTripwire = () => {
     }
     return { value, error, threw, hits };
   };
-  // awaits fn's result while armed: the tripwire's own wait on it is a thenable whose then subscribes disarmed, so
-  // its PromiseResolve and then (each looking up the promise's constructor) are not recorded as the built-in's
+  // awaits fn's result while armed. It yields once first, so the caller's own await on what it returns (and the test
+  // runner's on the test's promise, handed over at the test's first await) look up the promise's constructor before
+  // it arms; and its own wait on fn's result is a thenable whose then subscribes disarmed
   const runAsync = async (fn) => {
+    await undefined;
     hits = [];
     armed = true;
     let value;
@@ -202,25 +204,11 @@ export const installTripwire = () => {
     return { value, error, threw, hits };
   };
 
-  // the caller awaits what watchAsync returns while the call is still in flight, and so still armed: a thenable
-  // whose then subscribes disarmed keeps the caller's own await (its PromiseResolve) out of the record
-  const settledLater = (promise) => ({
-    then(resolve, reject) {
-      const was = armed;
-      armed = false;
-      try {
-        apply(promiseThen, promise, [resolve, reject]);
-      } finally {
-        armed = was;
-      }
-    },
-  });
-
   return {
     // runs fn armed: { value, error, threw, hits }
     watch: run,
     // runs fn armed and awaits its result, armed throughout; await what it returns
-    watchAsync: (fn) => settledLater(runAsync(fn)),
+    watchAsync: runAsync,
     // the intrinsic property at path (a value, or a getter's function) as the realm had it, marked covered
     original: lookup,
     // calls the method or getter at path on thisArg, armed
@@ -231,7 +219,7 @@ export const installTripwire = () => {
     // calls it and awaits its result, armed throughout
     invokeAsync(path, thisArg, ...args) {
       const f = lookup(path);
-      return settledLater(runAsync(() => apply(f, thisArg, args)));
+      return runAsync(() => apply(f, thisArg, args));
     },
     // constructs the constructor at path, armed
     construct(path, ...args) {

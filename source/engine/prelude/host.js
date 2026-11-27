@@ -250,6 +250,9 @@
   defineProperty(G, 'PermissionDenied', { value: PermissionDenied, writable: true, enumerable: false, configurable: true });
   shared.PermissionDenied = PermissionDenied;
 
+  // the prototypes structuredClone refuses, now that every prelude class exists and before any script runs
+  if (typeof shared.collectCloneProtos === 'function') shared.collectCloneProtos();
+
   const Goccia = {
     version: info.version,
     commit: info.commit,

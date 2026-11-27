@@ -10,6 +10,47 @@
   const ownKeys = Reflect.ownKeys;
   const apply = Reflect.apply;
   const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into these built-ins
+  const { TypeError, RangeError, String, Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView, Map, Date, RegExp, Error } = G;
+  const ToObject = Object, isView = ArrayBuffer.isView, SetCtor = Set, ArrayCtor = Array;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const StringPrototypeToLowerCase = uncurryThis(String.prototype.toLowerCase);
+  const ArrayPrototypeIncludes = uncurryThis(Array.prototype.includes);
+  const RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  const ObjectPrototypeHasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+  const ObjectPrototypeToString = uncurryThis(Object.prototype.toString);
+  const MapPrototypeHas = uncurryThis(Map.prototype.has), MapPrototypeGet = uncurryThis(Map.prototype.get);
+  const MapPrototypeSet = uncurryThis(Map.prototype.set), SetPrototypeHas = uncurryThis(Set.prototype.has);
+  const TAP = getPrototypeOf(Uint8Array.prototype);
+  const TypedArrayPrototypeSet = uncurryThis(TAP.set), TypedArrayPrototypeSubarray = uncurryThis(TAP.subarray);
+  const taTagOf = uncurryThis(getOwnPropertyDescriptor(TAP, Symbol.toStringTag).get);
+  const taLengthOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'length').get);
+  const taBufferOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'buffer').get);
+  const taOffsetOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'byteOffset').get);
+  const taByteLengthOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'byteLength').get);
+  const dvBufferOf = uncurryThis(getOwnPropertyDescriptor(DataView.prototype, 'buffer').get);
+  const dvOffsetOf = uncurryThis(getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get);
+  const dvByteLengthOf = uncurryThis(getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get);
+  // a typed array's or DataView's buffer, offset and length, read from its internal slots
+  const viewBuffer = (v) => (taTagOf(v) !== undefined ? taBufferOf(v) : dvBufferOf(v));
+  const viewOffset = (v) => (taTagOf(v) !== undefined ? taOffsetOf(v) : dvOffsetOf(v));
+  const viewLength = (v) => (taTagOf(v) !== undefined ? taByteLengthOf(v) : dvByteLengthOf(v));
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  // s without the characters in set at its ends (where), or anywhere (everywhere)
+  const strip = (s, set, everywhere) => {
+    let a = 0, b = s.length;
+    if (!everywhere) {
+      while (a < b && StringPrototypeIncludes(set, s[a])) a++;
+      while (b > a && StringPrototypeIncludes(set, s[b - 1])) b--;
+    }
+    let r = '';
+    for (let i = a; i < b; i++) if (!everywhere || !StringPrototypeIncludes(set, s[i])) r += s[i];
+    return r;
+  };
+  const StringPrototypeIncludes = uncurryThis(String.prototype.includes);
 
   // ---------------- DOMException ----------------
   // the legacy codes of the names that have one (Web IDL, DOMException names table)
@@ -71,13 +112,14 @@
   const fromCharCode = String.fromCharCode;
   function atob(data) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'atob': 1 argument required, but only 0 present.");
-    let s = String(data).replace(/[\t\n\f\r ]/g, '');
-    if (s.length % 4 === 0) s = s.replace(/==?$/, '');
-    if (s.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(s))
+    let s = strip(String(data), '\t\n\f\r ', true);
+    if (s.length % 4 === 0) s = s[s.length - 1] !== '=' ? s : StringPrototypeSlice(s, 0, s[s.length - 2] === '=' ? -2 : -1);
+    if (s.length % 4 === 1 || RegExpPrototypeExec(/[^A-Za-z0-9+/]/, s) !== null)
       throw new DOMException("Failed to execute 'atob': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
     const bytes = fromBase64(s, { lastChunkHandling: 'loose' });
     let out = '';
-    for (let i = 0; i < bytes.length; i += 8192) out += apply(fromCharCode, null, bytes.subarray(i, i + 8192));
+    const length = taLengthOf(bytes);
+    for (let i = 0; i < length; i += 8192) out += apply(fromCharCode, null, TypedArrayPrototypeSubarray(bytes, i, i + 8192));
     return out;
   }
   function btoa(data) {
@@ -85,7 +127,7 @@
     const s = String(data);
     const bytes = new Uint8Array(s.length);
     for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i);
+      const c = StringPrototypeCharCodeAt(s, i);
       if (c > 255)
         throw new DOMException("Failed to execute 'btoa': The string to be encoded contains characters outside of the Latin1 range.", 'InvalidCharacterError');
       bytes[i] = c;
@@ -139,8 +181,8 @@
   // the nesting a clone follows before it gives up, as a RangeError
   const MAX_DEPTH = 256;
   // the prototypes of the engine's and the host's classes (a prelude's class keeps its internal slots in private
-  // fields, so an instance is an ordinary object): an object that inherits from one has no serialization; found on
-  // the first clone, when every host prelude has run
+  // fields, so an instance is an ordinary object): an object that inherits from one has no serialization; found once
+  // every host prelude has run (host.js calls shared.collectCloneProtos), before any script can change the globals
   let intrinsicProtos = null;
   const fnToString = Function.prototype.toString, nativeSource = /\{\s*\[native code\]\s*\}\s*$/;
   function collectIntrinsicProtos() {
@@ -175,7 +217,7 @@
     return set;
   }
   function hasIntrinsicProto(v) {
-    for (let p = getPrototypeOf(v); p !== null; p = getPrototypeOf(p)) if (intrinsicProtos.has(p)) return true;
+    for (let p = getPrototypeOf(v); p !== null; p = getPrototypeOf(p)) if (SetPrototypeHas(intrinsicProtos, p)) return true;
     return false;
   }
 
@@ -184,7 +226,7 @@
       throw new TypeError("Failed to execute 'structuredClone': 1 argument required, but only 0 present.");
     void options;
     const memory = new Map();
-    if (intrinsicProtos === null) intrinsicProtos = collectIntrinsicProtos();
+    if (intrinsicProtos === null) intrinsicProtos = collectIntrinsicProtos();   // a host that did not call it
     let depth = 0;
     const clone = (v) => {
       if (++depth > MAX_DEPTH) throw new RangeError('Maximum call stack size exceeded');
@@ -195,29 +237,29 @@
       if (t === 'symbol') throw cloneError(describe(v));
       if (t === 'function') throw cloneError(describe(v));
       if (v === null || t !== 'object') return v;
-      if (memory.has(v)) return memory.get(v);
+      if (MapPrototypeHas(memory, v)) return MapPrototypeGet(memory, v);
       let out;
-      if (isBool(v)) { out = Object(apply(boolValue, v, [])); memory.set(v, out); return out; }
-      if (isNum(v)) { out = Object(apply(numValue, v, [])); memory.set(v, out); return out; }
-      if (isBig(v)) { out = Object(apply(bigValue, v, [])); memory.set(v, out); return out; }
-      if (isStr(v)) { out = Object(apply(strValue, v, [])); memory.set(v, out); return out; }
+      if (isBool(v)) { out = ToObject(apply(boolValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
+      if (isNum(v)) { out = ToObject(apply(numValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
+      if (isBig(v)) { out = ToObject(apply(bigValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
+      if (isStr(v)) { out = ToObject(apply(strValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
       if (isSym(v)) throw cloneError('Symbol object');
-      if (isDate(v)) { out = new Date(apply(dateValue, v, [])); memory.set(v, out); return out; }
-      if (isRegExp(v)) { out = new RegExp(apply(regexpSource, v, []), apply(regexpFlags, v, [])); memory.set(v, out); return out; }
+      if (isDate(v)) { out = new Date(apply(dateValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
+      if (isRegExp(v)) { out = new RegExp(apply(regexpSource, v, []), apply(regexpFlags, v, [])); MapPrototypeSet(memory, v, out); return out; }
       if (isSAB(v)) {
         const len = apply(sabByteLength, v, []);
         out = new SharedArrayBuffer(len);
-        new Uint8Array(out).set(new Uint8Array(v));
-        memory.set(v, out);
+        TypedArrayPrototypeSet(new Uint8Array(out), new Uint8Array(v));
+        MapPrototypeSet(memory, v, out);
         return out;
       }
       if (isAB(v)) {
         if (apply(abDetached, v, [])) throw new DOMException('An ArrayBuffer is detached and could not be cloned.', 'DataCloneError');
         if (apply(abResizable, v, [])) {
           out = new ArrayBuffer(apply(abByteLength, v, []), { maxByteLength: apply(abMax, v, []) });
-          new Uint8Array(out).set(new Uint8Array(v));
+          TypedArrayPrototypeSet(new Uint8Array(out), new Uint8Array(v));
         } else out = apply(abSlice, v, []);
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         return out;
       }
       const tag = apply(taTag, v, []);
@@ -226,7 +268,7 @@
         if (info[1]) throw new DOMException(`${tag} is out of bounds of its ArrayBuffer and could not be cloned.`, 'DataCloneError');
         const b = clone(apply(taBuffer, v, []));
         out = info[0] ? new ctors[tag](b, apply(taOffset, v, [])) : new ctors[tag](b, apply(taOffset, v, []), apply(taLength, v, []));
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         return out;
       }
       if (isDV(v)) {
@@ -236,52 +278,54 @@
         const tracking = dvInfo[0];
         const b = clone(apply(dvBuffer, v, []));
         out = tracking ? new DataView(b, apply(dvOffset, v, [])) : new DataView(b, apply(dvOffset, v, []), len);
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         return out;
       }
       if (isDOMException(v)) {
         out = new DOMException(v.message, v.name);
         defineProperty(out, 'stack', { value: v.stack, writable: true, enumerable: false, configurable: true });
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         return out;
       }
       if (isMap(v)) {
         out = new Map();
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         const entries = [];
-        apply(mapForEach, v, [(val, key) => entries.push([key, val])]);
-        for (const [key, val] of entries) apply(mapSet, out, [clone(key), clone(val)]);
+        apply(mapForEach, v, [(val, key) => append(entries, [key, val])]);
+        for (let i = 0; i < entries.length; i++) apply(mapSet, out, [clone(entries[i][0]), clone(entries[i][1])]);
         return out;
       }
       if (isSet(v)) {
-        out = new Set();
-        memory.set(v, out);
+        out = new SetCtor();
+        MapPrototypeSet(memory, v, out);
         const items = [];
-        apply(setForEach, v, [(val) => items.push(val)]);
-        for (const val of items) apply(setAdd, out, [clone(val)]);
+        apply(setForEach, v, [(val) => append(items, val)]);
+        for (let i = 0; i < items.length; i++) apply(setAdd, out, [clone(items[i])]);
         return out;
       }
       if (isError(v)) {
         let name = v.name;
         name = name === undefined ? 'Error' : String(name);
-        const Ctor = Object.prototype.hasOwnProperty.call(ERROR_TYPES, name) ? ERROR_TYPES[name] : Error;
+        const Ctor = ObjectPrototypeHasOwnProperty(ERROR_TYPES, name) ? ERROR_TYPES[name] : Error;
         const hasMessage = getOwnPropertyDescriptor(v, 'message') !== undefined;
         const message = hasMessage ? String(v.message) : undefined;
         out = hasMessage ? new Ctor(message) : new Ctor();
         const stack = v.stack;
         if (typeof stack === 'string') defineProperty(out, 'stack', { value: stack, writable: true, enumerable: false, configurable: true });
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
         return out;
       }
-      if (!n.plainCloneable(v) || hasIntrinsicProto(v)) throw cloneError(Object.prototype.toString.call(v).slice(8, -1) + ' object');
+      if (!n.plainCloneable(v) || hasIntrinsicProto(v)) throw cloneError(StringPrototypeSlice(ObjectPrototypeToString(v), 8, -1) + ' object');
       if (isArray(v)) {
-        out = new Array(v.length);
-        memory.set(v, out);
+        out = new ArrayCtor(v.length);
+        MapPrototypeSet(memory, v, out);
       } else {
         out = {};
-        memory.set(v, out);
+        MapPrototypeSet(memory, v, out);
       }
-      for (const key of ownKeys(v)) {
+      const keys = ownKeys(v);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
         if (typeof key !== 'string') continue;
         const d = getOwnPropertyDescriptor(v, key);
         if (d === undefined || !d.enumerable) continue;
@@ -322,7 +366,7 @@
       TextEncoder.#check(this, 'encodeInto');
       if (!(destination instanceof Uint8Array)) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.");
       const s = String(source);   // converted first, as Web IDL converts the arguments in order
-      if (resizableBuffer(destination.buffer)) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': The provided Uint8Array value must not be resizable.");
+      if (resizableBuffer(taBufferOf(destination))) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': The provided Uint8Array value must not be resizable.");
       const r = n.utf8Write(s, destination, 0);
       return { read: r[0], written: r[1] };
     }
@@ -335,8 +379,8 @@
     #pending = [];        // the bytes of an incomplete sequence a streaming decode kept
     #bomSeen = false;
     constructor(label = 'utf-8', options = undefined) {
-      const l = String(label).replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '').toLowerCase();
-      if (!UTF8_LABELS.includes(l)) throw new RangeError(`The encoding label provided ('${String(label)}') is invalid.`);
+      const l = StringPrototypeToLowerCase(strip(String(label), '\t\n\f\r ', false));
+      if (!ArrayPrototypeIncludes(UTF8_LABELS, l)) throw new RangeError(`The encoding label provided ('${String(label)}') is invalid.`);
       if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'function')
         throw new TypeError("Failed to construct 'TextDecoder': The provided value is not of type 'TextDecoderOptions'.");
       const o = options === undefined || options === null ? {} : options;
@@ -352,24 +396,29 @@
     decode(input = undefined, options = undefined) {
       TextDecoder.#check(this, 'decode');
       let bytes;
-      const buffer = input === undefined ? undefined : isAB(input) || isSAB(input) ? input : ArrayBuffer.isView(input) ? input.buffer : undefined;
+      const buffer = input === undefined ? undefined : isAB(input) || isSAB(input) ? input : isView(input) ? viewBuffer(input) : undefined;
       if (buffer !== undefined && resizableBuffer(buffer))
         throw new TypeError("Failed to execute 'decode' on 'TextDecoder': The provided ArrayBufferView value must not be resizable.");
       if (input === undefined) bytes = new Uint8Array(0);
       // a detached buffer, like a view of one, decodes as nothing
       else if (isAB(input) && apply(abDetached, input, [])) bytes = new Uint8Array(0);
       else if (isAB(input) || isSAB(input)) bytes = new Uint8Array(input);
-      else if (ArrayBuffer.isView(input)) {
+      else if (isView(input)) {
         // a view of a detached buffer decodes as nothing
-        bytes = isAB(input.buffer) && apply(abDetached, input.buffer, []) ? new Uint8Array(0)
-          : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+        bytes = isAB(buffer) && apply(abDetached, buffer, []) ? new Uint8Array(0)
+          : new Uint8Array(buffer, viewOffset(input), viewLength(input));
       }
       else throw new TypeError("Failed to execute 'decode' on 'TextDecoder': The provided value is not of type '(ArrayBuffer or ArrayBufferView)'.");
       const stream = options !== undefined && options !== null && !!options.stream;
-      const all = this.#pending.length > 0 ? [...this.#pending, ...bytes] : bytes;
+      let all = bytes, n = taLengthOf(bytes);
+      if (this.#pending.length > 0) {
+        all = [];
+        for (let k = 0; k < this.#pending.length; k++) append(all, this.#pending[k]);
+        for (let k = 0; k < n; k++) append(all, bytes[k]);
+        n = all.length;
+      }
       this.#pending = [];
       let out = '', i = 0;
-      const n = all.length;
       const bad = () => {
         if (this.#fatal) { this.#pending = []; this.#bomSeen = false; throw new TypeError("Failed to execute 'decode' on 'TextDecoder': The encoded data was not valid."); }
         out += '\uFFFD';
@@ -394,12 +443,12 @@
           out += cp >= 0x10000 ? fromCharCode(0xD800 + ((cp - 0x10000) >> 10), 0xDC00 + ((cp - 0x10000) & 0x3FF)) : fromCharCode(cp);
           i += need + 1;
         } else if (i + j >= n && stream) {
-          for (let k = i; k < n; k++) this.#pending.push(all[k]);
+          for (let k = i; k < n; k++) append(this.#pending, all[k]);
           i = n;
         } else { bad(); i += j; }
       }
       if (!this.#ignoreBOM && !this.#bomSeen && out.length > 0) {
-        if (out.charCodeAt(0) === 0xFEFF) out = out.slice(1);
+        if (StringPrototypeCharCodeAt(out, 0) === 0xFEFF) out = StringPrototypeSlice(out, 1);
         this.#bomSeen = true;
       } else if (out.length > 0) this.#bomSeen = true;
       if (!stream) this.#bomSeen = false;
@@ -417,5 +466,6 @@
   hidden(G, 'atob', atob);
   hidden(G, 'btoa', btoa);
   hidden(G, 'structuredClone', structuredClone);
+  shared.collectCloneProtos = () => { intrinsicProtos = collectIntrinsicProtos(); };
   shared.DOMException = DOMException;
 })

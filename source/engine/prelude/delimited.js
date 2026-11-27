@@ -6,6 +6,22 @@
 (function (G, n, shared) {
   'use strict';
   const apply = Reflect.apply;
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the parser or the serializer
+  const { TypeError, SyntaxError, String, Number } = G;
+  const MathTrunc = Math.trunc, NumberIsNaN = Number.isNaN, getOwnPropertyNames = Object.getOwnPropertyNames;
+  const defineProperty = Object.defineProperty;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeSlice = uncurryThis(String.prototype.slice), StringPrototypeIncludes = uncurryThis(String.prototype.includes);
+  const StringPrototypeSplit = uncurryThis(String.prototype.split), ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  // a record's field, defined (a header named __proto__ is a field like any other)
+  const field = (o, k, v) => { defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true }); };
+  // the values of a row's fields
+  const valuesOf = (fields) => { const r = []; for (let i = 0; i < fields.length; i++) append(r, fields[i].value); return r; };
+  // every occurrence of a in s replaced by b
+  const replaceAll = (s, a, b) => ArrayPrototypeJoin(StringPrototypeSplit(s, a), b);
   const isArray = Array.isArray;
   const isPlainRecord = (v) => v !== null && typeof v === 'object' && !isArray(v);
   const BOM = '\uFEFF';
@@ -24,7 +40,7 @@
     return o;
   }
   const callback = (args, i) => (args.length > i && typeof args[i] === 'function' ? args[i] : undefined);
-  const toInteger = (v) => { const x = Math.trunc(Number(v)); return Number.isNaN(x) ? 0 : x; };
+  const toInteger = (v) => { const x = MathTrunc(Number(v)); return NumberIsNaN(x) ? 0 : x; };
   const clamp = (v, limit) => (v < 0 ? 0 : v > limit ? limit : v);
 
   // ---------------- rows ----------------
@@ -45,18 +61,18 @@
         inQuotes = true;
         pos++;
       } else if (ch === delimiter) {
-        fields.push({ value: builder, quoted });
+        append(fields, { value: builder, quoted });
         builder = ''; quoted = false;
         pos++;
       } else if (ch === '\r' || ch === '\n') {
-        fields.push({ value: builder, quoted });
+        append(fields, { value: builder, quoted });
         pos++;
         if (ch === '\r' && pos < end && text[pos] === '\n') pos++;
         return { fields, pos, consumed: true };
       } else { builder += ch; pos++; }
     }
     if (inQuotes) return null;
-    fields.push({ value: builder, quoted });
+    append(fields, { value: builder, quoted });
     return { fields, pos, consumed: true };
   }
   const csvEmpty = (fields) => fields.length === 1 && fields[0].value === '' && !fields[0].quoted;
@@ -83,20 +99,20 @@
     while (pos < end) {
       const ch = text[pos];
       if (ch === '\t') {
-        fields.push({ value: tsvUnescape(text.slice(start, pos)), quoted: false });
+        append(fields, { value: tsvUnescape(StringPrototypeSlice(text, start, pos)), quoted: false });
         pos++;
         start = pos;
       } else if (ch === '\r' || ch === '\n') {
-        fields.push({ value: tsvUnescape(text.slice(start, pos)), quoted: false });
+        append(fields, { value: tsvUnescape(StringPrototypeSlice(text, start, pos)), quoted: false });
         pos++;
         if (ch === '\r' && pos < end && text[pos] === '\n') pos++;
         return { fields, pos, consumed: true };
       } else pos++;
     }
-    fields.push({ value: tsvUnescape(text.slice(start, pos)), quoted: false });
+    append(fields, { value: tsvUnescape(StringPrototypeSlice(text, start, pos)), quoted: false });
     return { fields, pos, consumed: false };
   }
-  const tsvEmpty = (fields) => fields.length <= 1 && fields.every((f) => f.value === '');
+  const tsvEmpty = (fields) => fields.length === 0 || (fields.length === 1 && fields[0].value === '');
 
   // ---------------- parse ----------------
   function makeFormat(csv) {
@@ -105,7 +121,7 @@
     const isEmpty = csv ? csvEmpty : tsvEmpty;
     const record = (header, fields) => {
       const obj = {};
-      for (let i = 0; i < header.length; i++) obj[header[i].value] = i < fields.length ? fields[i].value : '';
+      for (let i = 0; i < header.length; i++) field(obj, header[i].value, i < fields.length ? fields[i].value : '');
       return obj;
     };
 
@@ -122,7 +138,7 @@
         rowNumber++;
         pos = r.pos;
         if (o.skipEmptyLines && isEmpty(r.fields)) continue;
-        out.push(r.fields);
+        append(out, r.fields);
       }
       return out;
     }
@@ -147,9 +163,9 @@
             for (let j = 0; j < header.length; j++) {
               const f = all[i][j];
               const context = csv ? { quoted: f !== undefined && f.quoted, row: i - 1, column: j } : { row: i - 1, column: j };
-              obj[header[j].value] = apply(fn, undefined, [header[j].value, f !== undefined ? f.value : '', context]);
+              field(obj, header[j].value, apply(fn, undefined, [header[j].value, f !== undefined ? f.value : '', context]));
             }
-            result.push(obj);
+            append(result, obj);
           }
           return result;
         }
@@ -165,8 +181,14 @@
         if (!csv && !o.headers) header = [];
       }
       if (fn !== undefined) {
-        for (const [i, fields] of rows(text, o).entries()) {
-          result.push(fields.map((f, j) => apply(fn, undefined, [j, f.value, csv ? { quoted: f.quoted, row: i, column: j } : { row: i, column: j }])));
+        const all = rows(text, o);
+        for (let i = 0; i < all.length; i++) {
+          const fields = all[i], values = [];
+          for (let j = 0; j < fields.length; j++) {
+            const f = fields[j];
+            append(values, apply(fn, undefined, [j, f.value, csv ? { quoted: f.quoted, row: i, column: j } : { row: i, column: j }]));
+          }
+          append(result, values);
         }
         return result;
       }
@@ -176,7 +198,7 @@
         rowNumber++;
         pos = r.pos;
         if (o.skipEmptyLines && isEmpty(r.fields)) continue;
-        result.push(o.headers ? record(header, r.fields) : r.fields.map((f) => f.value));
+        append(result, o.headers ? record(header, r.fields) : valuesOf(r.fields));
       }
       return result;
     }
@@ -211,7 +233,7 @@
         rowNumber++;
         pos = r.pos;
         if (o.skipEmptyLines && isEmpty(r.fields)) { resume = pos; continue; }
-        values.push(o.headers && header !== undefined ? record(header, r.fields) : r.fields.map((f) => f.value));
+        append(values, o.headers && header !== undefined ? record(header, r.fields) : valuesOf(r.fields));
         resume = pos;
       }
       return result(end, true);
@@ -219,20 +241,27 @@
 
     // ---------------- stringify ----------------
     const escape = csv
-      ? (s, d) => (s.includes(d) || s.includes('"') || s.includes('\n') || s.includes('\r') ? '"' + s.split('"').join('""') + '"' : s)
-      : (s) => s.split('\\').join('\\\\').split('\t').join('\\t').split('\n').join('\\n').split('\r').join('\\r');
+      ? (s, d) => (StringPrototypeIncludes(s, d) || StringPrototypeIncludes(s, '"') || StringPrototypeIncludes(s, '\n') || StringPrototypeIncludes(s, '\r') ? '"' + replaceAll(s, '"', '""') + '"' : s)
+      : (s) => replaceAll(replaceAll(replaceAll(replaceAll(s, '\\', '\\\\'), '\t', '\\t'), '\n', '\\n'), '\r', '\\r');
     function replaceRows(data, fn) {
       const out = [];
       if (data.length > 0 && isPlainRecord(data[0])) {
-        const keys = Object.getOwnPropertyNames(data[0]);
-        for (const item of data) {
+        const keys = getOwnPropertyNames(data[0]);
+        for (let i = 0; i < data.length; i++) {
+          const item = data[i];
           if (item === null || typeof item !== 'object') continue;
           const o = {};
-          for (const k of keys) o[k] = apply(fn, undefined, [k, item[k]]);
-          out.push(o);
+          for (let k = 0; k < keys.length; k++) field(o, keys[k], apply(fn, undefined, [keys[k], item[keys[k]]]));
+          append(out, o);
         }
       } else {
-        for (const row of data) if (isArray(row)) out.push(row.map((v, j) => apply(fn, undefined, [j, v])));
+        for (let i = 0; i < data.length; i++) {
+          const row = data[i];
+          if (!isArray(row)) continue;
+          const r = [];
+          for (let j = 0; j < row.length; j++) append(r, apply(fn, undefined, [j, row[j]]));
+          append(out, r);
+        }
       }
       return out;
     }
@@ -246,16 +275,24 @@
       const d = csv ? o.delimiter : '\t';
       const lines = [];
       if (isPlainRecord(rows[0]) && o.headers) {
-        const keys = Object.getOwnPropertyNames(rows[0]);
-        lines.push(keys.map((k) => escape(k, d)).join(d));
-        for (const item of rows) {
+        const keys = getOwnPropertyNames(rows[0]);
+        const line = (cell, length) => { let s = ''; for (let j = 0; j < length; j++) s += (j > 0 ? d : '') + cell(j); return s; };
+        append(lines, line((j) => escape(keys[j], d), keys.length));
+        for (let i = 0; i < rows.length; i++) {
+          const item = rows[i];
           if (item === null || typeof item !== 'object') continue;
-          lines.push(keys.map((k) => { const v = item[k]; return v === undefined ? '' : escape(String(v), d); }).join(d));
+          append(lines, line((j) => { const v = item[keys[j]]; return v === undefined ? '' : escape(String(v), d); }, keys.length));
         }
       } else {
-        for (const row of rows) if (isArray(row)) lines.push(Array.from(row, (v) => escape(String(v), d)).join(d));
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          if (!isArray(row)) continue;
+          let s = '';
+          for (let j = 0; j < row.length; j++) s += (j > 0 ? d : '') + escape(String(row[j]), d);
+          append(lines, s);
+        }
       }
-      return lines.join('\n');
+      return ArrayPrototypeJoin(lines, '\n');
     }
     return { parse, parseChunk, stringify };
   }
@@ -267,7 +304,7 @@
   const indexed = (rowsOf) => (text) => {
     const records = rowsOf(text);
     const out = [];
-    for (let i = 0; i < records.length; i++) out.push(String(i), records[i]);
+    for (let i = 0; i < records.length; i++) { append(out, String(i)); append(out, records[i]); }
     return shared.exportList(out);
   };
   shared.dataFormats['.csv'] = indexed((t) => csvModule.parse(t));

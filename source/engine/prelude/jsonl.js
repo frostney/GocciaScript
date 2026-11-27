@@ -5,12 +5,25 @@
 // module and the file format.
 (function (G, n, shared) {
   'use strict';
-  const decoder = new G.TextDecoder();
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the parser
+  const { TypeError, SyntaxError, String, Number, Uint8Array } = G;
+  const NumberIsNaN = Number.isNaN, MathTrunc = Math.trunc, JSONParse = JSON.parse, defineProperty = Object.defineProperty;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeIncludes = uncurryThis(String.prototype.includes), StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeTrim = uncurryThis(String.prototype.trim);
+  const RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  const TAP = Object.getPrototypeOf(Uint8Array.prototype);
+  const TypedArrayPrototypeSubarray = uncurryThis(TAP.subarray);
+  const taLength = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'length').get);
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const decoder = new G.TextDecoder(), decode = uncurryThis(G.TextDecoder.prototype.decode);
 
   // whether text could still become a JSON text by appending to it (it ends inside a value)
   function isJSONPrefix(text) {
     let i = 0;
-    const ws = () => { while (i < text.length && ' \t\n\r'.includes(text[i])) i++; };
+    const ws = () => { while (i < text.length && StringPrototypeIncludes(' \t\n\r', text[i])) i++; };
     const EOF = {};
     function value() {
       ws();
@@ -51,7 +64,9 @@
         }
       }
       if (c === '"') { string(); return; }
-      for (const w of ['true', 'false', 'null']) {
+      const words = ['true', 'false', 'null'];
+      for (let wi = 0; wi < words.length; wi++) {
+        const w = words[wi];
         if (w[0] === c) {
           for (let k = 0; k < w.length; k++) {
             if (i >= text.length) throw EOF;
@@ -62,7 +77,7 @@
         }
       }
       if (c === '-' || (c >= '0' && c <= '9')) {
-        const m = /^-?(0|[1-9][0-9]*)?(\.[0-9]*)?([eE][+-]?[0-9]*)?/.exec(text.slice(i));
+        const m = RegExpPrototypeExec(/^-?(0|[1-9][0-9]*)?(\.[0-9]*)?([eE][+-]?[0-9]*)?/, StringPrototypeSlice(text, i));
         i += m[0].length;
         if (i >= text.length) throw EOF;
         return;
@@ -85,34 +100,38 @@
   // the input as units: a string's code units or a Uint8Array's bytes
   function source(input, what) {
     if (typeof input === 'string') {
-      return { length: input.length, at: (i) => input.charCodeAt(i), slice: (a, b) => input.slice(a, b),
-        bom: input.charCodeAt(0) === 0xFEFF ? 1 : 0 };
+      return { length: input.length, at: (i) => StringPrototypeCharCodeAt(input, i), slice: (a, b) => StringPrototypeSlice(input, a, b),
+        bom: StringPrototypeCharCodeAt(input, 0) === 0xFEFF ? 1 : 0 };
     }
     if (input instanceof Uint8Array) {
-      const bom = input.length >= 3 && input[0] === 0xEF && input[1] === 0xBB && input[2] === 0xBF ? 3 : 0;
-      return { length: input.length, at: (i) => input[i], slice: (a, b) => decoder.decode(input.subarray(a, b)), bom };
+      const length = taLength(input);
+      const bom = length >= 3 && input[0] === 0xEF && input[1] === 0xBB && input[2] === 0xBF ? 3 : 0;
+      return { length, at: (i) => input[i], slice: (a, b) => decode(decoder, TypedArrayPrototypeSubarray(input, a, b)), bom };
     }
     throw new TypeError(`JSONL.${what}: first argument must be a string or a Uint8Array`);
   }
   const offset = (v, len) => {
     const x = Number(v);
-    if (Number.isNaN(x) || x === -Infinity) return 0;
+    if (NumberIsNaN(x) || x === -Infinity) return 0;
     if (x === Infinity) return len;
-    const t = Math.trunc(x);
+    const t = MathTrunc(x);
     return t < 0 ? 0 : t > len ? len : t;
   };
 
   // the lines in [start, end): each { from, to (content end), next (after the line break), last (no break) }
-  function* lines(src, start, end) {
+  // (a list, not a generator: iterating one would look up the generator prototype's next)
+  function lines(src, start, end) {
+    const out = [];
     let pos = start;
     while (pos < end) {
       let e = pos;
       while (e < end && src.at(e) !== 10 && src.at(e) !== 13) e++;
       let next = e;
       if (e < end) { next = e + 1; if (src.at(e) === 13 && next < end && src.at(next) === 10) next++; }
-      yield { from: pos, to: e, next, last: e >= end };
+      append(out, { from: pos, to: e, next, last: e >= end });
       pos = next;
     }
+    return out;
   }
   function lineError(lineNumber, e) { return new SyntaxError(`JSONL line ${lineNumber}: ${e.message}`); }
 
@@ -121,11 +140,13 @@
     const src = source(input, 'parse');
     const out = [];
     let lineNumber = 0;
-    for (const l of lines(src, src.bom, src.length)) {
+    const all = lines(src, src.bom, src.length);
+    for (let k = 0; k < all.length; k++) {
+      const l = all[k];
       lineNumber++;
       const text = src.slice(l.from, l.to);
-      if (text.trim() === '') continue;
-      try { out.push(JSON.parse(text)); } catch (e) { throw lineError(lineNumber, e); }
+      if (StringPrototypeTrim(text) === '') continue;
+      try { append(out, JSONParse(text)); } catch (e) { throw lineError(lineNumber, e); }
     }
     return out;
   }
@@ -139,17 +160,19 @@
     if (from === 0) from = src.bom;
     const values = [];
     let read = from, lineNumber = 0;
-    for (const l of lines(src, from, to)) {
+    const all = lines(src, from, to);
+    for (let k = 0; k < all.length; k++) {
+      const l = all[k];
       lineNumber++;
       const text = src.slice(l.from, l.to);
-      if (text.trim() === '') { read = l.to; continue; }
+      if (StringPrototypeTrim(text) === '') { read = l.to; continue; }
       let v;
-      try { v = JSON.parse(text); }
+      try { v = JSONParse(text); }
       catch (e) {
-        if (l.last && isJSONPrefix(text.trim())) return { values, read, done: false, error: null };
+        if (l.last && isJSONPrefix(StringPrototypeTrim(text))) return { values, read, done: false, error: null };
         return { values, read, done: false, error: lineError(lineNumber, e) };
       }
-      values.push(v);
+      append(values, v);
       read = l.to;
     }
     return { values, read: to, done: true, error: null };
@@ -161,7 +184,7 @@
   shared.dataFormats['.jsonl'] = (text) => {
     const records = parse(text);
     const out = [];
-    for (let i = 0; i < records.length; i++) out.push(String(i), records[i]);
+    for (let i = 0; i < records.length; i++) { append(out, String(i)); append(out, records[i]); }
     return shared.exportList(out);
   };
 })

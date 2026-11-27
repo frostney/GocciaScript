@@ -43,7 +43,7 @@
   const TypedArrayPrototypeSet = uncurryThis(TAP.set);
   const taTag = uncurryThis(getter(TAP, SymToStringTag));
   const taBuffer = uncurryThis(getter(TAP, 'buffer')), taByteOffset = uncurryThis(getter(TAP, 'byteOffset'));
-  const taByteLength = uncurryThis(getter(TAP, 'byteLength'));
+  const taByteLength = uncurryThis(getter(TAP, 'byteLength')), taLength = uncurryThis(getter(TAP, 'length'));
   const dvBuffer = uncurryThis(getter(DVP, 'buffer')), dvByteOffset = uncurryThis(getter(DVP, 'byteOffset'));
   const dvByteLength = uncurryThis(getter(DVP, 'byteLength'));
   // a typed array's or DataView's buffer, offset and length, read from its internal slots
@@ -136,7 +136,7 @@
       for (let i = 0; i < pieces.length; i++) {
         const p = pieces[i];
         let len;
-        if (p.blob !== undefined) len = p.blob.length;
+        if (p.blob !== undefined) len = taLength(p.blob);
         else if (p.buffer !== undefined) len = apply(abDetached, p.buffer, []) ? 0 : apply(abByteLength, p.buffer, []);
         else if (p.view !== undefined) {
           const v = p.view, buffer = viewBuffer(v);
@@ -166,11 +166,11 @@
     static #check(b, what) {
       if (!isObject(b) || !(#bytes in b)) throw new TypeError(`Failed to execute '${what}' on 'Blob': Illegal invocation`);
     }
-    get size() { Blob.#check(this, 'size'); return this.#bytes.length; }
+    get size() { Blob.#check(this, 'size'); return taLength(this.#bytes); }
     get type() { Blob.#check(this, 'type'); return this.#type; }
     slice(start = undefined, end = undefined, contentType = undefined) {
       Blob.#check(this, 'slice');
-      const len = this.#bytes.length;
+      const len = taLength(this.#bytes);
       const rel = (v, d) => {
         if (v === undefined) return d;
         // Web IDL [Clamp] long long: clamped, then rounded to the nearest integer, ties to even
@@ -196,11 +196,11 @@
     }
     arrayBuffer() {
       try { Blob.#check(this, 'arrayBuffer'); } catch (e) { return PromiseReject(e); }
-      return PromiseResolve(taBuffer(sliceBytes(this.#bytes, 0, this.#bytes.length)));
+      return PromiseResolve(taBuffer(sliceBytes(this.#bytes, 0, taLength(this.#bytes))));
     }
     bytes() {
       try { Blob.#check(this, 'bytes'); } catch (e) { return PromiseReject(e); }
-      return PromiseResolve(sliceBytes(this.#bytes, 0, this.#bytes.length));
+      return PromiseResolve(sliceBytes(this.#bytes, 0, taLength(this.#bytes)));
     }
     static {
       blobBytes = (b) => (isObject(b) && #bytes in b ? b.#bytes : undefined);
@@ -337,7 +337,7 @@
   function extractBody(body) {
     if (body === null || body === undefined) return { bytes: null, type: null };
     const bb = blobBytes(body);
-    if (bb !== undefined) return { bytes: sliceBytes(bb, 0, bb.length), type: blobType(body) === '' ? null : blobType(body) };
+    if (bb !== undefined) return { bytes: sliceBytes(bb, 0, taLength(bb)), type: blobType(body) === '' ? null : blobType(body) };
     if (isAB(body)) return { bytes: copyBytes(body, 0, apply(abByteLength, body, [])), type: null };
     if (isView(body)) return { bytes: copyBytes(viewBuffer(body), viewOffset(body), viewLength(body)), type: null };
     if (body instanceof URLSearchParamsCtor) return { bytes: utf8(searchParamsToString(body)), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
@@ -395,8 +395,8 @@
       try { const t = decode(this.#consume('json')); return PromiseResolve(JSONParse(t)); }
       catch (e) { return PromiseReject(e); }
     }
-    arrayBuffer() { try { const b = this.#consume('arrayBuffer'); return PromiseResolve(taBuffer(sliceBytes(b, 0, b.length))); } catch (e) { return PromiseReject(e); } }
-    bytes() { try { const b = this.#consume('bytes'); return PromiseResolve(sliceBytes(b, 0, b.length)); } catch (e) { return PromiseReject(e); } }
+    arrayBuffer() { try { const b = this.#consume('arrayBuffer'); return PromiseResolve(taBuffer(sliceBytes(b, 0, taLength(b)))); } catch (e) { return PromiseReject(e); } }
+    bytes() { try { const b = this.#consume('bytes'); return PromiseResolve(sliceBytes(b, 0, taLength(b))); } catch (e) { return PromiseReject(e); } }
     blob() {
       try {
         const bytes = this.#consume('blob');
@@ -409,7 +409,7 @@
       Response.#check(this, 'clone');
       if (this.#used) throw new TypeError("Failed to execute 'clone' on 'Response': Response body is already used");
       const r = new Response(null, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
-      r.#body = this.#body === null ? null : sliceBytes(this.#body, 0, this.#body.length);
+      r.#body = this.#body === null ? null : sliceBytes(this.#body, 0, taLength(this.#body));
       r.#type = this.#type; r.#url = this.#url; r.#redirected = this.#redirected;
       return r;
     }
