@@ -681,7 +681,13 @@ begin
     ActiveNativeFactories.Add(Marker);
     try
       Exp := VUndefined;
-      if Factory(Exp) then Result := 1 else Result := -1;
+      if Factory(Exp) then Result := 1
+      else
+      begin
+        if Pending = VUndefined then
+          ThrowTypeError('The native module factory for ' + Key + ' failed without an error');
+        Result := -1;
+      end;
     finally
       I := ActiveNativeFactories.IndexOf(Marker);
       if I >= 0 then ActiveNativeFactories.Delete(I);
@@ -1285,6 +1291,12 @@ begin
   if not Assigned(Factory) then
   begin
     Err := 'Native module factory is required';
+    Exit;
+  end;
+  { the goccia: namespace is the runtime's, including modules a test or bench host installs later }
+  if Copy(Specifier, 1, 7) = 'goccia:' then
+  begin
+    Err := 'Native module specifier must not use the runtime''s goccia: namespace';
     Exit;
   end;
   if FindHostModuleKey(Specifier, Registered, True) then

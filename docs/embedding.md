@@ -369,12 +369,15 @@ A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant
 
 `TGocciaEngine.DefineNativeModule(Specifier, Factory, Err)` registers a native implementation under a virtual
 address such as `host:sample`. Configure the engine first and register on its owning thread before running
-source or an artifact. Registration refuses an existing module key. It also works with `Bare`.
+source or an artifact. Registration refuses an existing module key and the runtime's `goccia:` namespace, including the modules a test or
+bench host installs later. It also works with `Bare`.
 
 The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
-loads. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
+loads: while the import graph loads, before any module in it evaluates, even if linking the graph fails afterwards and
+under `import defer` too. A factory with side effects must not rely on another module of the same graph having run. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
 string. Build the list with `NewArray` and `ArrayPush` and release temporary roots after setting `ExportList`.
-Return `False` with a pending error when initialization fails; a later import calls the factory again. The module
+Return `False` with a pending error when initialization fails, and never let a Pascal exception escape the callback;
+`False` with nothing pending fails the import with a `TypeError`. A later import calls the factory again. The module
 loader retains the exports for that realm, and repeated imports use the same namespace object. A load that reaches
 the same module in the same realm while its factory is still running fails with a `TypeError` instead of calling
 the factory again. Keep the callback's owner live until the engine is

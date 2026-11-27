@@ -927,7 +927,7 @@ begin
     if SourceOnly and NativeModuleHasNoSource(Resolved) then
     begin
       M.RequestsState := 0;
-      Exit(ThrowError('SyntaxError', NoSourcePhaseRepresentation));
+      Exit(ThrowError('SyntaxError', 'Module source is not available for "' + M.Info.Requests[I] + '"'));
     end;
     if not LoadModule(Resolved, D) then
     begin

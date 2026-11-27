@@ -18,6 +18,7 @@ type
     function CreateExports(var AExports: TValue): Boolean;
     function InvalidExports(var AExports: TValue): Boolean;
     function MissingExports(var AExports: TValue): Boolean;
+    function SilentFailure(var AExports: TValue): Boolean;
     function CyclicExports(var AExports: TValue): Boolean;
   end;
 
@@ -58,6 +59,11 @@ begin
     PopRoots(1);
   end;
   Result := True;
+end;
+
+function TFactory.SilentFailure(var AExports: TValue): Boolean;
+begin
+  Result := False;
 end;
 
 function TFactory.MissingExports(var AExports: TValue): Boolean;
@@ -154,7 +160,8 @@ begin
     Check(not RunResult.Ok and (Factory.Calls = 0), 'a typed import ran a native factory');
     RunResult := Engine.Run('static-source.mjs', 'import source original from "host:sample"; original;');
     Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError') and (Factory.Calls = 0) and
-      (Pos('no source phase representation', RunResult.ErrorText) > 0), 'a static source import ran a native factory');
+      (Pos('Module source is not available for "host:sample"', RunResult.ErrorText) > 0),
+      'a static source import ran a native factory: ' + RunResult.ErrorText);
     RunResult := Engine.Run('dynamic-source.mjs',
       'await import.source("host:sample").then(() => false, e => e instanceof SyntaxError);');
     Check(RunResult.Ok and (RunResult.ResultText = 'true') and (Factory.Calls = 0), 'a dynamic source import ran a native factory');
@@ -177,6 +184,11 @@ begin
       'import source original from "host:mixed"; import { answer } from "host:mixed"; answer;');
     Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError') and (Factory.Calls = 2),
       'a mixed request lost its evaluation lookup');
+    Check(Engine.DefineNativeModule('host:silent', Factory.SilentFailure, ErrorText), ErrorText);
+    RunResult := Engine.Run('silent-failure.mjs',
+      'await import("host:silent").then(() => "loaded", e => e instanceof TypeError && e.message);');
+    Check(RunResult.Ok and (Pos('failed without an error', RunResult.ResultText) > 0),
+      'a factory that failed without an error was not reported: ' + RunResult.ResultText + RunResult.ErrorMessage);
     Check(Engine.DefineNativeModule('host:no-output', Factory.MissingExports, ErrorText), ErrorText);
     RunResult := Engine.Run('missing-exports.mjs',
       'await import("host:no-output").then(() => false, e => e instanceof TypeError);');
@@ -209,12 +221,14 @@ begin
   Engine := TGocciaEngine.Create;
   try
     Engine.TestMode := True;
-    Check(Engine.DefineNativeModule('goccia:test', Factory.CreateExports, ErrorText), ErrorText);
-    Check(not InstallTestingAPI(ErrorText) and (Pos('goccia:test', ErrorText) > 0), ErrorText);
-    Check(Engine.DefineNativeModule('goccia:microbench', Factory.CreateExports, ErrorText), ErrorText);
-    Check(not InstallBenchmarkAPI(ErrorText) and (Pos('goccia:microbench', ErrorText) > 0), ErrorText);
+    Check(not Engine.DefineNativeModule('goccia:test', Factory.CreateExports, ErrorText) and
+      (Pos('goccia:', ErrorText) > 0), 'a native module took the test host''s goccia:test');
+    Check(InstallTestingAPI(ErrorText), ErrorText);
+    Check(not Engine.DefineNativeModule('goccia:microbench', Factory.CreateExports, ErrorText) and
+      (Pos('goccia:', ErrorText) > 0), 'a native module took the bench host''s goccia:microbench');
+    Check(InstallBenchmarkAPI(ErrorText), ErrorText);
     Check(not Engine.DefineInlineVirtualModule('goccia:microbench=export const value = 1;', '', ErrorText) and
-      (Pos('conflicts with a registered host module', ErrorText) > 0), ErrorText);
+      (Pos('conflicts with a registered runtime module', ErrorText) > 0), ErrorText);
     Check(Factory.Calls = 0, 'rejecting a conflicting registration ran the factory');
   finally
     Engine.Free;
