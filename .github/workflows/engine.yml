@@ -163,6 +163,23 @@ jobs:
       - name: Execution limits
         run: bash scripts/engine/limits-test.sh build/engine/goccia
 
+      - name: Install the JIT permissions trace tool
+        run: |
+          if ! command -v strace >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y strace
+          fi
+
+      - name: JIT code is read-execute and released at engine teardown
+        env:
+          GOCCIA_JIT: "1"
+          GOCCIA_OPT: "0"
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/jit-permissions-test scripts/engine/jit-permissions-test.pas
+          timeout 20 strace -o build/jit-permissions.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
+          python3 scripts/engine/check-jit-publication.py build/jit-permissions.strace
+
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
