@@ -7328,7 +7328,9 @@ begin
 end;
 
 { whether O is uncurryThis(f) for a native f other than Function.prototype.call: Function.prototype.call.bind(f) with
-  no bound arguments (the preludes' captured prototype methods), which FastLoop's opCall calls as f.call }
+  no bound arguments (the preludes' captured prototype methods), which the JIT's call paths call as f.call. FastLoop
+  leaves such a call to Execute: on x86_64-darwin any further code in its opCall breaks the test runner's files that
+  follow a ShadowRealm's (#2232) }
 function XUncurriedNative(O: PObj): Boolean; inline;
 var B: PValueArray;
 begin
@@ -8201,28 +8203,6 @@ LSetPropSlow:
           O := ObjOf(VA);
           Argc := PWord(PByte(IP) - 5)^;
           if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
-          if (O^.OKind = okBound) and XUncurriedNative(O) then
-          begin
-            { uncurryThis(f)(t, ...args) for a native f: the registers shift down a place, f the callee and t its
-              this, and f is called here, as f.call(t, ...args) is below }
-            VA := PValueArray(PtrOf(O^.Aux2))^.Data[0];
-            R[A] := VA;
-            if Argc = 0 then R[A + 1] := VUndefined
-            else
-            begin
-              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
-              Dec(Argc);
-            end;
-            O := ObjOf(VA);
-            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
-            if not XFastNative(O, R, A, (PQWord(IP)[-1] and not ((QWord($FFFF) shl 24) or (QWord(1) shl 40))) or
-              (QWord(Argc) shl 24), Fr) then
-            begin
-              InjectThrow := True;
-              Exit(-1);
-            end;
-            Continue;
-          end;
           if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
           begin
             { f.call(t, ...args) with the intrinsic call (as Execute's opCall): the registers shift down a place, f
