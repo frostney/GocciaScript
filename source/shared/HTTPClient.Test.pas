@@ -226,12 +226,15 @@ begin
   end;
 end;
 
-{ A TCP listener on an ephemeral loopback port. }
-function CreateLoopbackListener(out APort: Word;
-  const ARequestedPort: Word = 0; const AListen: Boolean = True): cint;
+{ A TCP socket bound to 127.0.0.1 on ARequestedPort, or on an ephemeral
+  port for 0, and listening when AListen. -1 when another socket already
+  holds ARequestedPort on 127.0.0.1. }
+function TryCreateLoopbackListener(out APort: Word;
+  const ARequestedPort: Word; const AListen: Boolean): cint;
 var
   Address: TInetSockAddr;
   AddressLength: TSockLen;
+  BindError: cint;
 begin
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
@@ -241,8 +244,15 @@ begin
   Address.sin_port := htons(ARequestedPort);
   Address.sin_addr := StrToNetAddr('127.0.0.1');
   AddressLength := SizeOf(Address);
-  if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
-     (AListen and (fpListen(Result, 1) <> 0)) or
+  if fpBind(Result, @Address, SizeOf(Address)) <> 0 then
+  begin
+    BindError := SocketError;
+    CloseSocket(Result);
+    if BindError = ESysEADDRINUSE then
+      Exit(-1);
+    raise Exception.Create('loopback listener failed');
+  end;
+  if (AListen and (fpListen(Result, 1) <> 0)) or
      (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
   begin
     CloseSocket(Result);
@@ -251,27 +261,86 @@ begin
   APort := ntohs(Address.sin_port);
 end;
 
+{ A TCP socket on an ephemeral 127.0.0.1 port, listening unless AListen is
+  False. }
+function CreateLoopbackListener(out APort: Word;
+  const AListen: Boolean = True): cint;
+begin
+  Result := TryCreateLoopbackListener(APort, 0, AListen);
+  if Result < 0 then
+    raise Exception.Create('loopback listener failed');
+end;
+
+{ Closes a server's listener unless it was never opened. Each server sets
+  its listener to -1 before anything in its constructor can raise: left at
+  its initial 0, it would close the process's standard input. }
+procedure CloseListener(const AListener: cint);
+begin
+  if AListener >= 0 then
+    CloseSocket(AListener);
+end;
+
 {$IFDEF LINUX}
-function CreateIPv6LoopbackListener(out APort: Word): cint;
+{ A TCP listener bound to ::1 on ARequestedPort. -1 when another socket
+  already holds that port on ::1. }
+function TryCreateIPv6LoopbackListener(const ARequestedPort: Word): cint;
 var
   Address: TInetSockAddr6;
-  AddressLength: TSockLen;
+  BindError: cint;
 begin
   Result := fpSocket(AF_INET6, SOCK_STREAM, 0);
   if Result < 0 then
     raise Exception.Create('IPv6 socket failed');
   FillChar(Address, SizeOf(Address), 0);
   Address.sin6_family := AF_INET6;
+  Address.sin6_port := htons(ARequestedPort);
   Address.sin6_addr := StrToNetAddr6('::1');
-  AddressLength := SizeOf(Address);
-  if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
-     (fpListen(Result, 1) <> 0) or
-     (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
+  if fpBind(Result, @Address, SizeOf(Address)) <> 0 then
+  begin
+    BindError := SocketError;
+    CloseSocket(Result);
+    if BindError = ESysEADDRINUSE then
+      Exit(-1);
+    raise Exception.Create('IPv6 loopback listener failed');
+  end;
+  if fpListen(Result, 1) <> 0 then
   begin
     CloseSocket(Result);
     raise Exception.Create('IPv6 loopback listener failed');
   end;
-  APort := ntohs(Address.sin6_port);
+end;
+
+{ Binds 127.0.0.1 and ::1 on one port number, so a client that resolves
+  localhost to both reaches either address on the same port. ::1 listens;
+  127.0.0.1 listens only when AListenIPv4, so without it a connection there
+  is refused. The kernel picks the IPv4 port, one that nothing on 127.0.0.1
+  holds, where a test run's other sockets are. ::1 then takes the same
+  number, and a pair whose IPv6 half is taken is dropped and a fresh one
+  tried, up to ATTEMPTS times. }
+procedure CreateLoopbackPortPair(out AIPv4Listener, AIPv6Listener: cint;
+  out APort: Word; const AListenIPv4: Boolean);
+const
+  ATTEMPTS = 1000;
+var
+  Attempt: Integer;
+begin
+  for Attempt := 1 to ATTEMPTS do
+  begin
+    AIPv4Listener := TryCreateLoopbackListener(APort, 0, AListenIPv4);
+    if AIPv4Listener < 0 then
+      raise Exception.Create('loopback listener failed');
+    try
+      AIPv6Listener := TryCreateIPv6LoopbackListener(APort);
+    except
+      CloseSocket(AIPv4Listener);
+      raise;
+    end;
+    if AIPv6Listener >= 0 then
+      Exit;
+    CloseSocket(AIPv4Listener);
+  end;
+  raise Exception.CreateFmt(
+    'found no port free on both 127.0.0.1 and ::1 in %d tries', [ATTEMPTS]);
 end;
 {$ENDIF}
 
@@ -395,8 +464,12 @@ end;
 destructor TResettableServer.Destroy;
 begin
   inherited Destroy;
-  RTLEventDestroy(FResetNow);
-  RTLEventDestroy(FResetDone);
+  { A descendant constructor that raises before it calls this one leaves
+    both events unset. }
+  if FResetNow <> nil then
+    RTLEventDestroy(FResetNow);
+  if FResetDone <> nil then
+    RTLEventDestroy(FResetDone);
 end;
 
 procedure TResettableServer.RequestReset;
@@ -479,6 +552,7 @@ constructor TCannedResponseServer.Create(
 var
   I: Integer;
 begin
+  FListener := -1;
   SetLength(FResponses, Length(AResponses));
   SetLength(FRequestHeads, Length(AResponses));
   for I := 0 to High(AResponses) do
@@ -489,7 +563,7 @@ end;
 
 destructor TCannedResponseServer.Destroy;
 begin
-  CloseSocket(FListener);
+  CloseListener(FListener);
   inherited Destroy;
 end;
 
@@ -668,13 +742,14 @@ end;
 
 constructor TTricklingTLSServer.Create;
 begin
+  FListener := -1;
   FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
 
 destructor TTricklingTLSServer.Destroy;
 begin
-  CloseSocket(FListener);
+  CloseListener(FListener);
   inherited Destroy;
 end;
 
@@ -857,6 +932,7 @@ type
 
 constructor TSilentTLSServer.Create(const ACertificateFile, AKeyFile: string);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FRelease := RTLEventCreate;
@@ -866,8 +942,9 @@ end;
 
 destructor TSilentTLSServer.Destroy;
 begin
-  CloseSocket(FListener);
-  RTLEventDestroy(FRelease);
+  CloseListener(FListener);
+  if FRelease <> nil then
+    RTLEventDestroy(FRelease);
   inherited Destroy;
 end;
 
@@ -1386,7 +1463,7 @@ var
   Port: Word;
   I: Integer;
 begin
-  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port, 0, False));
+  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port, False));
   for I := 0 to High(Fillers) do
     Fillers[I] := -1;
   try
@@ -1586,6 +1663,7 @@ type
 constructor TResettingTLSServer.Create(const ACertificateFile,
   AKeyFile: string; const AResetBeforeNextRequest: Boolean);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FResetBeforeNextRequest := AResetBeforeNextRequest;
@@ -1595,7 +1673,7 @@ end;
 
 destructor TResettingTLSServer.Destroy;
 begin
-  CloseSocket(FListener);
+  CloseListener(FListener);
   inherited Destroy;
 end;
 
@@ -1752,6 +1830,7 @@ type
 constructor TAnsweringTLSServer.Create(const ACertificateFile,
   AKeyFile: string; const AConnections: Integer);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FConnections := AConnections;
@@ -1761,7 +1840,7 @@ end;
 
 destructor TAnsweringTLSServer.Destroy;
 begin
-  CloseSocket(FListener);
+  CloseListener(FListener);
   inherited Destroy;
 end;
 
@@ -2448,31 +2527,43 @@ type
     Port: Word;
     Connections: Integer;
     Served: Integer;
-    constructor Create(const AResponses: array of RawByteString
-      {$IFDEF LINUX}; const AIPv6: Boolean = False{$ENDIF});
+    { Serves on an ephemeral 127.0.0.1 port. }
+    constructor Create(const AResponses: array of RawByteString); overload;
+    { Serves on AListener, a listening socket on APort, which it takes over:
+      AListener is -1 once this constructor runs, and the server closes the
+      socket when freed, also when this constructor raises. }
+    constructor Create(const AResponses: array of RawByteString;
+      var AListener: cint; const APort: Word); overload;
     destructor Destroy; override;
   end;
 
-constructor TKeepAliveServer.Create(const AResponses: array of RawByteString
-  {$IFDEF LINUX}; const AIPv6: Boolean{$ENDIF});
+constructor TKeepAliveServer.Create(
+  const AResponses: array of RawByteString);
+var
+  Listener: cint;
+begin
+  FListener := -1;
+  Listener := CreateLoopbackListener(Port);
+  Create(AResponses, Listener, Port);
+end;
+
+constructor TKeepAliveServer.Create(const AResponses: array of RawByteString;
+  var AListener: cint; const APort: Word);
 var
   I: Integer;
 begin
+  FListener := AListener;
+  AListener := -1;
+  Port := APort;
   SetLength(FResponses, Length(AResponses));
   for I := 0 to High(AResponses) do
     FResponses[I] := AResponses[I];
-  {$IFDEF LINUX}
-  if AIPv6 then
-    FListener := CreateIPv6LoopbackListener(Port)
-  else
-  {$ENDIF}
-    FListener := CreateLoopbackListener(Port);
   inherited Create;
 end;
 
 destructor TKeepAliveServer.Destroy;
 begin
-  CloseSocket(FListener);
+  CloseListener(FListener);
   inherited Destroy;
 end;
 
@@ -2862,18 +2953,19 @@ var
   Gate: THopGate;
   Policy: THTTPRequestPolicy;
   Server: TKeepAliveServer;
-  IPv4Listener: cint;
-  IPv4Port: Word;
+  IPv4Listener, IPv6Listener: cint;
+  Port: Word;
   DenyIPv4: Boolean;
 begin
   for DenyIPv4 := False to True do
   begin
-    Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE], True);
+    { With a grant, bind IPv4 without listening so it fails and IPv6
+      wins the race. Without a grant, a listening IPv4 socket would
+      reveal any connection attempted before the denial. }
+    CreateLoopbackPortPair(IPv4Listener, IPv6Listener, Port, DenyIPv4);
     try
-      { With a grant, bind IPv4 without listening so it fails and IPv6
-        wins the race. Without a grant, a listening IPv4 socket would
-        reveal any connection attempted before the denial. }
-      IPv4Listener := CreateLoopbackListener(IPv4Port, Server.Port, DenyIPv4);
+      Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE],
+        IPv6Listener, Port);
       try
         Gate := THopGate.Create;
         try
@@ -2892,10 +2984,13 @@ begin
           Gate.Free;
         end;
       finally
-        CloseSocket(IPv4Listener);
+        Server.Free;
       end;
     finally
-      Server.Free;
+      CloseSocket(IPv4Listener);
+      { Still open only when the server never took it over }
+      if IPv6Listener >= 0 then
+        CloseSocket(IPv6Listener);
     end;
   end;
 end;
