@@ -261,10 +261,12 @@ begin
   APort := ntohs(Address.sin_port);
 end;
 
-{ A TCP listener on an ephemeral 127.0.0.1 port. }
-function CreateLoopbackListener(out APort: Word): cint;
+{ A TCP socket on an ephemeral 127.0.0.1 port, listening unless AListen is
+  False. }
+function CreateLoopbackListener(out APort: Word;
+  const AListen: Boolean = True): cint;
 begin
-  Result := TryCreateLoopbackListener(APort, 0, True);
+  Result := TryCreateLoopbackListener(APort, 0, AListen);
   if Result < 0 then
     raise Exception.Create('loopback listener failed');
 end;
@@ -1461,7 +1463,7 @@ var
   Port: Word;
   I: Integer;
 begin
-  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port, 0, False));
+  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port, False));
   for I := 0 to High(Fillers) do
     Fillers[I] := -1;
   try
