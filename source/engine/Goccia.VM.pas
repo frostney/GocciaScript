@@ -452,6 +452,7 @@ function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): B
 { a mapped arguments object's parameter map (10.4.4): the upvalue of index Key, nil when unmapped }
 function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
 function ArgsMapGet(U: PUpval): TValue;
+function ArgsMapCheck(O: PObj; Idx: Int64; V: TValue): Boolean;
 procedure ArgsMapSet(U: PUpval; V: TValue);
 procedure ArgsUnmap(O: PObj; Idx: Int64);
 { [[Delete]] on an ordinary object (and the exotic ones the engine models in it): False for a non-configurable property }
@@ -2642,6 +2643,43 @@ begin
   if U^.StackIndex >= 0 then Result := VStack[U^.StackIndex] else Result := U^.Value;
 end;
 
+{ opCheckType: V has the strict type Code (types-as-comments; GocciaScript's Goccia.Types.Enforcement) }
+function XTypeOK(V: TValue; Code: QWord): Boolean; inline;
+begin
+  case Code of
+    TYPE_NUMBER: Result := IsNumber(V);
+    TYPE_BOOLEAN: Result := (V = VTrue) or (V = VFalse);
+    TYPE_STRING: Result := IsString(V);
+    TYPE_OBJECT: Result := IsObject(V);
+  else Result := True;
+  end;
+end;
+
+function XThrowTypeMismatch(V: TValue; Code: QWord): Boolean; noinline;
+var Got, Want: UnicodeString;
+begin
+  if V = VNull then Got := 'null' else Got := TypeOfStr(V);
+  case Code of
+    TYPE_NUMBER: Want := 'number';
+    TYPE_BOOLEAN: Want := 'boolean';
+    TYPE_STRING: Want := 'string';
+  else Want := 'object';
+  end;
+  Result := ThrowTypeError('Type ''' + Got + ''' is not assignable to type ''' + Want + '''');
+end;
+
+{ The compiler supplies one type code per index in Aux2, up to the last typed parameter. Only a live
+  mapping applies the code. Keeping it on the object also covers closed and suspended parameter cells. }
+function ArgsMapCheck(O: PObj; Idx: Int64; V: TValue): Boolean;
+var Types: PStr; Code: QWord;
+begin
+  if not IsString(O^.Aux2) then Exit(True);
+  Types := StrOf(O^.Aux2);
+  if Idx >= Types^.Len then Exit(True);
+  Code := Ord(StrChars(Types)[Idx]);
+  Result := XTypeOK(V, Code) or XThrowTypeMismatch(V, Code);
+end;
+
 procedure ArgsMapSet(U: PUpval; V: TValue);
 begin
   if U^.StackIndex >= 0 then VStack[U^.StackIndex] := V
@@ -3063,7 +3101,11 @@ begin
   if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 shr 48) = TAG_PTR_HI) then
   begin
     U := ArgsMapCell(O, Key, Idx);
-    if U <> nil then ArgsMapSet(U, V);
+    if U <> nil then
+    begin
+      if not ArgsMapCheck(O, Idx, V) then Exit(False);
+      ArgsMapSet(U, V);
+    end;
   end;
   if (O^.OKind = okArguments) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx >= O^.Elements^.Len))) then
   begin
@@ -6425,7 +6467,8 @@ var O: PObj; CI: Integer; Idx: Int64;
 begin
   O := ObjOf(Obj);
   if (O^.OKind = okArray) and IndexFromString(Key, Idx) then Exit(SetElemV(Obj, MkPtr(Key), V));
-  if O^.OKind in [okProxy, okModuleNS, okTypedArray, okArguments, okStringObj] then Exit(CreateDataHook(Obj, Key, V));
+  if O^.OKind in [okProxy, okModuleNS, okTypedArray, okArguments, okArgumentsOrd, okStringObj] then
+    Exit(CreateDataHook(Obj, Key, V));
   CI := ShapeLookup(O^.Shape, Key);
   if CI >= 0 then
   begin
@@ -8492,31 +8535,6 @@ begin
   SwitchRealm(R0);
 end;
 
-{ opCheckType: V has the strict type Code (types-as-comments; GocciaScript's Goccia.Types.Enforcement) }
-function XTypeOK(V: TValue; Code: QWord): Boolean; inline;
-begin
-  case Code of
-    TYPE_NUMBER: Result := IsNumber(V);
-    TYPE_BOOLEAN: Result := (V = VTrue) or (V = VFalse);
-    TYPE_STRING: Result := IsString(V);
-    TYPE_OBJECT: Result := IsObject(V);
-  else Result := True;
-  end;
-end;
-
-function XThrowTypeMismatch(V: TValue; Code: QWord): Boolean; noinline;
-var Got, Want: UnicodeString;
-begin
-  if V = VNull then Got := 'null' else Got := TypeOfStr(V);
-  case Code of
-    TYPE_NUMBER: Want := 'number';
-    TYPE_BOOLEAN: Want := 'boolean';
-    TYPE_STRING: Want := 'string';
-  else Want := 'object';
-  end;
-  Result := ThrowTypeError('Type ''' + Got + ''' is not assignable to type ''' + Want + '''');
-end;
-
 { opIntrinsic: Intrinsics[Idx](Args[0], ..., Args[Argc - 1]) }
 { 14.7.5.9 EnumerateObjectProperties, as its informative definition reads it: at its turn a key is visited when
   the first object on the chain with the key as an own property (V's own keys first) has it enumerable. A key
@@ -10531,6 +10549,13 @@ LReload:
           Fr^.PC := PC;
           XThrowTypeMismatch(R[A], I shr 40);
           goto LThrow;
+        end;
+      opMapArgTypes:
+        if IsObject(R[A]) and (ObjOf(R[A])^.OKind = okArgumentsOrd) then
+        begin
+          O := ObjOf(R[A]);
+          O^.Aux2 := K[I shr 40];
+          WriteBarrier(@O^.Hdr, O^.Aux2);
         end;
       opIntrinsic:
         begin
