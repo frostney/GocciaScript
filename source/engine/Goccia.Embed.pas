@@ -1156,7 +1156,6 @@ begin
     FArtifactEntry := False;
     FArtifactBytes := '';
     SetProvidedArtifact('', '', '');
-    SetScriptArtifact('', '');
   end;
 end;
 

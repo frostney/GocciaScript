@@ -189,6 +189,9 @@ jobs:
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
+      - name: A symlinked bytecode Script resolves import() from the real directory across runs
+        run: bash scripts/engine/script-artifact-imports-test.sh
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 

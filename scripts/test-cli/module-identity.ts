@@ -139,9 +139,27 @@ export function verifyModuleIdentity() {
       ]);
       symlinkSync(join(project, "fb", "lib.mjs"), join(project, "fa", "lib.mjs"));
       write("lib-main.mjs", ['import "./fa/lib.mjs";']);
+      write("virtual-lib-main.mjs", ['import "./fa/vlib.mjs";']);
       const libOutput = run(RUNNER, "lib-main.mjs", "--unsafe-shadowrealm");
       assert.ok(libOutput.includes("lib imports: real directory | real directory | real directory\n"), libOutput);
       assert.match(libOutput, /^lib meta: file:\/\/\S*\/fb\/lib\.mjs file:\/\/\S*\/fb\/sib\.mjs$/m, libOutput);
+
+      // A virtual module whose address is a symlink to another file resolves all three from its own address.
+      write("fb/vsib.mjs", ['export const who = "disk target";']);
+      write("fb/vlib.mjs", ['export const who = "disk module";']);
+      symlinkSync(join(project, "fb", "vlib.mjs"), join(project, "fa", "vlib.mjs"));
+      const virtualLib = join(project, "fa", "vlib.mjs");
+      const virtualOutput = run(
+        RUNNER, "virtual-lib-main.mjs", "--unsafe-shadowrealm",
+        "--module", `${virtualLib}=${[
+          'import { who } from "./vsib.mjs";',
+          'const dynamic = await import("./vsib.mjs");',
+          'const realm = await new ShadowRealm().importValue("./vsib.mjs", "who");',
+          'console.log("virtual imports:", who, "|", dynamic.who, "|", realm);',
+        ].join(" ")}`,
+        "--module", `${join(project, "fa", "vsib.mjs")}=export const who = "configured";`,
+      );
+      assert.ok(virtualOutput.includes("virtual imports: configured | configured | configured\n"), virtualOutput);
 
       write("fb/script.js", [
         'import { who } from "./sib.mjs";',

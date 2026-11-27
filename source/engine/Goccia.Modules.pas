@@ -148,9 +148,9 @@ function ResolvingSourcePhase: Boolean;
 { an entry module given as bytecode (a .gbc entry): Bytes load as the module keyed Path (its ArtifactModulePath)
   when RunModuleFile runs it; '' clears it }
 procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
-{ a Script entry given as bytecode, keyed Path (its ArtifactModulePath): its imports and import() calls resolve
-  from the real address a bytecode module there would have, beside the real bytecode file at GbcPath when no
-  source is there; '' clears it }
+{ a Script entry given as bytecode, keyed Path (its ArtifactModulePath): its imports and import() calls, its
+  closures' in later runs too, resolve from the real address a bytecode module there would have, beside the real
+  bytecode file at GbcPath when no source is there. The engine keeps it until its modules are released. }
 procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
 
 implementation
@@ -849,22 +849,31 @@ begin
 end;
 
 threadvar
-  ScriptArtifactPath, ScriptArtifactRealPath: UnicodeString;
+  { the Script entries run from bytecode (SetScriptArtifact): each one's key and real address, the latest run's for
+    a key run twice }
+  ScriptArtifactPaths, ScriptArtifactRealPaths: array of UnicodeString;
 
 procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
+var I: Integer;
 begin
-  ScriptArtifactPath := Path;
-  if Path = '' then ScriptArtifactRealPath := ''
-  else ScriptArtifactRealPath := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
+  I := 0;
+  while (I < Length(ScriptArtifactPaths)) and (ScriptArtifactPaths[I] <> Path) do Inc(I);
+  if I = Length(ScriptArtifactPaths) then
+  begin
+    SetLength(ScriptArtifactPaths, I + 1);
+    SetLength(ScriptArtifactRealPaths, I + 1);
+    ScriptArtifactPaths[I] := Path;
+  end;
+  ScriptArtifactRealPaths[I] := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
 end;
 
 { the real path a Script entry keyed Path resolves its imports from: '' when it names no host file }
 function ScriptRealPath(const Path: UnicodeString): UnicodeString;
-var P: UnicodeString;
+var I: Integer;
 begin
-  P := ScriptArtifactPath;
-  if (P <> '') and (P = Path) then Result := ScriptArtifactRealPath
-  else Result := HostRealFilePath(Path);
+  for I := 0 to High(ScriptArtifactPaths) do
+    if ScriptArtifactPaths[I] = Path then Exit(ScriptArtifactRealPaths[I]);
+  Result := HostRealFilePath(Path);
 end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
@@ -1992,12 +2001,21 @@ end;
 { the path an import() made by code with no module record of its own (a Script, a ShadowRealm's importValue)
   resolves from: the real path of the module or Script file its code is in, Ref itself when it names none }
 function ReferrerFilePath(const Ref: UnicodeString): UnicodeString;
-var M: TModRec; Real: UnicodeString;
+var M, Found: TModRec; Real: UnicodeString;
 begin
   Result := Ref;
   if (Ref = '') or (Ref[1] = '<') then Exit;
-  M := FindModuleByPath(Ref);
-  if M <> nil then Exit(M.Address.FilePath);
+  { the record of the code's module, in any realm: a ShadowRealm's importValue runs in the realm it evaluates in,
+    and the address is the same in each. The running realm's comes first. }
+  Found := nil;
+  if Mods <> nil then
+    for M in Mods do
+      if (M.Address.Path = Ref) and (M.Address.ModuleType = '') and not M.Superseded then
+      begin
+        Found := M;
+        if M.Realm = CurRealm then Break;
+      end;
+  if Found <> nil then Exit(Found.Address.FilePath);
   { a host module's key (goccia:, a URL) is never a file name, and a relative one is the script's as given }
   if not IsAbsoluteFilePath(Ref) and (Pos(':', Ref) > 0) then Exit;
   Real := ScriptRealPath(UnicodeString(ExpandFileName(string(Ref))));
@@ -2381,6 +2399,8 @@ begin
   if Mods <> nil then
     for I := 0 to Mods.Count - 1 do Mods[I].Free;
   FreeAndNil(Mods);
+  ScriptArtifactPaths := nil;
+  ScriptArtifactRealPaths := nil;
 end;
 
 procedure InitModules;
@@ -2422,6 +2442,7 @@ begin
   ParseFailSuggestion := '';
   SitePath := '';
   ProvidedArtifactPath := '';
+  ProvidedArtifactRealPath := '';
   ScriptImportKey := '';
 end;
 
