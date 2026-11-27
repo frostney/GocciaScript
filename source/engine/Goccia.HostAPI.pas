@@ -1930,21 +1930,13 @@ begin
   PopRoots(1);
 end;
 
-{ vitestSource(moduleOnly): the vitest compatibility shim's module source (Goccia.VitestShim.inc). The hosts that run
-  a test file (GocciaTestRunner, goccia --test) hoist vi.mock and vi.unmock out of it before it is parsed. The
-  module-only opt-in (moduleOnly true) has no such pass and no module mocks at all: vi.mock, vi.unmock and the members
-  that only make sense beside a module mock refuse with that reason instead of ignoring the call }
-function VitestShimSource(ModuleOnly: Boolean; out Src, Err: UnicodeString): Boolean;
+{ vitestSource(moduleOnly): the vitest compatibility shim's module source (Goccia.VitestShim.inc), with MODULE_ONLY
+  set for the module-only opt-in. The hosts that run a test file (GocciaTestRunner, goccia --test) hoist vi.mock and
+  vi.unmock out of it before it is parsed; the module-only opt-in has no such pass, and its shim refuses them }
+function VitestShimSource(ModuleOnly: Boolean): UnicodeString;
 const
   LB = #10;
-  Hoisted: array[0..1] of UnicodeString = ('  mock: hoistedDirective,' + LB, '  unmock: hoistedDirective,' + LB);
-  Refused: array[0..1] of UnicodeString = ('  mock: unsupported("mock", NOT_HOISTED),' + LB,
-    '  unmock: unsupported("unmock", NOT_HOISTED),' + LB);
-  { the reasons that describe factory-form vi.mock as supported }
-  MockReasons: array[0..2] of UnicodeString = ('DYNAMIC_MOCKING', 'NO_ACTUAL_MODULE', 'FACTORY_SCOPE');
-  NotHoisted = 'const NOT_HOISTED = "Module mocks need the pass that hoists them out of a test file before its " +' +
-    LB + '  "module graph loads, which GocciaTestRunner and goccia --test run and this host does not.";' + LB;
-var I, Start, Stop: Integer;
+  Flags: array[Boolean] of UnicodeString = ('const MODULE_ONLY = false;' + LB, 'const MODULE_ONLY = true;' + LB);
 
   function ShimSource: UnicodeString;
   begin
@@ -1952,40 +1944,12 @@ var I, Start, Stop: Integer;
   end;
 
 begin
-  Err := '';
-  Src := ShimSource;
-  Result := True;
-  if not ModuleOnly then Exit;
-  Result := False;
-  for I := 0 to High(Hoisted) do
-  begin
-    if Pos(Hoisted[I], Src) = 0 then
-    begin
-      Err := 'vitest shim lost its hoisted directive';
-      Exit;
-    end;
-    Src := StringReplace(Src, Hoisted[I], Refused[I], []);
-  end;
-  for I := 0 to High(MockReasons) do
-  begin
-    Start := Pos('const ' + MockReasons[I] + ' =', Src);
-    if Start > 0 then Stop := Pos(';' + LB, Src, Start) else Stop := 0;
-    if Stop = 0 then
-    begin
-      Err := 'vitest shim lost ' + MockReasons[I];
-      Exit;
-    end;
-    Src := Copy(Src, 1, Start - 1) + 'const ' + MockReasons[I] + ' = NOT_HOISTED;' + Copy(Src, Stop + 1, MaxInt);
-  end;
-  Src := NotHoisted + Src;
-  Result := True;
+  Result := Flags[ModuleOnly] + ShimSource;
 end;
 
 function Host_VitestSource(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var Src, Err: UnicodeString;
 begin
-  if not VitestShimSource((Argc >= 1) and (Args[1] = VTrue), Src, Err) then Exit(ThrowError('Error', Err));
-  Res := StrFromUnicode(Src);
+  Res := StrFromUnicode(VitestShimSource((Argc >= 1) and (Args[1] = VTrue)));
   Result := True;
 end;
 
