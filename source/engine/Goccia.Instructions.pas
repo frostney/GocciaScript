@@ -266,7 +266,7 @@ var
   { Goccia.Lazy's: frees a template's lazy stub (TFuncTemplate.Lazy), one a function never called still holds }
   FreeLazyStubHook: procedure(P: Pointer) = nil;
   { Goccia.VM's: frees what the baseline JIT and the optimizing tier made for a template (its entry tables, its
-    optimizing state); not its code, which stays in the JIT's chunks }
+    optimizing state). JitEngineDone unmaps the engine's compiled code. }
   FreeJitStateHook: procedure(T: PFuncTemplate) = nil;
 { clears every cached add transition of this thread's templates (Goccia.Core ProtoChanged) }
 procedure ForgetAddTransitions;
