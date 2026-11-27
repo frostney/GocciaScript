@@ -8466,6 +8466,13 @@ LSetPropSlow:
               InjectThrow := True;
               Exit(-1);
             end;
+            { a cancellation the native requested or that arrived while it ran ends the run before the next call }
+            if (Interrupt <> 0) and RunAbortRequested then
+            begin
+              XAbort(1);
+              InjectThrow := True;
+              Exit(-1);
+            end;
             Continue;
           end;
           if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then goto LBail;
@@ -10008,6 +10015,13 @@ LReload:
             StackTop := SavedTop;
             if not Ok then goto LThrow;
             R[A] := V;
+            { a cancellation the native requested or that arrived while it ran ends the run before the next call }
+            if (Interrupt <> 0) and RunAbortRequested then
+            begin
+              Fr^.PC := PC;
+              XAbort(1);
+              goto LThrow;
+            end;
             Continue;
           end;
           if not CallValue(VA, R[A + 1], @R[A + 2], Argc, V) then goto LThrow;

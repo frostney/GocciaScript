@@ -492,7 +492,8 @@ nothing. A request that lands while the run finishes still reports `gaHostAbort`
 completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
 thread may each release their reference whenever they are done with it.
 A run with an armed handle runs in the interpreter, without the JIT. The handle has expired by the time `RunTests` or
-`RunBenchmarks` runs, and a nested sandbox run another thread executes sees it only once that run returns.
+`RunBenchmarks` runs. A nested sandbox run another thread executes does not see the request; the caller observes it
+when that run returns.
 Compilation and custom blocking native functions can reach the abort only when they return or encounter an engine
 checkpoint. [ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design.
 

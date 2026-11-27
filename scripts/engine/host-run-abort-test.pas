@@ -82,6 +82,16 @@ begin
   Result := True;
 end;
 
+var
+  SecondNativeEntered: Boolean;
+
+function MarkEntered(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  SecondNativeEntered := True;
+  AResult := VUndefined;
+  Result := True;
+end;
+
 function RequestAbortAndThrow(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
 begin
   if CurrentAbort <> nil then CurrentAbort.Request;
@@ -111,6 +121,7 @@ begin
   Check(AEngine.PrepareHost(ErrorText), ErrorText);
   Check(InjectGlobalBinding('requestAbort', NewNativeFunction(@RequestAbort, 'requestAbort', 0)) and
     InjectGlobalBinding('requestAbortAndThrow', NewNativeFunction(@RequestAbortAndThrow, 'requestAbortAndThrow', 0)) and
+    InjectGlobalBinding('markEntered', NewNativeFunction(@MarkEntered, 'markEntered', 0)) and
     InjectGlobalBinding('requestAbortAtTop', NewNativeFunction(@RequestAbortAtTop, 'requestAbortAtTop', 0)) and
     InjectGlobalBinding('requestAbortInTimeZone',
       NewNativeFunction(@RequestAbortInTimeZone, 'requestAbortInTimeZone', 0)), 'could not install abort natives');
@@ -160,6 +171,18 @@ begin
   Check(RunResult.Aborted = gaHostAbort, 'a native request then error was not a cancellation: ' + RunResult.ErrorMessage);
   RunResult := AEngine.Run('after-request-then-throw.js', 'String(globalThis.caught);');
   Check(RunResult.Ok and (RunResult.ResultText = 'false'), 'a guest catch ran after the host cancelled the run');
+end;
+
+{ A native that requests the cancellation and returns normally: the run ends before the next native starts. }
+procedure CheckNativeRequestThenReturn(AEngine: TGocciaEngine);
+var RunResult: TGocciaRunResult;
+begin
+  SecondNativeEntered := False;
+  CurrentAbort := AEngine.CaptureAbortHandle;
+  RunResult := AEngine.Run('request-then-return.js', 'requestAbort(); markEntered(); 1;');
+  CurrentAbort := nil;
+  Check((RunResult.Aborted = gaHostAbort) and not SecondNativeEntered,
+    'a native ran after the host cancelled the run: ' + RunResult.ErrorMessage);
 end;
 
 { A module the cancellation interrupted evaluates again when the same path runs next, as do its imports. }
@@ -383,6 +406,7 @@ begin
     CheckAbortDuringResult(Engine);
     CheckPreStartKeepsEarlierWork(Engine);
     CheckNativeRequestThenThrow(Engine);
+    CheckNativeRequestThenReturn(Engine);
     RunResult := Engine.Run('reuse-after-checks.js', '21 * 2;');
     Check(RunResult.Ok and (RunResult.ResultText = '42'), 'cancelled engine could not be reused');
   finally

@@ -2305,28 +2305,40 @@ begin
 end;
 
 procedure SupersedeFailedModulesFrom(Mark: Integer);
-var I: Integer; M: TModRec; Changed: Boolean;
+var I: Integer; M: TModRec; Changed: Boolean; Fresh: TList<TModRec>; WasSuperseded: array of Boolean;
 begin
   if Mods = nil then Exit;
   if Mark < 0 then Mark := 0;
+  if Mark > Mods.Count then Mark := Mods.Count;
+  SetLength(WasSuperseded, Mods.Count - Mark);
+  for I := Mark to Mods.Count - 1 do WasSuperseded[I - Mark] := Mods[I].Superseded;
   for I := Mark to Mods.Count - 1 do
   begin
     M := Mods[I];
     if M.Errored or (M.Status <> msEvaluated) then M.Superseded := True;
   end;
-  { a cycle member that finished but waits on a superseded cycle root (an async cycle the abort left) goes too }
-  repeat
-    Changed := False;
-    for I := 0 to Mods.Count - 1 do
-    begin
-      M := Mods[I];
-      if not M.Superseded and (M.CycleRoot <> nil) and M.CycleRoot.Superseded then
+  { a cycle member that finished but waits on a cycle root this call superseded (an async cycle the abort left) goes
+    too; a root superseded before, by a file that changed (ADR 0139), keeps its members }
+  Fresh := TList<TModRec>.Create;
+  try
+    for I := Mark to Mods.Count - 1 do
+      if Mods[I].Superseded and not WasSuperseded[I - Mark] then Fresh.Add(Mods[I]);
+    repeat
+      Changed := False;
+      for I := 0 to Mods.Count - 1 do
       begin
-        M.Superseded := True;
-        Changed := True;
+        M := Mods[I];
+        if not M.Superseded and (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then
+        begin
+          M.Superseded := True;
+          Fresh.Add(M);
+          Changed := True;
+        end;
       end;
-    end;
-  until not Changed;
+    until not Changed;
+  finally
+    Fresh.Free;
+  end;
 end;
 
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;

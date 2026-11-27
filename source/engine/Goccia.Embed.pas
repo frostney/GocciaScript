@@ -1331,6 +1331,8 @@ begin
       4: Result.Aborted := gaHostAbort;
     end;
     DescribeThrown(RootAt(TempTop - 1), Result);
+    { a host environment the abort handle cancelled reads as any cancelled run }
+    if (EnvAbort = 4) and (HostAbortMessage = SHostRunCancelled) then ReportHostCancellation(Result);
     PopRoots(1);
     Pending := VUndefined;
     SetHostResolver(nil);
@@ -1522,8 +1524,8 @@ begin
           Result.ErrorName := 'Error';
           Result.ErrorText := HostAbortMessage;
           { the abort handle's cancellation reads the same however it was observed; a capability audit's keeps its
-            own message }
-          if RunAbortRequested then ReportHostCancellation(Result);
+            own message (the abort records which came first) }
+          if HostAbortMessage = SHostRunCancelled then ReportHostCancellation(Result);
         end;
     end;
   finally
