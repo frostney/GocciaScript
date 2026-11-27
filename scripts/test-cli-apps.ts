@@ -9601,7 +9601,9 @@ await section("REPL: a spent execution limit leaves the session usable...", asyn
     });
     const stdout = normalizeLineEndings(proc.stdout.toString());
     const stderr = proc.stderr.toString();
-    if (proc.exitCode !== 0 || !stdout.split("\n").includes("42") || !`${stdout}\n${stderr}`.includes(diagnostic))
+    // A REPL that does not echo piped input prints the result after its prompt.
+    const recovered = stdout.split("\n").some((line) => line === "42" || line === "> 42");
+    if (proc.exitCode !== 0 || !recovered || !`${stdout}\n${stderr}`.includes(diagnostic))
       throw new Error(`REPL did not recover after ${flag}: ${stdout}\n${stderr}`);
   }
 });
