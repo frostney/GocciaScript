@@ -6461,9 +6461,9 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
 
       // The same physical file named two different ways must land on one key.
-      // Compare against the *real* directory: canonicalization is textual and
-      // deliberately does not resolve symlinks, and on macOS the system temp
-      // directory is reached through the /var -> /private/var symlink.
+      // Coverage keys are the host's canonical paths, the same paths module
+      // identity uses, so on macOS the system temp directory's /var ->
+      // /private/var symlink and on Windows a short 8.3 name resolve too.
       const realDualDir = realpathSync(dualDir);
       const absoluteSpelling = await runDual("absolute-spelling.json", [
         join(realDualDir, "shared.test.js"),
@@ -6473,6 +6473,38 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         throw new Error(
           `Absolute and relative command-line spellings should produce identical report keys: ${Object.keys(absoluteSpelling).sort().join(", ")} vs ${Object.keys(bothRoles).sort().join(", ")}`,
         );
+      }
+
+      // An entry named through a symlinked directory is the same file its
+      // import reaches through the real one, so it still gets one record
+      // with both roles' hits. Hosts that cannot create the link skip this.
+      const linkedDualDir = join(tmp, "coverage-dual-role-link");
+      let linked = false;
+      try {
+        symlinkSync(realDualDir, linkedDualDir, "dir");
+        linked = true;
+      } catch {
+        console.log("  (skipped the symlinked spelling: this host cannot create the link)");
+      }
+      if (linked) {
+        const linkedSpelling = await runDual("linked-spelling.json", [
+          join(linkedDualDir, "shared.test.js"),
+          join(linkedDualDir, "main.test.js"),
+        ]);
+        const linkedKeys = sharedRecords(linkedSpelling);
+        if (linkedKeys.length !== 1) {
+          throw new Error(
+            `An entry named through a symlink and imported through the real path should get one coverage record, got ${linkedKeys.length}: ${linkedKeys.join(", ")}`,
+          );
+        }
+        const linkedHits = linkedSpelling[linkedKeys[0]].s;
+        for (const statement of Object.keys(mergedHits)) {
+          if (linkedHits[statement] !== mergedHits[statement]) {
+            throw new Error(
+              `The symlinked spelling should merge both roles' hits like the plain one: statement ${statement} expected ${mergedHits[statement]}, got ${linkedHits[statement]}`,
+            );
+          }
+        }
       }
 
       // Separators are '/' in every emitted path on every platform: genhtml and

@@ -86,9 +86,10 @@ end;
   absolute path; callers derive the other spellings they need from it.
 
   Deliberately created under the working directory rather than the system
-  temp directory: canonicalization is textual (ExpandFileName), so it does
-  not collapse spellings that differ by a symlinked ancestor, and on macOS
-  the temp directory is reached through the /var -> /private/var symlink. }
+  temp directory: the tests build their expected spellings with
+  ExpandFileName, while canonicalization resolves symlinks through the host,
+  and on macOS the temp directory is reached through the /var -> /private/var
+  symlink, so the two would differ there. }
 function MakeTempSourceFile: string;
 var
   Lines: TextFile;
