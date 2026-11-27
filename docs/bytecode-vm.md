@@ -178,7 +178,7 @@ See [Errors](errors.md) for the messages and stack format.
 
 ## Instruction Limit
 
-`LimitsArm(TimeoutMs, MaxInstructions)` arms a run's limits. With an instruction budget, `Execute` decrements `InstrLeft` for every instruction and skips `FastLoop`, and built-ins whose loops run as long as the script says poll the same counter (`PollInterrupt`), so the count is exact and the same on every run. A spent budget aborts with `Execution exceeded instruction limit of N`; no `catch` or `finally` runs. The JIT stays off under a budget. See [Execution limits](engine/README.md#execution-limits).
+`LimitsArm(TimeoutMs, MaxInstructions)` arms a run's limits. With an instruction budget, `Execute` decrements `InstrLeft` for every instruction and skips `FastLoop`, and built-ins whose loops run as long as the script says poll the same counter (`PollInterrupt`), so one engine's count is exact and the same on every run (engines that share a budget take it in reserves, so a job's total is exact once they have all ended). A spent budget aborts with `Execution exceeded instruction limit of N`; no `catch` or `finally` runs. The JIT stays off under a budget. See [Execution limits](engine/README.md#execution-limits).
 
 ## Binary Format
 

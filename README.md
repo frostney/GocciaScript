@@ -80,7 +80,9 @@ application-specific globals, [native modules](docs/embedding.md#native-modules)
 grant or withhold `fetch` through the `net` capability
 ([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
 read-only, bound a run with a timeout or measure its charged instructions
-([Execution Limits](docs/embedding.md#execution-limits)), and cancel it from
+([Execution Limits](docs/embedding.md#execution-limits)), including one
+instruction budget shared by the engines of a job
+([Sharing an instruction budget](docs/embedding.md#sharing-an-instruction-budget)), and cancel it from
 another thread
 ([Aborting a Run from Another Thread](docs/embedding.md#aborting-a-run-from-another-thread)). The timeout takes
 effect at the engine's next check, so a native call blocked outside the engine
