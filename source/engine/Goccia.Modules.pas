@@ -1991,8 +1991,8 @@ end;
 { the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var I, J, Data: Integer; M: TModRec; Ref, Spec, Text: UnicodeString; G: TList<TModRec>; R, St: TValue;
-  Loaded, SavedHostLoading: Boolean; Address: TModuleAddress;
+var I, J, Data: Integer; M: TModRec; Ref, Spec, Text, LinkSource: UnicodeString; G: TList<TModRec>; R, St: TValue;
+  Loaded, SavedHostLoading: Boolean; Address: TModuleAddress; LinkLine, LinkColumn: Integer;
 begin
   Res := VUndefined;
   Result := True;
@@ -2036,7 +2036,12 @@ begin
     if IsObject(R) and (I <= High(ImportStacks)) and (ImportStacks[I] <> '') then
     begin
       PushRoot(R);
-      if (not ErrorStackProvenance(RootAt(TempTop - 1), Text) or (Pos(#10'    at ', Text) = 0)) and
+      { a link error names its declaration in its one frame: the import() call's frames follow it }
+      if ErrorSourceLocation(RootAt(TempTop - 1), LinkSource, LinkLine, LinkColumn) and
+         ErrorStackProvenance(RootAt(TempTop - 1), Text) then
+        SetEngineErrorStack(RootAt(TempTop - 1), Text + ImportStacks[I], ProfileStackTraces, LinkSource, LinkLine,
+          LinkColumn)
+      else if (not ErrorStackProvenance(RootAt(TempTop - 1), Text) or (Pos(#10'    at ', Text) = 0)) and
          (not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
           (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0)) then
       begin

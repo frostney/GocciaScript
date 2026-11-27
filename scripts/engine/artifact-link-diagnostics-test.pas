@@ -107,6 +107,11 @@ begin
     RunResult := Engine.Run(ChangeFileExt(AEntry, '.second.mjs'),
       'await import("./dynamic.mjs").then(() => false, error => error.stack.includes("dynamic.mjs:2:1)"));');
     Check(RunResult.Ok and (RunResult.ResultText = 'true'), 'dynamic rejection lost the declaration stack frame');
+    RunResult := Engine.Run(ChangeFileExt(AEntry, '.third.mjs'),
+      'const load = async () => { await import("./dynamic.mjs"); };' +
+      'await load().then(() => false, error => error.stack.includes("dynamic.mjs:2:1)") && ' +
+      'error.stack.includes("at load ("));');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true'), 'dynamic rejection lost the import() call''s frames');
   finally
     Engine.Free;
   end;
