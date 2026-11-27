@@ -10,12 +10,12 @@ D=$(mktemp -d)
 trap 'rm -rf "$D"' EXIT
 fails=0
 
-# case NAME FLAGS EXPECTED-OUTPUT SOURCE: runs SOURCE with FLAGS, compares the whole output and the exit code
+# check NAME FLAGS EXPECTED-OUTPUT SOURCE [WATCHDOG-SECONDS]: compares the whole output and exit code
 # (1 when EXPECTED starts with "Fatal error", 0 otherwise)
 check() {
-  local name=$1 flags=$2 want=$3 src=$4 got rc want_rc=0
+  local name=$1 flags=$2 want=$3 src=$4 watchdog=${5:-20} got rc want_rc=0
   printf '%s\n' "$src" > "$D/$name.js"
-  got=$(timeout 20 "$ENGINE" $flags "$D/$name.js" 2>&1); rc=$?
+  got=$(timeout "$watchdog" "$ENGINE" $flags "$D/$name.js" 2>&1); rc=$?
   case $want in "Fatal error"*) want_rc=1 ;; esac
   if [ "$got" != "$want" ] || [ $rc -ne $want_rc ]; then
     echo "FAIL $name ($flags): exit $rc, output: $got (want exit $want_rc: $want)"
@@ -25,6 +25,10 @@ check() {
 
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
+check atomics-wait --timeout=200 "$T" \
+  'const a = new Int32Array(new SharedArrayBuffer(4)); try { Atomics.wait(a, 0, 0, 15000); } catch { console.log("caught"); }' 5
+check atomics-guest-timeout --timeout=2000 'timed-out' \
+  'const a = new Int32Array(new SharedArrayBuffer(4)); console.log(Atomics.wait(a, 0, 0, 10));' 5
 check do-while --timeout=200 "$T" 'let n = 0; do { n++; } while (true);'
 check catch-finally --timeout=200 "$T" \
   'while (true) { try { for (;;) {} } catch (e) { console.log("caught"); } finally { console.log("finally"); } }'
