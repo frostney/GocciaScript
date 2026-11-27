@@ -2305,7 +2305,7 @@ begin
 end;
 
 procedure SupersedeFailedModulesFrom(Mark: Integer);
-var I: Integer; M: TModRec;
+var I: Integer; M: TModRec; Changed: Boolean;
 begin
   if Mods = nil then Exit;
   if Mark < 0 then Mark := 0;
@@ -2314,6 +2314,19 @@ begin
     M := Mods[I];
     if M.Errored or (M.Status <> msEvaluated) then M.Superseded := True;
   end;
+  { a cycle member that finished but waits on a superseded cycle root (an async cycle the abort left) goes too }
+  repeat
+    Changed := False;
+    for I := 0 to Mods.Count - 1 do
+    begin
+      M := Mods[I];
+      if not M.Superseded and (M.CycleRoot <> nil) and M.CycleRoot.Superseded then
+      begin
+        M.Superseded := True;
+        Changed := True;
+      end;
+    end;
+  until not Changed;
 end;
 
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;

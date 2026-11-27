@@ -34,7 +34,8 @@ type
   TGocciaAbort = (gaNone, gaTimeout, gaInstructionLimit,
     { eight memory refusals in a row (MaxMemory) freed nothing; ErrorText says how much }
     gaMemoryLimit,
-    { the host ended the run, past every handler: AuditSink could not record a decision (ErrorText says why) }
+    { the host ended the run, past every handler: its abort handle was requested, or AuditSink could not record a
+      decision (ErrorText says which) }
     gaHostAbort);
 
   { the engine's heap now (Memory): what a CLI's JSON report shows under memory.gc }
@@ -686,7 +687,7 @@ function TGocciaEngine.LoadHostEnvironment: Boolean;
 const NAMES: array[0..3] of UnicodeString = ('epochNanoseconds', 'monotonicNanoseconds', 'timeZoneIdentifier',
   'random');
 var NS, V, R: TValue; I: Integer; Z, C: string; PrevClock: THostClockFn; PrevRandom: THostRandomFn;
-  Committed: Boolean;
+  Committed: Boolean; PrevOriginMs: Double; PrevOriginMonoNs: Int64;
 begin
   Result := False;
   if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(FHostEnvironment))), NS) then Exit;
@@ -712,6 +713,8 @@ begin
   SetLength(FEnvStreamSet, 0);
   PrevClock := HostClock;
   PrevRandom := HostRandom;
+  PrevOriginMs := TimeOriginMs;
+  PrevOriginMonoNs := TimeOriginMonoNs;
   HostClock := ProviderClock;
   HostRandom := ProviderRandom;
   { the provider counts as loaded only once its setup has finished: a setup an error or an abort stopped in one of its
@@ -742,6 +745,8 @@ begin
     begin
       HostClock := PrevClock;
       HostRandom := PrevRandom;
+      TimeOriginMs := PrevOriginMs;
+      TimeOriginMonoNs := PrevOriginMonoNs;
       for I := 0 to 3 do FEnvFns[I] := VUndefined;
     end;
   end;
@@ -1191,6 +1196,24 @@ begin
   Result := FNextRunAbort;
 end;
 
+{ a run the host cancelled through its abort handle, reported the same whenever the request was observed }
+procedure ReportHostCancellation(var R: TGocciaRunResult);
+begin
+  R.Ok := False;
+  R.Aborted := gaHostAbort;
+  R.ErrorIsError := True;
+  R.ErrorName := 'Error';
+  R.ErrorText := SHostRunCancelled;
+  R.ErrorMessage := R.ErrorText;
+  R.ErrorFile := '';
+  R.ErrorLine := 0;
+  R.ErrorColumn := 0;
+  R.ErrorSuggestion := '';
+  R.ErrorResolvedPath := '';
+  R.HasResult := False;
+  R.ResultText := '';
+end;
+
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
 var Signal: IRunAbortSignal; Requested, Started: Boolean; Err: UnicodeString; WeakMark: Int64;
 begin
@@ -1200,7 +1223,13 @@ begin
   { the engine's own setup runs before the handle binds: a request cannot leave the host half installed, and takes
     effect when the run starts (RunEntry reports a setup that failed) }
   Err := '';
-  PrepareHost(Err);
+  if not PrepareHost(Err) then
+  begin
+    { a setup that failed is the run's failure, reported as RunEntry reports it, with the handle never bound }
+    Result := Default(TGocciaRunResult);
+    Result.ErrorMessage := Err;
+    Exit;
+  end;
   WeakMark := WeakCleanupMark;
   Started := False;
   BeginRunAbort(Signal);
@@ -1220,19 +1249,7 @@ begin
       throwing entry queued, a timer) is discarded as after any abort, not run by the next entry. A run cancelled
       before it started made nothing, and what earlier runs left stays. }
     if Started then DiscardAbortedRunWork(WeakMark);
-    Result.Ok := False;
-    Result.Aborted := gaHostAbort;
-    Result.ErrorIsError := True;
-    Result.ErrorName := 'Error';
-    Result.ErrorText := SHostRunCancelled;
-    Result.ErrorMessage := Result.ErrorText;
-    Result.ErrorFile := '';
-    Result.ErrorLine := 0;
-    Result.ErrorColumn := 0;
-    Result.ErrorSuggestion := '';
-    Result.ErrorResolvedPath := '';
-    Result.HasResult := False;
-    Result.ResultText := '';
+    ReportHostCancellation(Result);
   end;
 end;
 
@@ -1240,7 +1257,7 @@ function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeStr
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean; EnvAbort, EnvMark: Integer;
+  Compiled: Boolean; EnvAbort, EnvMark, RunModuleMark: Integer;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1251,6 +1268,7 @@ begin
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
+  RunModuleMark := ModuleCount;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   NurseryFitCeiling;
   SetActiveProfile(FProfile);
@@ -1503,10 +1521,18 @@ begin
           Result.Aborted := gaHostAbort;
           Result.ErrorName := 'Error';
           Result.ErrorText := HostAbortMessage;
+          { the abort handle's cancellation reads the same however it was observed; a capability audit's keeps its
+            own message }
+          if RunAbortRequested then ReportHostCancellation(Result);
         end;
     end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then
+    begin
+      DiscardAbortedRunWork(FWeakCleanupMark);
+      { the module evaluations the abort cut short load again on a later run; finished ones stay }
+      SupersedeFailedModulesFrom(RunModuleMark);
+    end;
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);

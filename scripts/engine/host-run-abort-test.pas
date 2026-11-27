@@ -82,6 +82,12 @@ begin
   Result := True;
 end;
 
+function RequestAbortAndThrow(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  if CurrentAbort <> nil then CurrentAbort.Request;
+  Result := ThrowTypeError('native failure after the request');
+end;
+
 function RequestAbortAtTop(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
 begin
   if AbortAtTop and (CurrentAbort <> nil) then CurrentAbort.Request;
@@ -104,6 +110,7 @@ var ErrorText: UnicodeString;
 begin
   Check(AEngine.PrepareHost(ErrorText), ErrorText);
   Check(InjectGlobalBinding('requestAbort', NewNativeFunction(@RequestAbort, 'requestAbort', 0)) and
+    InjectGlobalBinding('requestAbortAndThrow', NewNativeFunction(@RequestAbortAndThrow, 'requestAbortAndThrow', 0)) and
     InjectGlobalBinding('requestAbortAtTop', NewNativeFunction(@RequestAbortAtTop, 'requestAbortAtTop', 0)) and
     InjectGlobalBinding('requestAbortInTimeZone',
       NewNativeFunction(@RequestAbortInTimeZone, 'requestAbortInTimeZone', 0)), 'could not install abort natives');
@@ -140,6 +147,57 @@ begin
   RunResult := AEngine.Run('weak-check.js', 'String(globalThis.cleaned);');
   Check(RunResult.Ok and (RunResult.ResultText = 'true'),
     'a pre-start cancellation dropped an earlier run''s cleanup: ' + RunResult.ResultText + RunResult.ErrorMessage);
+end;
+
+{ A native that requests the cancellation and then throws does not hand its error to a guest catch. }
+procedure CheckNativeRequestThenThrow(AEngine: TGocciaEngine);
+var RunResult: TGocciaRunResult;
+begin
+  CurrentAbort := AEngine.CaptureAbortHandle;
+  RunResult := AEngine.Run('request-then-throw.js',
+    'globalThis.caught = false; try { requestAbortAndThrow(); } catch { globalThis.caught = true; } 1;');
+  CurrentAbort := nil;
+  Check(RunResult.Aborted = gaHostAbort, 'a native request then error was not a cancellation: ' + RunResult.ErrorMessage);
+  RunResult := AEngine.Run('after-request-then-throw.js', 'String(globalThis.caught);');
+  Check(RunResult.Ok and (RunResult.ResultText = 'false'), 'a guest catch ran after the host cancelled the run');
+end;
+
+{ A module the cancellation interrupted evaluates again when the same path runs next, as do its imports. }
+procedure CheckCancelledModuleReloads;
+var
+  AEngine: TGocciaEngine;
+  Directory, Dependency: string;
+  Lines: TStringList;
+  RunResult: TGocciaRunResult;
+begin
+  { an engine of its own, with the default capabilities, so it reads its module files }
+  AEngine := TGocciaEngine.Create;
+  AEngine.ResultForm := grfString;
+  InstallAbortNatives(AEngine);
+  Directory := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-run-abort-module-' + IntToStr(GetProcessID) +
+    '-' + IntToStr(GetTickCount64);
+  Check(ForceDirectories(Directory), 'could not create ' + UnicodeString(Directory));
+  Dependency := Directory + PathDelim + 'dependency.mjs';
+  Lines := TStringList.Create;
+  try
+    Lines.Text := 'if (globalThis.cancelDependency) requestAbort(); const step = () => 0; step(); export const ready = 7;';
+    Lines.SaveToFile(Dependency);
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'entry.mjs',
+      'globalThis.cancelDependency = true; const { ready } = await import("./dependency.mjs"); ready;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the dependency''s cancellation was not reported: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'entry.mjs',
+      'globalThis.cancelDependency = false; const { ready } = await import("./dependency.mjs"); ready;');
+    Check(RunResult.Ok and (RunResult.ResultText = '7'),
+      'a module the cancellation interrupted did not evaluate again: ' + RunResult.ResultText + RunResult.ErrorMessage);
+  finally
+    CurrentAbort := nil;
+    AEngine.Free;
+    Lines.Free;
+    DeleteFile(Dependency);
+    RemoveDir(Directory);
+  end;
 end;
 
 { A cancelled host environment setup loads again: at the provider's top level, then inside its time zone call. }
@@ -221,6 +279,8 @@ type
   protected
     procedure Execute; override;
   public
+    { set by the worker once Request returned; read on the engine thread inside the run }
+    RequestMade: LongInt;
     Acknowledged: Boolean;
     constructor Create(const AHandle: IGocciaAbortHandle);
     destructor Destroy; override;
@@ -249,6 +309,7 @@ procedure TStaleRequester.Execute;
 begin
   RTLEventWaitFor(FGate);
   FHandle.Request;
+  InterLockedExchange(RequestMade, 1);
   RTLEventSetEvent(FDone);
 end;
 
@@ -258,7 +319,8 @@ begin
   RTLEventSetEvent(FGate);
   { the run goes on only once the old handle's request was made, so the request overlaps it }
   RTLEventWaitFor(FDone, 3000);
-  Acknowledged := True;
+  { only a request the worker made while this run waited proves the overlap }
+  Acknowledged := InterLockedCompareExchange(RequestMade, 0, 0) = 1;
 end;
 
 procedure CheckLateAbort(AEngine: TGocciaEngine);
@@ -320,6 +382,7 @@ begin
     InstallAbortNatives(Engine);
     CheckAbortDuringResult(Engine);
     CheckPreStartKeepsEarlierWork(Engine);
+    CheckNativeRequestThenThrow(Engine);
     RunResult := Engine.Run('reuse-after-checks.js', '21 * 2;');
     Check(RunResult.Ok and (RunResult.ResultText = '42'), 'cancelled engine could not be reused');
   finally
@@ -327,5 +390,6 @@ begin
   end;
   Handle.Request;
   CheckProviderAbort;
+  CheckCancelledModuleReloads;
   WriteLn('Host run abort tests passed');
 end.

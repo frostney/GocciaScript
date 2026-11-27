@@ -253,7 +253,8 @@ function NewRunAbortSignal: IRunAbortSignal;
 procedure BeginRunAbort(const ASignal: IRunAbortSignal);
 function EndRunAbort: Boolean;
 function RunAbortRequested: Boolean;
-function RunAbortArmed: Boolean; inline;
+{ not inline: a threadvar read across units (docs/core-patterns.md) }
+function RunAbortArmed: Boolean; noinline;
 procedure WaitForRunEvent(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
 
 const
@@ -802,7 +803,7 @@ begin
     InstrCounted or (LimitTimer <> nil);
 end;
 
-function RunAbortArmed: Boolean; inline;
+function RunAbortArmed: Boolean;
 begin
   Result := ActiveRunAbort <> nil;
 end;
@@ -11031,6 +11032,12 @@ LBackEdge:
     Continue;
 LThrow:
     if ThrowTrace then XTraceThrow;
+    { a host's cancellation requested by a native that then threw is the run's end, not an error a handler takes }
+    if (Interrupt <> 0) and not Aborting and RunAbortRequested then
+    begin
+      Fr^.PC := PC;
+      XAbort(1);
+    end;
     { an abort: no handler of this activation runs }
     if Aborting then
       while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) do

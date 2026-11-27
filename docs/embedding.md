@@ -481,18 +481,20 @@ path and leave `HasInstructionCount` false. Counter-enabled entries run in the i
 
 On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArtifact`. Hold the returned
 `IGocciaAbortHandle` in the thread that may call `Request`. A request made before the run prevents it from starting.
-A request during execution ends it past guest handlers with `Aborted = gaHostAbort`. The engine interrupts its fetch
-and Atomics waits, then discards pending guest work under the same rules as a timeout.
+A request during execution ends it past guest handlers with `Aborted = gaHostAbort`, even when a native function
+that made the request returns an error. The engine interrupts its fetch and Atomics waits, then discards pending guest
+work under the same rules as a timeout, and a module evaluation the request cut short loads again on a later run. A run
+cancelled before it started made nothing, so it leaves what earlier runs queued in place.
 
 The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
 Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do
 nothing. A request that lands while the run finishes still reports `gaHostAbort`, and a cancelled run has no
 completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
 thread may each release their reference whenever they are done with it.
-A run with an armed handle runs in the interpreter, without the JIT. The handle does not reach
-`RunTests`, `RunBenchmarks` or a nested sandbox run another thread executes.
-[ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design. The interpreter handles runs with an abort handle armed. Compilation and custom
-blocking native functions can reach the abort only when they return or encounter an engine checkpoint.
+A run with an armed handle runs in the interpreter, without the JIT. The handle has expired by the time `RunTests` or
+`RunBenchmarks` runs, and a nested sandbox run another thread executes sees it only once that run returns.
+Compilation and custom blocking native functions can reach the abort only when they return or encounter an engine
+checkpoint. [ADR 0196](adr/0196-an-abort-handle-belongs-to-the-next-run.md) records the design.
 
 ### Call Stack Depth Limit
 

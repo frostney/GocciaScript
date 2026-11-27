@@ -33,5 +33,6 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
 - A host environment setup that an abort of any kind cuts short, or that fails after the provider loaded, is undone
   and loads again on the next run.
 - A run with an armed handle runs in the interpreter, as a run with a limit does, so it does not use the JIT.
-- The handle covers the entry only: a request during `RunTests` or `RunBenchmarks`, or while the run waits for a
-  nested sandbox run on another thread, takes effect only once control returns to the entry's engine.
+- The handle covers the entry only: it has expired by the time `RunTests` or `RunBenchmarks` runs, and a request
+  while the entry waits for a nested sandbox run on another thread takes effect only once that run returns.
+- A module evaluation an abort cut short, an entry's or its imports', loads again on a later run; a finished one stays.
