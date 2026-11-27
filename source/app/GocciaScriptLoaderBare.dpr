@@ -548,7 +548,7 @@ begin
     end;
     on E: Exception do
     begin
-      { the bare loader runs its file on the main thread: a fault in it, or outside it, lands here (ADR 0196) }
+      { the bare loader runs its file on the main thread: a fault in it, or outside it, lands here (ADR 0198) }
       if IsEngineFault(E) then
         if Options.FileName <> '' then
           AbortOnEngineFault(Options.FileName, E)

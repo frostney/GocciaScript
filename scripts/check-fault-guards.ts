@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Fails on a catch-all exception handler that could turn an engine fault into
- * an ordinary result (docs/adr/0196-every-application-stops-on-an-engine-fault.md).
+ * an ordinary result (docs/adr/0198-every-application-stops-on-an-engine-fault.md).
  *
  * A catch-all is an `on E: Exception do` arm, or an `except` block with no
  * `on` arms. Each one in source/engine, source/units and source/app (Pascal
@@ -239,7 +239,7 @@ for (const f of findings) console.error(`${f.file}:${f.line}: ${f.message}`);
 if (findings.length > 0) {
   console.error(`\n${findings.length} handler(s) without a fault guard. Test the exception with IsEngineFault and ` +
     "re-raise it (a script boundary) or stop with AbortOnEngineFault (a host, or a thread that would end silently), " +
-    "or say why neither in a `fault-guard:` comment. See docs/adr/0196-every-application-stops-on-an-engine-fault.md.");
+    "or say why neither in a `fault-guard:` comment. See docs/adr/0198-every-application-stops-on-an-engine-fault.md.");
   process.exit(1);
 }
 console.log(`fault guards: every catch-all handler in ${TREES.join(", ")} is guarded`);

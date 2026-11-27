@@ -4,7 +4,7 @@
  *
  * Every application stops on a real engine fault: two `Engine fault:` lines on
  * stderr, exit 70, no summary or report, and nothing run after it
- * (docs/adr/0196-every-application-stops-on-an-engine-fault.md,
+ * (docs/adr/0198-every-application-stops-on-an-engine-fault.md,
  * docs/contributing/cli-conventions.md#exit-codes).
  *
  * The faults come from the fault build, which no shipped target makes

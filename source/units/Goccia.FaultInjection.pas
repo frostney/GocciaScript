@@ -1,7 +1,7 @@
 unit Goccia.FaultInjection;
 
 { Real engine faults on request, for the tests of how every application stops
-  on one (scripts/test-engine-faults.ts, docs/adr/0196-every-application-stops-on-an-engine-fault.md).
+  on one (scripts/test-engine-faults.ts, docs/adr/0198-every-application-stops-on-an-engine-fault.md).
 
   Only a build with -dGOCCIA_FAULT_INJECTION has any of this: the CI's fault
   build sets it through build.pas's variant mechanism,

@@ -549,7 +549,7 @@ begin
     except
       on E: Exception do
       begin
-        { each case runs in a worker process of its own; a fault in the coordinator itself ends the run (ADR 0196) }
+        { each case runs in a worker process of its own; a fault in the coordinator itself ends the run (ADR 0198) }
         if IsEngineFault(E) then
           AbortOnEngineFault('GocciaTOMLComplianceRunner', E);
         WriteLn('Error: ', E.Message);

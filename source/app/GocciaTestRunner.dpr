@@ -165,7 +165,7 @@ procedure TGocciaTestThread.Execute;
 var
   OwnsJit: Boolean;
 begin
-  { a file that would start while another thread reports a fault does not (ADR 0196) }
+  { a file that would start while another thread reports a fault does not (ADR 0198) }
   StopIfEngineFaultReported;
   try
     OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
@@ -184,7 +184,7 @@ begin
       on E: Exception do
       begin
         { the run stops here, on this file's thread: the files still running and the ones not started must not
-          report results from the state the fault calls into question (ADR 0196) }
+          report results from the state the fault calls into question (ADR 0198) }
         if IsEngineFault(E) then
           AbortOnEngineFault(FApp.FResults[FIndex].FileName, E);
         FErrorClass := ExceptClass(E.ClassType);
@@ -865,7 +865,7 @@ begin
       raise;
     on E: Exception do
     begin
-      { an engine fault is no verdict on the file: it stops the run (ADR 0196) }
+      { an engine fault is no verdict on the file: it stops the run (ADR 0198) }
       if IsEngineFault(E) then
         AbortOnEngineFault(FileName, E);
       { a file the host could not set up is one failed file (GocciaTestRunner RunScriptFromFile) }
