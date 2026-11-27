@@ -29,24 +29,24 @@
   const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
     '.tsv': 'TSV', '.yaml': 'YAML', '.yml': 'YAML', '.toml': 'TOML' };
   shared.hasHostModule = (key) => registry[key] !== undefined;
-  shared.loadHostModule = (key, realPath) => {
-    const make = realPath === '' ? registry[key] : undefined;
+  shared.loadHostModule = (key, filePath) => {
+    const make = filePath === '' ? registry[key] : undefined;
     let exports;
     if (make !== undefined) {
       exports = make();
       if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
     } else {
-      const path = realPath || key;
-      const extension = extensionOf(path);
-      const format = n.isAbsolutePath(path) ? formats[extension] : undefined;
+      if (filePath === '') return undefined;
+      const extension = extensionOf(filePath);
+      const format = n.isAbsolutePath(filePath) ? formats[extension] : undefined;
       if (format === undefined) return undefined;
-      const text = n.readText(key, path);
+      const text = n.readText(key, filePath);
       if (text === undefined) return undefined;
       // a parse failure names the specifier the module was imported by, not the host path
       const specifier = n.specifierOf(key);
       let value;
       try {
-        value = format(text, key, specifier, path);
+        value = format(text, key, specifier, filePath);
       } catch (e) {
         const kind = FORMAT_NAMES[extension];
         if (kind !== undefined && e instanceof SyntaxError)

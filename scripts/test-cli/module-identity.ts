@@ -137,6 +137,17 @@ export function verifyModuleIdentity() {
     ]);
     const checked = run(RUNNER, "permissions.mjs");
     assert.ok(checked.includes("read checks: PermissionDenied PermissionDenied\n"), checked);
+
+    const overlay = JSON.stringify(join(outside, "disallowed.mjs"));
+    write("virtual.mjs", [
+      `import value from ${overlay};`,
+      `import source from ${overlay} with { type: "text" };`,
+      'console.log("virtual source:", value, source.includes("registered fixture"));',
+    ]);
+    const outputWithOverlay = run(
+      RUNNER, "virtual.mjs", "--module", `${join(outside, "disallowed.mjs")}=export default "registered fixture";`,
+    );
+    assert.ok(outputWithOverlay.includes("virtual source: registered fixture true\n"), outputWithOverlay);
   } finally {
     clean(tmp);
   }

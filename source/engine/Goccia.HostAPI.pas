@@ -1378,13 +1378,15 @@ begin
   Result := DenyResolution('read', Spec, Suggestion);
 end;
 
-function HostResolveSpec(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
+function HostResolveSpec(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
+  out VirtualKey: Boolean): Integer;
 var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString; Guard: Boolean; Policy: TReadPolicy;
   SavedGuard: TModuleResolverProbeGuard; Canonical: string; Denial: TReadDenial;
-  Literal, Virtual, ProviderAllowed: Boolean;
+  Literal, ProviderAllowed: Boolean;
   SavedPrefer: Boolean;
 begin
   RealPath := '';
+  VirtualKey := True;
   { the import() being resolved: its specifier computed or not (the first resolution takes it) }
   Literal := not ImportComputed;
   ImportComputed := False;
@@ -1451,10 +1453,10 @@ begin
       refused as the file would be }
     if SameText(ExtractFileExt(UTF8Encode(Resolved)), '.gbc') and (Resolver.LastCompanionSourcePath <> '') then
       Resolver.ValidateCompanionSourcePath(Resolver.LastCompanionSourcePath);
-    Virtual := IsVirtualModuleURI(Resolved) or IsHostModuleKey(Resolved);
+    VirtualKey := IsVirtualModuleURI(Resolved) or IsHostModuleKey(Resolved);
     { Pass the path judged by the final read check through to the loader, including on cache hits. }
-    if not Virtual then RealPath := HostRealFilePath(Resolved);
-    if Guard and not Virtual then
+    if not VirtualKey then RealPath := HostRealFilePath(Resolved);
+    if Guard and not VirtualKey then
     begin
       Canonical := RealPath;
       if Canonical = '' then Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
@@ -1480,7 +1482,7 @@ begin
       end;
     end;
     { a virtual module at a path a file is at shadows it: warned once, as GocciaScript's loader warns }
-    if Virtual and IsAbsoluteFilePath(Resolved) and FileExists(UTF8Encode(Resolved)) then
+    if VirtualKey and IsAbsoluteFilePath(Resolved) and FileExists(UTF8Encode(Resolved)) then
     begin
       if ShadowWarned = nil then ShadowWarned := TStringList.Create;
       if ShadowWarned.IndexOf(UTF8Encode(Resolved)) < 0 then

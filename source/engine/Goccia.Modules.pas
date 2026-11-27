@@ -44,16 +44,17 @@ function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluati
 function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
 type
-  { a host's modules: for a request key (a specifier with a scheme, as goccia:csv, kept as written; otherwise a
-    resolved file path), 1 with Exp an array of the module's export names and values, interleaved (a
+  { a host's modules: for a request key, try only the host registry when FilePath is empty and only the
+    file at FilePath otherwise. 1 with Exp an array of the module's export names and values, interleaved (a
     synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
     has no such module (a file is then read as JavaScript), -1 with an error pending }
   THostModuleHook = function(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
-    an absolute path) and RealPath the canonical file path checked by the host (empty for virtual files and host
-    keys), 0 to resolve it as the engine does, -1 with Resolved the message of the error it fails with }
-  THostResolveHook = function(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
+    an absolute path), RealPath the canonical file path checked by the host when available, and VirtualKey set for
+    host keys. 0 resolves as the engine does, -1 gives the error message in Resolved. }
+  THostResolveHook = function(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
+    out VirtualKey: Boolean): Integer;
 
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook);
@@ -163,6 +164,7 @@ type
     Path: UnicodeString;      { resolver spelling for diagnostics, coverage and import.meta }
     RealPath: UnicodeString;  { canonical load address and relative import base of a host file }
     ModuleType: UnicodeString;
+    VirtualKey: Boolean;
     function FilePath: UnicodeString;
   end;
   TModRec = class
@@ -297,11 +299,12 @@ begin
   Result := H(Key, FilePath, Exp);
 end;
 
-function CallHostResolve(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString): Integer;
+function CallHostResolve(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
+  out VirtualKey: Boolean): Integer;
 var H: THostResolveHook;
 begin
   H := HostResolve;
-  Result := H(Spec, Referrer, Resolved, RealPath);
+  Result := H(Spec, Referrer, Resolved, RealPath, VirtualKey);
 end;
 
 function CallFileRead(const Path: UnicodeString; var B: RawByteString): Boolean;
@@ -476,7 +479,6 @@ begin
   Result := True;
 end;
 
-{ a direct entry or a hostless resolver can name an on-disk file. A custom reader owns its namespace. }
 function HostRealFilePath(const Path: UnicodeString): UnicodeString;
 begin
   Result := '';
@@ -484,6 +486,7 @@ begin
     Result := UnicodeString(CanonicalHostPath(string(Path)));
 end;
 
+{ a direct entry or a hostless resolver can name an on-disk file }
 function HostFileAddress(const Path: UnicodeString): TModuleAddress;
 begin
   Result := Default(TModuleAddress);
@@ -497,7 +500,7 @@ var Base: UnicodeString;
 begin
   Result := Default(TModuleAddress);
   if Assigned(HostResolve) then
-    case CallHostResolve(Spec, Referrer, Result.Path, Result.RealPath) of
+    case CallHostResolve(Spec, Referrer, Result.Path, Result.RealPath, Result.VirtualKey) of
       1: Exit;
       -1: begin Result.Path := #0 + Result.Path; Exit; end;
       { the error the host made (ResolveError), not a message }
@@ -506,6 +509,7 @@ begin
   if Assigned(HostModules) and IsSchemeSpecifier(Spec) then
   begin
     Result.Path := Spec;
+    Result.VirtualKey := True;
     Exit;
   end;
   if IsAbsoluteFilePath(Spec) then Exit(HostFileAddress(UnicodeString(ExpandFileName(string(Spec)))));
@@ -634,7 +638,8 @@ var M: TModRec;
 begin
   for M in Mods do
   begin
-    if M.Superseded or (M.Realm <> CurRealm) or (M.Address.ModuleType <> Address.ModuleType) then Continue;
+    if M.Superseded or (M.Realm <> CurRealm) or (M.Address.ModuleType <> Address.ModuleType) or
+       (M.Address.VirtualKey <> Address.VirtualKey) then Continue;
     if Address.RealPath = '' then
     begin
       if (M.Address.RealPath = '') and (M.Address.Path = Address.Path) then Exit(M);
@@ -660,32 +665,29 @@ function MakeHostModule(const Address: TModuleAddress; Exp: TValue; var M: TModR
   'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
   import bytes proposal: a Uint8Array over an immutable ArrayBuffer) }
 function LoadTypedModule(const Address: TModuleAddress; var M: TModRec): Boolean;
-var K: Integer; AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue; Virtual: Boolean;
+var K: Integer; AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue;
 begin
   AType := Address.ModuleType;
   if (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
     Exit(ThrowTypeError('Unsupported module type ''' + AType + ''''));
   { a host's virtual module (an address, not a path) reinterprets the source it stores }
-  Virtual := False;
-  if Assigned(HostModules) and (Address.Path <> '') and not IsAbsoluteFilePath(Address.Path) then
+  if Address.VirtualKey then
   begin
+    if not Assigned(HostModules) then Exit(ModuleReadFailed(Address.Path));
     K := CallHostModules(Address.Path, '', V);
     if K = -1 then Exit(False);
-    if K = 2 then
-    begin
-      Virtual := True;
-      Src := StrToUnicode(StrOf(V));
-      B := UTF8Encode(Src);
-    end;
+    if K <> 2 then Exit(ModuleReadFailed(Address.Path));
+    Src := StrToUnicode(StrOf(V));
   end;
   if AType = 'bytes' then
   begin
-    if not Virtual and not ReadModuleBytes(Address.Path, Address.FilePath, B) then Exit(ModuleReadFailed(Address.Path));
+    if Address.VirtualKey then B := UTF8Encode(Src)
+    else if not ReadModuleBytes(Address.Path, Address.FilePath, B) then Exit(ModuleReadFailed(Address.Path));
     if not BytesHook(B, V) then Exit(False);
   end
   else
   begin
-    if not Virtual and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Address.Path));
+    if not Address.VirtualKey and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Address.Path));
     if AType = 'text' then V := StrFromUnicode(Src)
     else if not JSONTextHook(Src, V) then Exit(False);
   end;
@@ -966,7 +968,8 @@ begin
     Exit(ThrowError('Error', Copy(Path, 2, MaxInt)));
   end;
   { bytecode: the provided entry, or a .gbc file }
-  if (Address.ModuleType = '') and SameText(ExtractFileExt(string(Address.FilePath)), '.gbc') then
+  if not Address.VirtualKey and (Address.ModuleType = '') and
+     SameText(ExtractFileExt(string(Address.FilePath)), '.gbc') then
     Exit(LoadArtifactModule(Address, M));
   M := FindModule(Address);
   if (M = nil) and (Address.ModuleType = '') and (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
@@ -1006,12 +1009,15 @@ begin
   end;
   Src := '';
   I := 0;
-  if Assigned(HostModules) then I := CallHostModules(Path, Address.RealPath, V);
+  if Assigned(HostModules) then
+    if Address.VirtualKey then I := CallHostModules(Path, '', V)
+    else I := CallHostModules(Path, Address.FilePath, V);
   case I of
     1: Exit(MakeHostModule(Address, V, M));
     2: Src := StrToUnicode(StrOf(V));
     -1: Exit(False);
   end;
+  if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
   { a file's modification time, taken before it is read: a change while it loads makes the next request load it
     again }
   Prov := ProvidedPath;
@@ -2262,7 +2268,7 @@ var M: TModRec;
 begin
   Result := '';
   M := FindModuleByPath(Path);
-  if (M = nil) or (M.Id < Mark) or M.HostOwned then Exit;
+  if (M = nil) or (M.Id < Mark) or M.HostOwned or M.Address.VirtualKey then Exit;
   { Use the stored load path for the frame. The diagnostic spelling may now name a different file. }
   if M.Address.RealPath <> '' then
   begin
