@@ -28,6 +28,8 @@ function FetchMark: Integer;
 { the requests started since Mark stop being waited for, as their signals' aborts stop them (fetchCancel): a test
   that timed out leaves no request for the next one to wait on }
 procedure FetchCancelFrom(Mark: Integer);
+{ ends the aborted run's requests and drops their JS completions without settling them }
+procedure DiscardFetches;
 { settles the requests that finished; with Block, first waits for one to finish, for a request's signal deadline
   (whose signals are then observed), for the run's interrupt, or until the tick Until_ (0: none). False when script
   failed or the run ended }
@@ -38,7 +40,7 @@ procedure FetchDone;
 implementation
 
 uses
-  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
+  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Builtins, Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
 
 const
   MAX_FETCH_WORKERS = 16;
@@ -111,7 +113,7 @@ threadvar
   Owner: TFetchOwner;
   Pendings: array of TPendingFetch;
   NextId: Integer;
-  SettleFn: TValue;
+  SettleFn, PendingCompletions: TValue;
   RootedGen: Integer;
 
 { ---------------- the owner ---------------- }
@@ -193,6 +195,7 @@ begin
   try
     { the engine gone: no one frees the worker but itself. A cancelled request's worker still goes to Done, where
       the engine frees it and its slot (its entry names it until then) }
+    if Cancelled then Response := Default(THTTPResponse);
     if O.Detached then FreeOnTerminate := True
     else O.Done.Add(Self);
   finally
@@ -411,6 +414,21 @@ begin
   SetLength(Pendings, Length(Pendings) - 1);
 end;
 
+procedure CancelRequest(var Request: TPendingFetch);
+begin
+  EnterCriticalSection(Owner.Lock);
+  try
+    Request.Worker.Cancelled := True;
+    { a worker that already posted its reply will not see the cancellation itself }
+    if Owner.Done.IndexOf(Request.Worker) >= 0 then Request.Worker.Response := Default(THTTPResponse);
+  finally
+    LeaveCriticalSection(Owner.Lock);
+  end;
+  { the slot stays taken until the worker finishes }
+  Request.Cancelled := True;
+  Request.Deadline := 0;
+end;
+
 { fetchCancel(id): the script stopped waiting (its signal aborted); the worker's answer is dropped }
 function Fetch_Cancel(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I: Integer;
@@ -419,15 +437,7 @@ begin
   Result := True;
   I := PendingIndex(Trunc(NumOf(ArgOf(Args, Argc, 1))));
   if I < 0 then Exit;
-  EnterCriticalSection(Owner.Lock);
-  try
-    Pendings[I].Worker.Cancelled := True;
-  finally
-    LeaveCriticalSection(Owner.Lock);
-  end;
-  { the slot stays taken until the worker finishes (FetchPump drops its answer and the entry then) }
-  Pendings[I].Cancelled := True;
-  Pendings[I].Deadline := 0;
+  CancelRequest(Pendings[I]);
 end;
 
 function FetchMark: Integer;
@@ -440,16 +450,13 @@ var I: Integer;
 begin
   for I := 0 to High(Pendings) do
     if (Pendings[I].Id >= Mark) and not Pendings[I].Cancelled then
-    begin
-      EnterCriticalSection(Owner.Lock);
-      try
-        Pendings[I].Worker.Cancelled := True;
-      finally
-        LeaveCriticalSection(Owner.Lock);
-      end;
-      Pendings[I].Cancelled := True;
-      Pendings[I].Deadline := 0;
-    end;
+      CancelRequest(Pendings[I]);
+end;
+
+procedure DiscardFetches;
+begin
+  FetchCancelFrom(0);
+  if SameEngine(RootedGen) and IsObject(PendingCompletions) then DiscardMapEntries(PendingCompletions);
 end;
 
 { fetchRegister(settle): the prelude's settle function, called as settle(id, kind, ...): kind 0 a response
@@ -458,20 +465,26 @@ end;
 function Fetch_Register(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   SettleFn := ArgOf(Args, Argc, 1);
+  PendingCompletions := ArgOf(Args, Argc, 2);
   Res := VUndefined;
   Result := True;
 end;
 
 procedure DefineFetchNatives(N: TValue);
 begin
-  if FirstInEngine(RootedGen) then AddRoot(@SettleFn);
+  if FirstInEngine(RootedGen) then
+  begin
+    AddRoot(@SettleFn);
+    AddRoot(@PendingCompletions);
+  end;
   SettleFn := VUndefined;
+  PendingCompletions := VUndefined;
   if MaxResponseBytes <= 0 then MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
   PushRoot(N);
   DefineNative(RootAt(TempTop - 1), 'fetchCheck', Fetch_Check, 1);
   DefineNative(RootAt(TempTop - 1), 'fetchStart', Fetch_Start, 5);
   DefineNative(RootAt(TempTop - 1), 'fetchCancel', Fetch_Cancel, 1);
-  DefineNative(RootAt(TempTop - 1), 'fetchRegister', Fetch_Register, 1);
+  DefineNative(RootAt(TempTop - 1), 'fetchRegister', Fetch_Register, 2);
   PopRoots(1);
 end;
 
@@ -656,6 +669,7 @@ procedure FetchDone;
 var I: Integer; W: TFetchWorker;
 begin
   SettleFn := VUndefined;
+  PendingCompletions := VUndefined;
   if Owner = nil then Exit;
   EnterCriticalSection(Owner.Lock);
   try

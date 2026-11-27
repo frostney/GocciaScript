@@ -71,6 +71,8 @@ function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitC
 function SharedAsyncCancel(Token: Integer): Boolean;
 { waits up to TimeoutMs for this thread's async waiters to be notified; returns their tokens }
 function SharedAsyncPoll(TimeoutMs: Cardinal): TBoundArray;
+{ drops this thread's async waiters and notifications without settling their promises }
+procedure SharedAsyncDiscard;
 { Atomics.notify: wakes up to Count (negative: all) waiters on (Block, ByteIndex), oldest first, sync and
   async alike; returns how many it woke }
 function SharedNotify(Block: PSharedBlock; ByteIndex: Int64; Count: Int64): Int64;
@@ -463,7 +465,7 @@ begin
 end;
 
 { this thread's mailbox goes, with its async waiters still in the list (their promises are the ending engine's) }
-procedure DropMailbox;
+procedure SharedAsyncDiscard;
 var P, Nx: PWaiter; M: PMailbox;
 begin
   M := MyMailbox;
@@ -494,7 +496,7 @@ begin
   SharedCount := 0;
   SharedObjs := nil;
   SharedBlocks := nil;
-  DropMailbox;
+  SharedAsyncDiscard;
 end;
 
 { the managed threadvars of this unit, released when the thread ends (Goccia.ThreadCleanupRegistry): FPC does not
@@ -503,7 +505,7 @@ procedure GocciaSharedThreadvarCleanup;
 begin
   SharedObjs := nil;
   SharedBlocks := nil;
-  DropMailbox;
+  SharedAsyncDiscard;
 end;
 
 initialization

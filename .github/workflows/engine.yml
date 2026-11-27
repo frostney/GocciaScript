@@ -163,6 +163,9 @@ jobs:
       - name: Execution limits
         run: bash scripts/engine/limits-test.sh build/engine/goccia
 
+      - name: Aborted runs discard queued work on a reused engine
+        run: bash scripts/engine/aborted-run-test.sh
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 

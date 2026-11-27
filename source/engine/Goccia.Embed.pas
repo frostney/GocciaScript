@@ -121,6 +121,8 @@ type
     FEnvClockCalling, FEnvRandomCalling: Boolean;
     { the module records before the run's entry: those are the host's (globals, manifests, the provider) }
     FModuleMark: Integer;
+    { registrations made during the entry and its test or benchmark suites }
+    FWeakCleanupMark: Int64;
     FAuditSink: TGocciaCapabilityAuditSink;
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
@@ -326,7 +328,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, Goccia.Engine, Goccia.Eval,
-  Goccia.Promise, Goccia.Builtins, Goccia.BigIntV, Goccia.ObjModel, Goccia.FFI, Goccia.Fetch, Goccia.Compiler, Goccia.Sandbox, Goccia.Profile, Goccia.Profiler.Compile,
+  Goccia.Promise, Goccia.Builtins, Goccia.BigIntV, Goccia.ObjModel, Goccia.FFI, Goccia.Fetch, Goccia.Compiler, Goccia.Sandbox, Goccia.Profile, Goccia.Profiler.Compile, Goccia.Weak,
   Goccia.HeapSnapshot, Goccia.Bytecode.Profile;
 
 threadvar
@@ -956,11 +958,13 @@ begin
 end;
 
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var WeakMark: Int64;
 begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
+  WeakMark := WeakCleanupMark;
   LimitsArm(FTimeoutMs, FMaxInstructions);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
@@ -971,6 +975,7 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
+    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark);
     LimitsDisarm;
   end;
 end;
@@ -1153,6 +1158,7 @@ begin
     Result.ErrorMessage := Err;
     Exit;
   end;
+  FWeakCleanupMark := WeakCleanupMark;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   NurseryFitCeiling;
   SetActiveProfile(FProfile);
@@ -1186,6 +1192,7 @@ begin
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
+        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
         LimitsDisarm;
       end;
     end
@@ -1194,7 +1201,7 @@ begin
     SetGuestLoads(False);
   end;
   SetReadPolicy(FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot, AuditRead);
-  if not Compiled then
+  if not Compiled or (EnvAbort <> 0) then
   begin
     PushRoot(Pending);
     Pending := VUndefined;
@@ -1322,7 +1329,7 @@ begin
     end;
     { what a run left rejected goes with it, reported or not: a later run on this engine (a REPL's next input) is
       not blamed for it }
-    if FFailOnUnhandledRejection then TakeRejections(0);
+    if FFailOnUnhandledRejection then DiscardRejections;
     { an entry module still waiting once nothing is left to settle it failed (GocciaScript's await of a promise
       that never settles); a rejection nothing handled comes first }
     if Result.Ok and Result.IsModule and EntryEvaluationPending then
@@ -1393,6 +1400,7 @@ begin
       end;
     end;
   finally
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
@@ -1401,7 +1409,7 @@ begin
     SetProviderGraphCheck(nil);
     PopRoots(1);
     { a test or benchmark file's limits cover its suites too (RunTests and RunBenchmarks disarm them) }
-    if not FTestMode and not FBenchMode then LimitsDisarm;
+    if (AbortKind <> 0) or (not FTestMode and not FBenchMode) then LimitsDisarm;
   end;
 end;
 
@@ -1433,6 +1441,7 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1443,6 +1452,7 @@ end;
 
 procedure TGocciaEngine.EndTests;
 begin
+  if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
   LimitsDisarm;
 end;
 
@@ -1493,6 +1503,7 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
