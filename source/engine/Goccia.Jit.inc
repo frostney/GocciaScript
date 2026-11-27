@@ -26,7 +26,7 @@ const
   jR8 = 8; jR9 = 9; jR10 = 10; jR11 = 11; jR12 = 12; jR13 = 13; jR14 = 14; jR15 = 15;
   ccO = 0; ccB = 2; ccAE = 3; ccE = 4; ccNE = 5; ccBE = 6; ccA = 7; ccS = 8; ccP = $A; ccL = $C; ccGE = $D;
   ccLE = $E; ccG = $F;
-  JIT_CHUNK = 4 * 1024 * 1024;
+  JIT_MAX_CODE_BYTES = 4 * 1024 * 1024;
   { membarrier(2) commands (linux/membarrier.h) }
   MEMBARRIER_CMD_QUERY = 0;
   MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE = 1 shl 5;
@@ -43,17 +43,19 @@ var
   JitExitOf: array of Integer;     { each PC's exit stub offset (-1 none yet) }
   JitTakenAt: array of Boolean;    { each PC: compiled (an entry), or only its exit }
   JitLoopHead: array of Boolean;   { each PC: a back edge's target in a template the optimizing tier may compile }
-  JitChunk: PByte = nil;           { executable memory, bump-allocated }
-  JitChunkUsed: PtrUInt = 0;
-  { where the shared stubs end (JitBuildCallStub and the rest, built at the first compile): everything after it is
-    the code of the compiling thread's engine's templates, which JitEngineDone gives back; nil until the stubs
-    exist. JitLaterChunks: the chunks mapped since }
-  JitMarkChunk: PByte = nil;
-  JitMarkUsed: PtrUInt = 0;
-  JitLaterChunks: array of PByte;
   JitMainThread: TThreadID;        { the thread the VM unit started on: the only one that compiles }
   JitSyncCore: Boolean = False;    { membarrier's SYNC_CORE registered for the process (JitOn; Linux) }
   JitTaken: Boolean;               { JitInstr compiled the instruction (False: its code is only its exit) }
+
+type
+  TJitCodeMapping = record
+    Address: Pointer;
+    Size: PtrUInt;
+  end;
+
+threadvar
+  JitCodeMappings: array of TJitCodeMapping;
+  JitCodeMappingCount: Integer;
 
 const
   JIT_HOT = 20;                    { a template's entries before it is compiled (GOCCIA_JIT_HOT overrides) }
@@ -836,7 +838,23 @@ begin
   VA := R[A];
   if not IsObject(VA) then Exit(1);
   O := ObjOf(VA);
-  if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
+  if (O^.OKind = okBound) and XUncurriedNative(O) then
+  begin
+    { uncurryThis(f)(t, ...args) for a native f (as FastLoop's opCall): the registers shift down a place, f the
+      callee and t its this }
+    VB := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+    R[A] := VB;
+    if Argc = 0 then R[A + 1] := VUndefined
+    else
+    begin
+      for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+      Dec(Argc);
+    end;
+    ThisFlag := 0;
+    VA := VB;
+    O := ObjOf(VB);
+  end
+  else if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
   begin
     { f.call(t, ...args) (as FastLoop's opCall): the registers shift down a place, f the callee; every
       condition that would leave the call to the interpreter is checked before the shift }
@@ -1084,6 +1102,28 @@ end;
 
 { the inline call's callee (the newest frame) stopped part way (Res its PC) or threw (-1): finished by a nested
   Execute, its result in R[A]. 0, or -1 a throw pending }
+{ the baseline JIT's call stub's shift for uncurryThis(f) with a native f (R the call's R[A], ArgcFlags its Argc with
+  the undefined-this flag at bit 16): f moved to R[0], the first argument to R[1] as its this, the rest down a place;
+  the new Argc returned (no flag), or -1, nothing changed, for any other callee or when XJitCall would hand the call
+  back to the interpreter }
+function XJitUncurry(R: PValue; ArgcFlags: PtrInt): PtrInt;
+var O: PObj; Argc, J: Integer;
+begin
+  { XJitCall gives these back to the interpreter, which runs the instruction again: on the registers as they were }
+  if MultiRealmAny or JitTooDeep then Exit(-1);
+  O := ObjOf(R[0]);
+  if (O^.OKind <> okBound) or not XUncurriedNative(O) then Exit(-1);
+  Argc := ArgcFlags and $FFFF;
+  R[0] := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+  if Argc = 0 then
+  begin
+    R[1] := VUndefined;
+    Exit(0);
+  end;
+  for J := 0 to Argc - 1 do R[1 + J] := R[2 + J];
+  Result := Argc - 1;
+end;
+
 function XJitCallPost(Fr: PFrame; A, Res: Integer): Integer;
 var V: TValue;
 begin
@@ -3921,32 +3961,6 @@ begin
   JitSlow := Saved;
 end;
 
-{ executable memory for N bytes (nil when the system gives none) }
-function JitAlloc(N: PtrUInt): PByte;
-var P: Pointer;
-begin
-  N := (N + 15) and not PtrUInt(15);
-  if (JitChunk = nil) or (JitChunkUsed + N > JIT_CHUNK) then
-  begin
-    if N > JIT_CHUNK then Exit(nil);
-    {$IFDEF UNIX}
-    P := Fpmmap(nil, JIT_CHUNK, PROT_READ or PROT_WRITE or PROT_EXEC, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
-    if (P = MAP_FAILED) or (P = nil) then Exit(nil);
-    {$ELSE}
-    Exit(nil);
-    {$ENDIF}
-    JitChunk := P;
-    JitChunkUsed := 0;
-    if JitMarkChunk <> nil then
-    begin
-      SetLength(JitLaterChunks, Length(JitLaterChunks) + 1);
-      JitLaterChunks[High(JitLaterChunks)] := P;
-    end;
-  end;
-  Result := JitChunk + JitChunkUsed;
-  Inc(JitChunkUsed, N);
-end;
-
 { CPUID: a core-serializing instruction (it discards the instructions this core fetched before it) }
 procedure JitSerializeCore; assembler; nostackframe;
 asm
@@ -3956,22 +3970,41 @@ asm
   popq %rbx
 end;
 
-{ the emitted code (JitBuf, JitLen bytes) to Dst, ready to run. x86 lets a core run instructions it fetched before
-  another core wrote over them until it executes a serializing instruction (Intel SDM vol. 3A, "Handling Self- and
-  Cross-Modifying Code"; AMD64 APM vol. 2, "Cross-Modifying Code"), and Linux switches between two threads of one
-  process without one (no CR3 write). A thread that
-  compiled on one core and ran the code on another could run the bytes the memory held before (a fresh chunk's
-  zeros: the prologue's first two bytes as add [rax], al, then push rsp for push r12). So every core serializes
-  before the code runs: this one through CPUID, the others through membarrier's SYNC_CORE (the ones running the
-  process's threads at once, the rest before they next return to it). Without it (not Linux, or not registered)
-  only this core does }
-procedure JitPublish(Dst: PByte);
+{ Each publication owns a mapping. The emitter writes into fresh non-executable pages, seals them read-execute,
+  then exposes the entry. Compiled templates belong to this engine. The fixed shared stubs live for the process.
+  Keep the existing core serialization before exposing a newly published entry, including between CPU cores. }
+function JitPublish(AShared: Boolean): PByte;
+var Code: Pointer; MappingIndex, MappingCapacity: Integer; Mapping: TJitCodeMapping;
 begin
-  Move(JitBuf[0], Dst^, JitLen);
-  JitSerializeCore;
-  {$IFDEF LINUX}
-  if JitSyncCore then Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
-  {$ENDIF}
+  Result := nil;
+  if (JitLen <= 0) or (JitLen > JIT_MAX_CODE_BYTES) then Exit;
+  { Linux may add execute permission to PROT_READ when READ_IMPLIES_EXEC is set. The copy needs only write. }
+  Code := Fpmmap(nil, JitLen, PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  if Code = MAP_FAILED then Exit;
+  try
+    Move(JitBuf[0], Code^, JitLen);
+    if Fpmprotect(Code, JitLen, PROT_READ or PROT_EXEC) <> 0 then Exit;
+    if not AShared then
+    begin
+      MappingIndex := JitCodeMappingCount;
+      MappingCapacity := Length(JitCodeMappings);
+      if MappingIndex = MappingCapacity then
+        try
+          SetLength(JitCodeMappings, MappingCapacity * 2 + 32);
+        except
+          on EOutOfMemory do Exit;
+        end;
+      Mapping.Address := Code;
+      Mapping.Size := JitLen;
+      JitCodeMappings[MappingIndex] := Mapping;
+      JitCodeMappingCount := MappingIndex + 1;
+    end;
+    JitSerializeCore;
+    if JitSyncCore then Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
+    Result := Code;
+  finally
+    if Result = nil then Fpmunmap(Code, JitLen);
+  end;
 end;
 
 { compiles T (JitState 1, Jit and JitTable set) or marks it not compiled (2) }
@@ -3981,7 +4014,7 @@ end;
   interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
 procedure JitBuildCallStub;
 var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, LNat, LNatDone: Integer;
-  LGen, LNatOk, LNatThrow, LNatAt: Integer;
+  LGen, LNatOk, LNatThrow, LNatAt, LUnc: Integer;
   LG1, LG2, LG3, LThisDone, LThisDone2: Integer; P: PByte;
   procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
 begin
@@ -4100,6 +4133,19 @@ begin
     here (rax the callee); anything else XJitCall's }
   PatchHere(LNat);
   LNatAt := JitLen;
+  { uncurryThis(f) for a native f (the preludes' captured prototype methods): the registers shifted by XJitUncurry,
+    f the callee and the first argument its this, then f's path from the start of this one (rax f) }
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okBound); LUnc := JccFwd(ccNE);
+  MovRR(jDI, jR13);
+  MovRR(jSI, jR14);
+  CallAbs(@XJitUncurry);
+  AluRI(7, jAX, -1, True); AddS(JccFwd(ccE));
+  MovRR(jR14, jAX);
+  MovRM(jAX, jR13, 0);
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jAX, jDX, True);
+  JB($E9); JD(Cardinal(LNatAt - (JitLen + 4)));
+  PatchHere(LUnc);
   CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okNative); AddS(JccFwd(ccNE));
   LGen := -1;
   if JitCharCodeAtFn <> nil then
@@ -4254,9 +4300,8 @@ begin
   JRex(False, jDX, 0, jAX); JB($8B); JModRR(jDX, jAX);           { mov edx, eax }
   MovRI(jAX, QWord(PtrUInt(@XJitCallPost)));
   JB($FF); JB($E0);                                                { jmp rax }
-  P := JitAlloc(JitLen);
+  P := JitPublish(True);
   if P = nil then Exit;
-  JitPublish(P);
   JitCallStub := P;
   JitCallStubObj := P + K;
   JitCallPost := P + L1;
@@ -4502,9 +4547,8 @@ begin
   for K := 0 to NF - 1 do PatchHere(Fails[K]);
   AluRR($31, jAX, jAX, False);
   JB($C3);
-  P := JitAlloc(JitLen);
+  P := JitPublish(True);
   if P = nil then Exit;
-  JitPublish(P);
   JitICGetHitCode := P;
   JitKeyedGetCode := P + KeyedAt;
 end;
@@ -4570,9 +4614,8 @@ begin
   JB($E9); JD(Cardinal(LCall - (JitLen + 4)));
   PatchHere(LSlow);
   JB($E9); JD(Cardinal(LAcc - (JitLen + 4)));
-  P := JitAlloc(JitLen);
+  P := JitPublish(True);
   if P = nil then Exit;
-  JitPublish(P);
   JitGetterStub := P;
 end;
 
@@ -4778,9 +4821,8 @@ begin
   JRex(False, jSI, 0, jCX); JB($8B); JModRR(jSI, jCX);         { mov esi, ecx }
   MovRI(jAX, QWord(PtrUInt(@XJitNew)));
   JB($FF); JB($E0);                                             { jmp rax }
-  P := JitAlloc(JitLen);
+  P := JitPublish(True);
   if P = nil then Exit;
-  JitPublish(P);
   JitNewStub := P;
 end;
 
@@ -5186,13 +5228,8 @@ begin
   if JitICGetHitCode = nil then JitBuildICGetHit;
   if JitNewStub = nil then JitBuildNewStub;
   if (JitGetterStub = nil) and (JitCallStub <> nil) then JitBuildGetterStub;
-  if (JitMarkChunk = nil) and (JitCallStub <> nil) and (JitICGetHitCode <> nil) and (JitNewStub <> nil) and
-     (JitGetterStub <> nil) then
-  begin
-    JitMarkChunk := JitChunk;
-    JitMarkUsed := JitChunkUsed;
-  end;
-  if (JitCallStub = nil) or (JitGetterStub = nil) then Exit;
+  { Compiled call, new and getter sites require these shared stubs. }
+  if (JitCallStub = nil) or (JitNewStub = nil) or (JitGetterStub = nil) then Exit;
   JitLen := 0;
   JitFixCount := 0;
   JitDeferCount := 0;
@@ -5302,7 +5339,7 @@ begin
     JitBuf[JitFixes[I].At] := D and $FF; JitBuf[JitFixes[I].At + 1] := (D shr 8) and $FF;
     JitBuf[JitFixes[I].At + 2] := (D shr 16) and $FF; JitBuf[JitFixes[I].At + 3] := D shr 24;
   end;
-  Code := JitAlloc(JitLen);
+  Code := JitPublish(False);
   if Code = nil then
   begin
     { no executable memory: the template stays interpreted, and nothing of this compile is kept }
@@ -5312,7 +5349,6 @@ begin
     Exit;
   end;
   {$IFDEF GOCCIA_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
-  JitPublish(Code);
   if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, T, 'base');
   if ((JitDebugFlags and 2) <> 0) and (T^.Name <> nil) and
      (Pos(GetEnvironmentVariable('GOCCIA_JITDUMP'), UTF8Encode(StrToUnicode(T^.Name))) > 0) then

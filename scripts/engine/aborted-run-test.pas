@@ -124,6 +124,27 @@ begin
   end;
 end;
 
+procedure CheckSyncWaitTimeout;
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    RunResult := Engine.Run('setup.js', 'globalThis.cells = new Int32Array(new SharedArrayBuffer(4));');
+    Check(RunResult.Ok, 'synchronous wait fixture setup: ' + RunResult.ErrorMessage);
+    Engine.TimeoutMs := 100;
+    RunResult := Engine.Run('wait.js', 'Atomics.wait(cells, 0, 0);');
+    Check(RunResult.Aborted = gaTimeout, 'a synchronous wait should respect the run deadline');
+    Engine.TimeoutMs := 0;
+    RunResult := Engine.Run('notify.js', 'Atomics.notify(cells, 0);');
+    Check(RunResult.Ok and (RunResult.ResultText = '0'), 'timeout should unregister the synchronous waiter');
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure CheckAsyncWaitTimeout;
 var
   Engine: TGocciaEngine;
@@ -288,18 +309,127 @@ begin
   end;
 end;
 
+{ the URL global name set to AURL for the engine's next run }
+procedure SetGlobalURL(const AName, AURL: UnicodeString);
+var Value: TValue;
+begin
+  Value := StrFromUnicode(AURL);
+  PushRoot(Value);
+  Check(SetV(GlobalObj, AtomOf(AName), RootAt(TempTop - 1)), 'could not set ' + AName);
+  PopRoots(1);
+end;
+
+{ the global status is the 200 a run's request to okURL settled with }
+procedure CheckAnswered(const AMessage: string);
+var Status: TValue;
+begin
+  Check(GetV(GlobalObj, AtomOf('status'), Status) and IsNumber(Status) and (NumOf(Status) = 200), AMessage);
+end;
+
+const
+  { requests that hold every one of the thread's worker slots }
+  FETCH_WORKER_SLOTS = 16;
+  { an aborted request's worker stops within one network poll (50 ms): the next request is answered well within
+    this, where before it waited for the hung requests' sockets, which never return }
+  PROMPT_ANSWER_MS = 2000;
+  NEXT_RUN_TIMEOUT_MS = 5000;
+
+{ a run that ends at its instruction limit with every worker slot taken by a request to a server that never answers:
+  its requests are dropped and their workers stop, so the engine's next run gets the slots at once (#2216) }
+procedure CheckFetchRunAbortFreesSlots(const AHangURL, AOkURL: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  ErrorText: UnicodeString;
+  Profile: TLangProfile;
+  StartedAt: QWord;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1');
+    Profile := Engine.Profile;
+    Profile.WhileLoop := True;
+    Engine.Profile := Profile;
+    if not Engine.PrepareHost(ErrorText) then Check(False, 'fetch host setup: ' + ErrorText);
+    SetGlobalURL('hangURL', AHangURL);
+    SetGlobalURL('okURL', AOkURL);
+    Engine.MaxInstructions := 500000;
+    RunResult := Engine.Run('hang.js',
+      'let i = 0; while (i < ' + IntToStr(FETCH_WORKER_SLOTS) + ') { fetch(hangURL).catch(() => {}); i++; } ' +
+      'while (true) {}');
+    Check(RunResult.Aborted = gaInstructionLimit, 'the hung run should end at its instruction limit: ' +
+      RunResult.ErrorMessage);
+    Check(not FetchPending, 'the instruction limit should drop the hung requests');
+    Engine.MaxInstructions := 0;
+    Engine.TimeoutMs := NEXT_RUN_TIMEOUT_MS;
+    StartedAt := GetTickCount64;
+    RunResult := Engine.Run('next.js',
+      'globalThis.status = 0; fetch(okURL).then((r) => { globalThis.status = r.status; });');
+    Check(RunResult.Ok, 'the next run''s request should not wait for the aborted run''s hung requests: ' +
+      RunResult.ErrorMessage);
+    CheckAnswered('the next run''s request should be answered');
+    Check(GetTickCount64 - StartedAt < PROMPT_ANSWER_MS, 'the next run''s request should be answered promptly, not ' +
+      'after ' + IntToStr(GetTickCount64 - StartedAt) + ' ms');
+  finally
+    Engine.Free;
+  end;
+end;
+
+{ every worker slot taken by a request to a server that never answers, each aborted through its own
+  AbortController: the aborted requests' workers stop, so a request made after them starts and is answered at once
+  (#2216) }
+procedure CheckFetchControllerAbortFreesSlots(const AHangURL, AOkURL: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  ErrorText: UnicodeString;
+  StartedAt: QWord;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1');
+    if not Engine.PrepareHost(ErrorText) then Check(False, 'fetch host setup: ' + ErrorText);
+    SetGlobalURL('hangURL', AHangURL);
+    SetGlobalURL('okURL', AOkURL);
+    Engine.TimeoutMs := NEXT_RUN_TIMEOUT_MS;
+    StartedAt := GetTickCount64;
+    RunResult := Engine.Run('controllers.js',
+      'globalThis.status = 0;' +
+      'const controllers = Array.from({ length: ' + IntToStr(FETCH_WORKER_SLOTS + 4) + ' }, () => new AbortController());' +
+      'const hung = controllers.map((c) => fetch(hangURL, { signal: c.signal }).catch((e) => e.name));' +
+      'controllers.forEach((c) => c.abort());' +
+      'Promise.all(hung).then((names) => {' +
+      '  if (!names.every((n) => n === "AbortError")) throw new Error("not aborted: " + names);' +
+      '  return fetch(okURL);' +
+      '}).then((r) => { globalThis.status = r.status; });');
+    Check(RunResult.Ok, 'the request after the aborted ones should not wait for their workers: ' +
+      RunResult.ErrorMessage);
+    CheckAnswered('the request after the aborted ones should be answered');
+    Check(GetTickCount64 - StartedAt < PROMPT_ANSWER_MS, 'the request after the aborted ones should be answered ' +
+      'promptly, not after ' + IntToStr(GetTickCount64 - StartedAt) + ' ms');
+  finally
+    Engine.Free;
+  end;
+end;
+
 begin
   try
     CheckAbort(gaHostAbort);
     CheckAbort(gaInstructionLimit, True);
     CheckAbort(gaTimeout);
     CheckAbort(gaMemoryLimit);
+    CheckSyncWaitTimeout;
     CheckAsyncWaitTimeout;
     CheckFinalizationAbort;
-    if ParamCount = 1 then
+    if ParamCount >= 1 then
     begin
       CheckFetchAbort(ParamStr(1));
       CheckFetchQueueAbort(ParamStr(1));
+    end;
+    if ParamCount >= 2 then
+    begin
+      CheckFetchRunAbortFreesSlots(ParamStr(2), ParamStr(1));
+      CheckFetchControllerAbortFreesSlots(ParamStr(2), ParamStr(1));
     end;
     WriteLn('Aborted run tests passed');
   except

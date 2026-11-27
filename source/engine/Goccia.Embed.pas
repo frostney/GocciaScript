@@ -16,6 +16,8 @@ uses
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
+  TGocciaNativeModuleFactory = TNativeModuleFactory;
+  TGocciaEmbedderWork = TEmbedderWork;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -76,6 +78,9 @@ type
     ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
+    { Dispatch and native work charged while running this entry and its event loop. }
+    HasInstructionCount: Boolean;
+    InstructionCount: QWord;
     { ResultForm: the entry's completion value as String(value) or JSON (a module's too: the value of its last
       expression statement), converted after the event loop under the run's limits; a conversion that throws fails
       the run }
@@ -92,6 +97,7 @@ type
     FBenchMode: Boolean;
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
+    FMeasureInstructions: Boolean;
     FSetupAborted: TGocciaAbort;
     FMaxFrames: Integer;
     FHostReady: Boolean;
@@ -220,6 +226,11 @@ type
     function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+    { Registers a native factory for an import, with the same lifetime as this engine. }
+    function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+      var Err: UnicodeString): Boolean;
+    { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
+    procedure SetHostWork(Work: TGocciaEmbedderWork);
     function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
@@ -313,6 +324,8 @@ type
       run's }
     property SetupAborted: TGocciaAbort read FSetupAborted;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
+    { Count instructions when MaxInstructions is zero. Capped runs always report a count. }
+    property MeasureInstructions: Boolean read FMeasureInstructions write FMeasureInstructions;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
       own); 0 for the default (Goccia.HostAPI DefaultHeapCeiling) }
@@ -512,7 +525,8 @@ begin
     Exit('[object ' + Tag + ']');
   end;
   Result := '';
-  if ToStringV(V, S) and IsString(S) then Result := StrToUnicode(StrOf(S));
+  if ToStringV(V, S) and IsString(S) then Result := StrToUnicode(StrOf(S))
+  else if (AbortKind <> 0) and IsObject(Pending) then Result := ThrownText(Pending);
   Pending := VUndefined;
 end;
 
@@ -664,6 +678,12 @@ begin
     Exit(True);
   end;
   Result := ThrowTypeError('Host environment export "' + Name + '" must return a Number or BigInt');
+end;
+
+function TGocciaEngine.DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := HostReady(Err) and Goccia.HostAPI.DefineNativeModule(Specifier, Factory, Err);
 end;
 
 { the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
@@ -934,6 +954,11 @@ begin
   Result := InstallHost(Err);
 end;
 
+procedure TGocciaEngine.SetHostWork(Work: TGocciaEmbedderWork);
+begin
+  SetEmbedderWork(Work);
+end;
+
 function TGocciaEngine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
@@ -973,6 +998,7 @@ begin
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
   LimitsArm(FTimeoutMs, FMaxInstructions);
+  Result := False;
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
@@ -982,7 +1008,8 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
-    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark);
+    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark)
+    else if not Result then DiscardEmbedderWork;
     LimitsDisarm;
   end;
 end;
@@ -1163,6 +1190,8 @@ begin
   if not PrepareHost(Err) then
   begin
     Result.ErrorMessage := Err;
+    { work the host source holds from before does not outlive the failed run }
+    DiscardEmbedderWork;
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
@@ -1195,11 +1224,13 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions);
+      Compiled := False;
       try
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+        else if not Compiled then DiscardEmbedderWork;
         LimitsDisarm;
       end;
     end
@@ -1251,6 +1282,8 @@ begin
     Result.CompileNanoseconds := GetNanoseconds - Start;
     if not Compiled then
     begin
+      { work a loaded host environment started does not outlive the failed run }
+      DiscardEmbedderWork;
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1272,6 +1305,7 @@ begin
     Result.ErrorLine := ParseErrorLine;
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
+    DiscardEmbedderWork;
     Exit;
   end;
   Result.Compiled := True;
@@ -1283,7 +1317,7 @@ begin
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
-  LimitsArm(FTimeoutMs, FMaxInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions);
   Start := GetNanoseconds;
   { the completion value, rooted through the event loop }
   PushRoot(VUndefined);
@@ -1350,23 +1384,7 @@ begin
       Result.HasResult := Result.Ok;
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
-    case AbortKind of
-      1: Result.Aborted := gaTimeout;
-      2: Result.Aborted := gaInstructionLimit;
-      3:
-        begin
-          Result.Aborted := gaMemoryLimit;
-          Result.ErrorName := 'RangeError';
-          Result.ErrorText := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Result.Aborted := gaHostAbort;
-          Result.ErrorName := 'Error';
-          Result.ErrorText := HostAbortMessage;
-        end;
-    end;
-    if not Result.Ok or (Result.Aborted <> gaNone) then
+    if not Result.Ok or (AbortKind <> 0) then
     begin
       Result.Ok := False;
       Thrown := Pending;
@@ -1375,7 +1393,7 @@ begin
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
-      if Result.Aborted = gaNone then DescribeThrown(RootAt(TempTop - 1), Result);
+      if AbortKind = 0 then DescribeThrown(RootAt(TempTop - 1), Result);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
@@ -1406,8 +1424,26 @@ begin
         end;
       end;
     end;
+    Result.HasInstructionCount := ReadInstructionCount(Result.InstructionCount);
+    case AbortKind of
+      1: Result.Aborted := gaTimeout;
+      2: Result.Aborted := gaInstructionLimit;
+      3:
+        begin
+          Result.Aborted := gaMemoryLimit;
+          Result.ErrorName := 'RangeError';
+          Result.ErrorText := MemoryLimitMessage;
+        end;
+      4:
+        begin
+          Result.Aborted := gaHostAbort;
+          Result.ErrorName := 'Error';
+          Result.ErrorText := HostAbortMessage;
+        end;
+    end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result.Ok then DiscardEmbedderWork;
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
@@ -1416,7 +1452,8 @@ begin
     SetProviderGraphCheck(nil);
     PopRoots(1);
     { a test or benchmark file's limits cover its suites too (RunTests and RunBenchmarks disarm them) }
-    if (AbortKind <> 0) or (not FTestMode and not FBenchMode) then LimitsDisarm;
+    if (AbortKind <> 0) or (not FTestMode and not FBenchMode) then LimitsDisarm
+    else StopInstructionMeasurement;
   end;
 end;
 
@@ -1430,6 +1467,7 @@ begin
   SetModuleContentCheck(FModuleContentCheck);
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
+  Result := False;
   try
     Result := RunTestSuites(Json, Err);
     case AbortKind of
@@ -1448,7 +1486,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1492,6 +1531,7 @@ begin
   SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
+  Result := False;
   try
     Result := RunBenchmarkSuites(Deterministic, Entries, Total, DurationNanoseconds, Err);
     case AbortKind of
@@ -1510,7 +1550,8 @@ begin
     end;
     if Aborted <> gaNone then Result := False;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result then DiscardEmbedderWork;
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);

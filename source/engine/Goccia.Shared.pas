@@ -31,6 +31,10 @@ type
     GrowLock: LongInt;      { atomic: held while a grow zeroes the new bytes and publishes the length }
   end;
 
+{ the tick count a wait of TimeoutMs milliseconds ends at, shared by Atomics.wait and Atomics.waitAsync: High(QWord)
+  for an infinite timeout and for one past 1e15 ms (some 31,000 years, the cutoff Atomics.waitAsync used), which no
+  run outlives and which keeps Ceil64 and the sum far from overflowing }
+function WaitDeadline(TimeoutMs: Double): QWord;
 function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
 procedure RetainBlock(B: PSharedBlock);
 procedure ReleaseBlock(B: PSharedBlock);
@@ -60,9 +64,10 @@ type
   TWaitCheck = function(Data: Pointer): Boolean;
 
 { Atomics.wait: suspends the calling thread on (Block, ByteIndex) if Check holds, until notified or
-  TimeoutMs passes. TimeoutMs is +Infinity or >= 0 (25.4.13: NaN is +Infinity, a negative time 0). }
+  TimeoutMs passes. TimeoutMs is +Infinity or >= 0 (25.4.13: NaN is +Infinity, a negative time 0).
+  When InterruptWord is set, end the wait once the engine raises that flag. The caller delivers the abort. }
 function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
-  TimeoutMs: Double): TWaitResult;
+  TimeoutMs: Double; InterruptWord: PLongInt): TWaitResult;
 { Atomics.waitAsync: adds an async waiter for this thread with Token if Check holds (wrOk), else wrNotEqual.
   A notify posts Token to this thread's mailbox (SharedAsyncPoll). }
 function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
@@ -81,6 +86,15 @@ implementation
 
 uses
   Math, Goccia.ThreadCleanupRegistry;
+
+function WaitDeadline(TimeoutMs: Double): QWord;
+const LongestWaitMs = 1e15;
+begin
+  if IsInfinite(TimeoutMs) or (TimeoutMs > LongestWaitMs) then Exit(High(QWord));
+  if TimeoutMs <= 0 then Exit(GetTickCount64);
+  { Ceil64: Ceil is 32-bit and would wrap a wait of 2^32 ms or more }
+  Result := GetTickCount64 + QWord(Ceil64(TimeoutMs));
+end;
 
 { ---------------- blocks ---------------- }
 
@@ -332,8 +346,9 @@ begin
 end;
 
 function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
-  TimeoutMs: Double): TWaitResult;
-var W: TWaiter; Ms: Cardinal; Deadline, Now_: QWord;
+  TimeoutMs: Double; InterruptWord: PLongInt): TWaitResult;
+const InterruptCheckMs = 10;
+var W: TWaiter; Ms: Cardinal; Deadline, Now_: QWord; Notified: Boolean;
 begin
   EnterCriticalSection(WaitLock);
   if not Check(CheckData) then
@@ -346,27 +361,23 @@ begin
   if WaitTail = nil then WaitHead := @W else WaitTail^.Next := @W;
   WaitTail := @W;
   LeaveCriticalSection(WaitLock);
-  if IsInfinite(TimeoutMs) then
-    repeat
-      RTLEventWaitFor(W.Event);
-      EnterCriticalSection(WaitLock);
-      Now_ := Ord(W.Notified);
-      LeaveCriticalSection(WaitLock);
-    until Now_ <> 0
-  else
-  begin
-    Deadline := GetTickCount64 + QWord(Ceil(TimeoutMs));
-    repeat
-      EnterCriticalSection(WaitLock);
-      Now_ := Ord(W.Notified);
-      LeaveCriticalSection(WaitLock);
-      if Now_ <> 0 then Break;
-      Now_ := GetTickCount64;
-      if Now_ >= Deadline then Break;
+  Deadline := WaitDeadline(TimeoutMs);
+  repeat
+    EnterCriticalSection(WaitLock);
+    Notified := W.Notified;
+    LeaveCriticalSection(WaitLock);
+    if Notified then Break;
+    if (InterruptWord <> nil) and (InterruptWord^ <> 0) then Break;
+    Now_ := GetTickCount64;
+    if Now_ >= Deadline then Break;
+    if (InterruptWord = nil) and (Deadline = High(QWord)) then RTLEventWaitFor(W.Event)
+    else
+    begin
       if Deadline - Now_ > 1000000 then Ms := 1000000 else Ms := Deadline - Now_;
+      if (InterruptWord <> nil) and (Ms > InterruptCheckMs) then Ms := InterruptCheckMs;
       RTLEventWaitFor(W.Event, Ms);
-    until False;
-  end;
+    end;
+  until False;
   EnterCriticalSection(WaitLock);
   if W.Notified then Result := wrOk
   else
@@ -513,6 +524,9 @@ initialization
   InitCriticalSection(WaitLock);
 
 finalization
+  { this unit finalizes before Goccia.ThreadCleanupRegistry, whose finalization runs GocciaSharedThreadvarCleanup on
+    the main thread: release the main thread's mailbox while WaitLock still exists }
+  SharedAsyncDiscard;
   DoneCriticalSection(WaitLock);
 
 end.

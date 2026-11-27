@@ -63,12 +63,12 @@ end.
 |-------|---------|
 | Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact` |
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
-| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment` |
+| Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment`, [`SetHostWork`](#asynchronous-host-work) |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
-| Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
+| Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, [`DefineNativeModule`](#native-modules), `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
 | Capabilities | `Capabilities`, `ProjectRoot`, `AuditSink`, `Audit`, `FetchMaxResponseBytes` |
-| Limits | `TimeoutMs`, `MaxInstructions`, `MaxMemory`, `MaxFrames` |
+| Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `MaxMemory`, `MaxFrames` |
 | Test and benchmark hosts | `RunTests`, `EndTests`, `LateRejection`, `RunBenchmarks`, `HeapSnapshotObserved`, `HeapSnapshotVerify` |
 | Profiling and coverage | `ProfileOpcodes`, `ProfileFunctions`, `Coverage` |
 
@@ -210,12 +210,45 @@ Settings choose the rest:
 
 | Setting | Effect |
 |---------|--------|
-| `Bare` | Only the core language with `print`, `Goccia`, `DOMException`, `atob`, `btoa` and `PermissionDenied`: no console, timers, web APIs or host modules, and no module content provider, so an import that finds its file fails with `ERR_MODULE_LOADING_UNSUPPORTED` (`GocciaScriptLoaderBare`) |
+| `Bare` | Only the core language with `print`, `Goccia`, `DOMException`, `atob`, `btoa` and `PermissionDenied`: no console, timers, web APIs or default host modules. Hosts can register [native modules](#native-modules). With no module content provider, an import that finds its file fails with `ERR_MODULE_LOADING_UNSUPPORTED` (`GocciaScriptLoaderBare`) |
 | `ExposeTimers := False` | No timer globals and no `goccia:timers`; the timer queue still serves the host's own users, such as `AbortSignal.timeout` |
 | `ConfigJson` | The host config as a JSON object of strings (`goccia.json`'s keys), read by the preludes |
 | `TestMode` | The test framework's host: an uncaught error does not end the process; `InstallTestingAPI` (`Goccia.HostAPI`) then installs `describe`, `test`, `expect` and `goccia:test`, and `RunTests` runs the suites |
+| `ConfigJson` with `"vitest-compat": "true"` | Enables imports from `vitest` outside `TestMode`, with no testing globals. `goccia:test.runTests()` stays synchronous and tests are available by import. Requires the standard host with timers enabled; module mocks (`vi.mock`, `vi.unmock` and their helpers) throw, as nothing hoists them ([the `vitest` shim](testing-api.md#the-vitest-compatibility-shim)) |
 | `BenchMode` | The benchmark runner's host: `InstallBenchmarkAPI` installs `goccia:microbench`, and the limits `Run` armed stay armed for `RunBenchmarks` |
 | `Capabilities` granting `ffi` | Installs the `FFI` global; `FFI.open` judges each library by the `ffi` scopes |
+
+### Asynchronous host work
+
+Install a `TGocciaEmbedderWork` instance with `Engine.SetHostWork` before running code. Keep the
+instance alive until it is removed with `SetHostWork(nil)` or the engine is destroyed. A bare
+engine can use this hook as well.
+
+- `HasPending` reports outstanding work such as a native request holding a JavaScript promise.
+- `Pump(TimeoutMs)` takes ready results and settles their promises on the engine thread. Zero
+  means return immediately. A positive value bounds the wait for a wake from the work source.
+  Return `False` with an engine exception pending when the pump stops the run.
+- `Discard` drops outstanding requests and clears their temporary roots without executing guest
+  code. The engine calls it when discarding pending work after failure, replacing the handler or
+  ending the engine.
+- `Mark` records the current request boundary. `DiscardFrom(Mark)` drops requests added after
+  that boundary when an individual test times out, leaving earlier work in place.
+
+Background producers send native data to the work source. Keep JavaScript values and promise
+settlement on the engine thread. Root storage registered with `AddRoot` or `AddRootRange` must
+outlive the engine, even when the work source is detached first. Keep such slots in the
+engine owner's storage and clear them to `VUndefined` when releasing their values.
+
+The event loop checks deadlines and cancellation before and after the pump. Results a pump
+delivers after the deadline passed are late: their promises settle, but their reactions do
+not run, so a value derived from one never settles. While host work is pending, virtual
+timers do not jump ahead: only a timer already due runs. In test mode a pump that returns
+`False` fails the current test and the suite goes on, even when the failing request belongs
+to work another test started. Idle pumps do not spend the instruction budget, and neither do timers that cannot
+fire while host work waits. JavaScript callbacks and native work explicitly charged by the
+host still spend it. The [event loop's order](architecture.md#synchronous-microtask-queue) and
+[ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md) describe the
+scheduling.
 
 ### Sandbox filesystem
 
@@ -365,6 +398,38 @@ Aliases follow WHATWG import map matching: a key without a trailing `/` matches 
 
 A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant` callback grants the walk; a resolver without one refuses it. The CLI hosts answer it from the `import` capability (`Goccia.CLI.FileEngine` `TGocciaImportGrant`), which also grants and audits provider packages (`ProviderGrant`, `ProviderAudit`) and checks their files against their pins through `ModuleContentCheck` and `ProviderGraph`.
 
+### Native modules
+
+`TGocciaEngine.DefineNativeModule(Specifier, Factory, Err)` registers a native implementation under a virtual
+address such as `host:sample`. Configure the engine first and register on its owning thread before running
+source or an artifact. Registration refuses an existing module key and the runtime's `goccia:` namespace, including the modules a test or
+bench host installs later. It also works with `Bare`.
+
+The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
+loads: while the import graph loads, before any module in it evaluates, even if linking the graph fails afterwards and
+under `import defer` too. A factory with side effects must not rely on another module of the same graph having run. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
+string. Build the list with `NewArray` and `ArrayPush` and release temporary roots after setting `ExportList`.
+Return `False` with a pending error when initialization fails, and never let a Pascal exception escape the callback;
+`False` with nothing pending fails the import with a `TypeError`. A later import calls the factory again. The module
+loader retains the exports for that realm, and repeated imports use the same namespace object. A load that reaches
+the same module in the same realm while its factory is still running fails with a `TypeError` instead of calling
+the factory again. Keep the callback's owner live until the engine is
+destroyed. Registrations end with that engine.
+
+```pascal
+Base := TempTop;
+PushRoot(MkPtr(NewArray(0, 2)));
+try
+  PushRoot(StrFromUnicode('answer'));
+  ArrayPush(ObjOf(RootAt(Base)), RootAt(Base + 1));
+  ArrayPush(ObjOf(RootAt(Base)), MkInt(42));
+  ExportList := RootAt(Base);
+finally
+  PopRoots(TempTop - Base);
+end;
+Result := True;
+```
+
 ### Virtual Modules
 
 Virtual modules supply modules that are not files ([Virtual Module Configuration](virtual-modules.md)). Define them before the run:
@@ -419,6 +484,7 @@ Engine.AuditSink := Log.Record_;
 | `Ok` | The run completed |
 | `Compiled` | The entry compiled; False for a syntax error |
 | `Aborted` | `gaNone`, or the limit or host abort that ended the run ([Execution Limits](#execution-limits)) |
+| `HasInstructionCount`, `InstructionCount` | Whether the entry's execution was counted and the number of units charged in that entry and its event loop |
 | `ErrorMessage` | The uncaught value as text (`TypeError: bad input`), or the limit's message |
 | `ErrorIsError` | The thrown value had a string `name` or `message`, or the source did not compile |
 | `ErrorName`, `ErrorText` | Its name and message |
@@ -464,7 +530,12 @@ Engine.MaxFrames := 5000;
 
 ### Instruction Limit
 
-`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
+`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`), as `Array.prototype.fill` and the element loops of the typed-array built-ins do. A `set` or the constructor between typed arrays of one element type copies their bytes in one move and charges no steps; a same-type `slice` copies element by element and charges one step per element. The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
+
+A capped entry reports its count in `TGocciaRunResult`, including the charge that found an exhausted cap.
+Set `MeasureInstructions` to count the same units in an uncapped entry. Both modes count the entry and its event
+loop on that engine thread, including native work charged there. Set neither setting to keep the ordinary fast
+path and leave `HasInstructionCount` false. Counter-enabled entries run in the interpreter.
 
 ### Memory Limit
 
@@ -488,7 +559,7 @@ Engine.MaxFrames := 5000;
 
 ## Event Loop
 
-Promise jobs, timers and `fetch` completions are run by `Run` itself; a host drains nothing. The script is one task: its synchronous code runs to completion, then its jobs in order, then each due timer followed by the jobs it queued. Timers wait on a virtual clock, not on wall time: when the engine runs out of work the clock jumps to the next due timer. A pending `fetch` is waited for in slices, so the run's deadline still ends the wait.
+Promise jobs, timers, `Atomics.waitAsync` waits and `fetch` completions are run by `Run` itself; a host drains nothing. The [architecture guide](architecture.md#synchronous-microtask-queue) lists the loop's order, including the virtual timer clock. A host with native work of its own settles it through [`SetHostWork`](#asynchronous-host-work).
 
 ## Garbage Collector
 

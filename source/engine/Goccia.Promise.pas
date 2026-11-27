@@ -35,6 +35,8 @@ function TakeRejections(From: Integer): TValue;
 function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;
 function TakeJobErrors: TValue;
 procedure DiscardJobs;
+{ drops, without running them, the jobs queued after the oldest Keep }
+procedure DiscardJobsAfter(Keep: Integer);
 { clears unhandled rejections without allocating the report that TakeRejections returns }
 procedure DiscardRejections;
 { the jobs queued and not yet run }
@@ -332,6 +334,22 @@ begin
   for I := 0 to Integer(Q^.Len) - 1 do Q^.Data[I] := VUndefined;
   JobHead := 0;
   JobCount := 0;
+end;
+
+procedure DiscardJobsAfter(Keep: Integer);
+var Q: PValueArray; Cap, I, J, K: Integer;
+begin
+  if Keep < 0 then Keep := 0;
+  if JobCount <= Keep then Exit;
+  Q := VA(Jobs);
+  Cap := Integer(Q^.Len) div 4;
+  for I := Keep to JobCount - 1 do
+  begin
+    J := ((JobHead + I) mod Cap) * 4;
+    for K := 0 to 3 do Q^.Data[J + K] := VUndefined;
+  end;
+  JobCount := Keep;
+  if JobCount = 0 then JobHead := 0;
 end;
 
 procedure Settle(P: TValue; State: Integer; V: TValue);

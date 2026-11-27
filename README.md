@@ -76,10 +76,10 @@ environment.
 ## Embed it
 
 Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. A host can
+application-specific globals, [native modules](docs/embedding.md#native-modules), capabilities, and limits. A host can
 grant or withhold `fetch` through the `net` capability
 ([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
-read-only, and bound a run with a timeout
+read-only, and bound a run with a timeout or measure its charged instructions
 ([Execution Limits](docs/embedding.md#execution-limits)). The timeout takes
 effect at the engine's next check, so a native call blocked outside the engine
 is not interrupted until it returns; give such calls their own deadlines or
@@ -454,7 +454,9 @@ property shapes, asymmetric matchers, custom serializers, and `-u` updates.
 Importing `vi` from `"vitest"` resolves to a bundled compatibility shim, so
 suites written against `vi.fn`, `vi.spyOn`, and factory-form `vi.mock` (a
 synchronous arrow factory returning an object literal — no automock, no
-spread-based partial mock) run unmodified; see
+spread-based partial mock) run unmodified. An embedder can
+[opt in to the shim](docs/testing-api.md#the-vitest-compatibility-shim) without
+the testing globals; see
 [Test Framework API](docs/testing-api.md) for the full factory constraints and
 the members that are not implemented.
 See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
@@ -534,6 +536,8 @@ complete implementation, default-profile, and compatibility-path detail, see
 [Language](docs/language.md).
 
 ## FreePascal and native embedding
+
+An embedder can [pump asynchronous host work](docs/embedding.md#asynchronous-host-work) alongside JavaScript promises and built-in work.
 
 FreePascal builds GocciaScript's native binaries, so the engine needs no other
 runtime underneath, and it is the toolchain for releases and the documented

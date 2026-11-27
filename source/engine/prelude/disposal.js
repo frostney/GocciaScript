@@ -16,7 +16,7 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
 
   // SuppressedError ( error, suppressed, message )
   var SEP;
@@ -30,7 +30,7 @@
     return e;
   }
   SEP = Object.create(Err.prototype);
-  defineProperty(SuppressedError, "prototype", { value: SEP, writable: false, enumerable: false, configurable: false });
+  defineProperty(SuppressedError, "prototype", { __proto__: null, value: SEP, writable: false, enumerable: false, configurable: false });
   def(SEP, "constructor", SuppressedError);
   def(SEP, "name", "SuppressedError");
   def(SEP, "message", "");
@@ -72,6 +72,9 @@
     return m;
   }
   // AddDisposableResource(capability, V, hint)
+  // a stack's capability list: no prototype, so an index store reaches no setter a script put on Array.prototype or
+  // Object.prototype
+  function capList() { return setProto([], null); }
   function add(cap, v, async) {
     if (v === null || v === undefined) {
       if (async) { var n = cap.length; cap[n] = undefined; cap[n + 1] = undefined; cap[n + 2] = true; }
@@ -158,7 +161,7 @@
 
   // 27.3 DisposableStack
   class DisposableStack {
-    #state = "pending"; #cap = [];
+    #state = "pending"; #cap = capList();
     constructor() {}
     static #check(s, name) {
       if (!isObject(s) || !(#state in s)) throw new TypeErr("DisposableStack.prototype." + name + " called on an incompatible receiver");
@@ -196,7 +199,7 @@
       if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
       var n = new DisposableStack();
       n.#cap = this.#cap;
-      this.#cap = [];
+      this.#cap = capList();
       this.#state = "disposed";
       return n;
     }
@@ -204,7 +207,7 @@
 
   // 27.4 AsyncDisposableStack
   class AsyncDisposableStack {
-    #state = "pending"; #cap = [];
+    #state = "pending"; #cap = capList();
     constructor() {}
     static #check(s, name) {
       if (!isObject(s) || !(#state in s)) throw new TypeErr("AsyncDisposableStack.prototype." + name + " called on an incompatible receiver");
@@ -245,7 +248,7 @@
       if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
       var n = new AsyncDisposableStack();
       n.#cap = this.#cap;
-      this.#cap = [];
+      this.#cap = capList();
       this.#state = "disposed";
       return n;
     }
@@ -253,9 +256,9 @@
 
   var DP = DisposableStack.prototype, AP = AsyncDisposableStack.prototype;
   def(DP, SymDispose, DP.dispose);
-  defineProperty(DP, SymToStringTag, { value: "DisposableStack", writable: false, enumerable: false, configurable: true });
+  defineProperty(DP, SymToStringTag, { __proto__: null, value: "DisposableStack", writable: false, enumerable: false, configurable: true });
   def(AP, SymAsyncDispose, AP.disposeAsync);
-  defineProperty(AP, SymToStringTag, { value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
+  defineProperty(AP, SymToStringTag, { __proto__: null, value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
   def(G, "DisposableStack", DisposableStack);
   markIntrinsic(DisposableStack);
   def(G, "AsyncDisposableStack", AsyncDisposableStack);
@@ -266,15 +269,15 @@
   var asyncIterDispose = {
     [SymAsyncDispose]() {
       var O = this;
-      return new Promise(function (resolve, reject) {
-        var ret;
-        try { ret = O.return; } catch (e) { reject(e); return; }
-        if (ret === undefined || ret === null) { resolve(undefined); return; }
-        if (!isCallable(ret)) { reject(new TypeErr("return is not a function")); return; }
-        var r;
-        try { r = apply(ret, O, []); } catch (e) { reject(e); return; }   // Call(return, O): no arguments
-        PromiseResolve(r).then(function () { resolve(undefined); }, reject);
-      });
+      // an async function: its abrupt completions reject (IfAbruptRejectPromise), and await is PromiseResolve then
+      // PerformPromiseThen, without looking up the result's then
+      return (async function () {
+        var ret = O.return;
+        if (ret === undefined || ret === null) return undefined;
+        if (!isCallable(ret)) throw new TypeErr("return is not a function");
+        await apply(ret, O, []);   // Call(return, O): no arguments
+        return undefined;
+      })();
     }
   }[SymAsyncDispose];
   def(AIP, SymAsyncDispose, asyncIterDispose);

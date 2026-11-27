@@ -327,19 +327,21 @@ jobs:
         # checksum, which would make Windows builds irreproducible.
         run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests ${{ matrix.os == 'darwin' && '--strip' || '' }}
 
-      - name: Stage TOML compliance runner
+      - name: Stage compliance runners
         run: |
-          copied=0
-          for candidate in build/GocciaTOMLComplianceRunner build/GocciaTOMLComplianceRunner.exe; do
-            if [ -f "$candidate" ]; then
-              cp "$candidate" ci-artifacts/
-              copied=1
+          for name in GocciaTOMLComplianceRunner GocciaYAMLComplianceRunner; do
+            copied=0
+            for candidate in "build/$name" "build/$name.exe"; do
+              if [ -f "$candidate" ]; then
+                cp "$candidate" ci-artifacts/
+                copied=1
+              fi
+            done
+            if [ "$copied" -eq 0 ]; then
+              echo "::error::Missing compiled $name binary in build/"
+              exit 1
             fi
           done
-          if [ "$copied" -eq 0 ]; then
-            echo "::error::Missing compiled GocciaTOMLComplianceRunner binary in build/"
-            exit 1
-          fi
 
       - name: Build Win32 exception probes with development metadata
         if: matrix.target == 'i386-win32'
@@ -668,6 +670,55 @@ jobs:
           name: toml-test-results-${{ matrix.target }}
           retention-days: 1
           path: toml-test-results-${{ matrix.target }}.json
+
+  yaml-compliance:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-darwin
+            runner: macos-latest
+          - target: x86_64-darwin
+            runner: macos-15-intel
+          - target: x86_64-linux
+            runner: ubuntu-latest
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: x86_64-win64
+            runner: windows-latest
+          - target: i386-win32
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gocciascript-${{ matrix.target }}
+          path: build/
+
+      - name: Make binaries executable
+        if: runner.os != 'Windows'
+        run: chmod +x build/*
+
+      - name: Run YAML 1.2.2 compliance suite
+        run: bash .github/scripts/run-yaml-compliance.sh build "$RUNNER_TEMP" yaml-test-results-${{ matrix.target }}.json
+
+      - name: Upload YAML compliance report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: yaml-test-results-${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 1
+          path: yaml-test-results-${{ matrix.target }}.json
 
   json5-compliance:
     needs: build
@@ -1659,7 +1710,7 @@ jobs:
           }
 
   artifacts:
-    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
+    needs: [test, toml-compliance, yaml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -1694,7 +1745,7 @@ jobs:
           path: release-artifacts/*
 
   release:
-    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
+    needs: [test, toml-compliance, yaml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
