@@ -238,9 +238,13 @@ settlement on the engine thread. Root storage registered with `AddRoot` or `AddR
 outlive the engine, even when the work source is detached first. Keep such slots in the
 engine owner's storage and clear them to `VUndefined` when releasing their values.
 
-The event loop checks deadlines and cancellation before and after the pump. Idle pumps do
-not spend the instruction budget. JavaScript callbacks and native work explicitly charged
-by the host still spend it.
+The event loop checks deadlines and cancellation before and after the pump. Results a pump
+delivers after the deadline passed are late: their promises settle, but their reactions do
+not run. Idle pumps do not spend the instruction budget, and neither do timers that cannot
+fire while host work waits. JavaScript callbacks and native work explicitly charged by the
+host still spend it. The [event loop's order](architecture.md#synchronous-microtask-queue) and
+[ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md) describe the
+scheduling.
 
 ### Sandbox filesystem
 
@@ -513,7 +517,7 @@ Engine.MaxFrames := 5000;
 
 ## Event Loop
 
-Promise jobs, timers and `fetch` completions are run by `Run` itself; a host drains nothing. The script is one task: its synchronous code runs to completion, then its jobs in order, then each due timer followed by the jobs it queued. Timers wait on a virtual clock, not on wall time: when the engine runs out of work the clock jumps to the next due timer. A pending `fetch` is waited for in slices, so the run's deadline still ends the wait.
+Promise jobs, timers, `Atomics.waitAsync` waits and `fetch` completions are run by `Run` itself; a host drains nothing. The [architecture guide](architecture.md#synchronous-microtask-queue) lists the loop's order, including the virtual timer clock. A host with native work of its own settles it through [`SetHostWork`](#asynchronous-host-work).
 
 ## Garbage Collector
 

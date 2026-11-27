@@ -2564,12 +2564,19 @@ begin
 end;
 
 function PumpEmbedderWork(TimeoutMs: Cardinal): Boolean;
-var Work: TEmbedderWork;
+var Work: TEmbedderWork; Queued: Integer;
 begin
   Work := EmbedderWork;
   if Interrupt <> 0 then Exit(AbortInterrupted);
+  Queued := PendingJobCount;
   Result := Work.Pump(TimeoutMs);
-  if Interrupt <> 0 then Result := AbortInterrupted;
+  if Interrupt <> 0 then
+  begin
+    { the deadline passed during the pump: the results it delivered are late, and their reactions do not run, as a
+      job taken after an abort does not (a timed-out test's continuation stays stopped) }
+    DiscardJobsAfter(Queued);
+    Result := AbortInterrupted;
+  end;
 end;
 
 function EmbedderWorkWait: Cardinal;
@@ -2587,20 +2594,30 @@ begin
 end;
 
 function RunEventLoopIn(Intervals: Boolean): Boolean;
-var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord; HostPending: Boolean;
+var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord; HostPending, TimersIdle: Boolean;
+
+  { the jobs, which may make a timer runnable (a new one, a cleared one, a fake clock moved) }
+  function Drain: Boolean;
+  begin
+    if PendingJobCount > 0 then TimersIdle := False;
+    Result := RunMicrotasks;
+  end;
+
 begin
+  { set once the timers had nothing runnable while host work waits, so idle turns do not run their bytecode again }
+  TimersIdle := False;
   while True do
   begin
-    if not RunMicrotasks then Exit(False);
+    if not Drain then Exit(False);
     HostPending := EmbedderWorkPending;
     if HostPending then
     begin
-      if not PumpEmbedderWork(0) or not RunMicrotasks then Exit(False);
+      if not PumpEmbedderWork(0) or not Drain then Exit(False);
       if not EmbedderWorkPending then Continue;
       { while an embedder can make progress, take only ready built-in work before returning to it }
       PumpAsyncWaits;
-      if not RunMicrotasks then Exit(False);
-      if FetchPending and (not FetchPump(True, GetTickCount64) or not RunMicrotasks) then Exit(False);
+      if not Drain then Exit(False);
+      if FetchPending and (not FetchPump(True, GetTickCount64) or not Drain) then Exit(False);
       if not EmbedderWorkPending then Continue;
     end
     { async waits and fetches both pending: the waits that fell due settle, then the fetches are waited for until
@@ -2608,7 +2625,7 @@ begin
     else if FetchPending and AsyncWaitsPending then
     begin
       PumpAsyncWaits;
-      if not RunMicrotasks then Exit(False);
+      if not Drain then Exit(False);
       if EmbedderWorkPending then Continue;
       if not FetchPending then Continue;
       Due := NextAsyncDeadline;
@@ -2619,6 +2636,7 @@ begin
     end
     else
     begin
+      TimersIdle := False;
       if not RunHostLoop(@EmbedderWorkPending) then Exit(False);
       if EmbedderWorkPending then Continue;
     end;
@@ -2627,6 +2645,7 @@ begin
     if WeakCleanupPending then
     begin
       ClearKeptObjects;
+      TimersIdle := False;
       if not RunWeakCleanup then Exit(False);
       Continue;
     end;
@@ -2641,9 +2660,9 @@ begin
       else if not FetchPump(True) then Exit(False);
       Continue;
     end;
-    if IsObject(FireNextV) and (not HostPending or JobErrorDropsTimers or
-      (IsObject(TimerQueue) and (MapCount(TimerQueue) > 0)) or
-      (IsObject(TimerHostTasks) and (ArrayLen(ObjOf(TimerHostTasks)) > 0))) then
+    if IsObject(FireNextV) and (not HostPending or JobErrorDropsTimers or (not TimersIdle and
+      ((IsObject(TimerQueue) and (MapCount(TimerQueue) > 0)) or
+      (IsObject(TimerHostTasks) and (ArrayLen(ObjOf(TimerHostTasks)) > 0))))) then
     begin
       { a test file's job that threw took the pending timers with it }
       if JobErrorDropsTimers then
@@ -2656,6 +2675,8 @@ begin
       A[0] := MkBool(Intervals and not ReportDone);
       if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
       if R = VTrue then Continue;
+      { only intervals or fake timers wait: nothing changes for them until a job runs }
+      TimersIdle := HostPending;
     end;
     if EmbedderWorkPending then
     begin

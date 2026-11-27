@@ -187,7 +187,9 @@ When [an embedder has outstanding work](embedding.md#asynchronous-host-work), th
 pumps its ready results and drains the reactions they queue. It polls ready Atomics and fetch
 results without blocking on either. An in-flight fetch still prevents a virtual timer jump.
 If only native work can make progress, the loop gives the embedder a bounded wait before it
-checks all sources again.
+checks all sources again. Results delivered by a pump during which the deadline passed do not
+run their reactions. [ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)
+records why.
 
 When nothing is left but a FinalizationRegistry cell still waits on its target, the loop collects once, so a cleanup that came due still runs.
 

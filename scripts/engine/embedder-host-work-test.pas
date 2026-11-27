@@ -22,8 +22,10 @@ type
     FSequence: QWord;
     FRequest: array[0..1] of QWord;
   public
-    Stall, Ready, FailOnWait: Boolean;
+    Stall, Ready, FailOnWait, Late: Boolean;
     Discards, IdleTurns, ScopedDiscards: Integer;
+    { the timeout of the pump that last delivered results }
+    DeliveredTimeout: Int64;
     constructor Create(ASlots: PPromiseSlots);
     function BeginRequest: TValue;
     function Mark: QWord; override;
@@ -93,12 +95,15 @@ begin
       Sleep(75);
       Exit(ThrowTypeError('pump failed'));
     end;
-    if Stall then
+    { results that arrive only after the run's deadline has passed }
+    if Late then Sleep(120)
+    else if Stall then
     begin
       Sleep(ATimeoutMs);
       Exit;
     end;
   end;
+  DeliveredTimeout := ATimeoutMs;
   for I := Low(FSlots^) to High(FSlots^) do
     if FSlots^[I] <> VUndefined then
     begin
@@ -143,15 +148,43 @@ begin
     'could not install hostReady');
 end;
 
+{ a run whose host environment started work and then failed, or whose entry then failed, releases that work, and
+  the next run delivers new work }
+procedure CheckFailedProvider(AEngine: TGocciaEngine; const APath: string; const AProvider, AEntry,
+  AWhat, AExpectedError: UnicodeString);
+var
+  Provider: TStringList;
+  RunResult: TGocciaRunResult;
+  Discards: Integer;
+begin
+  Provider := TStringList.Create;
+  try
+    Provider.Text := AProvider;
+    Provider.SaveToFile(APath);
+  finally
+    Provider.Free;
+  end;
+  Discards := Work.Discards;
+  AEngine.HostEnvironment := UnicodeString(APath);
+  { each call's entries are new modules: a path already evaluated on this engine would not run again }
+  RunResult := AEngine.Run('external-provider-' + IntToStr(Discards) + '.mjs', AEntry);
+  AEngine.HostEnvironment := '';
+  Check(not RunResult.Ok and (Work.Discards = Discards + 1) and not Work.HasPending and
+    ((AExpectedError = '') or (RunResult.ErrorName = AExpectedError)),
+    AWhat + ' left host work behind: ' + RunResult.ErrorName + ': ' + RunResult.ErrorMessage);
+  RunResult := AEngine.Run('external-after-provider-' + IntToStr(Discards) + '.mjs', 'await hostPromise();');
+  Check(RunResult.Ok and (RunResult.ResultText = '42'),
+    'the run after ' + AWhat + ' could not deliver host work: ok=' + BoolToStr(RunResult.Ok, True) + ' result=' +
+    RunResult.ResultText + ' error=' + RunResult.ErrorMessage);
+end;
+
 procedure CheckRuns(ABare: Boolean);
 var
   Engine: TGocciaEngine;
   ErrorText, Source: UnicodeString;
   RunResult: TGocciaRunResult;
   PromiseSlots: TPromiseSlots;
-  Provider: TStringList;
-  ProviderPath: string;
-  Discards: Integer;
+  ProviderDir: string;
 begin
   PromiseSlots[0] := VUndefined;
   PromiseSlots[1] := VUndefined;
@@ -175,16 +208,21 @@ begin
     else Check(RunResult.ResultText = '43', 'the queued timer did not run before the wait');
     Check(not Work.HasPending and (Work.Discards = 0), 'successful work was not released normally');
 
-    Engine.MaxInstructions := 100;
-    Work.IdleTurns := 150;
-    RunResult := Engine.Run('external-idle-budget.mjs', 'await hostPromise();');
+    { idle pumps spend no instructions, and neither does a parked interval the run does not fire }
+    Engine.MaxInstructions := 1000;
+    Work.IdleTurns := 2000;
+    if ABare then Source := 'await hostPromise();'
+    else Source := 'const parked = setInterval(() => {}, 1000); const value = await hostPromise(); clearInterval(parked); value;';
+    RunResult := Engine.Run('external-idle-budget.mjs', Source);
     Check(RunResult.Ok and (RunResult.ResultText = '42') and (Work.IdleTurns = 0), 'idle pumps spent the cap: ' + RunResult.ErrorMessage);
     Engine.MaxInstructions := 0;
 
     Work.Ready := True;
     Work.IdleTurns := 1;
+    Work.DeliveredTimeout := -1;
     RunResult := Engine.Run('external-nonblocking.mjs', 'await hostPromise();');
-    Check(RunResult.Ok and (Work.IdleTurns = 1), 'ready host work needed a blocking wait');
+    Check(RunResult.Ok and (Work.IdleTurns = 1) and (Work.DeliveredTimeout = 0),
+      'ready host work needed a blocking wait: ' + IntToStr(Work.DeliveredTimeout));
     Work.IdleTurns := 0;
     Work.Ready := False;
 
@@ -238,28 +276,25 @@ begin
     Check(RunResult.Ok and (RunResult.ResultText = '42') and (Work.Discards = 3),
       'the next run could not deliver new host work: ' + RunResult.ErrorMessage);
 
-    { a host environment that starts host work and then fails releases that work before the next run (a bare engine
-      has no module content provider, so it cannot load one) }
+    { host environments that start host work release it when the run fails: one that throws, and one that loads
+      before an entry that does not compile (a bare engine has no module content provider, so it cannot load one) }
     if not ABare then
     begin
-      ProviderPath := ExtractFilePath(ExpandFileName(ParamStr(0))) + 'host-work-provider.mjs';
-      Provider := TStringList.Create;
+      ProviderDir := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-host-work-' + IntToStr(GetProcessID) +
+        '-' + IntToStr(GetTickCount64);
+      Check(ForceDirectories(ProviderDir), 'could not create ' + UnicodeString(ProviderDir));
       try
-        Provider.Text := 'hostPromise(); throw new Error("provider failed");';
-        Provider.SaveToFile(ProviderPath);
+        CheckFailedProvider(Engine, ProviderDir + PathDelim + 'failing.mjs',
+          'hostPromise(); throw new Error("provider failed");', '42;', 'a failed host environment', '');
+        CheckFailedProvider(Engine, ProviderDir + PathDelim + 'loaded.mjs', 'hostPromise();' +
+          'export const epochNanoseconds = () => 1700000000000000000n; export const monotonicNanoseconds = () => 0n;' +
+          'export const timeZoneIdentifier = () => "UTC"; export const random = () => 0.25;', 'const = ;',
+          'an entry that did not compile after its host environment loaded', 'SyntaxError');
       finally
-        Provider.Free;
-    end;
-    Discards := Work.Discards;
-    Engine.HostEnvironment := UnicodeString(ProviderPath);
-    RunResult := Engine.Run('external-provider.mjs', '42;');
-    DeleteFile(ProviderPath);
-    Check(not RunResult.Ok and (Work.Discards = Discards + 1) and not Work.HasPending,
-      'a failed host environment left host work behind: ' + RunResult.ErrorMessage);
-    Engine.HostEnvironment := '';
-    RunResult := Engine.Run('external-after-provider.mjs', 'await hostPromise();');
-    Check(RunResult.Ok and (RunResult.ResultText = '42'),
-      'the run after a failed host environment could not deliver host work: ' + RunResult.ErrorMessage);
+        DeleteFile(ProviderDir + PathDelim + 'failing.mjs');
+        DeleteFile(ProviderDir + PathDelim + 'loaded.mjs');
+        RemoveDir(ProviderDir);
+      end;
     end;
 
     Engine.SetHostWork(nil);
@@ -324,6 +359,39 @@ begin
   end;
 end;
 
+{ A result that arrives only after a test's deadline does not resume the timed-out test. }
+procedure CheckLateDelivery;
+var
+  Engine: TGocciaEngine;
+  Json, Err: UnicodeString;
+  Aborted: TGocciaAbort;
+  RunResult: TGocciaRunResult;
+  PromiseSlots: TPromiseSlots;
+begin
+  Engine := nil;
+  TestTimeoutMs := 50;
+  try
+    Engine := NewTestEngine(PromiseSlots);
+    Work.Late := True;
+    RunResult := Engine.Run('host-work-late.test.js',
+      'let late = false;' +
+      'test("times out", async () => { await hostPromise(); late = true; });' +
+      'test("sees no late reaction", () => { expect(late).toBe(false); });');
+    Check(RunResult.Ok, 'test file did not load: ' + RunResult.ErrorMessage);
+    Json := '';
+    Err := '';
+    Aborted := gaNone;
+    Engine.RunTests(Json, Err, Aborted);
+    Check((Aborted = gaNone) and (Pos('"passed":1', Json) > 0) and (Pos('"failed":1', Json) > 0) and
+      (Pos('TIMEOUT', Json) > 0) and not Work.HasPending,
+      'a result delivered after the deadline resumed the timed-out test: ' + Json + Err);
+  finally
+    TestTimeoutMs := 0;
+    Engine.Free;
+    FreeAndNil(Work);
+  end;
+end;
+
 { Suites that end in an error without an abort release their host work. }
 procedure CheckFailedSuite;
 var
@@ -357,6 +425,7 @@ begin
   CheckRuns(False);
   CheckRuns(True);
   CheckTestTimeout;
+  CheckLateDelivery;
   CheckFailedSuite;
   WriteLn('Embedder host work: passed');
 end.

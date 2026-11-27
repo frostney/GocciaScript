@@ -1261,6 +1261,8 @@ begin
     Result.CompileNanoseconds := GetNanoseconds - Start;
     if not Compiled then
     begin
+      { work a loaded host environment started does not outlive the failed run }
+      DiscardEmbedderWork;
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1282,6 +1284,7 @@ begin
     Result.ErrorLine := ParseErrorLine;
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
+    DiscardEmbedderWork;
     Exit;
   end;
   Result.Compiled := True;
