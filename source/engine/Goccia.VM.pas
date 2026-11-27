@@ -1028,8 +1028,20 @@ begin
   LimitTimer := nil;
 end;
 
-procedure LimitsDisarm;
+{ the reserve this engine did not spend goes back to the job, and the engine lets go of the budget: when its limits
+  disarm, and when the VM or its thread ends with them still armed }
+procedure ReleaseSharedBudget;
 var Shared: IGocciaInstructionBudget; Left: Int64;
+begin
+  Shared := SharedInstructionBudget;
+  if Shared = nil then Exit;
+  Left := InstrLeft;
+  if Left > 0 then Shared.Refund(QWord(Left));
+  InstrLeft := 0;
+  SharedInstructionBudget := nil;
+end;
+
+procedure LimitsDisarm;
 begin
   if LimitTimer <> nil then StopLimitTimer;
   Interrupt := 0;
@@ -1037,15 +1049,8 @@ begin
   AbortKind := 0;
   FrameLimit := FrameLimitBase;
   InstrCounted := False;
-  { the reserve this engine did not spend goes back to the job }
-  Shared := SharedInstructionBudget;
-  if Shared <> nil then
-  begin
-    Left := InstrLeft;
-    if Left > 0 then Shared.Refund(QWord(Left));
-  end;
+  ReleaseSharedBudget;
   InstrLeft := 0;
-  SharedInstructionBudget := nil;
   { a refusal the run did not reach a back edge or call for goes with it }
   MemRefusePending := False;
   MemStrikes := 0;
@@ -11001,6 +11006,7 @@ end;
 procedure VMDone;
 var Atoms: PTypeofAtoms;
 begin
+  ReleaseSharedBudget;
   JitEngineDone;
   Atoms := TypeofAtoms;
   if Atoms <> nil then Dispose(Atoms);
@@ -11187,6 +11193,8 @@ end;
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
 procedure GocciaVMThreadvarCleanup;
 begin
+  { FPC does not finalize managed threadvars: the budget reference goes, with what it holds back to the job }
+  ReleaseSharedBudget;
   Frames := nil;
   Handlers := nil;
   ExtraRoots := nil;

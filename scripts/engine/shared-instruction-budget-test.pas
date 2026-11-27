@@ -283,6 +283,34 @@ begin
   Check(Budget.Reserve(1, High(QWord)) = High(QWord), 'a full-range uncapped reserve failed');
   Budget.Refund(High(QWord));
   Check(Budget.Count = 0, 'a full refund left the uncapped count saturated: ' + IntToStr(Budget.Count));
+  { past High(QWord) the total overflowed: it stays saturated, refunds or not (the documented policy) }
+  Budget := NewInstructionBudget(0);
+  Check(Budget.Reserve(1, High(QWord)) = High(QWord), 'a full-range uncapped reserve failed');
+  Check(Budget.Reserve(1, 1) = 1, 'a reserve past the range was refused');
+  Budget.Refund(High(QWord));
+  Budget.Refund(1);
+  Check(Budget.Count = QWord(High(Int64)), 'an overflowed uncapped total did not stay saturated');
+end;
+
+{ A host that cannot prepare still reports the job's count, which other engines may have charged. }
+procedure CheckPrepareFailureCount;
+var
+  Engine: TGocciaEngine;
+  Shared: IGocciaInstructionBudget;
+  RunResult: TGocciaRunResult;
+begin
+  Shared := NewInstructionBudget(0);
+  Check(Shared.TryCharge(777), 'the precharge failed');
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ConfigJson := '{ not json';
+    Engine.InstructionBudget := Shared;
+    RunResult := Engine.Run('unprepared.mjs', '1;');
+    Check(not RunResult.Ok and RunResult.HasInstructionCount and (RunResult.InstructionCount = 777),
+      'a host that could not prepare did not report the job''s count: ' + IntToStr(RunResult.InstructionCount));
+  finally
+    Engine.Free;
+  end;
 end;
 
 { A host environment refused by the shared cap reports the job's count with the abort. }
@@ -372,5 +400,6 @@ begin
     OneEntry.InstructionCount + OneEntry.InstructionCount div 2 + 1, True);
   CheckNativeCharges;
   CheckProviderCount;
+  CheckPrepareFailureCount;
   WriteLn('Shared instruction budget: passed');
 end.

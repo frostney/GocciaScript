@@ -492,13 +492,15 @@ module, the host environment) is charged to it as well. Set a fresh budget for e
 
 Each engine takes units from the budget in reserves and spends them on its own counter, so the
 dispatch loop does no shared write per instruction. Each engine holds at most one reserve at a
-time, of up to 1,024 units and, under a cap, about an eighth of what is left, so the units other
-engines hold unspent when one is refused are a small part of the cap
+time, of up to 1,024 units and, under a cap, about an eighth of what is left when it takes it
 ([ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) gives the exact
-rule). The job never spends more than the limit. An engine learns
+rule). The reserves several engines hold unspent at once add up, so a job of many engines that
+pause while holding them can be refused well below the cap: with an 8,192-unit cap, five engines
+can be refused after about 4,800 units of work. The job never spends more than the limit. An engine learns
 of a cap another engine spent when its own units run out, or at a zero charge. An engine returns
 what it did not spend when its run ends. For a job that was never refused, `Budget.Count` is
-exact once every engine has ended; a refused job reports `Limit + 1`. A run's reported count is
+exact once every engine has ended; a refused job reports `Limit + 1`, and an uncapped total that
+overflowed `High(QWord)` stays saturated at `High(Int64)`. A run's reported count is
 the job's count so far without that engine's unspent units: read `Budget.Count` for the job
 rather than adding up the engines' counts.
 [ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) records the design.

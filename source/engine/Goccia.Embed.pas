@@ -1185,6 +1185,7 @@ begin
   if not PrepareHost(Err) then
   begin
     Result.ErrorMessage := Err;
+    ReportSharedCount(Result);
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;

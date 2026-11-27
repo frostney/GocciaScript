@@ -22,7 +22,8 @@ type
       is more, so engines that share a nearly spent cap are refused late, not early. 0 and the cap spent when fewer than
       MinUnits are left. MinUnits is at least 1. }
     function Reserve(MinUnits, MaxUnits: QWord): QWord;
-    { returns reserved units an engine did not spend; nothing once a cap was refused }
+    { returns reserved units an engine did not spend; nothing once a cap was refused, or once an uncapped total
+      overflowed High(QWord), after which it stays saturated }
     procedure Refund(Units: QWord);
   end;
 
