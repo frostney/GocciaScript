@@ -6,6 +6,9 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
   Goccia.Embed,
+  Goccia.HostAPI,
+  Goccia.Instructions,
+  Goccia.Profiler,
   Goccia.VM;
 
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
@@ -24,14 +27,14 @@ begin
     Engine.MaxInstructions := ACap;
     Engine.MeasureInstructions := AMeasure;
     Engine.ResultForm := grfString;
-    Result := Engine.Run('measure.js', ASource);
+    Result := Engine.Run('measure.mjs', ASource);
   finally
     Engine.Free;
   end;
 end;
 
 const
-  Source = 'const cells = new Array(256); cells.fill(42); cells[13];';
+  Source = 'const cells = await Promise.resolve().then(() => new Array(256).fill(42)); cells[13];';
 
 procedure CheckNativeRefusalCount;
 var
@@ -104,6 +107,53 @@ begin
   end;
 end;
 
+function CountBenchmarkXors(AMeasure: Boolean): Int64;
+var
+  Engine: TGocciaEngine;
+  Profiler: TGocciaProfiler;
+  RunResult: TGocciaRunResult;
+  Entries: TGocciaBenchEntries;
+  Total: Integer;
+  Duration, BeforeSuite: Int64;
+  ErrorText: UnicodeString;
+  Aborted: TGocciaAbort;
+begin
+  Profiler := TGocciaProfiler.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    TGocciaProfiler.Adopt(Profiler);
+    Profiler.Enabled := True;
+    Profiler.Mode := [pmOpcodes];
+    Engine.BenchMode := True;
+    Engine.ProfileOpcodes := True;
+    Engine.MeasureInstructions := AMeasure;
+    Check(Engine.PrepareHost(ErrorText), 'benchmark host setup failed: ' + ErrorText);
+    Check(InstallBenchmarkAPI(ErrorText), 'benchmark API setup failed: ' + ErrorText);
+    RunResult := Engine.Run('profile-bench.mjs',
+      'import { bench } from "goccia:microbench";' +
+      'bench("opcode count", () => new Array(64).fill(7).forEach(value => value ^ 3));');
+    Check(RunResult.Ok, 'benchmark entry failed: ' + RunResult.ErrorMessage);
+    BeforeSuite := Profiler.GetOpcodeCount(Ord(opBitXorI));
+    Check(Engine.RunBenchmarks(True, Entries, Total, Duration, ErrorText, Aborted), 'benchmark failed: ' + ErrorText);
+    Check(Total = 1, 'expected one executed benchmark');
+    Result := Profiler.GetOpcodeCount(Ord(opBitXorI)) - BeforeSuite;
+  finally
+    TGocciaProfiler.Adopt(nil);
+    Engine.Free;
+    Profiler.Free;
+  end;
+end;
+
+procedure CheckBenchmarkProfiling;
+var
+  Ordinary, Measured: Int64;
+begin
+  Ordinary := CountBenchmarkXors(False);
+  Measured := CountBenchmarkXors(True);
+  Check((Ordinary = 64) and (Measured = Ordinary),
+    'benchmark profile lost opcodes: ordinary ' + IntToStr(Ordinary) + ', measured ' + IntToStr(Measured));
+end;
+
 var
   Unmeasured, Uncapped, Capped, Refused: TGocciaRunResult;
 begin
@@ -125,5 +175,6 @@ begin
   CheckNativeRefusalCount;
   CheckFailureAndReuse;
   CheckSuiteLimitScope;
+  CheckBenchmarkProfiling;
   WriteLn('Embedding instruction counts: passed');
 end.

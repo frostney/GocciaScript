@@ -8743,7 +8743,6 @@ LReload:
   end;
   while True do
   begin
-    {$IFNDEF GOCCIA_OPSTATS}
     if Counted then
     begin
       if CoverageOn then CovStep(Fr, PC);
@@ -8759,12 +8758,13 @@ LReload:
         end;
       end;
     end
+    {$IFNDEF GOCCIA_OPSTATS}
     else if FastOp[Code[PC] and $FF] then
     begin
       PC := FastLoop(Code, PC, R, K, ICB, Fr, StopFrame);
       if PC < 0 then goto LReload;
-    end;
-    {$ENDIF}
+    end
+    {$ENDIF};
     I := Code[PC];
     A := PWord(PByte(@Code[PC]) + 1)^;
     Inc(PC);

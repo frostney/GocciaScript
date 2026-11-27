@@ -184,6 +184,7 @@ begin
   if Functions then CountObjects := True;
   ProfilingAny := True;
   ProfileOn := True;
+  JitBlocked := True;
 end;
 
 procedure ProfileStop;

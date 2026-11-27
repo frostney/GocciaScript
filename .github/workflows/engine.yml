@@ -167,7 +167,7 @@ jobs:
         run: |
           fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
             -obuild/embedding-instruction-counts-test scripts/engine/embedding-instruction-counts-test.pas
-          timeout 20 build/embedding-instruction-counts-test
+          GOCCIA_JIT=1 GOCCIA_JIT_HOT=8 timeout 20 build/embedding-instruction-counts-test
 
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
