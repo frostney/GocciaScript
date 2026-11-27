@@ -187,8 +187,13 @@ jobs:
           GOCCIA_JITMAP: "1"
         run: |
           mkdir -p build/jit-permissions-opt
+          # the jitmap is the fixture's stderr: show it when the fixture fails
           timeout 20 strace -ff -o build/jit-permissions-opt/trace -e trace=mmap,mprotect,munmap \
-            build/jit-permissions-test 2> build/jit-permissions-opt/jitmap
+            build/jit-permissions-test 2> build/jit-permissions-opt/jitmap || {
+            status=$?
+            grep -v '^jitmap ' build/jit-permissions-opt/jitmap >&2
+            exit "$status"
+          }
           python3 scripts/engine/check-jit-publication.py build/jit-permissions-opt/trace.* \
             --jitmap build/jit-permissions-opt/jitmap
 
