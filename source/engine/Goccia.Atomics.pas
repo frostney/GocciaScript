@@ -24,7 +24,9 @@ procedure InitAtomics;
 { the host's event loop for Atomics.waitAsync: after a script and its jobs, resolves this engine's
   async waits as other threads notify them or their timeouts pass, running the jobs that follow, until none
   is pending. False if a job threw. }
-function RunHostLoop: Boolean;
+type
+  THostLoopYield = function: Boolean;
+function RunHostLoop(ShouldYield: THostLoopYield = nil): Boolean;
 { one turn of that loop without blocking (a host timer tick): settles the async waits other threads notified
   and those whose timeouts passed; their reactions run as jobs }
 procedure PumpAsyncWaits;
@@ -524,8 +526,7 @@ begin
     SetLength(AsyncDeadlines, AsyncCount * 2 + 8);
     SetLength(AsyncLive, AsyncCount * 2 + 8);
   end;
-  if IsInfinite(T) or (T > 1e15) then AsyncDeadlines[Token] := High(QWord)
-  else AsyncDeadlines[Token] := GetTickCount64 + QWord(Ceil(T));
+  AsyncDeadlines[Token] := WaitDeadline(T);
   AsyncLive[Token] := True;
   Inc(AsyncCount);
   Inc(AsyncPending);
@@ -545,7 +546,7 @@ begin
   ResolvePendingPromise(Pr, StrFromUnicode(Outcome));
 end;
 
-function RunHostLoop: Boolean;
+function RunHostLoop(ShouldYield: THostLoopYield): Boolean;
 var Done: TBoundArray; I: Integer; Now_, Next: QWord; Wait: Cardinal; Remaining: Int64;
 begin
   Result := True;
@@ -568,6 +569,7 @@ begin
     for I := 0 to AsyncCount - 1 do
       if AsyncLive[I] and (AsyncDeadlines[I] <= Now_) and SharedAsyncCancel(I) then SettleAsync(I, 'timed-out');
     if not RunMicrotasks then Exit(False);
+    if Assigned(ShouldYield) and ShouldYield() then Exit(True);
   end;
 end;
 

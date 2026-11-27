@@ -21,6 +21,7 @@ var
 function NewSymbolValue(const Desc: UnicodeString): TValue;
 { empties an internal map without allocation or JS dispatch, even after a spent execution limit }
 procedure DiscardMapEntries(Map: TValue);
+function MapCount(M: TValue): Integer; inline;
 
 threadvar
   { set by an embedder (Goccia.Engine) to take this thread's console output; nil writes to stdout }

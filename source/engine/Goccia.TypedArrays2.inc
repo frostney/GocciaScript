@@ -28,6 +28,7 @@ begin
   PushRoot(T);
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     if ((M = VUndefined) or (M = VNull)) then
     begin
       if not GetElemV(RootAt(Base), IdxVal(K), V) then begin PopRoots(2); Exit(False); end;
@@ -58,7 +59,11 @@ begin
   if not TACreateFromCtor(Args[0], @LV, 1, Argc, T) then Exit(False);
   PushRoot(T);
   for K := 0 to Argc - 1 do
-    if not SetElemVS(RootAt(TempTop - 1), MkInt(K), Args[K + 1], True) then begin PopRoots(1); Exit(False); end;
+    if not PollInterrupt or not SetElemVS(RootAt(TempTop - 1), MkInt(K), Args[K + 1], True) then
+    begin
+      PopRoots(1);
+      Exit(False);
+    end;
   Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
@@ -185,6 +190,7 @@ begin
   if Rev then K := Len - 1 else K := 0;
   while (K >= 0) and (K < Len) do
   begin
+    if not PollInterrupt then Exit(False);
     V := TAGetV(Args[0], K);
     PushRoot(V);
     CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
@@ -251,6 +257,7 @@ begin
   PushRoot(MkPtr(NewArray(0, 8)));
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(1); Exit(False); end;
     V := TAGetV(Args[0], K);
     PushRoot(V);
     CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
@@ -264,7 +271,11 @@ begin
   if not TASpeciesCreate(Args[0], @LV, 1, N, T) then begin PopRoots(1); Exit(False); end;
   PushRoot(T);
   for K := 0 to N - 1 do
-    if not TAStoreValue(RootAt(Base + 1), K, ObjOf(RootAt(Base))^.Elements^.Data[K]) then begin PopRoots(2); Exit(False); end;
+    if not PollInterrupt or not TAStoreValue(RootAt(Base + 1), K, ObjOf(RootAt(Base))^.Elements^.Data[K]) then
+    begin
+      PopRoots(2);
+      Exit(False);
+    end;
   Res := RootAt(Base + 1);
   PopRoots(2);
   Result := True;
@@ -302,6 +313,7 @@ begin
     K := Trunc(D);
     while K >= 0 do
     begin
+      if not PollInterrupt then Exit(False);
       if K < TALength(ObjOf(Args[0])) then
       begin
         V := TAGet(ObjOf(Args[0]), K);
@@ -317,6 +329,7 @@ begin
   K := Trunc(D);
   while K < Len do
   begin
+    if not PollInterrupt then Exit(False);
     if Mode = 0 then
     begin
       if SameValueZeroV(TAGetV(Args[0], K), Arg(Args, Argc, 1)) then begin Res := VTrue; Exit(True); end;
@@ -346,6 +359,7 @@ begin
   B := '';
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(1); Exit(False); end;
     if K > 0 then B := B + StrToUnicode(StrOf(RootAt(TempTop - 1)));
     V := TAGetV(Args[0], K);
     if V = VUndefined then Continue;
@@ -382,6 +396,7 @@ begin
   PushRoot(T);
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(1); Exit(False); end;
     V := TAGetV(Args[0], K);
     CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
     if not CallValue(Args[1], Arg(Args, Argc, 2), @CB[0], 3, R) then begin PopRoots(1); Exit(False); end;
@@ -410,6 +425,7 @@ begin
   end;
   while (K >= 0) and (K < Len) do
   begin
+    if not PollInterrupt then begin PopRoots(1); Exit(False); end;
     CB[0] := RootAt(Base); CB[1] := TAGetV(Args[0], K); CB[2] := IdxVal(K); CB[3] := Args[0];
     if not CallValue(Args[1], VUndefined, @CB[0], 4, V) then begin PopRoots(1); Exit(False); end;
     TempRoots[Base] := V;
@@ -433,6 +449,8 @@ begin
   Lo := 0; Hi := Len - 1;
   while Lo < Hi do
   begin
+    { one poll per swap of two elements; the pointer stays valid, as no script code runs here }
+    if not PollInterrupt then Exit(False);
     for J := 0 to ES - 1 do
     begin
       T := P[Lo * ES + J]; P[Lo * ES + J] := P[Hi * ES + J]; P[Hi * ES + J] := T;
@@ -478,6 +496,8 @@ begin
       if SLen > 0 then Move(TAData(S)^, Clone[0], SLen * ES);
       SP := @Clone[0];
       for K := 0 to SLen - 1 do
+      begin
+        if not PollInterrupt then Exit(False);
         if TAIsBig(T) then TASetBig(T, Off + K, PQWord(SP)[K])
         else
           case SK of
@@ -491,6 +511,7 @@ begin
             taFloat16: TASet(T, Off + K, HalfToDouble(PWord(SP)[K]));
           else TASet(T, Off + K, PDouble(SP)[K]);
           end;
+      end;
     end;
     Res := VUndefined;
     Exit(True);
@@ -503,7 +524,7 @@ begin
   Off := Trunc(D);
   for K := 0 to SLen - 1 do
   begin
-    if not GetElemV(RootAt(TempTop - 1), IdxVal(K), V) then begin PopRoots(1); Exit(False); end;
+    if not PollInterrupt or not GetElemV(RootAt(TempTop - 1), IdxVal(K), V) then begin PopRoots(1); Exit(False); end;
     if not TAStoreValue(Args[0], Off + K, V) then begin PopRoots(1); Exit(False); end;
   end;
   PopRoots(1);
@@ -513,7 +534,7 @@ end;
 
 { 23.2.3.27 slice }
 function TAP_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K, Fin, Count: Int64; N: SizeInt; LV, T: TValue; O, A: PObj; ES: Integer;
+var Len, K, Fin, Count: Int64; N: SizeInt; LV, T: TValue; O, A: PObj; ES, J: Integer;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 1), Len, 0, K) then Exit(False);
@@ -531,8 +552,12 @@ begin
     if TAKind(A) = TAKind(O) then
     begin
       ES := TAElemSize[TAKind(O)];
-      { a byte copy, element by element in order (the two may share the buffer) }
-      for N := 0 to Count * ES - 1 do (TAData(A) + N)^ := (TAData(O) + K * ES + N)^;
+      { a byte copy, element by element in order (the two may share the buffer), one poll per element }
+      for N := 0 to Count - 1 do
+      begin
+        if not PollInterrupt then Exit(False);
+        for J := 0 to ES - 1 do (TAData(A) + N * ES + J)^ := (TAData(O) + (K + N) * ES + J)^;
+      end;
     end
     else
     begin
@@ -540,6 +565,7 @@ begin
       N := 0;
       while K < Fin do
       begin
+        if not PollInterrupt then begin PopRoots(1); Exit(False); end;
         LV := TAGetV(Args[0], K);   { may allocate (a BigInt): read before the rooted target }
         if not TAStoreValue(RootAt(TempTop - 1), N, LV) then begin PopRoots(1); Exit(False); end;
         Inc(K); Inc(N);
@@ -583,6 +609,7 @@ begin
   TempRoots[Base] := MkPtr(NewArray(0, Max(Len, 1)));
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then Exit(False);
     V := TAGetV(O^, K);
     ArrayPush(ObjOf(RootAt(Base)), V);
   end;
@@ -598,6 +625,7 @@ begin
       J := I;
       while (L < Min(I + W, N)) or (M < R_) do
       begin
+        if not PollInterrupt then Exit(False);
         Src := ObjOf(RootAt(Base))^.Elements;
         if L >= Min(I + W, N) then begin V := Src^.Data[M]; Inc(M); end
         else if M >= R_ then begin V := Src^.Data[L]; Inc(L); end
@@ -640,10 +668,17 @@ begin
   else TempRoots[Base + 3] := Args[0];
   if TASortValues(@Args[0], Len, Base + 1) then
   begin
-    for K := 0 to Len - 1 do
-      StoreElem(ObjOf(RootAt(Base + 3)), K, ObjOf(RootAt(Base + 1))^.Elements^.Data[K]);
-    Res := RootAt(Base + 3);
     Result := True;
+    for K := 0 to Len - 1 do
+    begin
+      if not PollInterrupt then
+      begin
+        Result := False;
+        Break;
+      end;
+      StoreElem(ObjOf(RootAt(Base + 3)), K, ObjOf(RootAt(Base + 1))^.Elements^.Data[K]);
+    end;
+    if Result then Res := RootAt(Base + 3);
   end;
   TASortFn := RootAt(Base);
   PopRoots(4);
@@ -681,9 +716,16 @@ var Len: Int64; K: SizeInt; T: TValue;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if not TACreateSameType(Args[0], Len, T) then Exit(False);
+  { the new array is rooted: reading a BigInt element allocates }
+  PushRoot(T);
   for K := 0 to Len - 1 do
-    StoreElem(ObjOf(T), K, TAGetV(Args[0], Len - 1 - K));
-  Res := T;
+  begin
+    if not PollInterrupt then begin PopRoots(1); Exit(False); end;
+    T := TAGetV(Args[0], Len - 1 - K);
+    StoreElem(ObjOf(RootAt(TempTop - 1)), K, T);
+  end;
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
   Result := True;
 end;
 
@@ -702,7 +744,8 @@ begin
   if not TACreateSameType(Args[0], Len, T) then begin PopRoots(1); Exit(False); end;
   PushRoot(T);
   for K := 0 to Len - 1 do
-    if K = Idx then StoreElem(ObjOf(RootAt(Base + 1)), K, RootAt(Base))
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end
+    else if K = Idx then StoreElem(ObjOf(RootAt(Base + 1)), K, RootAt(Base))
     else if K < TALength(ObjOf(Args[0])) then
     begin
       N := TAGetV(Args[0], K);   { a BigInt read allocates: the new array is re-read after it }

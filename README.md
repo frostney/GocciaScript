@@ -76,7 +76,7 @@ environment.
 ## Embed it
 
 Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. A host can
+application-specific globals, [native modules](docs/embedding.md#native-modules), capabilities, and limits. A host can
 grant or withhold `fetch` through the `net` capability
 ([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
 read-only, and bound a run with a timeout or measure its charged instructions
@@ -538,6 +538,8 @@ complete implementation, default-profile, and compatibility-path detail, see
 [Language](docs/language.md).
 
 ## FreePascal and native embedding
+
+An embedder can [pump asynchronous host work](docs/embedding.md#asynchronous-host-work) alongside JavaScript promises and built-in work.
 
 FreePascal builds GocciaScript's native binaries, so the engine needs no other
 runtime underneath, and it is the toolchain for releases and the documented
