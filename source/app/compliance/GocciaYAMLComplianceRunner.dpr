@@ -718,6 +718,13 @@ begin
     PrintUsage(StdErr);
     Exit(2);
   end;
+  // the known-failures list is gone: every case must pass
+  if ReadOptionValue('known-failures', OutputPath) then
+  begin
+    WriteLn(StdErr, 'Error: --known-failures was removed; every case must pass, ',
+      'so run without it');
+    Exit(2);
+  end;
   SuiteDirectory := ExpandFileName(SuiteDirectory);
   if not ReadOptionValue('pin-file', PinPath) then
     PinPath := DEFAULT_PIN_PATH;

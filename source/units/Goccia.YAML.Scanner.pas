@@ -111,6 +111,8 @@ type
       { the token's place among all the tokens, handed out or queued }
       TokenNumber: Integer;
       Mark: TGocciaYAMLMarker;
+      { where it starts, counted in Unicode characters }
+      CharacterIndex: Integer;
     end;
 
     TIndentLevel = record
@@ -125,6 +127,8 @@ type
     FText: string;
     FPosition: Integer;
     FMark: TGocciaYAMLMarker;
+    { the Unicode characters before FPosition, a surrogate pair counting once }
+    FCharacterIndex: Integer;
     { the queued tokens: FTokenCount of them from FTokenHead on }
     FTokenBuffer: array of TGocciaYAMLToken;
     FTokenHead: Integer;
@@ -155,6 +159,7 @@ type
     FPlainTrailingBreaks: string;
 
     procedure RaiseError(const AMark: TGocciaYAMLMarker; const AMessage: string);
+    procedure RejectControlCharacters;
     function Peek(const AOffset: Integer = 0): Char; {$IFDEF FPC}inline;{$ENDIF}
     function AtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function NextIsZ: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -169,6 +174,7 @@ type
     function NextIsDocumentIndicator: Boolean;
     function NextCanBePlainScalar(const AInFlow: Boolean): Boolean;
 
+    procedure CountCharacter; {$IFDEF FPC}inline;{$ENDIF}
     procedure SkipBlank; {$IFDEF FPC}inline;{$ENDIF}
     procedure SkipNonBlank; {$IFDEF FPC}inline;{$ENDIF}
     procedure SkipNonBlanks(const ACount: Integer);
@@ -270,7 +276,7 @@ uses
 const
   CHARACTER_NIL = #0;
   CHARACTER_BYTE_ORDER_MARK = #$FEFF;
-  { a simple key ends within this many code units, as libyaml's does }
+  { a simple key ends within this many Unicode characters (8.2.2) }
   MAX_SIMPLE_KEY_LENGTH = 1024;
   { a %YAML version number has at most this many digits }
   MAX_VERSION_DIGITS = 9;
@@ -401,6 +407,33 @@ begin
   FSimpleKeyAllowed := True;
   FIndent := -1;
   FLeadingWhitespace := True;
+  RejectControlCharacters;
+end;
+
+{ a YAML stream holds no C0 control character but tab, line feed and
+  carriage return (5.1), in any context: an escape is how a scalar spells one.
+  NUL ends the scan, which reports it where it stands. }
+procedure TGocciaYAMLScanner.RejectControlCharacters;
+var
+  Column, I, Line: Integer;
+  C: Char;
+begin
+  Line := 1;
+  Column := 0;
+  for I := 1 to Length(FText) do
+  begin
+    C := FText[I];
+    if (C = #10) or ((C = #13) and ((I = Length(FText)) or (FText[I + 1] <> #10))) then
+    begin
+      Inc(Line);
+      Column := 0;
+      Continue;
+    end;
+    if (Ord(C) > 0) and (Ord(C) < Ord(' ')) and (C <> #9) and (C <> #13) then
+      RaiseError(YAMLMarker(I - 1, Line, Column), Format(
+        'found the control character U+%.4X, which YAML text cannot hold', [Ord(C)]));
+    Inc(Column);
+  end;
 end;
 
 procedure TGocciaYAMLScanner.RaiseError(const AMark: TGocciaYAMLMarker;
@@ -491,8 +524,21 @@ begin
   Result := not (AInFlow and IsFlowCharacter(C));
 end;
 
+{ the code unit at FPosition starts a character unless it is the low half of
+  a surrogate pair }
+procedure TGocciaYAMLScanner.CountCharacter;
+begin
+  if not ((FPosition > 1) and (FPosition <= Length(FText)) and
+          (Ord(FText[FPosition]) >= LOW_SURROGATE_BASE) and
+          (Ord(FText[FPosition]) <= LAST_SURROGATE) and
+          (Ord(FText[FPosition - 1]) >= HIGH_SURROGATE_BASE) and
+          (Ord(FText[FPosition - 1]) < LOW_SURROGATE_BASE)) then
+    Inc(FCharacterIndex);
+end;
+
 procedure TGocciaYAMLScanner.SkipBlank;
 begin
+  CountCharacter;
   Inc(FPosition);
   Inc(FMark.Index);
   Inc(FMark.Column);
@@ -500,14 +546,17 @@ end;
 
 procedure TGocciaYAMLScanner.SkipNonBlank;
 begin
+  CountCharacter;
   Inc(FPosition);
   Inc(FMark.Index);
   Inc(FMark.Column);
   FLeadingWhitespace := False;
 end;
 
+{ ACount ASCII characters }
 procedure TGocciaYAMLScanner.SkipNonBlanks(const ACount: Integer);
 begin
+  Inc(FCharacterIndex, ACount);
   Inc(FPosition, ACount);
   Inc(FMark.Index, ACount);
   Inc(FMark.Column, ACount);
@@ -516,6 +565,7 @@ end;
 
 procedure TGocciaYAMLScanner.SkipNewline;
 begin
+  Inc(FCharacterIndex);
   Inc(FPosition);
   Inc(FMark.Index);
   FMark.Column := 0;
@@ -732,6 +782,7 @@ begin
   FSimpleKeys[FSimpleKeyCount].Required := False;
   FSimpleKeys[FSimpleKeyCount].TokenNumber := 0;
   FSimpleKeys[FSimpleKeyCount].Mark := YAMLMarker(0, 0, 0);
+  FSimpleKeys[FSimpleKeyCount].CharacterIndex := 0;
   Inc(FSimpleKeyCount);
 end;
 
@@ -768,7 +819,7 @@ procedure TGocciaYAMLScanner.StaleSimpleKeys;
 begin
   if (FSimpleKeyCount > 0) and FSimpleKeys[0].Possible and
      ((FSimpleKeys[0].Mark.Line < FMark.Line) or
-      (FSimpleKeys[0].Mark.Index + MAX_SIMPLE_KEY_LENGTH < FMark.Index)) then
+      (FSimpleKeys[0].CharacterIndex + MAX_SIMPLE_KEY_LENGTH < FCharacterIndex)) then
   begin
     if FSimpleKeys[0].Required then
       RaiseError(FMark, 'simple key expect '':''');
@@ -789,6 +840,7 @@ begin
     (FIndentCount > 0) and FIndents[FIndentCount - 1].NeedsBlockEnd;
   FSimpleKeys[Key].TokenNumber := FTokensParsed + FTokenCount;
   FSimpleKeys[Key].Mark := FMark;
+  FSimpleKeys[Key].CharacterIndex := FCharacterIndex;
 end;
 
 procedure TGocciaYAMLScanner.RemoveSimpleKey;
@@ -1316,7 +1368,8 @@ begin
   Result := Buffer.ToString;
 end;
 
-{ "!<uri>"; the "!<" is next }
+{ "!<uri>"; the "!<" is next. A verbatim tag is delivered as written (6.9.1),
+  so its "%xx" escapes stay escapes. }
 function TGocciaYAMLScanner.ScanVerbatimTag(const AMark: TGocciaYAMLMarker): string;
 var
   Buffer: TStringBuffer;
@@ -1325,7 +1378,12 @@ begin
   Buffer := TStringBuffer.Create;
   while IsURICharacter(Peek) do
     if Peek = '%' then
-      Buffer.Append(ScanURIEscapes(AMark))
+    begin
+      if not (IsHexCharacter(Peek(1)) and IsHexCharacter(Peek(2))) then
+        RaiseError(AMark, 'while parsing a tag, found an invalid escape sequence');
+      Buffer.Append(Copy(FText, FPosition, URI_ESCAPE_LENGTH));
+      SkipNonBlanks(URI_ESCAPE_LENGTH);
+    end
     else
     begin
       Buffer.AppendChar(Peek);
@@ -1573,6 +1631,7 @@ begin
   RemoveSimpleKey;
   // a byte order mark is not content: the column stays where it was
   StartMark := FMark;
+  Inc(FCharacterIndex);
   Inc(FPosition);
   Inc(FMark.Index);
   FSimpleKeyAllowed := True;

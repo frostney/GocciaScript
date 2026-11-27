@@ -311,6 +311,39 @@ m:
     });
   });
 
+  test("parses an empty explicit key in a flow sequence", () => {
+    expect(YAML.parse("[? : value]")).toEqual([{ "": "value" }]);
+    expect(YAML.parse("[? , x]")).toEqual([{ "": null }, "x"]);
+    expect(YAML.parse("[? ]")).toEqual([{ "": null }]);
+  });
+
+  test("keeps the escapes of a verbatim tag", () => {
+    // a verbatim tag is delivered as written (YAML 1.2.2 6.9.1)
+    const value = YAML.parse("!<tag:yaml.org,2002:%69nt> nope");
+    expect(value.tagName).toBe("tag:yaml.org,2002:%69nt");
+    expect(value.value).toBe("nope");
+    expect(YAML.parse("!foo%21 x").tagName).toBe("!foo!");
+  });
+
+  test("counts an implicit key's length in characters", () => {
+    expect(YAML.parse("\u{1F600}".repeat(600) + ": 1")).toEqual({
+      ["\u{1F600}".repeat(600)]: 1,
+    });
+    expect(() => YAML.parse("x".repeat(1025) + ": 1")).toThrow(SyntaxError);
+  });
+
+  test("rejects C0 control characters in the text", () => {
+    expect(() => YAML.parse("a: \u0001b\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse('"a\u0007"\n')).toThrow(SyntaxError);
+    expect(() => YAML.parse("# c\u001b\na: 1\n")).toThrow(SyntaxError);
+    // tab, line feed and carriage return are allowed, and escapes spell
+    // any character
+    expect(YAML.parse('a:\tb\r\nc: "\\a\\x01"\r\n')).toEqual({
+      a: "b",
+      c: "\u0007\u0001",
+    });
+  });
+
   test("reads the non-specific tag as a string", () => {
     // suite case S4JQ
     expect(YAML.parse('- "12"\n- 12\n- ! 12\n')).toEqual(["12", 12, "12"]);

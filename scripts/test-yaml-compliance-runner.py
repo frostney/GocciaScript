@@ -72,13 +72,13 @@ def make_suite(root, cases):
     return suite
 
 
-def run(root, suite, pin=None):
+def run(root, suite, pin=None, extra=()):
     report = root / "report.json"
     if report.exists():
         report.unlink()
     process = subprocess.run(
         [str(RUNNER), f"--suite-dir={suite}", f"--pin-file={pin or root / 'pin'}",
-         f"--output={report}", "--jobs=2"],
+         f"--output={report}", "--jobs=2", *extra],
         capture_output=True, text=True, timeout=120)
     outcomes = {}
     if report.exists():
@@ -107,6 +107,9 @@ with tempfile.TemporaryDirectory(prefix="goccia-yaml-runner-check-") as director
     (root / "not-a-pin").write_text("not a revision\n")
     code, outcomes, output = run(root, suite, pin=root / "not-a-pin")
     expect(code == 2, f"a pin that is no SHA is an unusable invocation, got {code}", output)
+
+    code, outcomes, output = run(root, suite, extra=[f"--known-failures={root / 'pin'}"])
+    expect(code == 2, f"the removed --known-failures option is an unusable invocation, got {code}", output)
 
     root = Path(directory) / "failing"
     root.mkdir()

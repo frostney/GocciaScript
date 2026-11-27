@@ -819,9 +819,10 @@ var
   Token: TGocciaYAMLToken;
 begin
   Token := PeekToken;
+  // an empty key: the ":", "," or "]" stays for the value and end states
+  // ([? : value], [? , x], [? ]); saphyr skipped it here
   if Token.Kind in [ytkValue, ytkFlowEntry, ytkFlowSequenceEnd] then
   begin
-    SkipToken;
     FState := psFlowSequenceEntryMappingValue;
     Result := EmptyScalar(Token.StartMark);
   end
