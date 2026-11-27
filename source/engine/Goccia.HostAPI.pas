@@ -1934,7 +1934,7 @@ end;
   a test file (GocciaTestRunner, goccia --test) hoist vi.mock and vi.unmock out of it before it is parsed. The
   module-only opt-in (moduleOnly true) has no such pass and no module mocks at all: vi.mock, vi.unmock and the members
   that only make sense beside a module mock refuse with that reason instead of ignoring the call }
-function VitestShimSource(ModuleOnly: Boolean): UnicodeString;
+function VitestShimSource(ModuleOnly: Boolean; out Src, Err: UnicodeString): Boolean;
 const
   LB = #10;
   Hoisted: array[0..1] of UnicodeString = ('  mock: hoistedDirective,' + LB, '  unmock: hoistedDirective,' + LB);
@@ -1945,29 +1945,47 @@ const
   NotHoisted = 'const NOT_HOISTED = "Module mocks need the pass that hoists them out of a test file before its " +' +
     LB + '  "module graph loads, which GocciaTestRunner and goccia --test run and this host does not.";' + LB;
 var I, Start, Stop: Integer;
+
+  function ShimSource: UnicodeString;
+  begin
+    {$I Goccia.VitestShim.inc}
+  end;
+
 begin
-  {$I Goccia.VitestShim.inc}
+  Err := '';
+  Src := ShimSource;
+  Result := True;
   if not ModuleOnly then Exit;
+  Result := False;
   for I := 0 to High(Hoisted) do
   begin
-    if Pos(Hoisted[I], Result) = 0 then raise Exception.Create('vitest shim lost its hoisted directive');
-    Result := StringReplace(Result, Hoisted[I], Refused[I], []);
+    if Pos(Hoisted[I], Src) = 0 then
+    begin
+      Err := 'vitest shim lost its hoisted directive';
+      Exit;
+    end;
+    Src := StringReplace(Src, Hoisted[I], Refused[I], []);
   end;
   for I := 0 to High(MockReasons) do
   begin
-    Start := Pos('const ' + MockReasons[I] + ' =', Result);
-    if Start = 0 then raise Exception.Create('vitest shim lost ' + MockReasons[I]);
-    Stop := Pos(';' + LB, Result, Start);
-    if Stop = 0 then raise Exception.Create('vitest shim has no end for ' + MockReasons[I]);
-    Result := Copy(Result, 1, Start - 1) + 'const ' + MockReasons[I] + ' = NOT_HOISTED;' +
-      Copy(Result, Stop + 1, MaxInt);
+    Start := Pos('const ' + MockReasons[I] + ' =', Src);
+    if Start > 0 then Stop := Pos(';' + LB, Src, Start) else Stop := 0;
+    if Stop = 0 then
+    begin
+      Err := 'vitest shim lost ' + MockReasons[I];
+      Exit;
+    end;
+    Src := Copy(Src, 1, Start - 1) + 'const ' + MockReasons[I] + ' = NOT_HOISTED;' + Copy(Src, Stop + 1, MaxInt);
   end;
-  Result := NotHoisted + Result;
+  Src := NotHoisted + Src;
+  Result := True;
 end;
 
 function Host_VitestSource(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Src, Err: UnicodeString;
 begin
-  Res := StrFromUnicode(VitestShimSource((Argc >= 1) and (Args[1] = VTrue)));
+  if not VitestShimSource((Argc >= 1) and (Args[1] = VTrue), Src, Err) then Exit(ThrowError('Error', Err));
+  Res := StrFromUnicode(Src);
   Result := True;
 end;
 
