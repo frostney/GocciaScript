@@ -68,7 +68,7 @@ end.
 | Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
 | Capabilities | `Capabilities`, `ProjectRoot`, `AuditSink`, `Audit`, `FetchMaxResponseBytes` |
-| Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `MaxMemory`, `MaxFrames` |
+| Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `InstructionBudget`, `MaxMemory`, `MaxFrames` |
 | Test and benchmark hosts | `RunTests`, `EndTests`, `LateRejection`, `RunBenchmarks`, `HeapSnapshotObserved`, `HeapSnapshotVerify` |
 | Profiling and coverage | `ProfileOpcodes`, `ProfileFunctions`, `Coverage` |
 
@@ -479,6 +479,25 @@ path and leave `HasInstructionCount` false. Counter-enabled entries run in the i
 ### Aborting a Run from Another Thread
 
 `TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled sees the interrupt only at loop back edges and counts no instructions, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
+
+### Sharing an instruction budget
+
+Create `NewInstructionBudget(Limit)` from `Goccia.InstructionBudget` and assign it to
+`Engine.InstructionBudget` on every engine in the job before running them, on one thread or
+several. A positive limit caps their combined work. Zero measures the combined work without
+setting a cap. The shared budget supplies the limit and reported count while attached. Set a
+fresh budget for each job.
+
+Each engine takes units from the budget 1,024 at a time and spends them on its own counter, so
+the dispatch loop does no shared write per instruction. The job never spends more than the
+limit, but an engine can be refused while others still hold up to 1,024 unspent units each, and
+it learns of a cap another engine spent when its own units run out. An engine returns what it did
+not spend when its run ends. `Budget.Count` is exact once every engine has ended; a run's
+reported count is the job's count so far without that engine's unspent units.
+
+Native code on an engine's thread can call `PollInstructionUnits(N)` in `Goccia.VM` before a
+bounded chunk of work. An accepted charge counts the whole chunk. A refused charge ends the run
+at its limit. A zero charge checks the limits without spending an instruction.
 
 ### Call Stack Depth Limit
 

@@ -11,7 +11,7 @@ interface
 
 uses
   SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, Goccia.Core, Goccia.HostAPI, Goccia.Modules, Goccia.VM,
-  Goccia.Instructions, Goccia.Artifact;
+  Goccia.Instructions, Goccia.InstructionBudget, Goccia.Artifact;
 
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
@@ -96,6 +96,7 @@ type
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMeasureInstructions: Boolean;
+    FInstructionBudget: IGocciaInstructionBudget;
     FSetupAborted: TGocciaAbort;
     FMaxFrames: Integer;
     FHostReady: Boolean;
@@ -319,6 +320,8 @@ type
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     { Count instructions when MaxInstructions is zero. Capped runs always report a count. }
     property MeasureInstructions: Boolean read FMeasureInstructions write FMeasureInstructions;
+    { Engines sharing a job attach the same budget before Run. It provides both the limit and count when assigned. }
+    property InstructionBudget: IGocciaInstructionBudget read FInstructionBudget write FInstructionBudget;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
       own); 0 for the default (Goccia.HostAPI DefaultHeapCeiling) }
@@ -979,7 +982,7 @@ begin
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
-  LimitsArm(FTimeoutMs, FMaxInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
@@ -1201,7 +1204,7 @@ begin
     if (FHostEnvironment <> '') and not FEnvLoaded then
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
-      LimitsArm(FTimeoutMs, FMaxInstructions);
+      LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
       try
         Compiled := LoadHostEnvironment;
       finally
@@ -1290,7 +1293,7 @@ begin
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
-  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions, FInstructionBudget);
   Start := GetNanoseconds;
   { the completion value, rooted through the event loop }
   PushRoot(VUndefined);
