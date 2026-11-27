@@ -3,7 +3,7 @@ program JitPermissionsTest;
 {$mode delphiunicode}{$H+}
 
 uses
-  cthreads,
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
   Goccia.Core,
   Goccia.Embed,
