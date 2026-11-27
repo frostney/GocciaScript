@@ -1,5 +1,6 @@
 { The vitest compatibility shim's module source (docs/testing-api.md, Vitest compatibility): the body of a
-  function returning it, with LB the line break. Shared by Goccia.RuntimeExtensions.VitestCompat and Goccia.HostAPI. }
+  function returning it, with LB the line break. Included by Goccia.HostAPI (VitestShimSource), which puts the
+  MODULE_ONLY constant before it. }
   Result :=
     '// GocciaScript vitest compatibility shim. Shipped inside the runner.' + LB +
     'import {' + LB +
@@ -66,18 +67,28 @@
     '// wired: the call itself has nothing left to do.' + LB +
     'const hoistedDirective = (specifier, factory) => undefined;' + LB +
     LB +
-    'const DYNAMIC_MOCKING =' + LB +
+    '// MODULE_ONLY (set by the host): the module-only opt-in of an embedding, which runs no' + LB +
+    '// hoisting pass, so it has no module mocks at all.' + LB +
+    'const NOT_HOISTED =' + LB +
+    '  "Module mocks need the pass that hoists them out of a test file before " +' + LB +
+    '  "its module graph loads, which GocciaTestRunner and goccia --test run " +' + LB +
+    '  "and this host does not.";' + LB +
+    'const MOCK_HOST = MODULE_ONLY' + LB +
+    '  ? "This host applies no module mocks. In GocciaTestRunner and goccia --test, "' + LB +
+    '  : "";' + LB +
+    LB +
+    'const DYNAMIC_MOCKING = MOCK_HOST +' + LB +
     '  "vi.mock with a factory is supported and is applied before the module " +' + LB +
     '  "graph is loaded; this member instead has to re-point a module after " +' + LB +
     '  "loading, which needs the module-cache eviction the GocciaScript " +' + LB +
     '  "module loader does not provide.";' + LB +
-    'const NO_ACTUAL_MODULE =' + LB +
+    'const NO_ACTUAL_MODULE = MOCK_HOST +' + LB +
     '  "vi.mock with a factory is supported, but the real module is not " +' + LB +
     '  "reachable once it is mocked: GocciaScript serves exactly one module " +' + LB +
     '  "per resolved address, so the original cannot be imported alongside " +' + LB +
     '  "the mock. Partial mocks that spread the actual module are therefore " +' + LB +
     '  "not supported either.";' + LB +
-    'const FACTORY_SCOPE =' + LB +
+    'const FACTORY_SCOPE = MOCK_HOST +' + LB +
     '  "vi.mock with a factory is supported, but the factory is relocated " +' + LB +
     '  "into its own module scope, so there is no shared hoisted-variable " +' + LB +
     '  "scope for it to read.";' + LB +
@@ -288,8 +299,8 @@
     '  // Vitest defines it that way too.' + LB +
     '  mocked: (value) => value,' + LB +
     LB +
-    '  mock: hoistedDirective,' + LB +
-    '  unmock: hoistedDirective,' + LB +
+    '  mock: MODULE_ONLY ? unsupported("mock", NOT_HOISTED) : hoistedDirective,' + LB +
+    '  unmock: MODULE_ONLY ? unsupported("unmock", NOT_HOISTED) : hoistedDirective,' + LB +
     LB +
     '  doMock: unsupported("doMock", DYNAMIC_MOCKING),' + LB +
     '  doUnmock: unsupported("doUnmock", DYNAMIC_MOCKING),' + LB +
