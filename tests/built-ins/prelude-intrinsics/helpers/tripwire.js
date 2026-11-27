@@ -97,15 +97,18 @@ export const installTripwire = () => {
     restore[restore.length] = [owner, key, d, ownerName, name];
     if ("value" in d) {
       apply(mapSet, originals, [name, d.value]);
-      if (!d.writable) return;
       let value = d.value;
+      // a configurable property a script can redefine is watched whether or not it is writable; a read-only one
+      // keeps refusing assignments (no setter)
       defineProperty(owner, key, {
         __proto__: null,
         get() { record(name); return value; },
-        set(v) {
-          if (this === owner) value = v;
-          else defineProperty(this, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
-        },
+        set: d.writable ? {
+          set(v) {
+            if (this === owner) value = v;
+            else defineProperty(this, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
+          },
+        }.set : undefined,
         enumerable: d.enumerable,
         configurable: true,
       });

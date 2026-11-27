@@ -4800,6 +4800,21 @@ await section("Runner: compiled calls of uncurried prelude methods keep working 
     throw new Error(`expected ${expected}, got ${JSON.stringify(result.json.files?.[0])}${result.stderr}`);
 });
 
+await section("Runner: an uncurried Function.prototype.call keeps working once the JIT compiles its caller...", async () => {
+  // Function.prototype.call.bind(Function.prototype.call): the shifted call is the call native itself, which the
+  // JIT's uncurry path must leave to the interpreter unshifted (#2185 review)
+  const source = [
+    "const u = Function.prototype.call.bind(Function.prototype.call);",
+    "const f = ((x) => x + 1).bind(null);",
+    "Array.from({ length: 100 }, () => u(f, null, 41)).join();",
+    "",
+  ].join("\n");
+  const expected = Array.from({ length: 100 }, () => "42").join();
+  const result = runLoaderJson(source, []);
+  if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+    throw new Error(`expected 100 results of 42, got ${JSON.stringify(result.json.files?.[0])}${result.stderr}`);
+});
+
 // -- --global / --globals -------------------------------------------------------
 
 await section("Loader: --host-environment module controls time, zone, and random streams...", async () => {
@@ -9637,8 +9652,9 @@ await section("REPL: Maps, Sets and RegExps display their contents, whatever a s
     "",
   ].join("\n");
   const out = await $`printf '%s' ${input} | ${REPL} 2>&1`.text();
+  // each result on a line of its own (the input lines echo the source, /x/g; among them)
   for (const shown of ["Map(1) { 1 => 'a' }", "Set(1) { 2 }", "/x/g"])
-    if (!out.includes(shown)) throw new Error(`REPL should display ${shown}, got: ${out}`);
+    if (!containsLine(out, shown)) throw new Error(`REPL should display ${shown}, got: ${out}`);
 });
 
 await section("REPL: ASI mode...", async () => {

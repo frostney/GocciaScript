@@ -86,7 +86,7 @@
     const parse = {
       parse(source, options = undefined) {
         if (typeof source !== 'string') throw new TypeErrorCtor('parse expects the source text as a string');
-        const o = options !== null && typeof options === 'object' ? options : {};
+        const o = options !== null && typeof options === 'object' ? options : { __proto__: null };
         const flag = (k, d) => (o[k] === undefined ? d : !!o[k]);
         const fileName = typeof o.fileName === 'string' ? o.fileName : '<source>';
         const raw = JSONParse(n.astParse(source, flag('jsx', false), flag('module', true), flag('tokens', false),

@@ -404,12 +404,17 @@
       return not(this, s !== undefined && StringPrototypeIncludes(s, text));
     });
   }
+  // each stringMatching pattern's source and flags, read when it was made (its own RegExp's getters live on
+  // RegExp.prototype, which a script may replace)
+  const patternSource = uncurryThis(regExpSource), patternOf = new global.WeakMap();
+  const WeakMapPrototypeGet = uncurryThis(global.WeakMap.prototype.get), WeakMapPrototypeSet = uncurryThis(global.WeakMap.prototype.set);
   function stringMatching(sample, inverse) {
     const text = stringOf(sample);
-    let re;
-    if (text !== undefined) re = new RegExp(text, '');
-    else if (isRegExp(sample)) re = new RegExp(sample.source, sample.flags);
+    let re, flags;
+    if (text !== undefined) { re = new RegExp(text, ''); flags = ''; }
+    else if (isRegExp(sample)) { flags = sample.flags; re = new RegExp(sample.source, flags); }
     else throw new Error('Expected is not a String or a RegExp');
+    WeakMapPrototypeSet(patternOf, re, [patternSource(re), flags]);
     return matcher('stringMatching', ['StringMatching', 'StringNotMatching'], re, inverse, function match(v) {
       const s = stringOf(v);
       if (s === undefined) return not(this, false);
@@ -418,9 +423,10 @@
       return not(this, RegExpPrototypeExec(re, s) !== null);
     }, (spec) => ({
       equivalent: (other) => other.kind === spec.kind && other.inverse === spec.inverse &&
-        other.sample.source === re.source && other.sample.flags === re.flags,
+        sameTextPattern(WeakMapPrototypeGet(patternOf, other.sample), WeakMapPrototypeGet(patternOf, re)),
     }));
   }
+  const sameTextPattern = (a, b) => a !== undefined && b !== undefined && a[0] === b[0] && a[1] === b[1];
   function closeTo(sample, precisionArg, inverse) {
     const expected = numberOf(sample);
     if (expected === undefined) throw new Error('Expected is not a Number');

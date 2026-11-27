@@ -229,6 +229,11 @@ These exceptions must be:
   reason;
 - kept small enough that a failure still identifies the contract that broke.
 
+`tests/built-ins/prelude-intrinsics` is one such contract by directory: a file per prelude (or per group of small
+ones) checks that its built-ins look up nothing a script can replace, across every method and getter it defines,
+with `helpers/tripwire.js`. `scripts/check-test-structure.ts` requires a file for each prelude rather than an
+allowlist entry for each file ([Captured intrinsics](adding-built-in-types.md#captured-intrinsics)).
+
 Shared setup or table data is not by itself a reason to combine operations.
 Prefer a helper imported by focused files when several operations need the same
 fixtures.

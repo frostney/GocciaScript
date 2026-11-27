@@ -46,7 +46,7 @@
     #defaultValue;
     #name;
     constructor(options = undefined) {
-      const o = options === undefined || options === null ? {} : options;
+      const o = options === undefined || options === null ? { __proto__: null } : options;
       this.#defaultValue = o.defaultValue;
       this.#name = o.name === undefined ? '' : String(o.name);
     }
@@ -112,7 +112,7 @@
       this.#type = type;
       this.#ctx = current();
       this.#asyncId = ++nextAsyncId;
-      const o = options === undefined || options === null ? {} : (typeof options === 'number' ? { triggerAsyncId: options } : options);
+      const o = options === undefined || options === null ? { __proto__: null } : (typeof options === 'number' ? { __proto__: null, triggerAsyncId: options } : options);
       this.#triggerId = typeof o.triggerAsyncId === 'number' ? o.triggerAsyncId : 1;
     }
     static #check(r, what) {

@@ -13,7 +13,8 @@ afterAll(() => wire.uninstall());
 const watched = (f) => expectClean(wire.watch(f));
 // what the matchers read from the values they compare, as data: a strict comparison's constructors, an error's name
 // and message, a RegExp's source, flags and test (a pattern compared, or a user's pattern a matcher runs)
-const VALUE_READS = /\.prototype\.(constructor|name|message)$|^RegExp\.prototype\./;
+// a constructor's name and a value's Symbol.toStringTag, which messages and snapshots print
+const VALUE_READS = /\.prototype\.(constructor|name|message)$|^RegExp\.prototype\.|\.name$|\[Symbol\.toStringTag\]$/;
 const valueChecked = (f) => {
   const r = wire.watch(f);
   if (r.threw) throw r.error;

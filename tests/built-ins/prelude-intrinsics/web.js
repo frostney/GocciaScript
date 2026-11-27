@@ -50,5 +50,6 @@ test("structuredClone", () => {
   expect(r.re.flags).toBe("gi");
   const refused = wire.invoke("globalThis.structuredClone", undefined, new Headers());
   expect(refused.threw).toBe(true);
-  expect(refused.hits).toEqual([]);
+  // the error names the value's kind, its Symbol.toStringTag (Object.prototype.toString reads it)
+  expect(refused.hits).toEqual(["Headers.prototype[Symbol.toStringTag]"]);
 });

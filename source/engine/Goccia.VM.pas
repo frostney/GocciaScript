@@ -7327,14 +7327,17 @@ begin
   Result := 1;
 end;
 
-{ whether O is uncurryThis(f) for a native f: Function.prototype.call.bind(f) with no bound arguments (the preludes'
-  captured prototype methods), which FastLoop's opCall calls as f.call }
+{ whether O is uncurryThis(f) for a native f other than Function.prototype.call: Function.prototype.call.bind(f) with
+  no bound arguments (the preludes' captured prototype methods), which FastLoop's opCall calls as f.call }
 function XUncurriedNative(O: PObj): Boolean; inline;
 var B: PValueArray;
 begin
   B := PValueArray(PtrOf(O^.Aux2));
   Result := (B^.Len = 1) and IsObject(O^.Aux1) and (ObjOf(O^.Aux1)^.OKind = okNative) and
-    (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsObject(B^.Data[0]) and (ObjOf(B^.Data[0])^.OKind = okNative);
+    (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsObject(B^.Data[0]) and (ObjOf(B^.Data[0])^.OKind = okNative) and
+    { f = Function.prototype.call itself: its shifted call would be one XJitCall hands back to the interpreter, which runs
+      the instruction again on the shifted registers }
+    (ObjOf(B^.Data[0])^.Native <> FuncCallNative);
 end;
 
 { FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }

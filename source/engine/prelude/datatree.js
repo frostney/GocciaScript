@@ -6,7 +6,7 @@
 // and the file formats.
 (function (G, n, shared) {
   'use strict';
-  const parseJSON = JSON.parse, create = Object.create, defineProperty = Object.defineProperty;
+  const parseJSON = JSON.parse, create = Object.create, defineProperty = Object.defineProperty, setProto = Object.setPrototypeOf;
   const toObject = Object, reflectGet = Reflect.get, ownKeys = Reflect.ownKeys, ProxyCtor = Proxy;
   const ErrorCtor = G.Error, TypeErrorCtor = G.TypeError, WeakSetCtor = WeakSet;
   const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
@@ -39,7 +39,8 @@
   // second pass, so a cycle finds it and the nesting needs no recursion
   function rebuild(json) {
     const entries = parseJSON(json);
-    const values = [], made = [], unfilled = [];
+    // the caches have no prototype: a read of an index not filled yet finds nothing a script put on Array.prototype
+    const values = setProto([], null), made = setProto([], null), unfilled = [];
     const valueOf = (i) => {
       if (made[i] === true) return values[i];
       const e = entries[i];

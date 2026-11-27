@@ -55,7 +55,8 @@
 
   // ---------------- DOMException ----------------
   // the legacy codes of the names that have one (Web IDL, DOMException names table)
-  const CODES = {
+  // without a prototype: a name the table lacks has code 0, even one Object.prototype holds (toString)
+  const CODES = { __proto__: null,
     IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5,
     NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9, InvalidStateError: 11, SyntaxError: 12,
     InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15, TypeMismatchError: 17,
@@ -400,7 +401,7 @@
       if (!ArrayPrototypeIncludes(UTF8_LABELS, l)) throw new RangeError(`The encoding label provided ('${String(label)}') is invalid.`);
       if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'function')
         throw new TypeError("Failed to construct 'TextDecoder': The provided value is not of type 'TextDecoderOptions'.");
-      const o = options === undefined || options === null ? {} : options;
+      const o = options === undefined || options === null ? { __proto__: null } : options;
       this.#fatal = !!o.fatal;
       this.#ignoreBOM = !!o.ignoreBOM;
     }

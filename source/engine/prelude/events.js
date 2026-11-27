@@ -24,7 +24,7 @@
       if (arguments.length < 1) throw new TypeError("Failed to construct 'Event': 1 argument required, but only 0 present.");
       if (eventInitDict !== undefined && eventInitDict !== null && !isObject(eventInitDict))
         throw new TypeError("Failed to construct 'Event': The provided value is not of type 'EventInit'.");
-      const init = eventInitDict === undefined || eventInitDict === null ? {} : eventInitDict;
+      const init = eventInitDict === undefined || eventInitDict === null ? { __proto__: null } : eventInitDict;
       const bubbles = !!init.bubbles, cancelable = !!init.cancelable, composed = !!init.composed;
       this.#s = { type: String(type), bubbles, cancelable, composed, target: null, currentTarget: null, phase: 0,
         canceled: false, stop: false, stopNow: false, dispatching: false, inPassive: false, timeStamp: n.hrNow() };

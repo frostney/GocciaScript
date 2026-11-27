@@ -81,19 +81,19 @@
       // Web IDL sequence<BlobPart>: the argument's own iterator
       for (const part of blobParts) {
         const partBytes = blobBytes(part);
-        if (partBytes !== undefined) append(pieces, { blob: partBytes });
+        if (partBytes !== undefined) append(pieces, { __proto__: null, blob: partBytes });
         else if (isObject(part) && isAB(part)) {
           if (apply(abResizable, part, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBuffer value must not be resizable.");
-          append(pieces, { buffer: part });
+          append(pieces, { __proto__: null, buffer: part });
         } else if (isObject(part) && isView(part)) {
           const buffer = viewBuffer(part);
           if (isSAB(buffer)) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be shared.");
           if (isAB(buffer) && apply(abResizable, buffer, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be resizable.");
-          append(pieces, { view: part });
+          append(pieces, { __proto__: null, view: part });
         } else {
           if (typeof part === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
           // USVString: the encoding turns a lone surrogate into U+FFFD, as converting first would
-          append(pieces, { string: String(part) });
+          append(pieces, { __proto__: null, string: String(part) });
         }
       }
     }
@@ -356,7 +356,7 @@
     constructor(body = null, init = undefined) {
       if (init !== undefined && init !== null && !isObject(init))
         throw new TypeError("Failed to construct 'Response': The provided value is not of type 'ResponseInit'.");
-      const o = init === undefined || init === null ? {} : init;
+      const o = init === undefined || init === null ? { __proto__: null } : init;
       const status = o.status === undefined ? 200 : Number(o.status);
       if (!(status >= 200 && status <= 599) || !NumberIsInteger(status))
         throw new RangeError(`Failed to construct 'Response': The status provided (${o.status}) is outside the range [200, 599].`);
@@ -402,7 +402,7 @@
         const bytes = this.#consume('blob');
         const type = headersGet(this.#headers, 'content-type');
         const t = type === null || nonPrintable(type) ? '' : StringPrototypeToLowerCase(type);
-        return PromiseResolve(new Blob(BLOB_INIT, [{ blob: bytes }], t, false));
+        return PromiseResolve(new Blob(BLOB_INIT, [{ __proto__: null, blob: bytes }], t, false));
       } catch (e) { return PromiseReject(e); }
     }
     clone() {

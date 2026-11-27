@@ -1028,15 +1028,15 @@
         var w = StringPrototypeCharCodeAt(s, i++) - 48;
         if (StringPrototypeCharCodeAt(s, i++) !== 46) return null;
         var d = StringPrototypeCharCodeAt(s, i++) - 48;
-        r = { kind: "M", m: m, w: w, d: d };
+        r = { __proto__: null, kind: "M", m: m, w: w, d: d };
       } else if (c === 74) {   // Jn: 1-365, no Feb 29
         i++;
         var n = 0; while (isDigit(StringPrototypeCharCodeAt(s, i))) n = n * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
-        r = { kind: "J", n: n };
+        r = { __proto__: null, kind: "J", n: n };
       } else {
         var n2 = 0, st = i; while (isDigit(StringPrototypeCharCodeAt(s, i))) n2 = n2 * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
         if (i === st) return null;
-        r = { kind: "N", n: n2 };
+        r = { __proto__: null, kind: "N", n: n2 };
       }
       r.time = 7200;
       if (StringPrototypeCharCodeAt(s, i) === 47) { i++; var t = offset(); if (t === null) return null; r.time = t; }

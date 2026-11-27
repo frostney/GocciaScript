@@ -8,8 +8,10 @@ import { expectClean, installTripwire } from "./helpers/tripwire.js";
 const wire = installTripwire();
 afterAll(() => wire.uninstall());
 
-// what rendering reads from the values themselves: an error's name, message and stack, which these inherit
-const ERROR_FIELDS = ["Error.prototype.name", "Error.prototype.message", "TypeError.prototype.name", "TypeError.prototype.message"];
+// what rendering reads from the values themselves: an error's name and message and an anonymous function's name,
+// which these inherit
+const ERROR_FIELDS = ["Error.prototype.name", "Error.prototype.message", "TypeError.prototype.name", "TypeError.prototype.message",
+  "Function.prototype.name"];
 
 test("every console method", () => {
   class Point { constructor() { this.x = 1; } }
