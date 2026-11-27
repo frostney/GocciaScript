@@ -142,7 +142,7 @@ const
   Output can fail, and the exit status must not: a write to a closed pipe
   returns an error rather than raising SIGPIPE, and a write that blocks (a full
   pipe nobody reads) cannot hold the process past the bound, because a
-  watchdog ends it then (PrepareEngineFaultReport). }
+  watchdog ends it then (BeginEngineCheckReport describes both). }
 procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
 
 { The same stop for one of the engine's own integrity checks, which has
@@ -153,13 +153,16 @@ procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
   the collector. Never returns. }
 procedure StopOnEngineCheck(const ACheck: string);
 
-{ Arms what keeps the exit status 70 whatever stderr does: a write to a closed
-  pipe fails instead of raising SIGPIPE, and a watchdog (alarm(2) on POSIX, a
-  thread on Windows) ends the process with EXIT_CODE_ENGINE_FAULT if a write
-  blocks on a full one. AbortOnEngineFault and StopOnEngineCheck call it; an
-  integrity check calls it before it writes what it found. Once per process;
-  later calls return at once. }
-procedure PrepareEngineFaultReport;
+{ Begins an integrity check's report, before the check writes what it found:
+  claims the report for the calling thread, so no scheduler starts another
+  file from here on (StopIfEngineFaultReported), and arms what keeps the exit
+  status 70 whatever stderr does. A write to a closed pipe fails instead of
+  raising SIGPIPE, and a watchdog (alarm(2) on POSIX, with SIGALRM unblocked
+  on the calling thread; a thread on Windows) ends the process with
+  EXIT_CODE_ENGINE_FAULT if a write blocks on a full one. A check writes its
+  finding with I/O checks off (the I- switch), so a failed write cannot raise, and
+  ends with StopOnEngineCheck. }
+procedure BeginEngineCheckReport;
 
 { True once a thread has begun reporting a fault. The process is ending. }
 function EngineFaultReported: Boolean;
@@ -251,6 +254,11 @@ var
   { Claimed by the first thread to arm the exit's protections. }
   GReportArmed: LongInt = 0;
 
+threadvar
+  { True on the thread whose integrity check claimed the report
+    (BeginEngineCheckReport): its StopOnEngineCheck writes the diagnostic. }
+  GOwnsReport: Boolean;
+
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 { SIGALRM's handler: async-signal-safe, it only ends the process }
 procedure WatchdogAlarm(ASignal: cint); cdecl;
@@ -266,20 +274,31 @@ begin
 end;
 {$IFEND}
 
-procedure PrepareEngineFaultReport;
+{ The exit's protections, armed once per process. Where one cannot be armed,
+  the process ends at once with EXIT_CODE_ENGINE_FAULT: a lost diagnostic, but
+  never a write that holds the process forever. }
+procedure ArmEngineFaultExit;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Alarm: TSigSet;
+  Ignored, Installed: SignalHandler;
+{$IFEND}
 begin
   if InterlockedExchange(GReportArmed, 1) <> 0 then
     Exit;
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
   { a closed pipe fails a write with EPIPE instead of killing the process, and
     the alarm, which needs no allocation and no thread, ends a process whose
-    write blocks }
-  fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
-  fpSignal(SIGALRM, @WatchdogAlarm);
+    write blocks; SIGALRM may arrive blocked from the parent, so it is
+    unblocked on this thread, the one that waits for the end }
+  Ignored := fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
+  Installed := fpSignal(SIGALRM, @WatchdogAlarm);
+  if (CodePointer(@Ignored) = CodePointer(SIG_ERR)) or (CodePointer(@Installed) = CodePointer(SIG_ERR)) or
+     (FpSigEmptySet(Alarm) <> 0) or (FpSigAddSet(Alarm, SIGALRM) <> 0) or
+     (FpSigProcMask(SIG_UNBLOCK, @Alarm, nil) <> 0) then
+    TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
   fpAlarm(WATCHDOG_SECONDS);
   {$ELSEIF DEFINED(MSWINDOWS)}
-  { no thread for the watchdog: end at once rather than risk a write that
-    never returns }
   try
     if BeginThread(@WatchdogThread) = 0 then
       TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
@@ -288,6 +307,13 @@ begin
     TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
   end;
   {$IFEND}
+end;
+
+procedure BeginEngineCheckReport;
+begin
+  if InterlockedExchange(GFaultReported, 1) = 0 then
+    GOwnsReport := True;
+  ArmEngineFaultExit;
 end;
 
 function EngineFaultReported: Boolean;
@@ -313,9 +339,12 @@ end;
 
 procedure ReportAndTerminate(const AFirstLine: string);
 begin
-  if InterlockedExchange(GFaultReported, 1) = 0 then
+  if GOwnsReport or (InterlockedExchange(GFaultReported, 1) = 0) then
   begin
-    PrepareEngineFaultReport;
+    ArmEngineFaultExit;
+    { a failed write before this one (a check's finding, written with I/O
+      checks off) leaves its error pending: cleared, so these writes run }
+    IOResult;
     { fault-guard throughout: the process is already ending on a fault, and a
       failed write must not stop that }
     try

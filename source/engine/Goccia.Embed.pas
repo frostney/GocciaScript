@@ -836,6 +836,9 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  InjectFaultAt('engine-free');
+  {$ENDIF}
   ModuleWarningHook := nil;
   SetReadPolicy(False, TGocciaCapabilities.None, '', nil);
   SetModuleLoadingUnsupported(False);

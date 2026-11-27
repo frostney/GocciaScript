@@ -194,40 +194,50 @@ end;
 procedure TFetchWorker.Execute;
 var Policy: THTTPRequestPolicy; O: TFetchOwner;
 begin
-  Policy := DefaultHTTPPolicy;
-  Policy.MaxResponseBytes := MaxBytes;
-  Policy.HostCheck := CheckDestination;
-  Policy.RedirectMode := Redirect;
+  { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
+    end the thread silently in FatalException (ADR 0196) }
   try
-    if Method = 'HEAD' then Response := HTTPHead(URL, Headers, nil, TimeoutMs, Policy)
-    else Response := HTTPGet(URL, Headers, nil, TimeoutMs, Policy);
-    Ok := True;
-  except
-    on E: EHTTPDestinationDenied do
-    begin
-      ErrorMessage := E.Message;
-      DeniedScope := E.Scope;
+    Policy := DefaultHTTPPolicy;
+    Policy.MaxResponseBytes := MaxBytes;
+    Policy.HostCheck := CheckDestination;
+    Policy.RedirectMode := Redirect;
+    try
+      if Method = 'HEAD' then Response := HTTPHead(URL, Headers, nil, TimeoutMs, Policy)
+      else Response := HTTPGet(URL, Headers, nil, TimeoutMs, Policy);
+      Ok := True;
+    except
+      on E: EHTTPDestinationDenied do
+      begin
+        ErrorMessage := E.Message;
+        DeniedScope := E.Scope;
+      end;
+      on E: EHTTPError do ErrorMessage := E.Message;
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then AbortOnEngineFault('<fetch>', E);
+        ErrorMessage := 'fetch failed: ' + E.Message;
+      end;
     end;
-    on E: EHTTPError do ErrorMessage := E.Message;
+    O := Owner;
+    EnterCriticalSection(O.Lock);
+    try
+      { the engine gone: no one frees the worker but itself. A cancelled request's worker still goes to Done, where
+        the engine frees it and its slot (its entry names it until then) }
+      if Cancelled then Response := Default(THTTPResponse);
+      if O.Detached then FreeOnTerminate := True
+      else O.Done.Add(Self);
+    finally
+      LeaveCriticalSection(O.Lock);
+    end;
+    RTLEventSetEvent(O.Wake);
+    O.Release;
+  except
     on E: Exception do
     begin
       if IsEngineFault(E) then AbortOnEngineFault('<fetch>', E);
-      ErrorMessage := 'fetch failed: ' + E.Message;
+      raise;
     end;
   end;
-  O := Owner;
-  EnterCriticalSection(O.Lock);
-  try
-    { the engine gone: no one frees the worker but itself. A cancelled request's worker still goes to Done, where
-      the engine frees it and its slot (its entry names it until then) }
-    if Cancelled then Response := Default(THTTPResponse);
-    if O.Detached then FreeOnTerminate := True
-    else O.Done.Add(Self);
-  finally
-    LeaveCriticalSection(O.Lock);
-  end;
-  RTLEventSetEvent(O.Wake);
-  O.Release;
 end;
 
 { ---------------- the policy and the checks ---------------- }

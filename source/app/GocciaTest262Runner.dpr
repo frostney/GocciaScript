@@ -1296,30 +1296,41 @@ procedure TTest262Worker.Execute;
 var
   UsesAgents: Boolean;
 begin
+  { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
+    end the thread silently in FatalException (ADR 0196) }
   try
     try
-      UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
-    except
-      on E: Exception do
-      begin
-        { a case thread: re-raised, the fault would end the thread silently }
-        if IsEngineFault(E) then
-          AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
-        UsesAgents := False;
+      try
+        UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
+      except
+        on E: Exception do
+        begin
+          { a case thread: re-raised, the fault would end the thread silently }
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
+          UsesAgents := False;
+        end;
       end;
-    end;
-    if UsesAgents then
-      EnterCriticalSection(AgentRunLock);
-    try
-      FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
-    finally
       if UsesAgents then
-        LeaveCriticalSection(AgentRunLock);
+        EnterCriticalSection(AgentRunLock);
+      try
+        FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
+      finally
+        if UsesAgents then
+          LeaveCriticalSection(AgentRunLock);
+      end;
+      FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
+    finally
+      { this thread's engine state: FPC does not finalize managed threadvars }
+      RunThreadvarCleanupsOrAbort(FApp.FCases[FIndex].Path);
     end;
-    FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
-  finally
-    { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanupsOrAbort(FApp.FCases[FIndex].Path);
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
+      raise;
+    end;
   end;
 end;
 

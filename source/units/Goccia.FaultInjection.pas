@@ -26,7 +26,8 @@ unit Goccia.FaultInjection;
                                  "compile-entry", inside the handler that makes
                                  a failure to compile a script's entry its
                                  SyntaxError (Goccia.Eval); "thread-cleanup", as
-                                 a worker thread releases its engine state; or
+                                 a worker thread releases its engine state;
+                                 "engine-free", as a host frees an engine; or
                                  "shutdown", as an application ends
 
   The kinds, each a real fault raised the way the engine's own bugs raise it:
@@ -100,9 +101,12 @@ begin
   end
   else if AKind = 'engine-check' then
   begin
-    PrepareEngineFaultReport;
+    { as an engine check writes its finding (BeginEngineCheckReport) }
+    {$PUSH}{$I-}
+    BeginEngineCheckReport;
     WriteLn(ErrOutput, 'injected engine check: the state it found');
     StopOnEngineCheck('injected');
+    {$POP}
   end
   else
     raise Exception.CreateFmt('unknown fault kind: %s', [AKind]);

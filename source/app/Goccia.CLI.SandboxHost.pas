@@ -340,153 +340,164 @@ var
   R: TGocciaRunResult;
   Message_: string;
 begin
+  { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
+    end the thread silently in FatalException (ADR 0196) }
   try
-    Result := Default(TGocciaSandboxRunResult);
-    Result.Ok := False;
-    Result.ExitCode := 1;
-    { every path below assigns a kind; this one stands for the runner returning
-      without classifying }
-    Result.FailureKind := sfkHostError;
-    Resolver := nil;
-    CurrentRun := Run;
-    SetSandbox(Run.Context);
     try
+      Result := Default(TGocciaSandboxRunResult);
+      Result.Ok := False;
+      Result.ExitCode := 1;
+      { every path below assigns a kind; this one stands for the runner returning
+        without classifying }
+      Result.FailureKind := sfkHostError;
+      Resolver := nil;
+      CurrentRun := Run;
+      SetSandbox(Run.Context);
       try
-        Resolver := TGocciaSandboxModuleResolver.Create(Run.Context.Fs,
-          SANDBOX_ROOT);
-        Host.ConfigureResolver(Resolver);
-        Run.Engine := TGocciaEngine.Create;
-        Run.Engine.Resolver := Resolver;
-        Run.Engine.Capabilities := Run.Capabilities;
-        Run.Engine.Deterministic := Run.Deterministic;
-        if RandomRoot <> nil then
-          Run.Engine.RandomRoot := RandomRoot;
-        Run.Engine.OnConsole := Run.CaptureConsole;
-        Run.Engine.FailOnUnhandledRejection := True;
-        Run.Engine.ExposeTimers := False;
-        Run.Engine.TimeoutMs := Run.TimeoutMilliseconds;
-        Run.Engine.MaxInstructions := Host.MaxInstructions;
-        Run.Engine.InspectDepth := Host.InspectDepth;
-        if Run.Parent <> nil then
-          Run.Engine.ResultForm := grfSandbox
-        else if Host.PrintRootResult then
-          Run.Engine.ResultForm := grfString;
-        if Assigned(Host.OnConfigureEngine) then
-          Host.OnConfigureEngine(Run);
-        Run.FPreviousClamp := Run.Context.Fs.RootClampCallback;
-        Run.Context.Fs.RootClampCallback := Run.HandleRootClamp;
         try
-          R := Run.Engine.Run(Run.EntryPath, Source);
-        finally
-          Run.Context.Fs.RootClampCallback := Run.FPreviousClamp;
-        end;
-        if R.Ok then
-        begin
-          Result.Ok := True;
-          Result.ExitCode := 0;
-          Result.FailureKind := sfkNone;
+          Resolver := TGocciaSandboxModuleResolver.Create(Run.Context.Fs,
+            SANDBOX_ROOT);
+          Host.ConfigureResolver(Resolver);
+          Run.Engine := TGocciaEngine.Create;
+          Run.Engine.Resolver := Resolver;
+          Run.Engine.Capabilities := Run.Capabilities;
+          Run.Engine.Deterministic := Run.Deterministic;
+          if RandomRoot <> nil then
+            Run.Engine.RandomRoot := RandomRoot;
+          Run.Engine.OnConsole := Run.CaptureConsole;
+          Run.Engine.FailOnUnhandledRejection := True;
+          Run.Engine.ExposeTimers := False;
+          Run.Engine.TimeoutMs := Run.TimeoutMilliseconds;
+          Run.Engine.MaxInstructions := Host.MaxInstructions;
+          Run.Engine.InspectDepth := Host.InspectDepth;
           if Run.Parent <> nil then
-          begin
-            Result.ResultEncoded := R.ResultText;
-            Result.HasResultEncoded := R.HasResult;
-          end
-          else if R.HasResult then
-          begin
-            Result.ResultText := R.ResultText;
-            Result.HasResultText := True;
+            Run.Engine.ResultForm := grfSandbox
+          else if Host.PrintRootResult then
+            Run.Engine.ResultForm := grfString;
+          if Assigned(Host.OnConfigureEngine) then
+            Host.OnConfigureEngine(Run);
+          Run.FPreviousClamp := Run.Context.Fs.RootClampCallback;
+          Run.Context.Fs.RootClampCallback := Run.HandleRootClamp;
+          try
+            R := Run.Engine.Run(Run.EntryPath, Source);
+          finally
+            Run.Context.Fs.RootClampCallback := Run.FPreviousClamp;
           end;
-        end
-        else
-        begin
-          { each kind the guest can steer is named before the script error }
-          case R.Aborted of
-            gaTimeout:
+          if R.Ok then
+          begin
+            Result.Ok := True;
+            Result.ExitCode := 0;
+            Result.FailureKind := sfkNone;
+            if Run.Parent <> nil then
+            begin
+              Result.ResultEncoded := R.ResultText;
+              Result.HasResultEncoded := R.HasResult;
+            end
+            else if R.HasResult then
+            begin
+              Result.ResultText := R.ResultText;
+              Result.HasResultText := True;
+            end;
+          end
+          else
+          begin
+            { each kind the guest can steer is named before the script error }
+            case R.Aborted of
+              gaTimeout:
+                begin
+                  Result.ErrorMessage := Format('file timed out after %dms',
+                    [Host.TimeoutMilliseconds]);
+                  Result.FailureKind := sfkTimeout;
+                end;
+              gaInstructionLimit:
+                begin
+                  Result.ErrorMessage := Format(
+                    'Execution exceeded instruction limit of %d',
+                    [Host.MaxInstructions]);
+                  Result.FailureKind := sfkResourceLimit;
+                end;
+              gaMemoryLimit:
+                begin
+                  Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
+                  Result.FailureKind := sfkResourceLimit;
+                end;
+              gaHostAbort:
+                if TakeSandboxCeiling then
+                begin
+                  Result.ErrorMessage := R.ErrorText;
+                  Result.FailureKind := sfkResourceLimit;
+                end
+                else
+                begin
+                  { a capability audit the sink could not take: the host's
+                    failure, raised in the caller }
+                  AuditFailed := True;
+                  AuditFailure := R.ErrorText;
+                end;
+            else
+              if (R.ErrorSuggestion = SSuggestMemoryLimitExceeded) or
+                 (R.ErrorSuggestion = SSuggestStackMemoryLimitExceeded) then
               begin
-                Result.ErrorMessage := Format('file timed out after %dms',
-                  [Host.TimeoutMilliseconds]);
-                Result.FailureKind := sfkTimeout;
-              end;
-            gaInstructionLimit:
-              begin
-                Result.ErrorMessage := Format(
-                  'Execution exceeded instruction limit of %d',
-                  [Host.MaxInstructions]);
-                Result.FailureKind := sfkResourceLimit;
-              end;
-            gaMemoryLimit:
-              begin
+                { --max-memory's refusal (ADR 0185: a catchable RangeError, which the engine marks with its suggestion
+                  in a slot the script cannot set) left uncaught: the host's ceiling, as the run the limit ends }
                 Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
-                Result.FailureKind := sfkResourceLimit;
-              end;
-            gaHostAbort:
-              if TakeSandboxCeiling then
-              begin
-                Result.ErrorMessage := R.ErrorText;
                 Result.FailureKind := sfkResourceLimit;
               end
               else
               begin
-                { a capability audit the sink could not take: the host's
-                  failure, raised in the caller }
-                AuditFailed := True;
-                AuditFailure := R.ErrorText;
+                if Assigned(Host.OnFormatFailure) then
+                  Message_ := Host.OnFormatFailure(Run, R)
+                else
+                  Message_ := R.ErrorMessage;
+                Result.ErrorMessage := Message_;
+                Result.FailureKind := sfkScriptError;
               end;
-          else
-            if (R.ErrorSuggestion = SSuggestMemoryLimitExceeded) or
-               (R.ErrorSuggestion = SSuggestStackMemoryLimitExceeded) then
-            begin
-              { --max-memory's refusal (ADR 0185: a catchable RangeError, which the engine marks with its suggestion
-                in a slot the script cannot set) left uncaught: the host's ceiling, as the run the limit ends }
-              Result.ErrorMessage := 'memory limit exceeded: ' + R.ErrorText;
-              Result.FailureKind := sfkResourceLimit;
-            end
-            else
-            begin
-              if Assigned(Host.OnFormatFailure) then
-                Message_ := Host.OnFormatFailure(Run, R)
-              else
-                Message_ := R.ErrorMessage;
-              Result.ErrorMessage := Message_;
-              Result.FailureKind := sfkScriptError;
             end;
           end;
-        end;
-      except
-        on E: EOutOfMemory do
-        begin
-          { a nested run's engine the process has no memory for (on a 32-bit build the nesting limit's engines,
-            each with its register stack and frames, fill the address space first): the host's ceiling, which a
-            guest reaches by nesting, as the nesting depth is }
-          Result.Ok := False;
-          Result.ExitCode := 1;
-          Result.ErrorMessage := E.Message;
-          if Run.Parent <> nil then
-            Result.FailureKind := sfkResourceLimit
-          else
+        except
+          on E: EOutOfMemory do
+          begin
+            { a nested run's engine the process has no memory for (on a 32-bit build the nesting limit's engines,
+              each with its register stack and frames, fill the address space first): the host's ceiling, which a
+              guest reaches by nesting, as the nesting depth is }
+            Result.Ok := False;
+            Result.ExitCode := 1;
+            Result.ErrorMessage := E.Message;
+            if Run.Parent <> nil then
+              Result.FailureKind := sfkResourceLimit
+            else
+              Result.FailureKind := sfkHostError;
+          end;
+          on E: Exception do
+          begin
+            if IsEngineFault(E) then
+              AbortOnEngineFault(Run.EntryPath, E);
+            Result.Ok := False;
+            Result.ExitCode := 1;
+            Result.ErrorMessage := E.Message;
             Result.FailureKind := sfkHostError;
+          end;
         end;
-        on E: Exception do
-        begin
-          if IsEngineFault(E) then
-            AbortOnEngineFault(Run.EntryPath, E);
-          Result.Ok := False;
-          Result.ExitCode := 1;
-          Result.ErrorMessage := E.Message;
-          Result.FailureKind := sfkHostError;
-        end;
+        Result.Output := Run.Output.Text;
+        if Result.ErrorMessage <> '' then
+          Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
+      finally
+        FreeAndNil(Run.Engine);
+        Resolver.Free;
+        SetSandbox(nil);
+        CurrentRun := nil;
       end;
-      Result.Output := Run.Output.Text;
-      if Result.ErrorMessage <> '' then
-        Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
     finally
-      FreeAndNil(Run.Engine);
-      Resolver.Free;
-      SetSandbox(nil);
-      CurrentRun := nil;
+      { this thread's engine state: FPC does not finalize managed threadvars }
+      RunThreadvarCleanupsOrAbort(Run.EntryPath);
     end;
-  finally
-    { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanupsOrAbort(Run.EntryPath);
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(Run.EntryPath, E);
+      raise;
+    end;
   end;
 end;
 

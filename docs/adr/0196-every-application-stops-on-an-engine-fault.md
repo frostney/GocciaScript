@@ -33,8 +33,10 @@ test, because reaching it needed a fault on request in the runner.
 `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`,
 `GocciaScriptLoaderBare`, and the coordinators of `GocciaTest262Runner` and
 `GocciaTOMLComplianceRunner`, from the application's construction to its
-destruction (the build's prelude snapshot stage included) and in each worker
-thread up to its last cleanup. The handler that
+destruction (the build's prelude snapshot stage included), in each worker
+thread from its first statement to its last cleanup (the sandbox's run
+threads, fetch workers, `$262.agent` threads and test262 case threads
+included), and in the main thread's threadvar cleanup at finalization. The handler that
 catches the fault calls `Goccia.EngineFault.AbortOnEngineFault`, from whichever
 thread it runs on. It writes two lines to stderr, flushed:
 
@@ -56,16 +58,20 @@ script printed before the fault comes out ahead of the diagnostic; output other
 threads still buffer dies with the process. A write to a closed stderr pipe
 fails instead of raising `SIGPIPE`, and a watchdog ends the process with `70`
 if the write blocks on a full pipe: `alarm(2)` on POSIX, which needs no thread
-and no allocation, and a thread on Windows, where the process ends at once if
-none can start. A broken stderr changes neither the exit status nor whether the
+and no allocation (`SIGALRM` is unblocked on the reporting thread, as a
+launcher can leave it blocked), and a thread on Windows. Where a protection
+cannot be armed, the process ends at once with `70`, losing the diagnostic
+rather than risking a write that never returns. A broken stderr changes neither the exit status nor whether the
 process ends. While the report is being written, no file starts: every
 scheduler checks `StopIfEngineFaultReported` after each wait and every worker
 before its file, and ends the process with the reporter instead. And the
 engine's own integrity checks (a heap cell, a shape, a closure or a root count
-found broken, often in the middle of a collection) arm the same protections,
-write what they found and then call `StopOnEngineCheck`, which ends the process
-the same way without raising, instead of `Halt(9)`, which ran unit finalization
-from the thread that found it.
+found broken, often in the middle of a collection) first claim the report and
+arm the same protections (`BeginEngineCheckReport`), so no file starts from
+there on; then they write what they found with I/O checks off, so a failed
+write cannot raise, and call `StopOnEngineCheck`, which ends the process the
+same way without raising. They used to call `Halt(9)`, which ran unit
+finalization from the thread that found the fault.
 
 The prefix is `Engine fault:` rather than ADR 0109's `Integrity fault:`,
 because the family below now includes assertions and stack overflows, and every

@@ -135,6 +135,7 @@ end;
 initialization
 
 finalization
-  RunThreadvarCleanups;
+  { the main thread's, after the program: a fault here would otherwise end it with an unhandled-exception report }
+  RunThreadvarCleanupsOrAbort('<finalization>');
 
 end.

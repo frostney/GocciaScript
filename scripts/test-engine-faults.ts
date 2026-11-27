@@ -105,6 +105,37 @@ function expectNoFault(r: Run, code: number): void {
 
 const STARTUP = { GOCCIA_FAULT_INJECTION: "access-violation@startup" };
 
+/** Runs `command` (POSIX only) with stderr a pipe already full that nobody reads, so the fault's report blocks, and
+ * stdout captured; with `blockAlarm`, SIGALRM arrives blocked, as a launcher may leave it. Prints `status=<code>`,
+ * or `status=hung` when the process outlives 30 seconds. */
+function runWithFullStderr(command: string[], env: Record<string, string> = {}, blockAlarm = false): Run {
+  return run(["python3", "-I", "-c", [
+    "import fcntl, os, signal, subprocess, sys",
+    "r, w = os.pipe()",
+    "fl = fcntl.fcntl(w, fcntl.F_GETFL)",
+    "fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)",
+    "try:",
+    "    while True: os.write(w, b'x' * 4096)",
+    "except BlockingIOError: pass",
+    "fcntl.fcntl(w, fcntl.F_SETFL, fl)",
+    `if ${blockAlarm ? "True" : "False"}: signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})`,
+    "p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=w)",
+    "try:",
+    "    out, _ = p.communicate(timeout=30)",
+    "    sys.stdout.write(out.decode('utf-8', 'replace'))",
+    "    print('status=%d' % p.returncode)",
+    "except subprocess.TimeoutExpired:",
+    "    p.kill(); p.wait(); print('status=hung')",
+  ].join("\n"), ...command], { env });
+}
+
+/** Runs `command` (POSIX only) with stderr a pipe whose reader has gone, so the fault's report fails to write;
+ * prints `status=<code>`. */
+function runWithClosedStderr(command: string[], env: Record<string, string> = {}): Run {
+  return run(["sh", "-c", `exec 3>&1; { sleep 1; "$@" 2>&1 >/dev/null; echo "status=$?" >&3; } | true`, "sh",
+    ...command], { env });
+}
+
 function writeTestFiles(dir: string, files: Record<string, string>): string[] {
   return Object.entries(files).map(([name, body]) => {
     const path = join(dir, name);
@@ -262,7 +293,7 @@ await section("GocciaRunner: every fault kind inside the compile handler, a stac
   }
 });
 
-await section("Every application: a fault in a worker's cleanup, or as the application ends, stops it", () => {
+await section("Every application: a fault in a worker's cleanup, as an engine is freed, or as the application ends, stops it", () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "fine.js");
@@ -275,6 +306,13 @@ await section("Every application: a fault in a worker's cleanup, or as the appli
     expectAbsent(r, "Test Results", "a summary was printed");
     expectFault(run([F.runner, file], { env: { GOCCIA_FAULT_INJECTION: "access-violation@shutdown" } }),
       "EAccessViolation", "GocciaRunner");
+    // a host freeing an engine, in sandbox mode too, where the run's own thread frees it
+    expectFault(run([F.runner, file], { env: { GOCCIA_FAULT_INJECTION: "access-violation@engine-free" } }),
+      "EAccessViolation", "fine.js");
+    mkdirSync(join(tmp, "tree"));
+    writeFileSync(join(tmp, "tree", "main.js"), "console.log('fine');\n");
+    expectFault(run([F.runner, "--copy", `${join(tmp, "tree")}=/`, "--entry=/main.js"],
+      { env: { GOCCIA_FAULT_INJECTION: "access-violation@engine-free" } }), "EAccessViolation", "main.js");
     expectFault(run([F.testRunner, "-P", test], { env: { GOCCIA_FAULT_INJECTION: "assertion@shutdown" } }),
       "EAssertionFailed", "GocciaTestRunner");
   } finally {
@@ -305,31 +343,22 @@ await section("Every application: a broken stderr cannot change the exit status 
   if (process.platform === "win32") return;
   const tmp = makeTmp();
   try {
-    const file = join(tmp, "fault.js");
-    writeFileSync(file, "__gocciaInjectFault('access-violation');\n");
-    // stderr is a pipe whose reader has gone: the diagnostic's write fails
-    const closed = run(["sh", "-c", `exec 3>&1; { sleep 1; "$0" "$1" 2>&1 >/dev/null; echo "status=$?" >&3; } | true`,
-      F.runner, file]);
-    if (!closed.stdout.includes("status=70"))
-      throw new Error(`a closed stderr pipe should still give exit 70, got ${describe(closed)}`);
-    // stderr is a pipe already full that nobody reads: the write blocks until the watchdog ends the process
-    const full = run(["python3", "-I", "-c", [
-      "import fcntl, os, subprocess, sys",
-      "r, w = os.pipe()",
-      "fl = fcntl.fcntl(w, fcntl.F_GETFL)",
-      "fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)",
-      "try:",
-      "    while True: os.write(w, b'x' * 4096)",
-      "except BlockingIOError: pass",
-      "fcntl.fcntl(w, fcntl.F_SETFL, fl)",
-      "p = subprocess.Popen([sys.argv[1], sys.argv[2]], stdout=subprocess.DEVNULL, stderr=w)",
-      "try:",
-      "    print('status=%d' % p.wait(timeout=20))",
-      "except subprocess.TimeoutExpired:",
-      "    p.kill(); p.wait(); print('status=hung')",
-    ].join("\n"), F.runner, file]);
-    if (!full.stdout.includes("status=70"))
-      throw new Error(`a full stderr pipe should end in exit 70 within the bound, got ${describe(full)}`);
+    const fault = join(tmp, "fault.js");
+    writeFileSync(fault, "__gocciaInjectFault('access-violation');\n");
+    const check = join(tmp, "check.js");
+    writeFileSync(check, "__gocciaInjectFault('engine-check');\n");
+    for (const file of [fault, check]) {
+      const closed = runWithClosedStderr([F.runner, file]);
+      if (!closed.stdout.includes("status=70"))
+        throw new Error(`a closed stderr pipe should still give exit 70 for ${file}, got ${describe(closed)}`);
+      const full = runWithFullStderr([F.runner, file]);
+      if (!full.stdout.includes("status=70"))
+        throw new Error(`a full stderr pipe should end in exit 70 within the bound for ${file}, got ${describe(full)}`);
+    }
+    // a launcher can leave SIGALRM blocked: the watchdog unblocks it
+    const masked = runWithFullStderr([F.runner, fault], {}, true);
+    if (!masked.stdout.includes("status=70"))
+      throw new Error(`a blocked SIGALRM should not disable the watchdog, got ${describe(masked)}`);
   } finally {
     clean(tmp);
   }
@@ -341,34 +370,20 @@ await section("GocciaTestRunner: no file starts while a fault's report is still 
   try {
     // with stderr full, the faulting file's report blocks until the watchdog; the passing file ends meanwhile, and
     // the scheduler must not start the third file, which would print its mark at once
-    const files = writeTestFiles(tmp, {
-      "a.test.js": "test('busy', () => { const end = Date.now() + 800; while (Date.now() < end) {} });\n",
-      "b.test.js": "test('faults', () => { __gocciaInjectFault('access-violation'); });\n",
-      "c.test.js": "test('marks', () => { __gocciaInjectFault('mark'); });\n",
-    });
-    const r = run(["python3", "-I", "-c", [
-      "import fcntl, os, subprocess, sys",
-      "r, w = os.pipe()",
-      "fl = fcntl.fcntl(w, fcntl.F_GETFL)",
-      "fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)",
-      "try:",
-      "    while True: os.write(w, b'x' * 4096)",
-      "except BlockingIOError: pass",
-      "fcntl.fcntl(w, fcntl.F_SETFL, fl)",
-      "p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=w)",
-      "try:",
-      "    out, _ = p.communicate(timeout=30)",
-      "    sys.stdout.write(out.decode('utf-8', 'replace'))",
-      "    print('status=%d' % p.returncode)",
-      "except subprocess.TimeoutExpired:",
-      "    p.kill(); p.wait(); print('status=hung')",
-    ].join("\n"), F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", ...files]);
-    if (!r.stdout.includes("status=70") || r.stdout.includes("injected mark"))
-      throw new Error(`expected exit 70 with the third file never started, got ${describe(r)}`);
-    // the control: a file that runs prints its mark
-    const control = run([F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", files[0], files[2]]);
-    if (control.code !== 0 || !control.stdout.includes("injected mark"))
-      throw new Error(`the mark should show when the file runs, got ${describe(control)}`);
+    for (const kind of ["access-violation", "engine-check"]) {
+      const files = writeTestFiles(tmp, {
+        "a.test.js": "test('busy', () => { const end = Date.now() + 800; while (Date.now() < end) {} });\n",
+        "b.test.js": `test('faults', () => { __gocciaInjectFault('${kind}'); });\n`,
+        "c.test.js": "test('marks', () => { __gocciaInjectFault('mark'); });\n",
+      });
+      const r = runWithFullStderr([F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", ...files]);
+      if (!r.stdout.includes("status=70") || r.stdout.includes("injected mark"))
+        throw new Error(`expected exit 70 with the third file never started (${kind}), got ${describe(r)}`);
+      // the control: a file that runs prints its mark
+      const control = run([F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", files[0], files[2]]);
+      if (control.code !== 0 || !control.stdout.includes("injected mark"))
+        throw new Error(`the mark should show when the file runs, got ${describe(control)}`);
+    }
   } finally {
     clean(tmp);
   }
