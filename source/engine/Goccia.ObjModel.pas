@@ -542,40 +542,8 @@ begin
   Result := True;
 end;
 
-function DefineOwnPropertyV0(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean; forward;
-
-{ 10.4.4.2 a mapped arguments object's [[DefineOwnProperty]]: an accessor, or a non-writable data property, ends
-  the index's mapping; a value given goes to the parameter too; made non-writable without a value, it keeps the
-  parameter's }
 function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
-var U: PUpval; Idx: Int64; D: TPropDesc;
-begin
-  if not IsObject(O) or (ObjOf(O)^.OKind <> okArgumentsOrd) then Exit(DefineOwnPropertyV0(O, Key, DIn, Ok));
-  U := ArgsMapCell(ObjOf(O), Key, Idx);
-  if U = nil then Exit(DefineOwnPropertyV0(O, Key, DIn, Ok));
-  D := DIn;
-  if not IsAccessorDesc(D) and not D.HasValue and D.HasWritable and not D.Writable then
-  begin
-    D.HasValue := True;
-    D.Value := ArgsMapGet(U);
-  end;
-  PushRoot(O); PushRoot(D.Value);
-  Result := DefineOwnPropertyV0(O, Key, D, Ok);
-  D.Value := RootAt(TempTop - 1); O := RootAt(TempTop - 2);
-  PopRoots(2);
-  if not Result or not Ok then Exit;
-  U := ArgsMapCell(ObjOf(O), Key, Idx);
-  if U = nil then Exit;
-  if IsAccessorDesc(DIn) then ArgsUnmap(ObjOf(O), Idx)
-  else
-  begin
-    if DIn.HasValue then ArgsMapSet(U, D.Value);
-    if DIn.HasWritable and not DIn.Writable then ArgsUnmap(ObjOf(O), Idx);
-  end;
-end;
-
-function DefineOwnPropertyV0(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
-var P: PObj; Cur, M, D: TPropDesc; Found: Boolean; Idx: Int64; Ext: Boolean; Dbl: Double;
+var P: PObj; U: PUpval; Cur, M, D: TPropDesc; Found, Mapped: Boolean; Idx, MappedIdx: Int64; Ext: Boolean; Dbl: Double;
 begin
   D := DIn;
   Ok := False;
@@ -639,7 +607,15 @@ begin
     PopRoots(1);
     Exit(True);
   end;
+  { 10.4.4.2: a mapped index made non-writable without a value keeps the parameter's current value. }
+  Mapped := ArgsMapCell(P, Key, MappedIdx) <> nil;
+  if Mapped and not IsAccessorDesc(D) and not D.HasValue and D.HasWritable and not D.Writable then
+  begin
+    D.HasValue := True;
+    D.Value := Cur.Value;
+  end;
   if not Compatible(Ext, D, Found, Cur) then begin PopRoots(1); Exit(True); end;
+  if Mapped and DIn.HasValue and not ArgsMapCheck(P, MappedIdx, D.Value) then begin PopRoots(1); Exit(False); end;
   if (P^.OKind = okStringObj) and Found and not Cur.Configurable then
   begin
     { a String object's characters and length are immutable: Compatible held, nothing changes }
@@ -650,6 +626,13 @@ begin
   MergeDesc(D, Found, Cur, M);
   PushRoot(M.Value); PushRoot(M.Get); PushRoot(M.Set_);
   StoreProperty(RootAt(TempTop - 4), Key, M);
+  if Mapped then
+  begin
+    P := ObjOf(RootAt(TempTop - 4));
+    U := ArgsMapCell(P, Key, MappedIdx);
+    if DIn.HasValue then ArgsMapSet(U, RootAt(TempTop - 3));
+    if IsAccessorDesc(DIn) or (DIn.HasWritable and not DIn.Writable) then ArgsUnmap(P, MappedIdx);
+  end;
   PopRoots(4);
   Ok := True;
   Result := True;
@@ -1063,12 +1046,19 @@ function ProxySetOM(PV: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean)
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor with an explicit receiver (Reflect.set) }
 function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean;
-var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64;
+var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64; U: PUpval;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
   { 10.4.4.4 a mapped arguments object as its own receiver: a mapped index's parameter too }
-  if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) and (ArgsMapCell(ObjOf(O), Key, Idx) <> nil) then
-    ArgsMapSet(ArgsMapCell(ObjOf(O), Key, Idx), V);
+  if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) then
+  begin
+    U := ArgsMapCell(ObjOf(O), Key, Idx);
+    if U <> nil then
+    begin
+      if not ArgsMapCheck(ObjOf(O), Idx, V) then Exit(False);
+      ArgsMapSet(U, V);
+    end;
+  end;
   { 10.4.6.9 a namespace's [[Set]]: false }
   if ObjOf(O)^.OKind = okModuleNS then begin Ok := False; Exit(True); end;
   { 10.4.5.5 a typed array's [[Set]] of a canonical numeric key: its own receiver stores (TypedArraySetElement,

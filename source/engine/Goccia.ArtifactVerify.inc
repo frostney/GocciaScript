@@ -340,6 +340,11 @@ begin
           else if (C < 0) or (C >= INTRINSIC_COUNT) then Bad(Format('intrinsic %d unknown', [C]));
         end;
       opCheckType: begin Reg(A); OneOf(C, TYPE_NUMBER, TYPE_OBJECT, 'type'); end;
+      opMapArgTypes:
+        begin
+          Reg(A); KonstStr(C);
+          if not T^.MappedArgs or (A <> T^.ArgsReg) then Bad('type codes without a mapped arguments register');
+        end;
     else
       { never emitted (opRest, opDebugger, opSwap, opInc, opDec, opSpreadCallArgs), or tied to the compiling
         engine's global lexical table (opGetGLex, opSetGLex: a file is compiled without them) }
