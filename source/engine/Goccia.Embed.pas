@@ -16,6 +16,7 @@ uses
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
+  TGocciaEmbedderWork = TEmbedderWork;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -220,6 +221,8 @@ type
     function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+    { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
+    procedure SetHostWork(Work: TGocciaEmbedderWork);
     function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
@@ -934,6 +937,11 @@ begin
   Result := InstallHost(Err);
 end;
 
+procedure TGocciaEngine.SetHostWork(Work: TGocciaEmbedderWork);
+begin
+  SetEmbedderWork(Work);
+end;
+
 function TGocciaEngine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
@@ -1407,7 +1415,8 @@ begin
       end;
     end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
+    else if not Result.Ok then DiscardEmbedderWork;
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);

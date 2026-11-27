@@ -106,6 +106,16 @@ function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: 
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
+type
+  TEmbedderWork = class
+  public
+    function HasPending: Boolean; virtual; abstract;
+    { A zero timeout pumps only ready work. A positive timeout bounds the wait for its next wake. }
+    function Pump(TimeoutMs: Cardinal): Boolean; virtual; abstract;
+    procedure Discard; virtual; abstract;
+  end;
+procedure SetEmbedderWork(Work: TEmbedderWork);
+procedure DiscardEmbedderWork;
 { drops work after a run aborts, while its limits are still in force }
 procedure DiscardAbortedRunWork(WeakMark: Int64);
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
@@ -669,8 +679,33 @@ threadvar
   { the virtual modules whose shadowing of a file was warned about }
   ShadowWarned: TStringList;
 
+threadvar
+  EmbedderWork: TEmbedderWork;
+
+function EmbedderWorkPending: Boolean;
+var Work: TEmbedderWork;
+begin
+  Work := EmbedderWork;
+  Result := (Work <> nil) and Work.HasPending;
+end;
+
+procedure DiscardEmbedderWork;
+var Work: TEmbedderWork;
+begin
+  Work := EmbedderWork;
+  if (Work <> nil) and Work.HasPending then Work.Discard;
+end;
+
+procedure SetEmbedderWork(Work: TEmbedderWork);
+begin
+  if EmbedderWork = Work then Exit;
+  DiscardEmbedderWork;
+  EmbedderWork := Work;
+end;
+
 procedure HostModulesDone;
 begin
+  SetEmbedderWork(nil);
   RealmHostInit := nil;
   FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
@@ -2521,15 +2556,47 @@ begin
   for I := 0 to High(Mocks) do MockModules.Add(Mocks[I].Address + #1 + Mocks[I].Source);
 end;
 
+function PumpEmbedderWork(TimeoutMs: Cardinal): Boolean;
+var Work: TEmbedderWork;
+begin
+  Work := EmbedderWork;
+  Result := PollInterrupt and Work.Pump(TimeoutMs) and PollInterrupt;
+end;
+
+function EmbedderWorkWait: Cardinal;
+const MaxWaitMs = 10;
+var Remaining: Int64; Due, Now_: QWord;
+begin
+  Result := MaxWaitMs;
+  Remaining := LimitRemainingMs;
+  if (Remaining > 0) and (Remaining < Result) then Result := Remaining;
+  if not AsyncWaitsPending then Exit;
+  Due := NextAsyncDeadline;
+  Now_ := GetTickCount64;
+  if Due <= Now_ then Exit(0);
+  if Due - Now_ < Result then Result := Due - Now_;
+end;
+
 function RunEventLoopIn(Intervals: Boolean): Boolean;
-var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord;
+var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord; HostPending: Boolean;
 begin
   while True do
   begin
     if not RunMicrotasks then Exit(False);
+    HostPending := EmbedderWorkPending;
+    if HostPending then
+    begin
+      if not PumpEmbedderWork(0) or not RunMicrotasks then Exit(False);
+      if not EmbedderWorkPending then Continue;
+      { while an embedder can make progress, take only ready built-in work before returning to it }
+      PumpAsyncWaits;
+      if not RunMicrotasks then Exit(False);
+      if FetchPending and (not FetchPump(True, GetTickCount64) or not RunMicrotasks) then Exit(False);
+      if not EmbedderWorkPending then Continue;
+    end
     { async waits and fetches both pending: the waits that fell due settle, then the fetches are waited for until
       the next wait's timeout, so neither holds the other up }
-    if FetchPending and AsyncWaitsPending then
+    else if FetchPending and AsyncWaitsPending then
     begin
       PumpAsyncWaits;
       if not RunMicrotasks then Exit(False);
@@ -2538,8 +2605,12 @@ begin
       if Due > Cap then Due := Cap;
       if not FetchPump(True, Due) then Exit(False);
       Continue;
+    end
+    else
+    begin
+      if not RunHostLoop(@EmbedderWorkPending) then Exit(False);
+      if EmbedderWorkPending then Continue;
     end;
-    if not RunHostLoop then Exit(False);
     { a FinalizationRegistry's cleanup: one job (one dead cell) at a time, the microtasks it queues before the
       next (9.13 HostEnqueueFinalizationRegistryCleanupJob) }
     if WeakCleanupPending then
@@ -2550,23 +2621,31 @@ begin
     end;
     { the fetches that finished settle first; while any is in flight the loop waits for it before the timers, which
       do not keep real time }
-    if FetchPending then
+    if not HostPending and FetchPending then
     begin
       if not FetchPump(True) then Exit(False);
       Continue;
     end;
-    if not IsObject(FireNextV) then Exit(True);
-    { a test file's job that threw took the pending timers with it }
-    if JobErrorDropsTimers then
+    if IsObject(FireNextV) then
     begin
-      JobErrorDropsTimers := False;
-      if IsCallable(DiscardTimersV) and not CallValue(DiscardTimersV, VUndefined, nil, 0, R) then Exit(False);
+      { a test file's job that threw took the pending timers with it }
+      if JobErrorDropsTimers then
+      begin
+        JobErrorDropsTimers := False;
+        if IsCallable(DiscardTimersV) and not CallValue(DiscardTimersV, VUndefined, nil, 0, R) then Exit(False);
+      end;
+      ClearKeptObjects;
+      { after the test report, the work the tests left still runs: its timers, not its intervals }
+      A[0] := MkBool(Intervals and not ReportDone);
+      if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
+      if R = VTrue then Continue;
     end;
-    ClearKeptObjects;
-    { after the test report, the work the tests left still runs: its timers, not its intervals }
-    A[0] := MkBool(Intervals and not ReportDone);
-    if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
-    if R = VTrue then Continue;
+    if EmbedderWorkPending then
+    begin
+      if not PumpEmbedderWork(EmbedderWorkWait) then Exit(False);
+      Continue;
+    end;
+    if not IsObject(FireNextV) then Exit(True);
     { nothing left to run: while a FinalizationRegistry cell still waits on its target, the host collects once
       (it may at any time, 9.13), so a target that died while nothing allocated still has its cleanup run (a
       sandbox caller's, whose nested run, an engine of its own, collects nothing of the caller's) }
@@ -2584,6 +2663,7 @@ end;
 
 procedure DiscardAbortedRunWork(WeakMark: Int64);
 begin
+  DiscardEmbedderWork;
   DiscardJobs;
   DiscardRejections;
   TakeJobErrors;

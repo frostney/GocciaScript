@@ -217,6 +217,24 @@ Settings choose the rest:
 | `BenchMode` | The benchmark runner's host: `InstallBenchmarkAPI` installs `goccia:microbench`, and the limits `Run` armed stay armed for `RunBenchmarks` |
 | `Capabilities` granting `ffi` | Installs the `FFI` global; `FFI.open` judges each library by the `ffi` scopes |
 
+### Asynchronous host work
+
+Install a `TGocciaEmbedderWork` instance with `Engine.SetHostWork` before running code. Keep the
+instance alive until it is removed with `SetHostWork(nil)` or the engine is destroyed. A bare
+engine can use this hook as well.
+
+- `HasPending` reports outstanding work such as a native request holding a JavaScript promise.
+- `Pump(TimeoutMs)` takes ready results and settles their promises on the engine thread. Zero
+  means return immediately. A positive value bounds the wait for a wake from the work source.
+  Return `False` with an engine exception pending when the pump stops the run.
+- `Discard` drops outstanding requests and clears their temporary roots without executing guest
+  code. The engine calls it when discarding pending work after failure, replacing the handler or
+  ending the engine.
+
+Background producers send native data to the work source. Keep JavaScript values and promise
+settlement on the engine thread. The event loop checks execution limits around the pump and
+services ready built-in work while the host has something pending.
+
 ### Sandbox filesystem
 
 `TGocciaSandboxHost` (`Goccia.CLI.SandboxHost`) runs a program over an in-memory filesystem, as `GocciaRunner`'s sandbox mode does: each run gets a thread and an engine of its own, imports and data files come from the virtual filesystem, and scripts see the import-only `"fs"`, `"goccia"` and `goccia:search` [sandbox modules](built-ins.md#sandbox-modules). The embedder fills `Host.Context.Fs` (a `TSandboxVirtualFileSystem`) before the run.

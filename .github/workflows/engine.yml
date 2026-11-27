@@ -166,6 +166,12 @@ jobs:
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
+      - name: Embedder host work interleaves with built-in events and is discarded on failure
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/embedder-host-work-test scripts/engine/embedder-host-work-test.pas
+          python3 scripts/engine/embedder-host-work-test.py build/embedder-host-work-test
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 
