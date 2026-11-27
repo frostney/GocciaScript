@@ -152,7 +152,7 @@ implementation
 
 uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.VM,
-  Goccia.Compiler, Goccia.Eval, Goccia.Promise, Goccia.ThreadCleanupRegistry;
+  Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry;
 
 
 const
@@ -635,6 +635,18 @@ begin
   Result.ModuleType := Copy(Req, P + 1, MaxInt);
 end;
 
+{ Different extensions can select the same implicit data or text loader. }
+function ImplicitDataFormat(const Path: UnicodeString): string;
+var Ext: string;
+begin
+  Ext := LowerCase(ExtractFileExt(string(Path)));
+  if IsTextAssetExtension(Ext) then Exit(EXT_TXT);
+  if IsJSON5Extension(Ext) then Exit(EXT_JSON5);
+  if IsYAMLExtension(Ext) then Exit(EXT_YAML);
+  if IsStructuredDataExtension(Ext) then Exit(Ext);
+  Result := '';
+end;
+
 { the running realm's record of a resolved address. Virtual and disk modules have separate identities. }
 function FindModule(const Address: TModuleAddress): TModRec;
 var M: TModRec;
@@ -649,7 +661,12 @@ begin
     end
     else if (M.Address.RealPath = Address.RealPath) or
       (SameText(M.Address.RealPath, Address.RealPath) and
-        SameHostFileIdentity(string(M.Address.RealPath), string(Address.RealPath))) then Exit(M);
+        SameHostFileIdentity(string(M.Address.RealPath), string(Address.RealPath))) then
+    begin
+      if Assigned(HostModules) and (Address.ModuleType = '') and (M.Address.Path <> Address.Path) and
+         (ImplicitDataFormat(M.Address.Path) <> ImplicitDataFormat(Address.Path)) then Continue;
+      Exit(M);
+    end;
   end;
   Result := nil;
 end;

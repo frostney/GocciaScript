@@ -90,6 +90,19 @@ export function verifyModuleIdentity() {
       ]);
       assert.ok(run(RUNNER, "file-main.mjs").includes("file aliases match: true\n"));
 
+      write("real/asset.payload", ['{"answer":42}']);
+      for (const alias of ["asset.json", "asset-alias.json", "asset.txt"]) {
+        symlinkSync(join(real, "asset.payload"), join(project, alias));
+      }
+      write("asset-main.mjs", [
+        'import * as json from "./asset.json";',
+        'import * as alias from "./asset-alias.json";',
+        'import text from "./asset.txt";',
+        'console.log("asset aliases match:", json === alias && json.answer === 42 && JSON.parse(text).answer === 42);',
+      ]);
+      const assetOutput = run(RUNNER, "asset-main.mjs");
+      assert.ok(assetOutput.includes("asset aliases match: true\n"), assetOutput);
+
       run(BUNDLER, "file-link.mjs");
       write("artifact-main.mjs", [
         'import * as compiled from "./file-link.gbc";',

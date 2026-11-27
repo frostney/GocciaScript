@@ -1,8 +1,8 @@
 // The CLI host's modules: goccia:* and the other host specifiers, as the preludes register them in
 // shared.hostModules (key -> a function returning the module's exports object, or its JavaScript source text).
-// Goccia.Modules asks Goccia.HostAPI's hook, which calls shared.loadHostModule(key): undefined for no host module, the
-// source text, or the export names and values interleaved. Called first, with the global object, the host's natives
-// (n) and the preludes' shared internals.
+// Goccia.Modules asks Goccia.HostAPI's hook, which calls shared.loadHostModule(key, filePath): undefined for no host
+// module, the source text, or the export names and values interleaved. Called first, with the global object, the
+// host's natives (n) and the preludes' shared internals.
 (function (G, n, shared) {
   'use strict';
   const registry = Object.create(null);
@@ -37,7 +37,7 @@
       if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
     } else {
       if (filePath === '') return undefined;
-      const extension = extensionOf(filePath);
+      const extension = extensionOf(key);
       const format = n.isAbsolutePath(filePath) ? formats[extension] : undefined;
       if (format === undefined) return undefined;
       const text = n.readText(key, filePath);

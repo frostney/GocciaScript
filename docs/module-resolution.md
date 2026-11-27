@@ -37,10 +37,13 @@ extension, then `<path>/index.<ext>`. A specifier therefore does not need a
 file extension, and a directory resolves to its `index` file.
 
 Within a realm, an on-disk module is loaded once per canonical file path and
-import type. A symlink or junction, a different spelling of the same name on
-a case-insensitive filesystem, and a specifier resolved through an import map
-or package can all reach the same module record. This also applies to the
-entry module. Relative imports in a file resolve from its canonical directory.
+module type. Import attributes and implicit data and text formats can select
+different types for the same file. The resolver's spelling determines the
+implicit data or text format. A symlink or junction, a different spelling of
+the same name on a case-insensitive filesystem, and a specifier resolved
+through an import map or package can all reach the same module record. This
+also applies to the entry module. Relative imports resolve from the file's
+canonical directory.
 Diagnostics, coverage, and `import.meta.url` use the path the module was first
 loaded under. `import.meta.resolve` computes its result lexically. The loader
 can reload an on-disk source module when it detects a newer version.
@@ -377,9 +380,10 @@ value's `stack` string:
   modules the host loads before the entry runs (`--globals`,
   `--host-environment`, `--module`, `--modules` and their config-file and
   embedding forms) are host-owned, and so is every module they import, even
-  when guest code calls an exported host function later (`HostOwnedReferrer`
-  in `Goccia.Modules`). A genuine error thrown inside a host-owned module shows its
-  location line but **no source excerpt**.
+  when guest code calls an exported host function later. The loader checks
+  ownership on the importing module record (`IsHostOwnedModule` in `ImportJob`).
+  An error thrown inside a host-owned module shows its location line but **no
+  source excerpt**.
 
 - **Canonical file identity.** A guest import of a file the host already loaded
   under another name — through a symlink, a hardlink or a case alias — is
