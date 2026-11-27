@@ -696,25 +696,40 @@ console.log("Private network ranges need an explicit address or private...");
   }
 }
 
+/** The name CI adds to /etc/hosts (.github/scripts/add-hosts-file-fixtures.sh). */
+const HOSTS_FILE_FIXTURE_NAME = "goccia-hosts-file.test";
+
 /**
- * A loopback name from /etc/hosts other than localhost (which fetch answers
- * itself), with every address the file lists for it. Debian and Ubuntu list
- * the machine's own hostname under 127.0.1.1; the Linux CI jobs add one.
+ * The hosts-file name the resolver check uses, with every address the file
+ * lists for it. When GOCCIA_HOSTS_FILE_FIXTURE names one, CI has added it: that
+ * name is used even when the file does not list it, so the check fails instead
+ * of skipping. Otherwise HOSTS_FILE_FIXTURE_NAME is used when the file lists it
+ * under a loopback address, because another name could also resolve through
+ * DNS and would not show that the hosts file was read. Failing both, any
+ * loopback name other than localhost (which fetch answers itself) is used, so
+ * the check also runs locally: Debian and Ubuntu list the machine's own
+ * hostname under 127.0.1.1.
  */
 function findLoopbackHostsFileName(): { name: string; addresses: Set<string> } | undefined {
-  if (isWindows || !existsSync("/etc/hosts")) return undefined;
-  const entries: [string, string[]][] = readFileSync("/etc/hosts", "utf-8")
+  const required = (process.env.GOCCIA_HOSTS_FILE_FIXTURE ?? "").trim().toLowerCase();
+  if (isWindows || (required === "" && !existsSync("/etc/hosts"))) return undefined;
+  const entries: [string, string[]][] = (existsSync("/etc/hosts") ? readFileSync("/etc/hosts", "utf-8") : "")
     .split("\n")
     .map((line) => line.replace(/#.*/, "").trim().split(/\s+/))
     .filter((fields) => fields.length > 1)
     .map((fields) => [fields[0], fields.slice(1).map((name) => name.toLowerCase())]);
+  const addressesOf = (name: string) =>
+    new Set(entries.filter(([, listed]) => listed.includes(name)).map(([listed]) => listed));
+  const isLoopbackIPv4 = (address: string) => /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address);
+  if (required !== "") return { name: required, addresses: addressesOf(required) };
+  const fixture = addressesOf(HOSTS_FILE_FIXTURE_NAME);
+  if ([...fixture].some(isLoopbackIPv4)) return { name: HOSTS_FILE_FIXTURE_NAME, addresses: fixture };
   const isLocalhost = (name: string) => /(^|\.)localhost\.?$/.test(name);
   for (const [address, names] of entries) {
-    if (!/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address)) continue;
+    if (!isLoopbackIPv4(address)) continue;
     const name = names.find((candidate) => !isLocalhost(candidate) && /^[a-z0-9.-]+$/.test(candidate));
     if (name === undefined) continue;
-    const addresses = new Set(entries.filter(([, listed]) => listed.includes(name)).map(([listed]) => listed));
-    return { name, addresses };
+    return { name, addresses: addressesOf(name) };
   }
   return undefined;
 }
@@ -743,6 +758,8 @@ console.log("Fetch resolves names through the system resolver, hosts file includ
   const entry = findLoopbackHostsFileName();
   if (entry === undefined) {
     console.log("  skipped: no loopback name other than localhost in /etc/hosts on this machine");
+  } else if (entry.addresses.size === 0) {
+    throw new Error(`GOCCIA_HOSTS_FILE_FIXTURE names ${entry.name}, which /etc/hosts does not list`);
   } else {
     const tmp = makeTmp();
     try {

@@ -175,7 +175,7 @@ implementation
 uses
   Math, MemoryDetection, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, Goccia.HostSemver, Goccia.DataTree,
+  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, TextEncoding, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
   Goccia.Fetch, Goccia.Sandbox, TimingUtils, Goccia.ThreadCleanupRegistry, ConsoleStreams;
 
@@ -790,7 +790,7 @@ begin
   Result := ReadFileBytes(Path, B);
   if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
-  Text := UnicodeString(UTF8Decode(B));
+  Text := UTF8DecodeKeepingNoncharacters(B);
   if (Text <> '') and (Text[1] = #$FEFF) then Delete(Text, 1, 1);
 end;
 
@@ -1586,7 +1586,7 @@ begin
   if not ReadModuleBytes(Path, FilePath, B) then Exit(Pending = VUndefined);
   if (Length(B) >= 3) and (B[1] = #$EF) and (B[2] = #$BB) and (B[3] = #$BF) then Delete(B, 1, 3);
   SetCodePage(B, CP_UTF8, False);
-  Res := StrFromUnicode(UTF8Decode(B));
+  Res := StrFromUnicode(UTF8DecodeKeepingNoncharacters(B));
 end;
 
 { fileSize(path): a file's size in bytes, -1 when it cannot be read }

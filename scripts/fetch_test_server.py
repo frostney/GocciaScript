@@ -11,6 +11,12 @@ Endpoints:
   GET  /redirect-chain/<n> — 307 → /redirect-chain/<n-1>; /redirect-chain/0 → /json
   GET  /bytes/<n>     — 200 with a body of <n> "a" bytes (application/octet-stream)
   GET  /status/<code> — responds with <code> and empty body
+  GET  /wave/<tag>    — 200 "ok" once the 16-request wave it arrived in is complete
+                        (request i waits until 16 * (i // 16 + 1) have arrived, at most 10 s)
+  GET  /sleep/<ms>/<tag> — 200 "ok" after <ms> milliseconds
+  GET  /arrivals      — 200 {"peak":n,"arrivals":[tag,...]}: the most /wave and /sleep
+                        requests held at once, and their tags in arrival order
+  GET  /arrivals-reset — 200 "ok", clearing both
   GET  /              — 200 "ok"
   HEAD *              — 200 with Content-Length but no body
 
@@ -30,14 +36,73 @@ import socket
 import socketserver
 import sys
 import threading
+import time
+
+
+class Arrivals:
+    """The /wave and /sleep requests the server has seen, shared by its threads."""
+
+    lock = threading.Condition()
+    tags = []
+    held = 0
+    peak = 0
+
+    @classmethod
+    def arrive(cls, tag):
+        with cls.lock:
+            cls.tags.append(tag)
+            cls.held += 1
+            cls.peak = max(cls.peak, cls.held)
+            cls.lock.notify_all()
+            return len(cls.tags) - 1
+
+    @classmethod
+    def leave(cls):
+        with cls.lock:
+            cls.held -= 1
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def send_ok(self):
+        body = b"ok"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path == "/json":
+        if self.path.startswith("/wave/"):
+            at = Arrivals.arrive(self.path[len("/wave/"):])
+            wave_end = 16 * (at // 16 + 1)
+            with Arrivals.lock:
+                Arrivals.lock.wait_for(lambda: len(Arrivals.tags) >= wave_end, 10)
+            # left before answering: the client's next request can only follow the answer
+            Arrivals.leave()
+            self.send_ok()
+        elif self.path.startswith("/sleep/"):
+            ms, _, tag = self.path[len("/sleep/"):].partition("/")
+            Arrivals.arrive(tag)
+            time.sleep(int(ms) / 1000)
+            Arrivals.leave()
+            self.send_ok()
+        elif self.path == "/arrivals":
+            with Arrivals.lock:
+                body = json.dumps({"peak": Arrivals.peak, "arrivals": Arrivals.tags}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/arrivals-reset":
+            with Arrivals.lock:
+                Arrivals.tags = []
+                Arrivals.peak = Arrivals.held
+            self.send_ok()
+        elif self.path == "/json":
             body = json.dumps({"url": self.path, "method": "GET"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -154,7 +219,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-class LoopbackHTTPServer(http.server.HTTPServer):
+class LoopbackHTTPServer(http.server.ThreadingHTTPServer):
+    # A thread per request: the /wave and /sleep endpoints hold several at once.
+    daemon_threads = True
+
     def server_bind(self):
         # HTTPServer asks DNS for a display name even for a numeric address.
         # These loopback fixtures must be ready without a reverse lookup.
@@ -196,7 +264,11 @@ def start_ipv6(port_file):
             raise
         return None
     stalled = ()
-    if os.environ.get("GOCCIA_FETCH_IPV6_HOST"):
+    # Only Linux leaves a connection pending behind a full accept queue: on
+    # macOS the second connection completed (CI run 45949336473). Elsewhere
+    # nothing listens on this port over IPv4, so the fallback check meets a
+    # refused connection instead of a pending one.
+    if os.environ.get("GOCCIA_FETCH_IPV6_HOST") and sys.platform.startswith("linux"):
         stalled = stall_ipv4(server.server_address[1])
     with open(port_file, "w") as f:
         f.write(str(server.server_address[1]))

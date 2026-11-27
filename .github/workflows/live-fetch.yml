@@ -1,0 +1,63 @@
+name: Live fetch
+
+# Fetches the project's own site with the published nightly build on macOS
+# (scripts/check-live-fetch.js): 40 pages, one after another, each with a
+# 15 second deadline, and fails if any GET does not complete.
+#
+# It covers what CI cannot: fetch over SecureTransport, macOS's TLS backend,
+# against a real HTTPS server. SecureTransport trusts only the system keychain,
+# and a macOS runner cannot be made to trust a local fixture's certificate
+# without a person approving it, so no CI job reaches that path. Issue #1558
+# was a stall on that path that only a real server's record sizes set off: 30-45%
+# of these GETs stalled on macOS while Linux and curl got every page.
+#
+# Daily rather than per pull request: it depends on the network and on a site
+# outside the change under test, so a failure here is a reason to look, not a
+# reason to block a merge. It downloads the nightly build instead of compiling,
+# so it checks the binary users download. 40 GETs a day is no load on the site.
+#
+# A scheduled workflow uses this file as it exists on the default branch, so a
+# change here takes effect only after it merges.
+
+on:
+  schedule:
+    # 05:17 UTC daily: clear of fuzz.yml (03:00), nightly.yml (:23 every three
+    # hours), gc-stress.yml (Sundays 04:41) and the Monday bump jobs, and off
+    # the hour, where GitHub delays or drops scheduled runs.
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    # Never from a fork: a fork's schedule would fetch the site too.
+    if: github.repository == 'frostney/GocciaScript'
+    runs-on: macos-latest
+    # 41 GETs that each end within 15 seconds.
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Download the nightly build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download nightly --repo "$GITHUB_REPOSITORY" \
+            --pattern 'gocciascript-nightly-macos-arm64.zip' --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/gocciascript-nightly-macos-arm64.zip" -d "$RUNNER_TEMP"
+          runner="$RUNNER_TEMP/gocciascript-nightly-macos-arm64/GocciaRunner"
+          chmod +x "$runner"
+          gh release view nightly --repo "$GITHUB_REPOSITORY" --json body --jq '.body | split("\n")[0]'
+          echo "GOCCIA_RUNNER=$runner" >> "$GITHUB_ENV"
+
+      - name: Fetch the site's pages
+        run: |
+          "$GOCCIA_RUNNER" scripts/check-live-fetch.js --source-type=module \
+            --allow-net=www.gocciascript.dev --timeout=900s

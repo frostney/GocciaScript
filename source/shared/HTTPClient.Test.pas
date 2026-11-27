@@ -101,14 +101,25 @@ begin
   InterlockedIncrement(GSigPipeCount);
 end;
 
-{ A loopback name in /etc/hosts other than localhost (which the client
-  answers itself), and every address the file lists for it. Debian and
-  Ubuntu list the machine's own hostname under 127.0.1.1. }
+const
+  { The name CI adds to /etc/hosts for the resolver checks
+    (.github/scripts/add-hosts-file-fixtures.sh). }
+  HOSTS_FILE_FIXTURE_NAME = 'goccia-hosts-file.test';
+
+{ The hosts-file name the resolver test uses, and every address the file lists
+  for it. When the environment variable GOCCIA_HOSTS_FILE_FIXTURE names one,
+  CI has added it: that name is used even when the file does not list it, so
+  the test fails instead of skipping. Otherwise HOSTS_FILE_FIXTURE_NAME is used
+  when the file lists it under a loopback address, because another name could
+  also resolve through DNS and would not show that the hosts file was read.
+  Failing both, any loopback name other than localhost (which the client
+  answers itself) is used, so the test also runs locally: Debian and Ubuntu
+  list the machine's own hostname under 127.0.1.1. False when there is none. }
 function FindLoopbackHostsFileName(out AName: string;
   const AAddresses: TStringList): Boolean;
 var
   Lines, Fields: TStringList;
-  Address, Candidate, Line: string;
+  Address, Candidate, Line, Required: string;
   CommentAt, I, J: Integer;
   Octets: array[0..3] of Byte;
 
@@ -129,23 +140,59 @@ var
     Fields.DelimitedText := Line;
     Result := Fields.Count > 1;
   end;
+
+  { Fills AAddresses with every address the file lists for ACandidate. }
+  procedure CollectAddresses(const ACandidate: string);
+  var
+    LineIndex, FieldIndex: Integer;
+  begin
+    AAddresses.Clear;
+    for LineIndex := 0 to Lines.Count - 1 do
+      if SplitLine(Lines[LineIndex]) then
+        for FieldIndex := 1 to Fields.Count - 1 do
+          if LowerCase(Fields[FieldIndex]) = ACandidate then
+            AAddresses.Add(Fields[0]);
+  end;
+
+  function IsLoopbackIPv4(const AValue: string): Boolean;
+  begin
+    Result := TryParseIPv4(AValue, Octets) and (Octets[0] = 127);
+  end;
 begin
   Result := False;
   AName := '';
-  if not FileExists('/etc/hosts') then
+  Required := LowerCase(Trim(GetEnvironmentVariable('GOCCIA_HOSTS_FILE_FIXTURE')));
+  if (Required = '') and not FileExists('/etc/hosts') then
     Exit;
   Lines := TStringList.Create;
   Fields := TStringList.Create;
   try
     Fields.Delimiter := ' ';
     Fields.StrictDelimiter := False;
-    Lines.LoadFromFile('/etc/hosts');
+    if FileExists('/etc/hosts') then
+      Lines.LoadFromFile('/etc/hosts');
+
+    if Required <> '' then
+    begin
+      AName := Required;
+      CollectAddresses(AName);
+      Exit(True);
+    end;
+
+    CollectAddresses(HOSTS_FILE_FIXTURE_NAME);
+    for I := 0 to AAddresses.Count - 1 do
+      if IsLoopbackIPv4(AAddresses[I]) then
+      begin
+        AName := HOSTS_FILE_FIXTURE_NAME;
+        Exit(True);
+      end;
+
     for I := 0 to Lines.Count - 1 do
     begin
       if not SplitLine(Lines[I]) then
         Continue;
       Address := Fields[0];
-      if not TryParseIPv4(Address, Octets) or (Octets[0] <> 127) then
+      if not IsLoopbackIPv4(Address) then
         Continue;
       for J := 1 to Fields.Count - 1 do
       begin
@@ -161,11 +208,7 @@ begin
     end;
     if AName = '' then
       Exit;
-    for I := 0 to Lines.Count - 1 do
-      if SplitLine(Lines[I]) then
-        for J := 1 to Fields.Count - 1 do
-          if LowerCase(Fields[J]) = AName then
-            AAddresses.Add(Fields[0]);
+    CollectAddresses(AName);
     Result := True;
   finally
     Fields.Free;
@@ -2777,6 +2820,10 @@ var
   AddressText: string;
   Found: Boolean;
 begin
+  if GHostsFileAddresses.Count = 0 then
+    raise Exception.CreateFmt(
+      'GOCCIA_HOSTS_FILE_FIXTURE names %s, which /etc/hosts does not list',
+      [GHostsFileName]);
   Found := False;
   if TryParseIPAddress(ResolveHostToAddress(GHostsFileName), Resolved) then
     for AddressText in GHostsFileAddresses do

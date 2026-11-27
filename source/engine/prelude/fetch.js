@@ -521,8 +521,8 @@
     return new Promise((resolve, reject) => {
       if (signal !== null && shared.isAborted(signal)) { reject(shared.abortReason(signal)); return; }
       const remaining = signal !== null ? shared.signalRemaining(signal) : -1;
+      // the request starts on a host worker, or waits its turn for one (Goccia.Fetch)
       const id = n.fetchStart(url, method, headers, redirect, remaining);
-      if (id < 0) { reject(new TypeError('fetch worker limit exceeded')); return; }
       apply(savePending, pendingFetches, [id, { resolve, reject, signal }]);
       // an abort algorithm: the rejection comes inside abort(), before the abort event
       if (signal !== null) shared.onAbort(signal, onFetchAbort(id));

@@ -71,6 +71,11 @@ function CreateECMAScriptSourceLines(const AText: string): TStringList;
 function CreateFileTextLines(const AText: string): TStringList;
 function NormalizeNewlinesToLF(const AText: string): string;
 function StringListToSourceText(const ALines: TStrings): string;
+{ ALines as source text for the engine: the text a source list keeps
+  (CreateTextLines and the other Create*Lines), or else its lines' UTF-8 bytes
+  (TStringList holds AnsiString) decoded by UTF8DecodeKeepingNoncharacters, so
+  neither the process code page nor U+FFFE and U+FFFF change the text }
+function StringListToEngineSourceText(const ALines: TStrings): UnicodeString;
 function StringListToLFText(const ALines: TStrings): string;
 
 implementation
@@ -80,7 +85,8 @@ uses
 
   Generated.UnicodeCaseData,
   ProcessEncoding,
-  StringBuffer;
+  StringBuffer,
+  TextEncoding;
 
 type
   TSourceTextStringList = class(TStringList)
@@ -911,6 +917,16 @@ begin
      TSourceTextStringList(ALines).HasSourceText then
     Exit(TSourceTextStringList(ALines).SourceText);
   Result := StringListToLFText(ALines);
+end;
+
+function StringListToEngineSourceText(const ALines: TStrings): UnicodeString;
+begin
+  if not Assigned(ALines) then
+    Exit('');
+  if (ALines is TSourceTextStringList) and
+     TSourceTextStringList(ALines).HasSourceText then
+    Exit(TSourceTextStringList(ALines).SourceText);
+  Result := UTF8DecodeKeepingNoncharacters(ALines.Text);
 end;
 
 function StringListToLFText(const ALines: TStrings): string;

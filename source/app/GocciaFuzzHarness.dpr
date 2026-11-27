@@ -559,7 +559,7 @@ begin
       Exit(False);
     end;
   end;
-  ASource := UTF8Decode(Text);
+  ASource := Text;
   Result := True;
 end;
 

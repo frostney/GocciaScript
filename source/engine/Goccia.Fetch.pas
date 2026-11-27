@@ -6,7 +6,10 @@ unit Goccia.Fetch;
   each finished request through the prelude's settle function.
 
   A run's requests belong to its engine: FetchDone detaches the ones still running, whose answers are dropped. At
-  most 16 requests of a thread are in flight at once. }
+  most 16 requests of a thread are in flight at once, each on its own worker; the ones past that wait their turn, in
+  the order they were made, with no thread of their own, and start as workers finish. A waiting request is the
+  engine's as a running one is: its storage counts against the memory limit, its signal's deadline runs from the
+  call, the run waits for it, and an abort or an aborted run drops it before it starts. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}
@@ -40,7 +43,8 @@ procedure FetchDone;
 implementation
 
 uses
-  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Builtins, Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
+  SysUtils, Classes, Math, HTTPTypes, HTTPClient, NetworkAddress, Goccia.Builtins, Goccia.Error.Messages,
+  Goccia.Error.Suggestions, Goccia.VM, Goccia.Typed, Goccia.ThreadCleanupRegistry;
 
 const
   MAX_FETCH_WORKERS = 16;
@@ -49,6 +53,9 @@ const
   FETCH_DEADLINE_SLACK_MS = 2000;
   { the slice the event loop waits in, so that the run's interrupt is seen }
   WAIT_SLICE_MS = 50;
+  { how soon the pump observes a waiting request's signal again when observing it did not abort it yet: the host's
+    tick and the signal's clock can differ by a tick }
+  SIGNAL_RECHECK_MS = 10;
 
 type
   THop = record
@@ -94,16 +101,28 @@ type
     procedure Release;
   end;
 
+  { a request of this thread: running on its worker, or waiting for one (Worker nil), in the order of the calls }
   TPendingFetch = record
     Id: Integer;
     Worker: TFetchWorker;
-    { GetTickCount64 at the request's signal deadline (0: none) }
+    { the request, kept for its worker until it starts }
+    URL, Method: string;
+    Headers: THTTPHeaders;
+    Redirect: THTTPRedirectMode;
+    { the bytes of the entry charged against the memory limit (Charge), until it is removed }
+    Bytes: Int64;
+    { GetTickCount64 at which the pump next has the signals observed for the request (0: none): its signal's deadline,
+      then for a request still waiting a recheck shortly after }
     Deadline: QWord;
+    { GetTickCount64 at the request's signal deadline (0: none): the socket's timeout when it starts, and for a
+      waiting request the time past which it never starts }
+    SignalDeadline: QWord;
     { the fetch() call, which the hop decisions are attributed to }
     Site: UnicodeString;
     Line, Column: Integer;
-    { the script stopped waiting (fetchCancel): the entry keeps its slot until its worker finishes, so at most
-      MAX_FETCH_WORKERS workers run, but the run no longer waits for it (FetchPending) }
+    { the script stopped waiting (fetchCancel): a running entry keeps its slot until its worker finishes, so at
+      most MAX_FETCH_WORKERS workers run, but the run no longer waits for it (FetchPending). A waiting entry is
+      removed instead }
     Cancelled: Boolean;
   end;
 
@@ -115,6 +134,8 @@ threadvar
   NextId: Integer;
   SettleFn, PendingCompletions: TValue;
   RootedGen: Integer;
+  { the entries' storage, charged against the memory limit }
+  Charge: THeapExternalCharge;
 
 { ---------------- the owner ---------------- }
 
@@ -318,12 +339,85 @@ begin
   end;
 end;
 
-{ fetchStart(url, method, headers, redirect, signalTimeoutMs): the request handed to a worker; its id, or -1 when
-  the thread's requests in flight are at their limit. headers is an array of [name, value] pairs; redirect 0
-  follow, 1 error, 2 manual; signalTimeoutMs the time left on the request's AbortSignal.timeout (-1 none) }
+{ the number of entries with a worker, finished or not: the slots taken }
+function RunningCount: Integer;
+var I: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(Pendings) do
+    if Pendings[I].Worker <> nil then Inc(Result);
+end;
+
+{ the waiting request P handed to a worker. Its socket's timeout runs past the run's deadline, or past the signal's.
+  Each deadline is the event loop's to act on: the run's ends the run (the loop sees its interrupt), and the signal's
+  aborts the signal, which rejects the request with the signal's reason (Fetch, "abort fetch"). A socket timeout at
+  the same moment must not settle the request first: the pump takes a finished worker before it looks at deadlines,
+  so on a loaded runner the script then catches a TypeError instead. The slack keeps each deadline first. Both are
+  read when the request starts: the time it waited for a slot is already off them }
+procedure StartWorker(var P: TPendingFetch);
+var W: TFetchWorker; Timeout, SignalMs: Int64; Now_: QWord;
+begin
+  Timeout := LimitRemainingMs;
+  if Timeout > 0 then Timeout := Timeout + FETCH_DEADLINE_SLACK_MS;
+  if P.SignalDeadline <> 0 then
+  begin
+    Now_ := GetTickCount64;
+    if P.SignalDeadline > Now_ then SignalMs := P.SignalDeadline - Now_ else SignalMs := 0;
+    if (Timeout = 0) or (SignalMs + FETCH_DEADLINE_SLACK_MS < Timeout) then
+      Timeout := SignalMs + FETCH_DEADLINE_SLACK_MS;
+  end;
+  W := TFetchWorker.Create(True, FETCH_WORKER_STACK_SIZE);
+  W.FreeOnTerminate := False;
+  W.Owner := Owner;
+  InterlockedIncrement(Owner.Refs);
+  W.Id := P.Id;
+  W.URL := P.URL;
+  W.Method := P.Method;
+  W.Headers := P.Headers;
+  W.Redirect := P.Redirect;
+  W.TimeoutMs := Integer(Min(Timeout, High(Integer)));
+  W.MaxBytes := MaxResponseBytes;
+  W.Caps := Caps;
+  P.Worker := W;
+  { the worker has its own copies now }
+  P.Headers := nil;
+  W.Start;
+end;
+
+{ the waiting requests started, oldest first, while a slot is free; the slots of cancelled requests whose workers
+  finished free first. None starts once the run is interrupted (its abort discards them), and none whose signal's
+  deadline passed: observing its signal aborts it, which drops it unstarted, and an abort listener that calls fetch()
+  before the pump observes the rest must not start them }
+procedure StartWaiting;
+var I, Running: Integer; Now_: QWord;
+begin
+  if Interrupt <> 0 then Exit;
+  Running := RunningCount;
+  if Running = Length(Pendings) then Exit;
+  if Running >= MAX_FETCH_WORKERS then
+  begin
+    ReapCancelled;
+    Running := RunningCount;
+  end;
+  Now_ := GetTickCount64;
+  for I := 0 to High(Pendings) do
+  begin
+    if Running >= MAX_FETCH_WORKERS then Exit;
+    if (Pendings[I].Worker = nil) and ((Pendings[I].SignalDeadline = 0) or (Pendings[I].SignalDeadline > Now_)) then
+    begin
+      StartWorker(Pendings[I]);
+      Inc(Running);
+    end;
+  end;
+end;
+
+{ fetchStart(url, method, headers, redirect, signalTimeoutMs): the request's id. It starts on a worker when one of
+  the thread's MAX_FETCH_WORKERS slots is free, and otherwise waits its turn behind the requests made before it.
+  headers is an array of [name, value] pairs; redirect 0 follow, 1 error, 2 manual; signalTimeoutMs the time left on
+  the request's AbortSignal.timeout (-1 none). A RangeError when the request's storage would pass the memory limit }
 function Fetch_Start(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var URL, Method: string; S, H, P, E: TValue; I, N, Id, SignalMs: Integer; Len: Int64; W: TFetchWorker;
-  Timeout: Int64; Src: UnicodeString; Line, Col: Integer; Headers: THTTPHeaders; Redirect: THTTPRedirectMode;
+var URL, Method: string; S, H, P, E: TValue; I, N, Id: Integer; Len, Bytes, SignalMs: Int64;
+  Src: UnicodeString; Line, Col: Integer; Headers: THTTPHeaders; Redirect: THTTPRedirectMode;
 begin
   if not ToStringV(ArgOf(Args, Argc, 1), S) then Exit(False);
   URL := StrToUnicode(StrOf(S));
@@ -350,51 +444,48 @@ begin
     2: Redirect := hrmManual;
   else Redirect := hrmFollow;
   end;
-  if IsNumber(ArgOf(Args, Argc, 5)) then SignalMs := Trunc(NumOf(Args[5])) else SignalMs := -1;
+  { the signal's time left, rounded up to whole milliseconds and held to a range a tick count adds safely; a
+    negative value (no signal, or one without a timeout) means none }
+  if IsNumber(ArgOf(Args, Argc, 5)) and (NumOf(Args[5]) >= 0) then
+    SignalMs := Ceil64(Min(NumOf(Args[5]), 1.0 * High(Integer)))
+  else
+    SignalMs := -1;
   if not AuditDecision(akNetDispatch, True, URL, 'fetch dispatch is allowed') then Exit(False);
-  { the slots of cancelled requests whose workers finished free first }
-  if Length(Pendings) >= MAX_FETCH_WORKERS then ReapCancelled;
-  if Length(Pendings) >= MAX_FETCH_WORKERS then
+  { the entry keeps the normalized URL, which percent-encoding can make several times longer }
+  URL := NormalizeHTTPRequestURL(URL);
+  Bytes := SizeOf(TPendingFetch) + (Int64(Length(URL)) + Length(Method)) * SizeOf(Char);
+  for I := 0 to High(Headers) do
+    Inc(Bytes, (Int64(Length(Headers[I].Name)) + Length(Headers[I].Value)) * SizeOf(Char) + SizeOf(THTTPHeader));
+  if CallSiteNow(Src, Line, Col) then Inc(Bytes, Int64(Length(Src)) * SizeOf(WideChar))
+  else
   begin
-    Res := MkInt(-1);
-    Exit(True);
+    Src := '';
+    Line := 0;
+    Col := 0;
   end;
-  { the socket's timeout: past the run's deadline, or past the signal's. Each deadline is the event loop's to act on:
-    the run's ends the run (the loop sees its interrupt), and the signal's aborts the signal, which rejects the
-    request with the signal's reason (Fetch, "abort fetch"). A socket timeout at the same moment must not settle the
-    request first: the pump takes a finished worker before it looks at deadlines, so on a loaded runner the script
-    then catches a TypeError instead. The slack keeps each deadline first. }
-  Timeout := LimitRemainingMs;
-  if Timeout > 0 then Timeout := Timeout + FETCH_DEADLINE_SLACK_MS;
-  if (SignalMs >= 0) and ((Timeout = 0) or (Int64(SignalMs) + FETCH_DEADLINE_SLACK_MS < Timeout)) then
-    Timeout := Int64(SignalMs) + FETCH_DEADLINE_SLACK_MS;
+  { collects when the entry does not fit yet; nothing below reads Args }
+  if not Charge.TryGrow(Bytes) then Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
   if Owner = nil then Owner := TFetchOwner.Create;
   Id := NextId;
   Inc(NextId);
-  W := TFetchWorker.Create(True, FETCH_WORKER_STACK_SIZE);
-  W.FreeOnTerminate := False;
-  W.Owner := Owner;
-  InterlockedIncrement(Owner.Refs);
-  W.Id := Id;
-  W.URL := NormalizeHTTPRequestURL(URL);
-  W.Method := Method;
-  W.Headers := Headers;
-  W.Redirect := Redirect;
-  W.TimeoutMs := Integer(Min(Timeout, High(Integer)));
-  W.MaxBytes := MaxResponseBytes;
-  W.Caps := Caps;
   N := Length(Pendings);
   SetLength(Pendings, N + 1);
   Pendings[N].Id := Id;
-  Pendings[N].Worker := W;
-  if SignalMs >= 0 then Pendings[N].Deadline := GetTickCount64 + QWord(SignalMs) else Pendings[N].Deadline := 0;
-  if CallSiteNow(Src, Line, Col) then
-  begin
-    Pendings[N].Site := Src;
-    Pendings[N].Line := Line;
-    Pendings[N].Column := Col;
-  end;
-  W.Start;
+  Pendings[N].Worker := nil;
+  Pendings[N].URL := URL;
+  Pendings[N].Method := Method;
+  Pendings[N].Headers := Headers;
+  Pendings[N].Redirect := Redirect;
+  Pendings[N].Bytes := Bytes;
+  { the signal's deadline runs from the call, whether the request starts now or waits its turn. A tick past the
+    signal's own: when the pump sees it pass, the signal has timed out too, so observing it aborts the request }
+  if SignalMs >= 0 then Pendings[N].Deadline := GetTickCount64 + QWord(SignalMs) + 1 else Pendings[N].Deadline := 0;
+  Pendings[N].SignalDeadline := Pendings[N].Deadline;
+  Pendings[N].Site := Src;
+  Pendings[N].Line := Line;
+  Pendings[N].Column := Col;
+  Pendings[N].Cancelled := False;
+  StartWaiting;
   Res := MkInt(Id);
   Result := True;
 end;
@@ -410,23 +501,33 @@ end;
 procedure RemovePending(I: Integer);
 var J: Integer;
 begin
+  Charge.Release(Pendings[I].Bytes);
   for J := I to High(Pendings) - 1 do Pendings[J] := Pendings[J + 1];
   SetLength(Pendings, Length(Pendings) - 1);
 end;
 
-procedure CancelRequest(var Request: TPendingFetch);
+{ the script stopped waiting for entry I: a waiting request is dropped before it starts, and a running one's answer
+  will be }
+procedure CancelRequest(I: Integer);
+var Request: ^TPendingFetch;
 begin
+  if Pendings[I].Worker = nil then
+  begin
+    RemovePending(I);
+    Exit;
+  end;
+  Request := @Pendings[I];
   EnterCriticalSection(Owner.Lock);
   try
-    Request.Worker.Cancelled := True;
+    Request^.Worker.Cancelled := True;
     { a worker that already posted its reply will not see the cancellation itself }
-    if Owner.Done.IndexOf(Request.Worker) >= 0 then Request.Worker.Response := Default(THTTPResponse);
+    if Owner.Done.IndexOf(Request^.Worker) >= 0 then Request^.Worker.Response := Default(THTTPResponse);
   finally
     LeaveCriticalSection(Owner.Lock);
   end;
   { the slot stays taken until the worker finishes }
-  Request.Cancelled := True;
-  Request.Deadline := 0;
+  Request^.Cancelled := True;
+  Request^.Deadline := 0;
 end;
 
 { fetchCancel(id): the script stopped waiting (its signal aborted); the worker's answer is dropped }
@@ -437,7 +538,7 @@ begin
   Result := True;
   I := PendingIndex(Trunc(NumOf(ArgOf(Args, Argc, 1))));
   if I < 0 then Exit;
-  CancelRequest(Pendings[I]);
+  CancelRequest(I);
 end;
 
 function FetchMark: Integer;
@@ -448,9 +549,10 @@ end;
 procedure FetchCancelFrom(Mark: Integer);
 var I: Integer;
 begin
-  for I := 0 to High(Pendings) do
+  { from the end: a waiting entry is removed }
+  for I := High(Pendings) downto 0 do
     if (Pendings[I].Id >= Mark) and not Pendings[I].Cancelled then
-      CancelRequest(Pendings[I]);
+      CancelRequest(I);
 end;
 
 procedure DiscardFetches;
@@ -590,6 +692,8 @@ var Taken: TList; I, K, Waits: Integer; W: TFetchWorker; P: TPendingFetch; Now_,
 begin
   Result := True;
   if Owner = nil then Exit;
+  { a slot a failed pump left free }
+  StartWaiting;
   if Block then
     while True do
     begin
@@ -605,11 +709,14 @@ begin
       for I := 0 to High(Pendings) do
         if (Pendings[I].Deadline <> 0) and ((Earliest = 0) or (Pendings[I].Deadline < Earliest)) then
           Earliest := Pendings[I].Deadline;
-      { a signal's deadline passed: its signal aborts when observed, which rejects and cancels its request }
+      { a signal's deadline passed: its signal aborts when observed, which rejects and cancels its request. A waiting
+        request is observed again shortly, until its signal aborts: it never starts }
       if (Earliest <> 0) and (Earliest <= Now_) then
       begin
         for I := 0 to High(Pendings) do
-          if (Pendings[I].Deadline <> 0) and (Pendings[I].Deadline <= Now_) then Pendings[I].Deadline := 0;
+          if (Pendings[I].Deadline <> 0) and (Pendings[I].Deadline <= Now_) then
+            if Pendings[I].Worker = nil then Pendings[I].Deadline := Now_ + SIGNAL_RECHECK_MS
+            else Pendings[I].Deadline := 0;
         Exit(Settle([MkInt(-1), MkInt(2)]));
       end;
       { the caller's own deadline (an async wait's timeout): it waits no longer }
@@ -663,6 +770,8 @@ begin
     end;
     Taken.Free;
   end;
+  { the slots that freed go to the requests waiting for one, unless the run failed: its abort discards them }
+  if Result then StartWaiting;
 end;
 
 procedure FetchDone;
@@ -674,7 +783,8 @@ begin
   EnterCriticalSection(Owner.Lock);
   try
     Owner.Detached := True;
-    for I := 0 to High(Pendings) do Pendings[I].Worker.Cancelled := True;
+    for I := 0 to High(Pendings) do
+      if Pendings[I].Worker <> nil then Pendings[I].Worker.Cancelled := True;
     for I := 0 to Owner.Done.Count - 1 do
     begin
       W := TFetchWorker(Owner.Done[I]);
@@ -686,6 +796,7 @@ begin
     LeaveCriticalSection(Owner.Lock);
   end;
   Pendings := nil;
+  Charge.Clear;
   Owner.Release;
   Owner := nil;
 end;

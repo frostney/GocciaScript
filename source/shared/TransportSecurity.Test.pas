@@ -23,6 +23,10 @@ type
     procedure TestExtraInputOfALargeRecordSurvivesDecryptingInPlace;
     procedure TestIncompleteMessageKeepsTheInputForTheNextReceive;
     procedure TestCoalescedRecordsAreConsumedOneAtATime;
+    procedure TestHeldRestOfAResponseIsReadWithoutTheSocket;
+    procedure TestHeldPlaintextLongerThanARequestIsReadInRequests;
+    procedure TestReadWithNothingHeldReadsOneRecord;
+    procedure TestReadThatWouldBlockBeforeAnyByteIsTriedAgain;
     procedure TestSendEndsAtTheDeadlineWhateverTheSocketTimeout;
     procedure TestSendToASlowlyDrainingPeerEndsAtTheDeadline;
     procedure TestSendAllKeepsSendingToAPeerThatMakesRoom;
@@ -48,6 +52,14 @@ begin
     TestIncompleteMessageKeepsTheInputForTheNextReceive);
   Test('Records that arrive in one receive are consumed one at a time',
     TestCoalescedRecordsAreConsumedOneAtATime);
+  Test('The rest of a response held from a decrypted record is read without the socket',
+    TestHeldRestOfAResponseIsReadWithoutTheSocket);
+  Test('Held plaintext longer than a request is read one request at a time',
+    TestHeldPlaintextLongerThanARequestIsReadInRequests);
+  Test('A read with nothing held reads one record',
+    TestReadWithNothingHeldReadsOneRecord);
+  Test('A read that would block before any byte is tried again',
+    TestReadThatWouldBlockBeforeAnyByteIsTriedAgain);
   Test('A send ends at the deadline whatever the socket timeout',
     TestSendEndsAtTheDeadlineWhateverTheSocketTimeout);
   Test('A send to a slowly draining peer ends at the deadline',
@@ -69,6 +81,133 @@ begin
   SetLength(Result, ALength);
   for I := 0 to ALength - 1 do
     Result[I] := Byte((I * 7 + ASeed) and $FF);
+end;
+
+const
+  SECURE_TRANSPORT_SUCCESS = 0;
+  SECURE_TRANSPORT_WOULD_BLOCK = -9803;
+  { What HTTPClient asks each TLS read for (RECV_BUF_SIZE). }
+  RESPONSE_READ_LENGTH = 8192;
+
+type
+  { A record layer that reads as SecureTransport's SSLRead does (Apple's
+    sslTransport.c): it copies the plaintext it holds from a record it has
+    already decrypted, and while the caller's buffer still has room it reads
+    one more record from the socket, holding back whatever of that record does
+    not fit. Records lists the plaintext of the records the server sent; once
+    they are all read, the server sends nothing more but keeps the connection
+    open, where SecureTransport's blocking socket read would wait forever. This
+    one records that it went to the socket then, and returns as a read that
+    would block. WouldBlockFirst is how many reads report a record still on its
+    way (would block, nothing read) before the records are read. }
+  TFakeRecordLayer = class
+  public
+    Records: array of TBytes;
+    NextRecord: Integer;
+    Held: TBytes;
+    HeldOffset: Integer;
+    WouldBlockFirst: Integer;
+    ReadsFromTheSocket: Integer;
+    WaitedForARecordThatNeverCame: Boolean;
+  end;
+
+function FakeRecordRead(AContext: Pointer; AData: Pointer;
+  ADataLength: NativeUInt; var AProcessed: NativeUInt): LongInt; cdecl;
+var
+  Layer: TFakeRecordLayer;
+  Target: PByte;
+  Count, Remaining: NativeUInt;
+  RecordBytes: TBytes;
+begin
+  Layer := TFakeRecordLayer(AContext);
+  Target := PByte(AData);
+  AProcessed := 0;
+  Remaining := ADataLength;
+  if Length(Layer.Held) - Layer.HeldOffset > 0 then
+  begin
+    Count := Length(Layer.Held) - Layer.HeldOffset;
+    if Count > Remaining then
+      Count := Remaining;
+    Move(Layer.Held[Layer.HeldOffset], Target^, Count);
+    Inc(Layer.HeldOffset, Count);
+    Inc(Target, Count);
+    Inc(AProcessed, Count);
+    Dec(Remaining, Count);
+    if Layer.HeldOffset >= Length(Layer.Held) then
+    begin
+      Layer.Held := nil;
+      Layer.HeldOffset := 0;
+    end;
+  end;
+  if Remaining = 0 then
+    Exit(SECURE_TRANSPORT_SUCCESS);
+
+  Inc(Layer.ReadsFromTheSocket);
+  if Layer.WouldBlockFirst > 0 then
+  begin
+    Dec(Layer.WouldBlockFirst);
+    Exit(SECURE_TRANSPORT_WOULD_BLOCK);
+  end;
+  if Layer.NextRecord >= Length(Layer.Records) then
+  begin
+    Layer.WaitedForARecordThatNeverCame := True;
+    Exit(SECURE_TRANSPORT_WOULD_BLOCK);
+  end;
+  RecordBytes := Layer.Records[Layer.NextRecord];
+  Inc(Layer.NextRecord);
+  Count := Length(RecordBytes);
+  if Count <= Remaining then
+    Move(RecordBytes[0], Target^, Count)
+  else
+  begin
+    Move(RecordBytes[0], Target^, Remaining);
+    Layer.Held := RecordBytes;
+    Layer.HeldOffset := Remaining;
+    Count := Remaining;
+  end;
+  Inc(AProcessed, Count);
+  Result := SECURE_TRANSPORT_SUCCESS;
+end;
+
+function FakeBufferedSize(AContext: Pointer;
+  var ABufferSize: NativeUInt): LongInt; cdecl;
+var
+  Layer: TFakeRecordLayer;
+begin
+  Layer := TFakeRecordLayer(AContext);
+  ABufferSize := Length(Layer.Held) - Layer.HeldOffset;
+  Result := SECURE_TRANSPORT_SUCCESS;
+end;
+
+{ Reads from ALayer as HTTPClient reads a response with a declared length:
+  requests of RESPONSE_READ_LENGTH bytes until AExpected bytes have come, and
+  checks they are AExpected's. }
+procedure ReadResponseOf(const ALayer: TFakeRecordLayer;
+  const AExpected: TBytes);
+var
+  Buffer: array[0..RESPONSE_READ_LENGTH - 1] of Byte;
+  Received: TBytes;
+  Count, Status, I: Integer;
+begin
+  Received := nil;
+  while Length(Received) < Length(AExpected) do
+  begin
+    Count := ReadSecureTransportRecords(ALayer, FakeRecordRead,
+      FakeBufferedSize, Buffer, RESPONSE_READ_LENGTH, Status);
+    Expect<Integer>(Status).ToBe(SECURE_TRANSPORT_SUCCESS);
+    Expect<Boolean>(Count > 0).ToBe(True);
+    if Count <= 0 then
+      Break;
+    SetLength(Received, Length(Received) + Count);
+    Move(Buffer[0], Received[Length(Received) - Count], Count);
+  end;
+  Expect<Integer>(Length(Received)).ToBe(Length(AExpected));
+  for I := 0 to Length(AExpected) - 1 do
+    if Received[I] <> AExpected[I] then
+    begin
+      Expect<Integer>(Received[I]).ToBe(AExpected[I]);
+      Break;
+    end;
 end;
 
 procedure TTransportSecurityTests.TestExtraInputMovesToTheFront;
@@ -199,6 +338,98 @@ begin
     Expect<Integer>(Input[I]).ToBe(Second[I]);
   ConsumeEncryptedInput(Input, False, 0);
   Expect<Integer>(Length(Input)).ToBe(0);
+end;
+
+procedure TTransportSecurityTests.TestHeldRestOfAResponseIsReadWithoutTheSocket;
+const
+  { A last record of 12,204 bytes of plaintext, as the issue's server sent:
+    a request of 8,192 takes the first part, and the 4,012 that are left are
+    the end of the response. }
+  LAST_RECORD_LENGTH = 12204;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(LAST_RECORD_LENGTH, 3);
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := Expected;
+    ReadResponseOf(Layer, Expected);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestHeldPlaintextLongerThanARequestIsReadInRequests;
+const
+  { Each record is longer than a request, so every one is held in part and
+    the last 808 bytes of the response are held when the request before them
+    returns. }
+  RECORD_LENGTH = 16384;
+  LAST_RECORD_LENGTH = 9000;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(RECORD_LENGTH + LAST_RECORD_LENGTH, 5);
+    SetLength(Layer.Records, 2);
+    Layer.Records[0] := Copy(Expected, 0, RECORD_LENGTH);
+    Layer.Records[1] := Copy(Expected, RECORD_LENGTH, LAST_RECORD_LENGTH);
+    ReadResponseOf(Layer, Expected);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(2);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestReadWithNothingHeldReadsOneRecord;
+const
+  RECORD_LENGTH = 239;
+var
+  Layer: TFakeRecordLayer;
+  Buffer: array[0..RESPONSE_READ_LENGTH - 1] of Byte;
+  Status: Integer;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := PatternBytes(RECORD_LENGTH, 7);
+    Expect<Integer>(ReadSecureTransportRecords(Layer, FakeRecordRead,
+      FakeBufferedSize, Buffer, RESPONSE_READ_LENGTH, Status))
+      .ToBe(RECORD_LENGTH);
+    Expect<Integer>(Status).ToBe(SECURE_TRANSPORT_SUCCESS);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestReadThatWouldBlockBeforeAnyByteIsTriedAgain;
+const
+  RECORD_LENGTH = 4000;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(RECORD_LENGTH, 11);
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := Expected;
+    Layer.WouldBlockFirst := 2;
+    ReadResponseOf(Layer, Expected);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(3);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+  finally
+    Layer.Free;
+  end;
 end;
 
 { A TCP connection on loopback, made in one thread: the listener's backlog
