@@ -365,6 +365,18 @@ Aliases follow WHATWG import map matching: a key without a trailing `/` matches 
 
 A bare specifier walks `node_modules` only when the resolver's `NodeModulesGrant` callback grants the walk; a resolver without one refuses it. The CLI hosts answer it from the `import` capability (`Goccia.CLI.FileEngine` `TGocciaImportGrant`), which also grants and audits provider packages (`ProviderGrant`, `ProviderAudit`) and checks their files against their pins through `ModuleContentCheck` and `ProviderGraph`.
 
+### Native modules
+
+`TGocciaEngine.DefineNativeModule(Specifier, Factory, Err)` registers a native implementation under a virtual
+address such as `host:sample`. Configure the engine first and register on its owning thread before running
+source or an artifact. Registration refuses an existing module key. It also works with `Bare`.
+
+The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
+loads. Return a rooted array of alternating export names and values through `ExportList`, with a string for every
+name. Release temporary roots after setting `ExportList`. Return `False` with a pending error when initialization
+fails. The module loader retains the exports for that realm, and repeated imports use the same namespace object.
+Keep the callback's owner live until the engine is destroyed. Registrations end with that engine.
+
 ### Virtual Modules
 
 Virtual modules supply modules that are not files ([Virtual Module Configuration](virtual-modules.md)). Define them before the run:
