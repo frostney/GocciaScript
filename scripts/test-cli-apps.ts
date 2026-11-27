@@ -4784,6 +4784,37 @@ await section("Loader: --log and --audit-log reject the same output path...", as
   }
 });
 
+await section("Runner: compiled calls of uncurried prelude methods keep working once a ShadowRealm exists...", async () => {
+  // the baseline JIT compiles f and the prelude functions it reaches (Intl, Temporal) before the realm; afterwards a
+  // call the JIT hands back to the interpreter must run on the registers as they were (#2185)
+  const source = [
+    'const f = () => new Intl.Locale("en-US").baseName + Temporal.Duration.from({ hours: 1 }).toString();',
+    'Array.from({ length: 60 }, () => f());',
+    "const realm = new ShadowRealm();",
+    'Array.from({ length: 5 }, () => f()).join("|");',
+    "",
+  ].join("\n");
+  const expected = Array.from({ length: 5 }, () => "en-USPT1H").join("|");
+  const result = runLoaderJson(source, ["--unsafe-shadowrealm"]);
+  if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+    throw new Error(`expected ${expected}, got ${JSON.stringify(result.json.files?.[0])}${result.stderr}`);
+});
+
+await section("Runner: an uncurried Function.prototype.call keeps working once the JIT compiles its caller...", async () => {
+  // Function.prototype.call.bind(Function.prototype.call): the shifted call is the call native itself, which the
+  // JIT's uncurry path must leave to the interpreter unshifted (#2185 review)
+  const source = [
+    "const u = Function.prototype.call.bind(Function.prototype.call);",
+    "const f = ((x) => x + 1).bind(null);",
+    "Array.from({ length: 100 }, () => u(f, null, 41)).join();",
+    "",
+  ].join("\n");
+  const expected = Array.from({ length: 100 }, () => "42").join();
+  const result = runLoaderJson(source, []);
+  if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+    throw new Error(`expected 100 results of 42, got ${JSON.stringify(result.json.files?.[0])}${result.stderr}`);
+});
+
 // -- --global / --globals -------------------------------------------------------
 
 await section("Loader: --host-environment module controls time, zone, and random streams...", async () => {
@@ -9633,6 +9664,24 @@ await section("REPL: banner...", async () => {
 await section("REPL: expression evaluation...", async () => {
   const out = await $`echo '2 + 2;' | ${REPL} 2>&1`.text();
   if (!out.includes("4")) throw new Error(`Expression 2+2 should produce 4, got: ${out}`);
+});
+
+await section("REPL: Maps, Sets and RegExps display their contents, whatever a script replaced...", async () => {
+  // the display (host.js's REPL formatter) brands values through captured getters and joins with captured methods
+  const input = [
+    "Array.prototype.join = () => 'patched';",
+    "String.prototype.padStart = () => 'patched';",
+    "new Map([[1, 'a']]);",
+    "new Set([2]);",
+    "/x/g;",
+    "",
+  ].join("\n");
+  const out = await $`printf '%s' ${input} | ${REPL} 2>&1`.text();
+  // each result on a line of its own (the input lines echo the source, /x/g; among them); where the input is not
+  // echoed (Windows) a result line starts with the prompt
+  const lines = normalizeLineEndings(out).split("\n").map((line) => line.replace(/^> /, "").trim());
+  for (const shown of ["Map(1) { 1 => 'a' }", "Set(1) { 2 }", "/x/g"])
+    if (!lines.includes(shown)) throw new Error(`REPL should display ${shown}, got: ${out}`);
 });
 
 await section("REPL: ASI mode...", async () => {

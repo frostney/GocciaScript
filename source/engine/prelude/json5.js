@@ -6,6 +6,25 @@
 (function (G, n, shared) {
   'use strict';
   const apply = Reflect.apply, defineProperty = Object.defineProperty;
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the parser or the serializer
+  const { TypeError, SyntaxError, String, Number, parseInt } = G;
+  const ObjectKeys = Object.keys, MathMin = Math.min, MathFloor = Math.floor, fromCharCode = String.fromCharCode;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeCodePointAt = uncurryThis(String.prototype.codePointAt), StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const StringPrototypeIndexOf = uncurryThis(String.prototype.indexOf), StringPrototypeStartsWith = uncurryThis(String.prototype.startsWith);
+  const StringPrototypeRepeat = uncurryThis(String.prototype.repeat), StringPrototypePadStart = uncurryThis(String.prototype.padStart);
+  const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeSplit = uncurryThis(String.prototype.split);
+  const StringPrototypeToUpperCase = uncurryThis(String.prototype.toUpperCase);
+  const NumberPrototypeToString = uncurryThis(Number.prototype.toString);
+  const ArrayPrototypeJoin = uncurryThis(Array.prototype.join), ArrayPrototypePop = uncurryThis(Array.prototype.pop);
+  const ArrayPrototypeIncludes = uncurryThis(Array.prototype.includes);
+  const RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  const RegExpTest = (re, s) => RegExpPrototypeExec(re, s) !== null;
+  const NumberValueOf = uncurryThis(Number.prototype.valueOf), StringValueOf = uncurryThis(String.prototype.valueOf);
+  const BooleanValueOf = uncurryThis(Boolean.prototype.valueOf), BigIntValueOf = uncurryThis(BigInt.prototype.valueOf);
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const isArray = Array.isArray, fromCodePoint = String.fromCodePoint;
   const ID_START = /[\p{L}\p{Nl}$_]/u;
   const ID_CONTINUE = /[\p{L}\p{Nl}$_\p{Mn}\p{Mc}\p{Nd}\p{Pc}\u200C\u200D]/u;
@@ -24,8 +43,8 @@
   }
   function describe(c) {
     if (c === undefined) return 'end of input';
-    const code = c.codePointAt(0);
-    if (code < 0x20 || code === 0x7F) return `character '\\x${code.toString(16).padStart(2, '0')}'`;
+    const code = StringPrototypeCodePointAt(c, 0);
+    if (code < 0x20 || code === 0x7F) return `character '\\x${StringPrototypePadStart(NumberPrototypeToString(code, 16), 2, '0')}'`;
     return `character '${c}'`;
   }
 
@@ -41,17 +60,17 @@
         if (c === undefined) return;
         if (c === '/') {
           const d = text[pos + 1];
-          if (d === '/') { pos += 2; while (pos < text.length && !/[\n\r\u2028\u2029]/.test(text[pos])) pos++; continue; }
+          if (d === '/') { pos += 2; while (pos < text.length && !RegExpTest(/[\n\r\u2028\u2029]/, text[pos])) pos++; continue; }
           if (d === '*') {
-            const end = text.indexOf('*/', pos + 2);
+            const end = StringPrototypeIndexOf(text, '*/', pos + 2);
             if (end < 0) { pos = text.length; fail('invalid end of input'); }
             pos = end + 2;
             continue;
           }
           fail();
         }
-        const cp = String.fromCodePoint(text.codePointAt(pos));
-        if (SPACE.test(cp)) { pos += cp.length; continue; }
+        const cp = fromCodePoint(StringPrototypeCodePointAt(text, pos));
+        if (RegExpTest(SPACE, cp)) { pos += cp.length; continue; }
         return;
       }
     }
@@ -59,7 +78,7 @@
       let v = 0;
       for (let i = 0; i < count; i++) {
         const c = text[pos];
-        if (c === undefined || !/[0-9a-fA-F]/.test(c)) fail();
+        if (c === undefined || !RegExpTest(/[0-9a-fA-F]/, c)) fail();
         v = v * 16 + parseInt(c, 16);
         pos++;
       }
@@ -78,14 +97,14 @@
         case 't': return '\t';
         case 'v': return '\v';
         case '0':
-          if (/[0-9]/.test(text[pos] || '')) { pos--; fail(); }
+          if (RegExpTest(/[0-9]/, text[pos] || '')) { pos--; fail(); }
           return '\0';
-        case 'x': return String.fromCharCode(hexDigits(2));
-        case 'u': return String.fromCharCode(hexDigits(4));
+        case 'x': return fromCharCode(hexDigits(2));
+        case 'u': return fromCharCode(hexDigits(4));
         case '\n': case '\u2028': case '\u2029': return '';
         case '\r': if (text[pos] === '\n') pos++; return '';
       }
-      if (/[1-9]/.test(c)) { pos--; fail(); }
+      if (RegExpTest(/[1-9]/, c)) { pos--; fail(); }
       return c;
     }
     function string() {
@@ -102,7 +121,7 @@
         s += c;
         pos++;
       }
-      return { value: s, source: text.slice(start, pos) };
+      return { value: s, source: StringPrototypeSlice(text, start, pos) };
     }
     function identifierName() {
       let name = '';
@@ -113,14 +132,14 @@
         if (c === '\\') {
           if (text[pos + 1] !== 'u') { pos++; fail(); }
           pos += 2;
-          ch = String.fromCharCode(hexDigits(4));
+          ch = fromCharCode(hexDigits(4));
         } else {
           if (c === undefined) break;
-          ch = String.fromCodePoint(text.codePointAt(pos));
-          if (!(first ? ID_START : ID_CONTINUE).test(ch)) break;
+          ch = fromCodePoint(StringPrototypeCodePointAt(text, pos));
+          if (!RegExpTest(first ? ID_START : ID_CONTINUE, ch)) break;
           pos += ch.length;
         }
-        if (!(first ? ID_START : ID_CONTINUE).test(ch)) fail(`invalid identifier character`);
+        if (!RegExpTest(first ? ID_START : ID_CONTINUE, ch)) fail(`invalid identifier character`);
         name += ch;
         first = false;
       }
@@ -128,7 +147,7 @@
       return name;
     }
     function word(w, value) {
-      if (text.startsWith(w, pos)) { pos += w.length; return value; }
+      if (StringPrototypeStartsWith(text, w, pos)) { pos += w.length; return value; }
       // the first character that differs
       for (let i = 0; i < w.length; i++) if (text[pos + i] !== w[i]) { pos += i; break; }
       return fail();
@@ -138,19 +157,19 @@
       let sign = 1;
       if (text[pos] === '+' || text[pos] === '-') { if (text[pos] === '-') sign = -1; pos++; }
       const c = text[pos];
-      if (c === 'I') return { value: sign * word('Infinity', Infinity), source: text.slice(start, pos) };
-      if (c === 'N') { word('NaN', NaN); return { value: NaN, source: text.slice(start, pos) }; }
+      if (c === 'I') return { value: sign * word('Infinity', Infinity), source: StringPrototypeSlice(text, start, pos) };
+      if (c === 'N') { word('NaN', NaN); return { value: NaN, source: StringPrototypeSlice(text, start, pos) }; }
       if (c === '0' && (text[pos + 1] === 'x' || text[pos + 1] === 'X')) {
         pos += 2;
         const h = pos;
-        while (/[0-9a-fA-F]/.test(text[pos] || '')) pos++;
+        while (RegExpTest(/[0-9a-fA-F]/, text[pos] || '')) pos++;
         if (pos === h) fail();
-        return { value: sign * Number('0x' + text.slice(h, pos)), source: text.slice(start, pos) };
+        return { value: sign * Number('0x' + StringPrototypeSlice(text, h, pos)), source: StringPrototypeSlice(text, start, pos) };
       }
-      const digits = () => { const d = pos; while (/[0-9]/.test(text[pos] || '')) pos++; return pos - d; };
+      const digits = () => { const d = pos; while (RegExpTest(/[0-9]/, text[pos] || '')) pos++; return pos - d; };
       let intDigits = 0;
       if (c === '0') { pos++; intDigits = 1; }
-      else if (/[1-9]/.test(c || '')) intDigits = digits();
+      else if (RegExpTest(/[1-9]/, c || '')) intDigits = digits();
       let fracDigits = 0;
       if (text[pos] === '.') { pos++; fracDigits = digits(); }
       if (intDigits === 0 && fracDigits === 0) fail();
@@ -159,8 +178,8 @@
         if (text[pos] === '+' || text[pos] === '-') pos++;
         if (digits() === 0) fail();
       }
-      const raw = text.slice(start, pos);
-      return { value: sign * Number(raw.replace(/^[+-]/, '')), source: raw };
+      const raw = StringPrototypeSlice(text, start, pos);
+      return { value: sign * Number(raw[0] === '+' || raw[0] === '-' ? StringPrototypeSlice(raw, 1) : raw), source: raw };
     }
     function value() {
       skipSpace();
@@ -181,7 +200,7 @@
           if (text[pos] !== ':') { if (text[pos] === undefined) fail('invalid end of input'); fail(); }
           pos++;
           const v = value();
-          defineProperty(o, key, { value: v, writable: true, enumerable: true, configurable: true });
+          defineProperty(o, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
           skipSpace();
           if (text[pos] === ',') {
             pos++;
@@ -200,7 +219,7 @@
         skipSpace();
         if (text[pos] === ']') { pos++; return a; }
         for (;;) {
-          a.push(value());
+          append(a, value());
           skipSpace();
           if (text[pos] === ',') {
             pos++;
@@ -215,12 +234,12 @@
       }
       let r;
       if (c === '"' || c === "'") r = string();
-      else if (c === 'n') { const s = pos; word('null', null); r = { value: null, source: text.slice(s, pos) }; }
-      else if (c === 't') { const s = pos; word('true', true); r = { value: true, source: text.slice(s, pos) }; }
-      else if (c === 'f') { const s = pos; word('false', false); r = { value: false, source: text.slice(s, pos) }; }
-      else if (/[-+.0-9IN]/.test(c)) r = number();
+      else if (c === 'n') { const s = pos; word('null', null); r = { value: null, source: StringPrototypeSlice(text, s, pos) }; }
+      else if (c === 't') { const s = pos; word('true', true); r = { value: true, source: StringPrototypeSlice(text, s, pos) }; }
+      else if (c === 'f') { const s = pos; word('false', false); r = { value: false, source: StringPrototypeSlice(text, s, pos) }; }
+      else if (RegExpTest(/[-+.0-9IN]/, c)) r = number();
       else fail();
-      if (wantSources) sources.push(r.source);
+      if (wantSources) append(sources, r.source);
       return r.value;
     }
     const result = value();
@@ -245,9 +264,10 @@
             if (nv === undefined) delete v[i]; else v[i] = nv;
           }
         } else {
-          for (const k of Object.keys(v)) {
-            const nv = internalize(v, k);
-            if (nv === undefined) delete v[k]; else defineProperty(v, k, { value: nv, writable: true, enumerable: true, configurable: true });
+          const keys = ObjectKeys(v);
+          for (let i = 0; i < keys.length; i++) {
+            const k = keys[i], nv = internalize(v, k);
+            if (nv === undefined) delete v[k]; else defineProperty(v, k, { __proto__: null, value: nv, writable: true, enumerable: true, configurable: true });
           }
         }
         return apply(reviver, holder, [key, v, {}]);
@@ -260,12 +280,21 @@
   }
 
   // ---------------- stringify ----------------
-  const isNumberObject = (v) => { try { Number.prototype.valueOf.call(v); return typeof v === 'object'; } catch { return false; } };
-  const isStringObject = (v) => { try { String.prototype.valueOf.call(v); return typeof v === 'object'; } catch { return false; } };
-  const isBooleanObject = (v) => { try { Boolean.prototype.valueOf.call(v); return typeof v === 'object'; } catch { return false; } };
-  const isBigIntObject = (v) => { try { BigInt.prototype.valueOf.call(v); return typeof v === 'object'; } catch { return false; } };
+  const isNumberObject = (v) => { try { NumberValueOf(v); return typeof v === 'object'; } catch { return false; } };
+  const isStringObject = (v) => { try { StringValueOf(v); return typeof v === 'object'; } catch { return false; } };
+  const isBooleanObject = (v) => { try { BooleanValueOf(v); return typeof v === 'object'; } catch { return false; } };
+  const isBigIntObject = (v) => { try { BigIntValueOf(v); return typeof v === 'object'; } catch { return false; } };
   const booleanValue = Boolean.prototype.valueOf;
-  const firstCodePoints = (s, count) => { let out = '', i = 0; for (const ch of s) { if (i++ >= count) break; out += ch; } return out; };
+  // the first count code points of s (a surrogate pair is one)
+  const firstCodePoints = (s, count) => {
+    let out = '';
+    for (let i = 0, n = 0; i < s.length && n < count; n++) {
+      const w = StringPrototypeCodePointAt(s, i) > 0xFFFF ? 2 : 1;
+      out += StringPrototypeSlice(s, i, i + w);
+      i += w;
+    }
+    return out;
+  };
 
   function stringify(value, replacer = undefined, space = undefined) {
     const stack = [];
@@ -288,39 +317,39 @@
         let item;
         if (typeof v === 'string') item = v;
         else if (typeof v === 'number' || isStringObject(v) || isNumberObject(v)) item = String(v);
-        if (item !== undefined && !propertyList.includes(item)) propertyList.push(item);
+        if (item !== undefined && !ArrayPrototypeIncludes(propertyList, item)) append(propertyList, item);
       }
     }
     if (isNumberObject(space)) space = Number(space);
     else if (isStringObject(space)) space = String(space);
     if (typeof space === 'number') {
-      if (space >= 1) gap = ' '.repeat(Math.min(10, Math.floor(space)));
+      if (space >= 1) gap = StringPrototypeRepeat(' ', MathMin(10, MathFloor(space)));
     } else if (typeof space === 'string') gap = firstCodePoints(space, 10);
 
     function quoteString(s) {
       const quotes = { "'": 0.1, '"': 0.2 };
-      const replacements = { "'": "\\'", '"': '\\"', '\\': '\\\\', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r',
+      const replacements = { __proto__: null, "'": "\\'", '"': '\\"', '\\': '\\\\', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r',
         '\t': '\\t', '\v': '\\v', '\0': '\\0', '\u2028': '\\u2028', '\u2029': '\\u2029' };
       let product = '';
       for (let i = 0; i < s.length; i++) {
         const c = s[i];
         if (c === "'" || c === '"') { quotes[c]++; product += c; continue; }
-        if (c === '\0' && /[0-9]/.test(s[i + 1] || '')) { product += '\\x00'; continue; }
+        if (c === '\0' && RegExpTest(/[0-9]/, s[i + 1] || '')) { product += '\\x00'; continue; }
         if (replacements[c] !== undefined) { product += replacements[c]; continue; }
-        if (c < ' ') { product += '\\x' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'); continue; }
+        if (c < ' ') { product += '\\x' + StringPrototypePadStart(StringPrototypeToUpperCase(NumberPrototypeToString(StringPrototypeCharCodeAt(c, 0), 16)), 2, '0'); continue; }
         product += c;
       }
       const quoteChar = quote !== undefined ? quote : (quotes["'"] <= quotes['"'] ? "'" : '"');
-      product = product.split(quoteChar).join(replacements[quoteChar]);
+      product = ArrayPrototypeJoin(StringPrototypeSplit(product, quoteChar), replacements[quoteChar]);
       return quoteChar + product + quoteChar;
     }
     function serializeKey(key) {
       if (key.length === 0) return quoteString(key);
-      const first = fromCodePoint(key.codePointAt(0));
-      if (!ID_START.test(first)) return quoteString(key);
+      const first = fromCodePoint(StringPrototypeCodePointAt(key, 0));
+      if (!RegExpTest(ID_START, first)) return quoteString(key);
       for (let i = first.length; i < key.length;) {
-        const ch = fromCodePoint(key.codePointAt(i));
-        if (!ID_CONTINUE.test(ch)) return quoteString(key);
+        const ch = fromCodePoint(StringPrototypeCodePointAt(key, i));
+        if (!RegExpTest(ID_CONTINUE, ch)) return quoteString(key);
         i += ch.length;
       }
       return key;
@@ -352,24 +381,24 @@
       return undefined;
     }
     function enter(v) {
-      if (stack.includes(v)) throw new TypeError('Converting circular structure to JSON5');
-      stack.push(v);
+      if (ArrayPrototypeIncludes(stack, v)) throw new TypeError('Converting circular structure to JSON5');
+      append(stack, v);
     }
     function serializeObject(v) {
       enter(v);
       const stepback = indent;
       indent += gap;
-      const keys = propertyList !== undefined ? propertyList : Object.keys(v);
+      const keys = propertyList !== undefined ? propertyList : ObjectKeys(v);
       const partial = [];
-      for (const key of keys) {
-        const ps = serializeProperty(key, v);
-        if (ps !== undefined) partial.push(serializeKey(key) + ':' + (gap !== '' ? ' ' : '') + ps);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i], ps = serializeProperty(key, v);
+        if (ps !== undefined) append(partial, serializeKey(key) + ':' + (gap !== '' ? ' ' : '') + ps);
       }
       let out;
       if (partial.length === 0) out = '{}';
-      else if (gap === '') out = '{' + partial.join(',') + '}';
-      else out = '{\n' + indent + partial.join(',\n' + indent) + ',\n' + stepback + '}';
-      stack.pop();
+      else if (gap === '') out = '{' + ArrayPrototypeJoin(partial, ',') + '}';
+      else out = '{\n' + indent + ArrayPrototypeJoin(partial, ',\n' + indent) + ',\n' + stepback + '}';
+      ArrayPrototypePop(stack);
       indent = stepback;
       return out;
     }
@@ -381,13 +410,13 @@
       const len = v.length;
       for (let i = 0; i < len; i++) {
         const ps = serializeProperty(String(i), v);
-        partial.push(ps !== undefined ? ps : 'null');
+        append(partial, ps !== undefined ? ps : 'null');
       }
       let out;
       if (partial.length === 0) out = '[]';
-      else if (gap === '') out = '[' + partial.join(',') + ']';
-      else out = '[\n' + indent + partial.join(',\n' + indent) + ',\n' + stepback + ']';
-      stack.pop();
+      else if (gap === '') out = '[' + ArrayPrototypeJoin(partial, ',') + ']';
+      else out = '[\n' + indent + ArrayPrototypeJoin(partial, ',\n' + indent) + ',\n' + stepback + ']';
+      ArrayPrototypePop(stack);
       indent = stepback;
       return out;
     }
