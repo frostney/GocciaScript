@@ -4148,7 +4148,9 @@ begin
   begin
     Reg := Scope.Bindings[I].Reg;
     if (Reg < 1) or (Reg > FS.NParamRegs) or (Scope.Bindings[I].LType = 0) then Continue;
-    if Codes = '' then SetLength(Codes, FS.NParamRegs);
+    { #0 marks an untyped parameter: SetLength would leave the new characters
+      as whatever the heap block held before }
+    if Codes = '' then Codes := StringOfChar(WideChar(0), FS.NParamRegs);
     Codes[Reg] := WideChar(Scope.Bindings[I].LType);
     if Reg > LastTyped then LastTyped := Reg;
   end;

@@ -100,6 +100,11 @@ To populate snapshots for existing history, run this from `website/` with
 bun run rebuild-history
 ```
 
+The token is stored only as a GitHub Actions secret, so the
+[rebuild-history workflow](../.github/workflows/rebuild-history.yml) runs the
+same command in CI. Start it from the Actions tab on `main`; it runs only for
+the repository owner.
+
 The command uses the same `AWFY_BLOB_PREFIX` / `AWFY_BLOB_ACCESS`,
 `JETSTREAM_BLOB_PREFIX` / `JETSTREAM_BLOB_ACCESS`, and
 `TEST262_BLOB_PREFIX` / `TEST262_BLOB_ACCESS` settings as publication. It writes
