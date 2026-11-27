@@ -838,7 +838,23 @@ begin
   VA := R[A];
   if not IsObject(VA) then Exit(1);
   O := ObjOf(VA);
-  if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
+  if (O^.OKind = okBound) and XUncurriedNative(O) then
+  begin
+    { uncurryThis(f)(t, ...args) for a native f (as FastLoop's opCall): the registers shift down a place, f the
+      callee and t its this }
+    VB := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+    R[A] := VB;
+    if Argc = 0 then R[A + 1] := VUndefined
+    else
+    begin
+      for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+      Dec(Argc);
+    end;
+    ThisFlag := 0;
+    VA := VB;
+    O := ObjOf(VB);
+  end
+  else if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
   begin
     { f.call(t, ...args) (as FastLoop's opCall): the registers shift down a place, f the callee; every
       condition that would leave the call to the interpreter is checked before the shift }
@@ -1086,6 +1102,28 @@ end;
 
 { the inline call's callee (the newest frame) stopped part way (Res its PC) or threw (-1): finished by a nested
   Execute, its result in R[A]. 0, or -1 a throw pending }
+{ the baseline JIT's call stub's shift for uncurryThis(f) with a native f (R the call's R[A], ArgcFlags its Argc with
+  the undefined-this flag at bit 16): f moved to R[0], the first argument to R[1] as its this, the rest down a place;
+  the new Argc returned (no flag), or -1, nothing changed, for any other callee or when XJitCall would hand the call
+  back to the interpreter }
+function XJitUncurry(R: PValue; ArgcFlags: PtrInt): PtrInt;
+var O: PObj; Argc, J: Integer;
+begin
+  { XJitCall gives these back to the interpreter, which runs the instruction again: on the registers as they were }
+  if MultiRealmAny or JitTooDeep then Exit(-1);
+  O := ObjOf(R[0]);
+  if (O^.OKind <> okBound) or not XUncurriedNative(O) then Exit(-1);
+  Argc := ArgcFlags and $FFFF;
+  R[0] := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+  if Argc = 0 then
+  begin
+    R[1] := VUndefined;
+    Exit(0);
+  end;
+  for J := 0 to Argc - 1 do R[1 + J] := R[2 + J];
+  Result := Argc - 1;
+end;
+
 function XJitCallPost(Fr: PFrame; A, Res: Integer): Integer;
 var V: TValue;
 begin
@@ -3976,7 +4014,7 @@ end;
   interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
 procedure JitBuildCallStub;
 var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, LNat, LNatDone: Integer;
-  LGen, LNatOk, LNatThrow, LNatAt: Integer;
+  LGen, LNatOk, LNatThrow, LNatAt, LUnc: Integer;
   LG1, LG2, LG3, LThisDone, LThisDone2: Integer; P: PByte;
   procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
 begin
@@ -4095,6 +4133,19 @@ begin
     here (rax the callee); anything else XJitCall's }
   PatchHere(LNat);
   LNatAt := JitLen;
+  { uncurryThis(f) for a native f (the preludes' captured prototype methods): the registers shifted by XJitUncurry,
+    f the callee and the first argument its this, then f's path from the start of this one (rax f) }
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okBound); LUnc := JccFwd(ccNE);
+  MovRR(jDI, jR13);
+  MovRR(jSI, jR14);
+  CallAbs(@XJitUncurry);
+  AluRI(7, jAX, -1, True); AddS(JccFwd(ccE));
+  MovRR(jR14, jAX);
+  MovRM(jAX, jR13, 0);
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jAX, jDX, True);
+  JB($E9); JD(Cardinal(LNatAt - (JitLen + 4)));
+  PatchHere(LUnc);
   CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okNative); AddS(JccFwd(ccNE));
   LGen := -1;
   if JitCharCodeAtFn <> nil then
