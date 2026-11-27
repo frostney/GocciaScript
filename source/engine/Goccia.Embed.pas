@@ -16,6 +16,7 @@ uses
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
+  TGocciaNativeModuleFactory = TNativeModuleFactory;
   TGocciaEmbedderWork = TEmbedderWork;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
@@ -225,6 +226,9 @@ type
     function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+    { Registers a native factory for an import, with the same lifetime as this engine. }
+    function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+      var Err: UnicodeString): Boolean;
     { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
     procedure SetHostWork(Work: TGocciaEmbedderWork);
     function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
@@ -674,6 +678,12 @@ begin
     Exit(True);
   end;
   Result := ThrowTypeError('Host environment export "' + Name + '" must return a Number or BigInt');
+end;
+
+function TGocciaEngine.DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := HostReady(Err) and Goccia.HostAPI.DefineNativeModule(Specifier, Factory, Err);
 end;
 
 { the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
