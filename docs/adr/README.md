@@ -201,3 +201,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0189 — Windows builds carry ICU's own libraries](0189-windows-builds-carry-icu-s-own-libraries.md)
 - [0190 — fetch connects across address families](0190-fetch-connects-across-address-families.md)
 - [0191 — FPC i386 builds compute doubles in SSE2](0191-fpc-i386-builds-compute-doubles-in-sse2.md)
+- [0192 — History reads ask for the strong ETag and project raw pointers](0192-history-reads-ask-for-the-strong-etag-and-project-raw-pointers.md)

@@ -21,7 +21,7 @@ procedure InitArrayProto;
 implementation
 
 uses
-  SysUtils, Math, Goccia.Core, Goccia.VM, Goccia.ObjModel, Goccia.BigIntV;
+  SysUtils, Math, Goccia.Core, Goccia.VM, Goccia.ObjModel, Goccia.BigIntV, Goccia.Error.Messages;
 
 const
   MAX_SAFE = 9007199254740991.0;   { 2^53 - 1 }
@@ -291,6 +291,15 @@ begin
   end;
   A := MkPtr(NewArray(Len, Len));
   Result := True;
+end;
+
+{ A copy creates an own property at every index. Even when ArrayCreate uses a sparse length, the result will
+  need at least one value slot per index. Check before any copy or dense allocation. }
+function ReserveArrayCopy(Len: Int64): Boolean;
+begin
+  if Len > 4294967295 then Exit(ThrowError('RangeError', 'Invalid array length'));
+  Result := HeapReserve(SizeOf(TValueArray) - SizeOf(TValue) + Max(Len, 1) * SizeOf(TValue));
+  if not Result then ThrowError('RangeError', SErrorMemoryLimitExceeded);
 end;
 
 { 10.4.2.3 ArraySpeciesCreate (realms not told apart) }
@@ -1459,6 +1468,7 @@ begin
   end;
   PopRoots(1);
   N := ObjOf(RootAt(Base))^.Elements^.Len;
+  if not ReserveArrayCopy(N) then Exit(False);
   TempRoots[Base + 1] := MkPtr(NewArray(N, N));
   W := 1;
   while W < N do
@@ -1540,7 +1550,7 @@ begin
   Base := TempTop;
   PushRoot(Saved); PushRoot(VUndefined); PushRoot(VUndefined);
   if ToObj(Args) and LengthOfArrayLike(Args[0], Len) and
-     ((Len <= 4294967295) or ThrowError('RangeError', 'Invalid array length')) then
+     ReserveArrayCopy(Len) then
     { ArrayCreate(len) filled from the sorted list, which has len values (holes read as undefined): the list
       itself is that array }
     if SortIndexed(Args[0], Len, False, Base + 1) then
@@ -1560,6 +1570,7 @@ var Len: Int64; K: SizeInt; A, V: TValue; Base: Integer;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not ReserveArrayCopy(Len) then Exit(False);
   if not ArrayCreate(Len, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
@@ -1590,6 +1601,7 @@ begin
   end;
   NewLen := Len + Ins - Skip;
   if NewLen > MAX_SAFE then Exit(ThrowTypeError('toSpliced result exceeds the maximum array-like length'));
+  if not ReserveArrayCopy(NewLen) then Exit(False);
   if not ArrayCreate(NewLen, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
@@ -1625,6 +1637,7 @@ begin
   if D < 0 then D := Len + D;
   if (D >= Len) or (D < 0) then Exit(ThrowError('RangeError', 'Invalid index'));
   Idx := Trunc(D);
+  if not ReserveArrayCopy(Len) then Exit(False);
   if not ArrayCreate(Len, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
@@ -1761,7 +1774,9 @@ begin
   { an array-like }
   if not ToObjectV(Args[1], AL) then Exit(False);
   PushRoot(AL);
-  if not LengthOfArrayLike(AL, Len) or not CreateFromThis(Args[0], Len, True, A) then begin PopRoots(1); Exit(False); end;
+  if not LengthOfArrayLike(RootAt(Base), Len) or
+     (((Args[0] = ArrayCtorV) or not IsConstructorV(Args[0])) and not ReserveArrayCopy(Len)) or
+     not CreateFromThis(Args[0], Len, True, A) then begin PopRoots(1); Exit(False); end;
   PushRoot(A);
   K := 0;
   while K < Len do

@@ -118,10 +118,9 @@ export async function readJetStreamBlobReportJson(
 }
 
 function compactHistoryRun(run: JetStreamBlobRun): JetStreamBlobRun {
-  // Daily pointers embed the full report as an extra field because the
-  // publisher spreads the whole publish entry into each pointer. The report
-  // artifact remains authoritative; the timeline needs only the declared run
-  // fields.
+  // Daily pointers published before the publisher stopped spreading the whole
+  // publish entry embed the full report as an extra field. The report artifact
+  // remains authoritative; the timeline needs only the declared run fields.
   const { reportJson: _reportJson, ...history } = run as JetStreamBlobRun & {
     reportJson?: unknown;
   };
@@ -140,7 +139,12 @@ export async function rebuildJetStreamBlobHistory(): Promise<number> {
 export async function listJetStreamBlobDailyRuns(
   prefix = jetStreamBlobPrefix(),
 ): Promise<JetStreamBlobRun[]> {
-  return listBlobHistory(prefix, jetStreamBlobAccess(), isJetStreamBlobRun);
+  return listBlobHistory(
+    prefix,
+    jetStreamBlobAccess(),
+    isJetStreamBlobRun,
+    compactHistoryRun,
+  );
 }
 
 export async function publishJetStreamReportsToBlob(
@@ -151,14 +155,14 @@ export async function publishJetStreamReportsToBlob(
   const publishedRuns: JetStreamBlobRun[] = [];
   const pointers: { pathname: string; etag: string; run: JetStreamBlobRun }[] =
     [];
-  for (const entry of entries) {
+  for (const { reportJson, ...entry } of entries) {
     const reportPath = jetStreamBlobReportPathForArtifactId(
       entry.artifactId,
       prefix,
     );
     const reportBlob = await putCompressedReportBlob(
       reportPath,
-      entry.reportJson,
+      reportJson,
       access,
     );
     const published: JetStreamBlobRun = {

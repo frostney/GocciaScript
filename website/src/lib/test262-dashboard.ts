@@ -471,15 +471,32 @@ export function latestTest262Summary(
 }
 
 async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
+  const timeline = await listTest262BlobDailyRuns();
+  const { latestReport, usableTimeline } =
+    await readNewestValidTest262Report(timeline);
+  return createTest262DashboardData({
+    generatedAt: new Date().toISOString(),
+    timeline: usableTimeline,
+    latestReport,
+  });
+}
+
+// A failed read throws out of the cached function so the cache never keeps
+// it: the previous good entry keeps being served while revalidation retries.
+const loadCachedTest262DashboardData = unstable_cache(
+  loadUncachedTest262DashboardData,
+  ["test262-dashboard"],
+  {
+    revalidate: TEST262_DASHBOARD_CACHE_SECONDS,
+    tags: ["test262-dashboard"],
+  },
+);
+
+export const test262DashboardTestApi = { loadUncachedTest262DashboardData };
+
+export async function loadTest262DashboardData(): Promise<Test262DashboardData> {
   try {
-    const timeline = await listTest262BlobDailyRuns();
-    const { latestReport, usableTimeline } =
-      await readNewestValidTest262Report(timeline);
-    return createTest262DashboardData({
-      generatedAt: new Date().toISOString(),
-      timeline: usableTimeline,
-      latestReport,
-    });
+    return await loadCachedTest262DashboardData();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = /No blob credentials|No read-write token/i.test(message)
@@ -491,15 +508,6 @@ async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData>
     );
   }
 }
-
-export const loadTest262DashboardData = unstable_cache(
-  loadUncachedTest262DashboardData,
-  ["test262-dashboard"],
-  {
-    revalidate: TEST262_DASHBOARD_CACHE_SECONDS,
-    tags: ["test262-dashboard"],
-  },
-);
 
 export function createTest262DashboardData({
   generatedAt,

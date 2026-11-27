@@ -31,6 +31,7 @@ import {
   BENCHRUNNER,
 } from "./test-cli/binaries";
 import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { assertPeakRssBelow, runWithPeakRss } from "./test-cli/rss";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 verifyOutputEncoding();
@@ -1870,6 +1871,44 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError: ${out}`);
   if (out.includes("memory budget")) throw new Error(`OOM should be refused at the next safe point, not by a growth gate: ${out}`);
+}
+
+console.log("--max-memory (array copy storage is reserved before copying)...");
+{
+  const cases = {
+    toSpliced: "Array.prototype.toSpliced.call(input, 0, 0)",
+    toReversed: "Array.prototype.toReversed.call(input)",
+    toSorted: "Array.prototype.toSorted.call(input)",
+    with: "Array.prototype.with.call(input, 1, 0)",
+    from: "Array.from(input)",
+  };
+  const dir = mkdtemp("goccia-array-copy-budget-");
+  try {
+    const path = join(dir, "copy.js");
+    // The getter stops an unguarded copy at its first read. Test lengths on both
+    // sides of the dense storage threshold without building a large sparse array.
+    for (const length of [4 * 1024 * 1024, 64 * 1024 * 1024 + 1]) {
+      for (const [name, copy] of Object.entries(cases)) {
+        writeFileSync(path, `
+const input = {
+  length: ${length},
+  get 0() { throw new Error('copy read an index'); },
+  get [${length - 1}]() { throw new Error('copy read an index'); },
+};
+${copy};
+`);
+        const label = `${name} with ${length} slots`;
+        const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
+        if (run.exitCode !== 1 || !run.output.includes("RangeError") ||
+            !run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit") ||
+            run.output.includes("Error: copy read an index"))
+          throw new Error(`${label} should be refused before the first indexed read: ${run.output}`);
+        assertPeakRssBelow(run, label, 40 * 1024 * 1024);
+      }
+    }
+  } finally {
+    clean(dir);
+  }
 }
 
 console.log("--max-memory (Blob bytes are charged and given back)...");
