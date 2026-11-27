@@ -31,6 +31,7 @@ import {
   BENCHRUNNER,
 } from "./test-cli/binaries";
 import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { assertPeakRssBelow, runWithPeakRss } from "./test-cli/rss";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 verifyOutputEncoding();
@@ -1847,27 +1848,21 @@ console.log("--max-memory (override)...");
 
 console.log("--max-memory (OOM triggers RangeError)...");
 {
-  // Array.from over an array-like first sizes the result's element storage
-  // for all 5000 slots, a gated growth point that ends the run with the opaque
-  // memory-budget error when it does not fit, and only then charges each
-  // element object as it is built. The budget therefore has to clear the live
-  // heap plus that storage, or the gate refuses before any charged allocation
-  // can. A fixed ceiling sat within a few hundred bytes of that line, so a
-  // small growth in what the engine keeps alive at startup turned the RangeError
-  // into the fatal error on development builds; the ceiling is set from the
-  // measured live heap instead.
+  // Leave room for the live heap, native startup storage and the result's
+  // element slots. The mapped element objects should exhaust the budget.
   const ELEMENTS = 5000;
   const POINTER_BYTES = 8;
-  const MARGIN_BYTES = 64 * 1024;
+  const MARGIN_BYTES = 256 * 1024;
   const probe = await $`echo 'Goccia.gc(); console.log(Goccia.gc.bytesAllocated);' | ${RUNNER} --compat-asi 2>/dev/null`.quiet().nothrow();
   const liveBytes = Number.parseInt(probe.text().trim().split("\n")[0], 10);
   if (probe.exitCode !== 0 || !Number.isFinite(liveBytes) || liveBytes <= 0) {
     throw new Error(`Could not measure the live heap: exit ${probe.exitCode}, ${probe.text()}`);
   }
   const maxMemory = liveBytes + ELEMENTS * POINTER_BYTES + MARGIN_BYTES;
-  const res = await $`echo ${`Array.from({length:${ELEMENTS}},(_,i)=>({x:i}));`} | ${RUNNER} --max-memory=${maxMemory} --compat-asi 2>&1`.quiet().nothrow();
+  const res = await $`echo ${`Array.from({length:${ELEMENTS}},(_,i)=>{ if (i===0) console.log('mapper started'); return {x:i}; });`} | ${RUNNER} --max-memory=${maxMemory} --compat-asi 2>&1`.quiet().nothrow();
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
+  if (!containsLine(out, "mapper started")) throw new Error(`OOM should occur during mapping: ${out}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError: ${out}`);
   if (out.includes("memory budget")) throw new Error(`OOM should be refused at the next safe point, not by a growth gate: ${out}`);
 }
@@ -1914,6 +1909,60 @@ console.log("--max-memory (Blob bytes are charged and given back)...");
   const endlessRes = await $`echo ${endless} | ${RUNNER} --max-memory=16777216 --timeout=60000 2>&1`.quiet().nothrow();
   if (endlessRes.exitCode !== 0 || !endlessRes.text().includes("RangeError")) {
     throw new Error(`Blob memory probe: an endless iterator of parts should be refused by the limit: ${endlessRes.text()}`);
+  }
+}
+
+console.log("--max-memory (compiled RegExp storage shares the allocation budget)...");
+{
+  const dir = mkdtemp("goccia-regexp-budget-");
+  const pattern = "a".repeat(32 * 1024);
+  const expressions = {
+    control: `pattern === ${JSON.stringify(pattern)}`,
+    constructor: "new RegExp(pattern).test(pattern)",
+    literal: `/${pattern}/.test(pattern)`,
+  };
+  try {
+    const path = join(dir, "regexp.js");
+    for (const [name, match] of Object.entries(expressions)) {
+      writeFileSync(path, `
+const pattern = ${JSON.stringify(pattern)};
+if (!(${match})) throw new Error('expected a match');
+Goccia.gc();
+// Leave room for a small allocation and the call itself. A compiled RegExp
+// also holds native storage, which is outside bytesAllocated.
+const available = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;
+new ArrayBuffer(available - 256 * 1024);
+console.log('buffer allocated');
+`);
+      const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
+      if (name === "control") {
+        if (run.exitCode !== 0 || !containsLine(run.output, "buffer allocated"))
+          throw new Error(`The buffer should fit without a compiled RegExp: ${run.output}`);
+      } else {
+        if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
+          throw new Error(`The buffer should be refused while the ${name} program is cached: ${run.output}`);
+        assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
+      }
+    }
+    const operations = {
+      compile: 'const re = new RegExp("a".repeat(64 * 1024)); console.log(re.source.length);',
+      "compile literal": `console.log(/${"a".repeat(64 * 1024)}/.source.length);`,
+      match: 'const re = new RegExp("a".repeat(256)); console.log(re.test("a".repeat(32 * 1024)));',
+    };
+    for (const [name, operation] of Object.entries(operations)) {
+      writeFileSync(path, `
+const padding = new ArrayBuffer(512 * 1024);
+${operation}
+console.log(padding.byteLength);
+`);
+      const run = await runWithPeakRss([RUNNER, "--max-memory=2MiB", "--timeout=10000", path]);
+      if (run.exitCode !== 1 || !run.output.includes("RangeError") ||
+          !run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
+        throw new Error(`RegExp ${name} should report a memory-limit RangeError: ${run.output}`);
+      assertPeakRssBelow(run, `RegExp ${name} workspace refusal`, 40 * 1024 * 1024);
+    }
+  } finally {
+    clean(dir);
   }
 }
 
@@ -2921,7 +2970,9 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
     "",
   ].join("\n");
 
-  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi"], { timeout: 30_000 });
+  // Include the now-charged native startup storage. The collection count below
+  // still requires all 30 manual collections during the recursive calls.
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=800000", "--compat-asi"], { timeout: 30_000 });
   if (exitCode !== 0) throw new Error(`Manual GC active-call exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call should return positive bytesAllocated`);
   if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call should report at least 30 collections, got ${json.memory?.gc?.collections}`);

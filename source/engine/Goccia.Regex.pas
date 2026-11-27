@@ -25,7 +25,9 @@ unit Goccia.Regex;
 interface
 
 uses
-  SysUtils, Goccia.RegExp.&Program, Goccia.RegExp.Compiler;
+  SysUtils, Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.Core;
+
+procedure CheckRegExpWorkspace(const Bytes: Int64);
 
 type
   ERegexRuntime = class(Exception);
@@ -36,6 +38,7 @@ type
     PC, Pos: Integer;
   end;
   TDepthCtx = record
+    Charge: PHeapExternalCharge;
     Stack: array of Integer;     { frames: slots, repeat stack, then RepeatDepth, RunStart, Pos, PC }
     Memo: array of TMemoCell;
     MemoCount: Integer;
@@ -56,6 +59,7 @@ type
 
   TRegexMatcher = class
   private
+    FCharge: THeapExternalCharge;
     FProg: TRegExpProgram;
     FCodeArr: array of UInt32;       { the program after the peephole passes }
     FCode: PUInt32;
@@ -75,7 +79,6 @@ type
     FFirst: array[0..7] of UInt32;
     FUseBits: Boolean;               { the current subject uses the bit-set memo }
     FStride: Integer;
-    FCtx0: PDepthCtx;
     FEmpty: Boolean;
     FIn: PWideChar;
     FLen: Integer;
@@ -97,6 +100,7 @@ type
     procedure AnalyzePossessive;
     function FirstSetFrom(PC: Integer; var Bits: TClassBits): Boolean;
     procedure Peephole;
+    function Execute(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
   public
     constructor Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
     destructor Destroy; override;
@@ -115,13 +119,14 @@ type
     function Interrupted: Boolean;
     { the match ran out of native stack (nested groups or lookarounds on a nearly exhausted stack) }
     function StackExhausted: Boolean;
+    function MemoryExhausted: Boolean;
     function ErrorMessage: UnicodeString;
   end;
 
 implementation
 
 uses
-  Goccia.NestingLimit, Goccia.RegExp.UnicodeData, Goccia.Core;
+  Goccia.NestingLimit, Goccia.RegExp.UnicodeData, Goccia.Error.Messages;
 
 const
   { the steps a match takes between polls of the thread's Interrupt }
@@ -138,6 +143,23 @@ const
   SStepLimitExceeded = 'Maximum regular expression step count exceeded';
   SBacktrackExceeded = 'Maximum regular expression backtrack stack size exceeded';
   EMPTY_REGEX = '(?:)';
+
+procedure RaiseRegExpMemoryLimit;
+begin
+  raise EHeapExternalMemoryLimit.Create(SErrorMemoryLimitExceeded);
+end;
+
+procedure CheckRegExpWorkspace(const Bytes: Int64);
+begin
+  if not HeapReserve(Bytes) then RaiseRegExpMemoryLimit;
+end;
+
+{ The old block may remain live while the RTL copies it. Matching reads the subject directly, so no GC can run here. }
+procedure ChargeMatchGrowth(var Charge: THeapExternalCharge; OldCount, NewCount, ItemSize: SizeInt);
+begin
+  if not Charge.TryGrow(Int64(NewCount) * ItemSize, False) then RaiseRegExpMemoryLimit;
+  Charge.Release(Int64(OldCount) * ItemSize);
+end;
 
 { ---------------- characters ---------------- }
 
@@ -288,6 +310,7 @@ begin
   if Cap >= MEMO_MAX_CAPACITY then Exit;
   NewCap := Cap * 2;
   if NewCap > MEMO_MAX_CAPACITY then NewCap := MEMO_MAX_CAPACITY;
+  ChargeMatchGrowth(C^.Charge^, Cap, NewCap, SizeOf(TMemoCell));
   Old := C^.Memo;
   Gen := C^.MemoGen;
   C^.Memo := nil;
@@ -303,6 +326,7 @@ var Cap: Integer;
 begin
   if Length(C^.Memo) = 0 then
   begin
+    ChargeMatchGrowth(C^.Charge^, 0, MEMO_INITIAL_CAPACITY, SizeOf(TMemoCell));
     SetLength(C^.Memo, MEMO_INITIAL_CAPACITY);
     FillChar(C^.Memo[0], MEMO_INITIAL_CAPACITY * SizeOf(TMemoCell), 0);
   end;
@@ -329,7 +353,11 @@ begin
   W := Bit shr 6;
   if C^.Bits[W] = 0 then
   begin
-    if C^.DirtyCount >= Length(C^.Dirty) then SetLength(C^.Dirty, C^.DirtyCount * 2 + 64);
+    if C^.DirtyCount >= Length(C^.Dirty) then
+    begin
+      ChargeMatchGrowth(C^.Charge^, Length(C^.Dirty), C^.DirtyCount * 2 + 64, SizeOf(Integer));
+      SetLength(C^.Dirty, C^.DirtyCount * 2 + 64);
+    end;
     C^.Dirty[C^.DirtyCount] := W;
     Inc(C^.DirtyCount);
   end;
@@ -390,20 +418,26 @@ end;
 
 procedure GrowStack(C: PDepthCtx; Need: Integer);
 begin
+  ChargeMatchGrowth(C^.Charge^, Length(C^.Stack), Need * 2 + 256, SizeOf(Integer));
   SetLength(C^.Stack, Need * 2 + 256);
 end;
 
 procedure GrowRep(C: PDepthCtx; Need: Integer);
 begin
+  ChargeMatchGrowth(C^.Charge^, Length(C^.Rep), Need * 2 + 8, SizeOf(Integer));
   SetLength(C^.Rep, Need * 2 + 8);
 end;
 
 constructor TRegexMatcher.Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
-var I, J: Integer; Lo, Hi: Cardinal; Op: TRegExpOpCode; T: Integer;
+var I, J: Integer; Lo, Hi: Cardinal; Op: TRegExpOpCode; T: Integer; Bytes: Int64;
 begin
   inherited Create;
+  { Peephole's code copy, replacement code, dead bitmap, targets, distances and PC map can coexist. }
+  CheckRegExpWorkspace(Int64(Length(AProg.Code) + 1) * (2 * SizeOf(UInt32) + SizeOf(Boolean) + 3 * SizeOf(Integer)) +
+    Int64(Length(AProg.CharClasses)) * SizeOf(TRegExpCharClass) + InstanceSize);
   FProg := AProg;
   FCodeArr := Copy(AProg.Code);   { a copy: the peephole passes rewrite it }
+  FProg.Code := nil;
   FProg.CharClasses := Copy(AProg.CharClasses);
   FUnicode := FProg.FullUnicode;
   FSlotCount := (FProg.CaptureCount + 1) * 2;
@@ -455,7 +489,15 @@ begin
       ((Integer(FCode[I] shr 8) and LOOK_TARGET_MASK) = I + 3);
   AnalyzeFirst;
   AnalyzePossessive;
-  FCtx0 := Ctx(0);
+  { Program tables share storage with AProg, except for the outer class table and classes made by Peephole. }
+  Bytes := InstanceSize + Int64(FCodeLen) * SizeOf(UInt32) + Int64(FSlotCount) * SizeOf(Integer) +
+    Int64(Length(FProg.CharClasses)) * SizeOf(TRegExpCharClass) + Int64(Length(FClassBits)) * SizeOf(TClassBits) +
+    Int64(FCodeLen + 1) * (3 * SizeOf(Boolean) + SizeOf(Integer)) +
+    Int64(Length(FLits)) * SizeOf(UnicodeString) + Int64(Length(FLitFrom)) * SizeOf(Integer);
+  for I := Length(AProg.CharClasses) to High(FProg.CharClasses) do
+    Inc(Bytes, Int64(Length(FProg.CharClasses[I].Ranges)) * SizeOf(TRegExpCharRange));
+  for I := 0 to High(FLits) do Inc(Bytes, Int64(Length(FLits[I])) * SizeOf(WideChar));
+  if not FCharge.TryGrow(Bytes) then RaiseRegExpMemoryLimit;
   if GetEnvironmentVariable('GOCCIA_REDBG') <> '' then
   begin
     { the program after the peephole passes, and what the analyses found }
@@ -475,6 +517,7 @@ var I: Integer;
 begin
   for I := 0 to High(FCtx) do
     if FCtx[I] <> nil then Dispose(FCtx[I]);
+  FCharge.Clear;
   inherited;
 end;
 
@@ -484,19 +527,22 @@ begin
   if Depth >= Length(FCtx) then
   begin
     Old := Length(FCtx);
+    ChargeMatchGrowth(FCharge, Old, Depth + 4, SizeOf(PDepthCtx));
     SetLength(FCtx, Depth + 4);
     for I := Old to High(FCtx) do FCtx[I] := nil;
   end;
   Result := FCtx[Depth];
   if Result = nil then
   begin
+    if not FCharge.TryGrow(SizeOf(TDepthCtx) + (256 + 8) * SizeOf(Integer), False) then RaiseRegExpMemoryLimit;
     New(Result);
+    FCtx[Depth] := Result;
+    Result^.Charge := @FCharge;
     Result^.MemoCount := 0;
     Result^.MemoGen := 1;
     Result^.DirtyCount := 0;
     SetLength(Result^.Stack, 256);
     SetLength(Result^.Rep, 8);
-    FCtx[Depth] := Result;
   end;
 end;
 
@@ -1128,7 +1174,7 @@ var
   Stk, Rep: PInteger;
 begin
   Result := False;
-  if Depth = 0 then C := FCtx0 else C := Ctx(Depth);
+  C := Ctx(Depth);
   UseBits := FUseBits;
   Stride := FStride;
   NoMemo := FProg.HasBackreferences;
@@ -1145,6 +1191,7 @@ begin
   RepCap := Length(C^.Rep);
   if UseBits and (Length(C^.Bits) < ((CodeLen + 1) * Stride + 63) shr 6) then
   begin
+    ChargeMatchGrowth(C^.Charge^, Length(C^.Bits), ((CodeLen + 1) * Stride + 63) shr 6 + 64, SizeOf(UInt64));
     BitsReset(C);
     C^.Bits := nil;
     SetLength(C^.Bits, ((CodeLen + 1) * Stride + 63) shr 6 + 64);
@@ -1541,7 +1588,11 @@ LAttempt:
             Continue;
           end;
           NC := Ctx(Depth + 1);
-          if Length(NC^.Slots) < SlotCount then SetLength(NC^.Slots, SlotCount);
+          if Length(NC^.Slots) < SlotCount then
+          begin
+            ChargeMatchGrowth(NC^.Charge^, Length(NC^.Slots), SlotCount, SizeOf(Integer));
+            SetLength(NC^.Slots, SlotCount);
+          end;
           for J := 0 to SlotCount - 1 do NC^.Slots[J] := Slots[J];
           if (Depth >= NESTING_UNCHECKED_DEPTH) and NativeStackNearlyExhausted then begin FErr := 3; Exit(False); end;
           Matched := Run(Depth + 1, @NC^.Slots[0], InputPos, PC + 1, nil, Op = RX_LOOKBEHIND, False);
@@ -1626,6 +1677,11 @@ begin
   Result := FErr = 3;
 end;
 
+function TRegexMatcher.MemoryExhausted: Boolean;
+begin
+  Result := FErr = 6;
+end;
+
 function TRegexMatcher.ErrorMessage: UnicodeString;
 begin
   case FErr of
@@ -1638,6 +1694,19 @@ begin
 end;
 
 function TRegexMatcher.Exec(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
+begin
+  try
+    Result := Execute(Chars, Len, Start, RequireStart);
+  except
+    on EHeapExternalMemoryLimit do
+    begin
+      FErr := 6;
+      Result := False;
+    end;
+  end;
+end;
+
+function TRegexMatcher.Execute(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
 var P, I: Integer;
 begin
   FErr := 0;

@@ -65,7 +65,11 @@ var
   // SyntaxError; an embedder that follows Annex B turns it on.
   RegExpIdentityK: Boolean = False;
 
-function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+type
+  TRegExpWorkspaceCheck = procedure(const ABytes: Int64);
+
+function CompileRegExp(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck = nil): TRegExpProgram;
 { An instruction word for AOp with operand AOperand. Raises EConvertError
   (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
   operand, instead of losing its high bits. }
@@ -123,6 +127,8 @@ type
     FPos: Integer;
     FCode: TRegExpCodeArray;
     FCodeLen: Integer;
+    FCheckWorkspace: TRegExpWorkspaceCheck;
+    FTableBytes: Int64;
     FCharClasses: TRegExpCharClassArray;
     FStringSets: TRegExpStringSetArray;
     FCaptureCount: Integer;
@@ -174,6 +180,8 @@ type
     function Advance: Char;
     function Match(C: Char): Boolean;
     procedure Emit(AInstr: UInt32);
+    procedure CheckWorkspace(const AAdditionalBytes: Int64);
+    procedure GrowCode(const ACapacity: Integer);
     function EmitHole: Integer;
     procedure PatchHole(AIndex: Integer; ATarget: Integer);
     function CurrentPC: Integer;
@@ -239,7 +247,8 @@ type
     procedure EmitDuplicateNamedBackref(const AName: string;
       ABackrefFlags: Integer);
   public
-    constructor Create(const APattern, AFlags: string);
+    constructor Create(const APattern, AFlags: string;
+      const ACheckWorkspace: TRegExpWorkspaceCheck);
     destructor Destroy; override;
     function Compile: TRegExpProgram;
   end;
@@ -389,13 +398,15 @@ begin
   end;
 end;
 
-constructor TRegExpCompiler.Create(const APattern, AFlags: string);
+constructor TRegExpCompiler.Create(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck);
 begin
   inherited Create;
+  FCheckWorkspace := ACheckWorkspace;
   FPattern := APattern;
   FPos := 1;
   FCodeLen := 0;
-  SetLength(FCode, 256);
+  GrowCode(256);
   SetLength(FCharClasses, 0);
   SetLength(FStringSets, 0);
   FCaptureCount := 0;
@@ -518,9 +529,21 @@ begin
   if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
     RaiseRegExpTooLarge;
   if FCodeLen >= Length(FCode) then
-    SetLength(FCode, FCodeLen * 2 + 16);
+    GrowCode(FCodeLen * 2 + 16);
   FCode[FCodeLen] := AInstr;
   Inc(FCodeLen);
+end;
+
+procedure TRegExpCompiler.CheckWorkspace(const AAdditionalBytes: Int64);
+begin
+  if Assigned(FCheckWorkspace) then
+    FCheckWorkspace(Int64(Length(FCode)) * SizeOf(UInt32) + FTableBytes + AAdditionalBytes);
+end;
+
+procedure TRegExpCompiler.GrowCode(const ACapacity: Integer);
+begin
+  CheckWorkspace(Int64(ACapacity) * SizeOf(UInt32));
+  SetLength(FCode, ACapacity);
 end;
 
 function TRegExpCompiler.EmitHole: Integer;
@@ -582,14 +605,20 @@ var
   RangeCount: Integer;
   RangeIndex: Integer;
   Normalized: TRegExpCharRangeArray;
+  ClassBytes: Int64;
 begin
   Result := Length(FCharClasses);
-  SetLength(FCharClasses, Result + 1);
   RangeCount := Length(ARanges);
   SetLength(Normalized, RangeCount);
   for I := 0 to High(ARanges) do
     Normalized[I] := ARanges[I];
   NormalizeRanges(Normalized, RangeCount);
+  ClassBytes := SizeOf(TRegExpCharClass) + Int64(RangeCount) * SizeOf(TRegExpCharRange);
+  if RangeCount > 8 then Inc(ClassBytes, REGEXP_CHAR_CLASS_PAGE_COUNT * SizeOf(Integer));
+  CheckWorkspace(ClassBytes + Int64(Result) * SizeOf(TRegExpCharClass) +
+    Int64(Length(Normalized)) * SizeOf(TRegExpCharRange));
+  Inc(FTableBytes, ClassBytes);
+  SetLength(FCharClasses, Result + 1);
   SetLength(FCharClasses[Result].Ranges, RangeCount);
   for I := 0 to RangeCount - 1 do
     FCharClasses[Result].Ranges[I] := Normalized[I];
@@ -616,8 +645,14 @@ function TRegExpCompiler.AddStringSet(
 var
   I, StringIndex: Integer;
   Ranges: TRegExpCharRangeArray;
+  SetBytes: Int64;
 begin
   Result := Length(FStringSets);
+  SetBytes := SizeOf(TRegExpStringSet) + Int64(AContents.StringCount) * SizeOf(TRegExpStringSequence);
+  for I := 0 to AContents.StringCount - 1 do
+    Inc(SetBytes, Int64(Length(AContents.Strings[I].CodePoints)) * SizeOf(Cardinal));
+  CheckWorkspace(SetBytes + Int64(Result) * SizeOf(TRegExpStringSet));
+  Inc(FTableBytes, SetBytes);
   SetLength(FStringSets, Result + 1);
 
   SetLength(Ranges, AContents.RangeCount);
@@ -3116,7 +3151,7 @@ begin
   if Int64(FCodeLen) + ANeeded > REGEXP_MAX_PROGRAM_LENGTH then
     RaiseRegExpTooLarge;
   if FCodeLen + ANeeded >= Length(FCode) then
-    SetLength(FCode, (FCodeLen + ANeeded) * 2 + 16);
+    GrowCode((FCodeLen + ANeeded) * 2 + 16);
 end;
 
 procedure TRegExpCompiler.EmitBody(const ABody: array of UInt32; ALen: Integer);
@@ -3881,11 +3916,12 @@ begin
     end;
 end;
 
-function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+function CompileRegExp(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck): TRegExpProgram;
 var
   Compiler: TRegExpCompiler;
 begin
-  Compiler := TRegExpCompiler.Create(APattern, AFlags);
+  Compiler := TRegExpCompiler.Create(APattern, AFlags, ACheckWorkspace);
   try
     Result := Compiler.Compile;
   finally

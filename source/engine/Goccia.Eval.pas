@@ -66,6 +66,13 @@ uses
   Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.Scan,
   Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
 
+function ParseFailureName(E: Exception): UnicodeString;
+begin
+  if E is EHeapExternalMemoryLimit then Exit('RangeError');
+  if E is TGocciaReferenceError then Exit('ReferenceError');
+  Result := 'SyntaxError';
+end;
+
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
 procedure CallModuleWarningHook(const FileName, Message, Suggestion: UnicodeString; Line, Column: Integer);
@@ -472,7 +479,7 @@ begin
       on E: Exception do
       begin
         Err := UnicodeString(E.Message);
-        if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+        ParseErrorName := ParseFailureName(E);
         ParseErrorLine := 0;
         ParseErrorColumn := 0;
         ParseErrorSuggestion := '';
@@ -503,6 +510,12 @@ begin
       PP.ParseProgram;
       LS := BuildLazySource(Source, FileName, PP);
     except
+      on E: EHeapExternalMemoryLimit do
+      begin
+        Err := UnicodeString(E.Message);
+        ErrName := ParseFailureName(E);
+        Exit(True);
+      end;
       on EScanError do Exit;
     end;
   finally
@@ -538,7 +551,7 @@ begin
       on E: Exception do
       begin
         Err := UnicodeString(E.Message);
-        if E is TGocciaReferenceError then ErrName := 'ReferenceError' else ErrName := 'SyntaxError';
+        ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
         ParseErrorLine := 0;
         ParseErrorColumn := 0;
@@ -575,6 +588,13 @@ begin
       PP.ParseProgram;
       LS := BuildLazySource(Source, FileName, PP);
     except
+      on E: EHeapExternalMemoryLimit do
+      begin
+        Err := UnicodeString(E.Message);
+        CompileFailKind := 1;
+        ParseErrorName := ParseFailureName(E);
+        Exit(True);
+      end;
       on EScanError do Exit;
     end;
   finally
@@ -610,8 +630,8 @@ begin
       on E: Exception do
       begin
         Err := UnicodeString(E.Message);
-        if E is EEarlySyntaxError then CompileFailKind := 1;
-        if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+        if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
+        ParseErrorName := ParseFailureName(E);
       end;
     end;
   finally
@@ -694,7 +714,7 @@ function LazyCompileIn(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
   Finder: TBodyFinder; IsMethod: Boolean; PrevModule: Integer;
-  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: Int64; RStart, RStop: Integer;
+  Arena, PrevArena: TGocciaASTArena; Msg, ErrorName: UnicodeString; TS0, TS1, TSa, TSb: Int64; RStart, RStop: Integer;
 begin
   TS0 := GetNanoseconds;
   St := PLazyStub(T^.Lazy);
@@ -708,6 +728,7 @@ begin
       LS.IsModule, ', method ', R^.CStart >= 0, ')');
   L := nil; P := nil; Finder := nil;
   Msg := '';
+  ErrorName := 'SyntaxError';
   IsMethod := R^.CStart >= 0;
   Arena := TGocciaASTArena.Create;
   try
@@ -788,7 +809,11 @@ begin
       FillChar(NT^, SizeOf(TFuncTemplate), 0);
       Dispose(St);
     except
-      on Ex: Exception do Msg := UnicodeString(Ex.Message);
+      on Ex: Exception do
+      begin
+        Msg := UnicodeString(Ex.Message);
+        if Ex is EHeapExternalMemoryLimit then ErrorName := 'RangeError';
+      end;
     end;
   finally
     Finder.Free;
@@ -804,7 +829,7 @@ begin
   TS1 := GetNanoseconds;
   Inc(LazyCompileCount);
   Inc(LazyCompileNs, TS1 - TS0);
-  if Msg <> '' then Exit(ThrowError('SyntaxError', Msg));
+  if Msg <> '' then Exit(ThrowError(ErrorName, Msg));
   Result := True;
 end;
 
@@ -853,7 +878,7 @@ begin
       on E: Exception do
       begin
         Err := UnicodeString(E.Message);
-        if E is TGocciaReferenceError then ErrName := 'ReferenceError' else ErrName := 'SyntaxError';
+        ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
         ParseErrorLine := 0;
         ParseErrorColumn := 0;
@@ -913,8 +938,8 @@ begin
       on E: Exception do
       begin
         Err := UnicodeString(E.Message);
-        if E is EEarlySyntaxError then CompileFailKind := 1;
-        if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+        if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
+        ParseErrorName := ParseFailureName(E);
       end;
     end;
   finally
