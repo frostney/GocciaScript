@@ -988,6 +988,7 @@ begin
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
   LimitsArm(FTimeoutMs, FMaxInstructions);
+  Result := False;
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
@@ -997,7 +998,8 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
-    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark);
+    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark)
+    else if not Result then DiscardEmbedderWork;
     LimitsDisarm;
   end;
 end;

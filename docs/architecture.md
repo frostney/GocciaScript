@@ -185,7 +185,8 @@ GocciaScript implements ECMAScript Promises with a synchronous job queue that dr
 
 When [an embedder has outstanding work](embedding.md#asynchronous-host-work), the loop also
 pumps its ready results and drains the reactions they queue. It polls ready Atomics and fetch
-results without blocking on either. An in-flight fetch still prevents a virtual timer jump.
+results without blocking on either. Pending host work, like an in-flight fetch, prevents a virtual timer jump: while
+it waits, only timers already due at the current virtual time run.
 If only native work can make progress, the loop gives the embedder a bounded wait before it
 checks all sources again. Results delivered by a pump during which the deadline passed do not
 run their reactions. [ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)

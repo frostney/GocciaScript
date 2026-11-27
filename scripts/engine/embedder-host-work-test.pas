@@ -250,6 +250,16 @@ begin
     Check(RunResult.Ok and (RunResult.ResultText = '42') and (Work.IdleTurns = 0), 'idle pumps spent the cap: ' + RunResult.ErrorMessage);
     Engine.MaxInstructions := 0;
 
+    if not ABare then
+    begin
+      { a long timer does not overtake host work that is still pending: the virtual clock waits for it }
+      Work.IdleTurns := 3;
+      RunResult := Engine.Run('external-race.mjs',
+        'await Promise.race([hostPromise(), new Promise(resolve => setTimeout(() => resolve("timeout"), 30000))]);');
+      Check(RunResult.Ok and (RunResult.ResultText = '42') and (Work.IdleTurns = 0),
+        'a virtual timer overtook pending host work: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    end;
+
     Work.Ready := True;
     Work.IdleTurns := 1;
     Work.DeliveredTimeout := -1;

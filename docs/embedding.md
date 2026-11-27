@@ -240,7 +240,10 @@ engine owner's storage and clear them to `VUndefined` when releasing their value
 
 The event loop checks deadlines and cancellation before and after the pump. Results a pump
 delivers after the deadline passed are late: their promises settle, but their reactions do
-not run. Idle pumps do not spend the instruction budget, and neither do timers that cannot
+not run, so a value derived from one never settles. While host work is pending, virtual
+timers do not jump ahead: only a timer already due runs. In test mode a pump that returns
+`False` fails the current test and the suite goes on, even when the failing request belongs
+to work another test started. Idle pumps do not spend the instruction budget, and neither do timers that cannot
 fire while host work waits. JavaScript callbacks and native work explicitly charged by the
 host still spend it. The [event loop's order](architecture.md#synchronous-microtask-queue) and
 [ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md) describe the

@@ -19,8 +19,9 @@ bounded slices.** `TGocciaEmbedderWork.Pump(0)` takes what is ready; a positive 
 10 ms, the run's remaining time and the next `Atomics.waitAsync` timeout. Between slices the loop takes ready
 Atomics and fetch results without blocking on either, so each source makes progress while the others wait.
 
-- An in-flight fetch still comes before a virtual timer jump, as without host work: the clock does not move while a
-  real response can still arrive.
+- Pending host work comes before a virtual timer jump, as an in-flight fetch does
+  ([ADR 0113](0113-deterministic-virtual-timer-queue.md)): while either waits, only a timer already due at the current
+  virtual time runs, so a long timer cannot overtake a real result.
 - Waiting for host work spends no instructions. The loop checks deadlines and cancellation before and after each
   pump without charging the budget, and does not run the timer queue again while it holds only timers that cannot
   fire (intervals in an ordinary run, or fake timers) until a job has run.
@@ -32,6 +33,8 @@ Atomics and fetch results without blocking on either, so each source makes progr
 ## Consequences
 
 - A host settles its promises on the engine thread inside `Pump`; background threads only hand it native data.
-- A result that arrives in the same pump as a test's deadline is not observed, even when it belongs to work
-  started before that test.
+- A result delivered in the pump during which a test's deadline passes settles its promise, but the reactions that
+  settlement queued are dropped, so anything derived from it never settles, even when it belongs to work started
+  before that test. The loop caps a pump's wait at the time left, so a source that keeps to its timeout delivers such
+  a result only at the deadline itself.
 - The bounded slice adds up to 10 ms of latency to a wake the source does not signal.

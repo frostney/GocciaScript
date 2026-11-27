@@ -2599,7 +2599,7 @@ begin
 end;
 
 function RunEventLoopIn(Intervals: Boolean): Boolean;
-var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord; HostPending, TimersIdle: Boolean; IdleCounter: Int64;
+var R: TValue; A: array[0..1] of TValue; Due, Cap: QWord; HostPending, TimersIdle: Boolean; IdleCounter: Int64;
 begin
   { set once the timers had nothing runnable while host work waits, with the instruction counter then: under an
     instruction limit, idle turns do not run the timers' bytecode again until some guest code (a job, a getter a pump
@@ -2672,7 +2672,10 @@ begin
       ClearKeptObjects;
       { after the test report, the work the tests left still runs: its timers, not its intervals }
       A[0] := MkBool(Intervals and not ReportDone);
-      if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
+      { real outstanding host work comes before virtual time, as an in-flight fetch does (ADR 0113): while it waits,
+        only a timer already due runs }
+      A[1] := MkBool(HostPending);
+      if not CallValue(FireNextV, VUndefined, @A[0], 2, R) then Exit(False);
       if R = VTrue then Continue;
       { only intervals or fake timers wait: nothing changes for them until guest code runs }
       TimersIdle := HostPending and InstrCounted;
