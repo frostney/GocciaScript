@@ -6,7 +6,15 @@
 (function (G, n, shared) {
   'use strict';
   const isObject = (v) => v !== null && (typeof v === 'object' || typeof v === 'function');
-  const call = (op, ...args) => JSON.parse(n.semver(op, ...args));
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the module
+  const { TypeError, String } = G;
+  const JSONParse = JSON.parse, JSONStringify = JSON.stringify, ArrayIsArray = Array.isArray, ObjectCreate = Object.create;
+  const ReflectApply = Reflect.apply, defineProperty = Object.defineProperty, semverOp = n.semver;
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
+  // the dispatcher's answer for op and the arguments after it (spreading them would look up the array iterator)
+  const call = function (op) { return JSONParse(ReflectApply(semverOp, n, arguments)); };
 
   // options: a boolean (loose) or an object; as a bit set for the dispatcher
   function optionsOf(v) {
@@ -26,8 +34,10 @@
   }
   const optsAt = (args, i) => (args.length > i ? optionsOf(args[i]) : optionsOf(undefined));
   function list(v) {
-    if (!Array.isArray(v)) throw new TypeError('Expected an array of versions');
-    return JSON.stringify(v.map((x) => String(x)));
+    if (!ArrayIsArray(v)) throw new TypeError('Expected an array of versions');
+    const r = [];
+    for (let i = 0; i < v.length; i++) append(r, String(v[i]));
+    return JSONStringify(r);
   }
 
   // ---------------- the classes ----------------
@@ -44,9 +54,9 @@
     target.build = r.build;
     return target;
   }
-  const semverObject = (r) => writeSemver(Object.create(SemVer.prototype), r);
+  const semverObject = (r) => writeSemver(ObjectCreate(SemVer.prototype), r);
   function comparatorObject(c) {
-    const o = Object.create(Comparator.prototype);
+    const o = ObjectCreate(Comparator.prototype);
     o.options = optionsObject(c.options);
     o.loose = c.options.loose;
     o.operator = c.operator;
@@ -55,13 +65,18 @@
     return o;
   }
   function rangeObject(r) {
-    const o = Object.create(Range.prototype);
+    const o = ObjectCreate(Range.prototype);
     o.options = optionsObject(r.options);
     o.loose = r.options.loose;
     o.includePrerelease = r.options.includePrerelease;
     o.raw = r.raw;
     o.range = r.range;
-    o.set = r.set.map((cs) => cs.map(comparatorObject));
+    o.set = [];
+    for (let i = 0; i < r.set.length; i++) {
+      const cs = r.set[i], row = [];
+      for (let j = 0; j < cs.length; j++) append(row, comparatorObject(cs[j]));
+      append(o.set, row);
+    }
     return o;
   }
   // a version, comparator or range argument: one of these objects (its raw text and options), else text
@@ -94,9 +109,9 @@
     return rangeObject(call('range', str(arguments, 0, 'Range'), bits(optsAt(arguments, 1))));
   }
   const def = (proto, name, fn, length) => {
-    Object.defineProperty(fn, 'name', { value: name, configurable: true });
-    Object.defineProperty(fn, 'length', { value: length, configurable: true });
-    Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(fn, 'name', { __proto__: null, value: name, configurable: true });
+    Object.defineProperty(fn, 'length', { __proto__: null, value: length, configurable: true });
+    Object.defineProperty(proto, name, { __proto__: null, value: fn, writable: true, enumerable: false, configurable: true });
   };
   def(SemVer.prototype, 'toString', function () { return readSemver(this, optionsOf()).version; }, 0);
   def(SemVer.prototype, 'format', function () { return readSemver(this, optionsOf()).version; }, 0);
@@ -106,7 +121,8 @@
   }, 1);
   def(SemVer.prototype, 'compareMain', function (other) {
     const a = readSemver(this, optionsOf()), b = readSemver(other, a.options);
-    for (const k of ['major', 'minor', 'patch']) { if (a[k] < b[k]) return -1; if (a[k] > b[k]) return 1; }
+    const parts = ['major', 'minor', 'patch'];
+    for (let i = 0; i < parts.length; i++) { const k = parts[i]; if (a[k] < b[k]) return -1; if (a[k] > b[k]) return 1; }
     return 0;
   }, 1);
   def(SemVer.prototype, 'comparePre', function (other) {
@@ -210,7 +226,7 @@
   const lengths = { inc: 2, intersects: 2, gt: 2, gte: 2, lt: 2, lte: 2, eq: 2, neq: 2, cmp: 3, compare: 2, rcompare: 2,
     compareBuild: 2, compareLoose: 2, diff: 2, satisfies: 2, maxSatisfying: 2, minSatisfying: 2, gtr: 2, ltr: 2, outside: 3,
     simplifyRange: 2, subset: 2 };
-  for (const k of Object.keys(fns)) Object.defineProperty(fns[k], 'length', { value: lengths[k] !== undefined ? lengths[k] : 1, configurable: true });
+  for (const k of Object.keys(fns)) Object.defineProperty(fns[k], 'length', { __proto__: null, value: lengths[k] !== undefined ? lengths[k] : 1, configurable: true });
 
   const pick = (names) => { const o = {}; for (const k of names) o[k] = fns[k]; return o; };
   const ns = {

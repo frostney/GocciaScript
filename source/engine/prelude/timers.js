@@ -11,7 +11,17 @@
 // shared.timers and shared.hostModules['goccia:timers'].
 (function (G, n, shared) {
   'use strict';
-  const hidden = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the timers
+  const { TypeError, RangeError, Error, Number, Map, Promise } = G;
+  const NumberIsFinite = Number.isFinite, NumberIsNaN = Number.isNaN, MathAbs = Math.abs, MathTrunc = Math.trunc;
+  const ReflectApply = Reflect.apply, defineProperty = Object.defineProperty;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const MapPrototypeSet = uncurryThis(Map.prototype.set), MapPrototypeDelete = uncurryThis(Map.prototype.delete);
+  const MapPrototypeClear = uncurryThis(Map.prototype.clear), MapPrototypeForEach = uncurryThis(Map.prototype.forEach);
+  const MapPrototypeGetSize = uncurryThis(Object.getOwnPropertyDescriptor(Map.prototype, 'size').get);
+  const ArrayPrototypeShift = uncurryThis(Array.prototype.shift);
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   const LOOP_LIMIT = 10000;
   // one advance may fire a great many timers (a 10ms interval over an hour fires 360000); the bound only stops a
   // zero-period interval, which re-arms at the instant it ran so the clock cannot move past it
@@ -22,8 +32,8 @@
   // the mocked clock is published as an Int64 nanosecond count: the largest whole milliseconds that fit
   const MAX_CLOCK = 9223372036854;
   const OUT_OF_RANGE = 'The resulting time is too large to represent as a nanosecond clock.';
-  function requireFinite(v) { if (!Number.isFinite(v)) throw new TypeError(NON_FINITE); }
-  function requireInRange(ms) { if (!(Math.abs(ms) <= MAX_CLOCK)) throw new RangeError(OUT_OF_RANGE); }
+  function requireFinite(v) { if (!NumberIsFinite(v)) throw new TypeError(NON_FINITE); }
+  function requireInRange(ms) { if (!(MathAbs(ms) <= MAX_CLOCK)) throw new RangeError(OUT_OF_RANGE); }
   const NOT_MOCKED = 'A function to advance timers was called but the timers APIs are not mocked. Call `vi.useFakeTimers()` in the test file first.';
 
   // ---------------- the queue ----------------
@@ -49,51 +59,51 @@
     let d = Number(ms);
     if (!(d > 0)) d = 0;   // NaN, negative and -0 alike
     if (d > 2147483647) d = 1;   // past the 32-bit range: as browsers and Node, almost at once
-    return Math.trunc(d);
+    return MathTrunc(d);
   }
   function add(handler, ms, args, repeat) {
     if (typeof handler !== 'function') throw new TypeError('The "callback" argument must be of type function');
     const id = nextId++;
     let delay = delayOf(ms);
     if (delay === 0 && ticking > 0) delay = 1;
-    queue.set(id, { id, callAt: now + delay, createdAt: now, fn: handler, args, interval: repeat ? delayOf(ms) : -1,
+    MapPrototypeSet(queue, id, { id, callAt: now + delay, createdAt: now, fn: handler, args, interval: repeat ? delayOf(ms) : -1,
       ctx: n.asyncGet() });
     return id;
   }
   function clear(id) {
-    if (typeof id === 'number') queue.delete(id);
+    if (typeof id === 'number') MapPrototypeDelete(queue, id);
     else if (id !== null && typeof id === 'object' && typeof id.valueOf === 'function') {
       const v = id.valueOf();
-      if (typeof v === 'number') queue.delete(v);
+      if (typeof v === 'number') MapPrototypeDelete(queue, v);
     }
   }
   // the earliest timer due at or before limit (all of them without one): due time, then creation, then id
   function earliest(limit = Infinity, intervals = true) {
     let best;
-    for (const t of queue.values()) {
-      if (t.callAt > limit || (!intervals && t.interval >= 0)) continue;
+    MapPrototypeForEach(queue, (t) => {
+      if (t.callAt > limit || (!intervals && t.interval >= 0)) return;
       if (best === undefined || t.callAt < best.callAt || (t.callAt === best.callAt &&
           (t.createdAt < best.createdAt || (t.createdAt === best.createdAt && t.id < best.id)))) best = t;
-    }
+    });
     return best;
   }
   // runs timer t at its due time; an interval is rescheduled first, so it does not drift
   function run(t) {
     if (t.callAt > now) now = t.callAt;
     if (t.interval >= 0) t.callAt += t.interval;
-    else queue.delete(t.id);
+    else MapPrototypeDelete(queue, t.id);
     syncClocks();
     // in the async context it was scheduled in
     const saved = n.asyncGet();
     n.asyncSet(t.ctx);
-    try { Reflect.apply(t.fn, undefined, t.args); } finally { n.asyncSet(saved); }
+    try { ReflectApply(t.fn, undefined, t.args); } finally { n.asyncSet(saved); }
   }
 
   // ---------------- real timers: the event loop and the runner ----------------
   // the next host task, else under real timers the next timer (intervals too when asked); false when neither runs
   let budget = LOOP_LIMIT;
   function fireNext(intervals) {
-    if (hostTasks.length > 0) { hostTasks.shift()(); return true; }
+    if (hostTasks.length > 0) { ArrayPrototypeShift(hostTasks)(); return true; }
     if (fake) return false;
     const t = earliest(Infinity, intervals);
     if (t === undefined || budget <= 0) return false;
@@ -111,25 +121,25 @@
         try { run(t); } catch (e) { if (parked === null) parked = { error: e }; }
         await yieldTask();
       }
-      queue.clear();
+      MapPrototypeClear(queue);
     }
     const p = parked;
     parked = null;
     return p;
   }
-  function yieldTask() { return new Promise((resolve) => { hostTasks.push(resolve); }); }
+  function yieldTask() { return new Promise((resolve) => { defineProperty(hostTasks, hostTasks.length, { __proto__: null, value: resolve, writable: true, enumerable: true, configurable: true }); }); }
 
   // ---------------- fake timers ----------------
   function requireFake() { if (!fake) throw new Error(NOT_MOCKED); }
   function useFakeTimers(start = undefined) {
     let at;
-    if (start !== undefined && !Number.isNaN(Number(start))) at = Number(start);
+    if (start !== undefined && !NumberIsNaN(Number(start))) at = Number(start);
     else if (fake) at = now;
     else if (frozenDate !== null) at = frozenDate;
     else at = n.realNow();
     requireFinite(at);
     requireInRange(at);
-    queue.clear();
+    MapPrototypeClear(queue);
     banked = 0;
     fake = true;
     now = at;
@@ -139,7 +149,7 @@
     syncClocks();
   }
   function useRealTimers() {
-    if (fake) queue.clear();
+    if (fake) MapPrototypeClear(queue);
     fake = false;
     now = 0;
     frozenDate = null;
@@ -149,11 +159,11 @@
     let t = ms === undefined ? n.realNow() : Number(ms);
     requireFinite(t);
     requireInRange(t);
-    t = Math.trunc(t);
+    t = MathTrunc(t);
     if (fake) {
       const delta = t - now;
       now = t;
-      for (const e of queue.values()) { e.callAt += delta; e.createdAt += delta; }
+      MapPrototypeForEach(queue, (e) => { e.callAt += delta; e.createdAt += delta; });
       installedAt += delta;   // performance.now is not moved by setSystemTime
     } else frozenDate = t;
     syncClocks();
@@ -166,8 +176,8 @@
     const d = Number(ms);
     requireFinite(d);
     if (d < 0) throw new TypeError('Negative ticks are not supported');
-    let target = now + Math.trunc(d);
-    let bank = banked + (d - Math.trunc(d));
+    let target = now + MathTrunc(d);
+    let bank = banked + (d - MathTrunc(d));
     if (bank >= 1 - 1e-9) { target += 1; bank -= 1; }
     requireInRange(target);
     requireInRange(target - installedAt);
@@ -237,7 +247,7 @@
       ticking++;
       try { run(t); } finally { ticking--; }
     }
-    if (queue.size > 0) throw new Error(`Aborting after running ${LOOP_LIMIT} timers, assuming an infinite loop!`);
+    if (MapPrototypeGetSize(queue) > 0) throw new Error(`Aborting after running ${LOOP_LIMIT} timers, assuming an infinite loop!`);
   }
   async function runAllAsync() {
     requireFake();
@@ -249,11 +259,11 @@
       try { run(t); } finally { ticking--; }
       await yieldTask();
     }
-    if (queue.size > 0) throw new Error(`Aborting after running ${LOOP_LIMIT} timers, assuming an infinite loop!`);
+    if (MapPrototypeGetSize(queue) > 0) throw new Error(`Aborting after running ${LOOP_LIMIT} timers, assuming an infinite loop!`);
   }
   function lastPendingDue() {
     let last = now;
-    for (const t of queue.values()) if (t.callAt > last) last = t.callAt;
+    MapPrototypeForEach(queue, (t) => { if (t.callAt > last) last = t.callAt; });
     return last;
   }
   function runOnlyPending() { requireFake(); tickSync(lastPendingDue() - now); }
@@ -291,14 +301,14 @@
     runOnlyPendingTimersAsync() { return runOnlyPendingAsync(); },
     clearAllTimers() {
       // the fake clock's reset: nothing pending, and the clock back at the instant fake timers were installed
-      queue.clear();
+      MapPrototypeClear(queue);
       if (fake) { now = installOrigin; installedAt = installOrigin; banked = 0; syncClocks(); }
     },
-    getTimerCount() { requireFake(); return queue.size; }
+    getTimerCount() { requireFake(); return MapPrototypeGetSize(queue); }
   };
   if (exposed) shared.hostModules['goccia:timers'] = () => timersModule;
   // the test runner, after a unit failed: what it left on the real timers does not run (fake timers are the suite's)
-  function discard() { if (!fake) queue.clear(); }
-  shared.timers = { fireNext, drainTest, add, clear, discard, count: () => queue.size, queue, hostTasks };
+  function discard() { if (!fake) MapPrototypeClear(queue); }
+  shared.timers = { fireNext, drainTest, add, clear, discard, count: () => MapPrototypeGetSize(queue), queue, hostTasks };
   if (exposed) shared.runtimeGlobals.push('setTimeout', 'setInterval', 'clearTimeout', 'clearInterval');
 })

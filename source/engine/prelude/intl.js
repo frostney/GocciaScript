@@ -11,8 +11,23 @@
   var MathFloor = Math.floor, MathMin = Math.min, MathMax = Math.max, MathAbs = Math.abs;
   var Str = String, Num = Number, Bool = Boolean, Sym = Symbol, NumberIsNaN = Number.isNaN;
   var ArrayIsArray = Array.isArray;
-  function typeError(m) { return new TypeError(m); }
-  function rangeError(m) { return new RangeError(m); }
+  var Obj = Object, BigIntCtor = BigInt, DateCtor = Date, TypeErrorCtor = TypeError, RangeErrorCtor = RangeError;
+  var GlobalIsFinite = isFinite, StringFromCharCode = String.fromCharCode;
+  // a prototype method as a function of its receiver and arguments: uncurryThis(String.prototype.slice)(s, 1, 2)
+  // is s.slice(1, 2) without looking slice up on the live prototype, which a script may have replaced
+  var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  var StringPrototypeSlice = uncurryThis(String.prototype.slice), StringPrototypeSplit = uncurryThis(String.prototype.split);
+  var StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt);
+  var StringPrototypeIndexOf = uncurryThis(String.prototype.indexOf);
+  var StringPrototypeLastIndexOf = uncurryThis(String.prototype.lastIndexOf);
+  var NumberPrototypeToPrecision = uncurryThis(Number.prototype.toPrecision);
+  var NumberPrototypeToFixed = uncurryThis(Number.prototype.toFixed);
+  var NumberPrototypeValueOf = uncurryThis(Number.prototype.valueOf), BigIntPrototypeValueOf = uncurryThis(BigInt.prototype.valueOf);
+  var DatePrototypeValueOf = uncurryThis(Date.prototype.valueOf), DatePrototypeToString = uncurryThis(Date.prototype.toString);
+  // RegExpBuiltinExec: no exec, flags or Symbol.match lookup on the pattern, unlike test, match and replace
+  var RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  function typeError(m) { return new TypeErrorCtor(m); }
+  function rangeError(m) { return new RangeErrorCtor(m); }
   // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
   function isObject(v) {
     var t = typeof v;
@@ -20,22 +35,22 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
-  function ToObject(v) { if (v === null || v === undefined) throw typeError("Cannot convert undefined or null to object"); return Object(v); }
+  function ToObject(v) { if (v === null || v === undefined) throw typeError("Cannot convert undefined or null to object"); return Obj(v); }
   function ToNumber(v) { return +v; }
   // ToString (the string hint first, unlike "" + v)
   function ToString(v) { if (typeof v === "symbol") throw typeError("Cannot convert a Symbol value to a string"); return Str(v); }
   function asciiLower(s) {
     var r = "";
     for (var i = 0; i < s.length; i++) {
-      var c = s.charCodeAt(i);
-      r += c >= 65 && c <= 90 ? Str.fromCharCode(c + 32) : s[i];
+      var c = StringPrototypeCharCodeAt(s, i);
+      r += c >= 65 && c <= 90 ? StringFromCharCode(c + 32) : s[i];
     }
     return r;
   }
   // internal records have no prototype, so a setter on Object.prototype never sees their fields
   function rec() { return ObjectCreate(null); }
   // CreateDataPropertyOrThrow, for objects handed to user code
-  function cdp(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true }); }
+  function cdp(o, k, v) { ObjectDefineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); }
   // a list append that defines the index (a setter on Object.prototype must not see it)
   function append(list, v) { cdp(list, list.length, v); }
   // internal lists use the primordial Array methods: the user may replace Array.prototype's
@@ -49,12 +64,12 @@
     for (var i = a; i < b; i++) append(r, list[i]);
     return r;
   }
-  function def(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { ObjectDefineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function getter(o, k, f) {
-    ObjectDefineProperty(f, "name", { value: "get " + k, configurable: true });
-    ObjectDefineProperty(o, k, { get: f, set: undefined, enumerable: false, configurable: true });
+    ObjectDefineProperty(f, "name", { __proto__: null, value: "get " + k, configurable: true });
+    ObjectDefineProperty(o, k, { __proto__: null, get: f, set: undefined, enumerable: false, configurable: true });
   }
-  function tag(o, t) { ObjectDefineProperty(o, Sym.toStringTag, { value: t, writable: false, enumerable: false, configurable: true }); }
+  function tag(o, t) { ObjectDefineProperty(o, Sym.toStringTag, { __proto__: null, value: t, writable: false, enumerable: false, configurable: true }); }
   function lengthOf(o) {
     var n = +o.length;
     if (!(n > 0)) return 0;
@@ -133,7 +148,7 @@
   }
   // the index of the Unicode locale extension sequence ("-u-...") of a canonical tag, and its end
   function unicodeExtensionRange(locale) {
-    var parts = locale.split("-"), pos = 0, start = -1, end = locale.length;
+    var parts = StringPrototypeSplit(locale, "-"), pos = 0, start = -1, end = locale.length;
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
       if (i > 0 && p.length === 1) {
@@ -148,26 +163,26 @@
   }
   function removeUnicodeExtension(locale) {
     var r = unicodeExtensionRange(locale);
-    return r === null ? locale : locale.slice(0, r[0]) + locale.slice(r[1]);
+    return r === null ? locale : StringPrototypeSlice(locale, 0, r[0]) + StringPrototypeSlice(locale, r[1]);
   }
   // 9.2.2 LookupMatchingLocaleByPrefix (BestFit matches the same way)
   function LookupMatchingLocale(availableSet, requested) {
     for (var i = 0; i < requested.length; i++) {
-      var locale = requested[i], r = unicodeExtensionRange(locale), extension = r === null ? "" : locale.slice(r[0], r[1]);
+      var locale = requested[i], r = unicodeExtensionRange(locale), extension = r === null ? "" : StringPrototypeSlice(locale, r[0], r[1]);
       var prefix = removeUnicodeExtension(locale);
       while (prefix !== "") {
         if (availableSet[prefix] === true) return { locale: prefix, extension: extension };
-        var pos = prefix.lastIndexOf("-");
+        var pos = StringPrototypeLastIndexOf(prefix, "-");
         if (pos < 0) break;
         if (pos >= 2 && prefix[pos - 2] === "-") pos -= 2;
-        prefix = prefix.slice(0, pos);
+        prefix = StringPrototypeSlice(prefix, 0, pos);
       }
     }
     return undefined;
   }
   // 9.2.4 UnicodeExtensionComponents
   function UnicodeExtensionComponents(ext) {
-    var attributes = [], keywords = [], keyword = null, parts = ext.split("-");
+    var attributes = [], keywords = [], keyword = null, parts = StringPrototypeSplit(ext, "-");
     for (var i = 2; i < parts.length; i++) {
       var sub = parts[i];
       if (sub.length === 2) {
@@ -191,8 +206,8 @@
     var ext = "-u";
     for (var i = 0; i < attributes.length; i++) ext += "-" + attributes[i];
     for (i = 0; i < keywords.length; i++) ext += "-" + keywords[i].key + (keywords[i].value === "" ? "" : "-" + keywords[i].value);
-    var px = locale.indexOf("-x-"), l;
-    if (px < 0) l = locale + ext; else l = locale.slice(0, px) + ext + locale.slice(px);
+    var px = StringPrototypeIndexOf(locale, "-x-"), l;
+    if (px < 0) l = locale + ext; else l = StringPrototypeSlice(locale, 0, px) + ext + StringPrototypeSlice(locale, px);
     return CanonicalizeUnicodeLocaleId(l);
   }
   // CanonicalizeUValue: the canonical form of a Unicode extension value
@@ -201,7 +216,7 @@
     if (c === null) return value;
     var r = unicodeExtensionRange(c);
     if (r === null) return "";
-    var comps = UnicodeExtensionComponents(c.slice(r[0], r[1]));
+    var comps = UnicodeExtensionComponents(StringPrototypeSlice(c, r[0], r[1]));
     for (var i = 0; i < comps.keywords.length; i++) if (comps.keywords[i].key === key) return comps.keywords[i].value;
     return "";
   }
@@ -285,12 +300,12 @@
   // the type nonterminal of a Unicode locale extension value: (3*8alphanum) *("-" (3*8alphanum))
   function isUnicodeType(v) {
     if (v === "") return false;
-    var parts = v.split("-");
+    var parts = StringPrototypeSplit(v, "-");
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
       if (p.length < 3 || p.length > 8) return false;
       for (var j = 0; j < p.length; j++) {
-        var c = p.charCodeAt(j);
+        var c = StringPrototypeCharCodeAt(p, j);
         if (!(c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122)) return false;
       }
     }
@@ -335,9 +350,9 @@
 
   // a service constructor: a plain function that throws without new, its prototype not writable
   function makeService(C, name, length, proto) {
-    ObjectDefineProperty(C, "length", { value: length, configurable: true });
-    ObjectDefineProperty(C, "name", { value: name, configurable: true });
-    ObjectDefineProperty(C, "prototype", { value: proto, writable: false, enumerable: false, configurable: false });
+    ObjectDefineProperty(C, "length", { __proto__: null, value: length, configurable: true });
+    ObjectDefineProperty(C, "name", { __proto__: null, value: name, configurable: true });
+    ObjectDefineProperty(C, "prototype", { __proto__: null, value: proto, writable: false, enumerable: false, configurable: false });
     def(proto, "constructor", C);
     def(C, "supportedLocalesOf", { supportedLocalesOf(locales, options = undefined) { return supportedLocalesOf(locales, options); } }.supportedLocalesOf);
     tag(proto, "Intl." + name);
@@ -393,7 +408,7 @@
   // the display name of a currency code (upper case) in a locale, or undefined
   function currencyDisplayName(locale, code, style) {
     var name = intlOp(16, locale, code, "currency", style);
-    if (name === undefined && (locale === "en" || locale.slice(0, 3) === "en-")) name = RECENT_CURRENCY_NAMES_EN[code];
+    if (name === undefined && (locale === "en" || StringPrototypeSlice(locale, 0, 3) === "en-")) name = RECENT_CURRENCY_NAMES_EN[code];
     return name;
   }
   function availableCurrencies() {
@@ -518,19 +533,19 @@
   makeService(PluralRules, "PluralRules", 0, PluralRulesProto);
   // the number the plural rules see: rounded as the digit options say
   function pluralValue(s, n) {
-    if (!isFinite(n)) return n;
+    if (!GlobalIsFinite(n)) return n;
     var r = n;
     if (s.roundingType === "significant-digits" || s.roundingType === "more-precision" && s.maximumSignificantDigits !== undefined && s.minimumFractionDigits === undefined) {
-      if (n !== 0) r = +n.toPrecision(s.maximumSignificantDigits);
+      if (n !== 0) r = +NumberPrototypeToPrecision(n, s.maximumSignificantDigits);
     } else if (s.maximumFractionDigits !== undefined) {
-      r = +n.toFixed(s.maximumFractionDigits);
+      r = +NumberPrototypeToFixed(n, s.maximumFractionDigits);
     }
     return r;
   }
   function selectCategory(s, n) {
     // compact notation: the plural rules see the compact form's exponent (CLDR operand e), so ICU selects on the
     // formatted number
-    if (s.notation === "compact" && s.type === "cardinal" && isFinite(n)) {
+    if (s.notation === "compact" && s.type === "cardinal" && GlobalIsFinite(n)) {
       var cc = intlOp(10, s.locale, n, false, s.compactDisplay === "long" ? "compact-long" : "compact-short");
       if (cc !== undefined) return cc;
     }
@@ -594,13 +609,13 @@
     var list = [], it = iterable[Sym.iterator]();
     var next = it.next;
     while (true) {
-      var r = next.call(it);
+      var r = ReflectApply(next, it, []);
       if (!isObject(r)) throw typeError("iterator result is not an object");
       if (r.done) return list;
       var v = r.value;
       if (typeof v !== "string") {
         var ret = it.return;
-        if (ret !== undefined && ret !== null) ret.call(it);
+        if (ret !== undefined && ret !== null) ReflectApply(ret, it, []);
         throw typeError("list items must be strings");
       }
       append(list, v);
@@ -637,14 +652,14 @@
     var ex = v[Sym.toPrimitive];
     if (ex !== undefined && ex !== null) {
       if (!isCallable(ex)) throw typeError("@@toPrimitive is not a function");
-      var r = ex.call(v, "number");
+      var r = ReflectApply(ex, v, ["number"]);
       if (isObject(r)) throw typeError("Cannot convert object to primitive value");
       return r;
     }
     var names = ["valueOf", "toString"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (isCallable(f)) { var x = f.call(v); if (!isObject(x)) return x; }
+      if (isCallable(f)) { var x = ReflectApply(f, v, []); if (!isObject(x)) return x; }
     }
     throw typeError("Cannot convert object to primitive value");
   }
@@ -654,9 +669,15 @@
   }
   function trimWS(s) {
     var a = 0, b = s.length;
-    while (a < b && isWS(s.charCodeAt(a))) a++;
-    while (b > a && isWS(s.charCodeAt(b - 1))) b--;
-    return s.slice(a, b);
+    while (a < b && isWS(StringPrototypeCharCodeAt(s, a))) a++;
+    while (b > a && isWS(StringPrototypeCharCodeAt(s, b - 1))) b--;
+    return StringPrototypeSlice(s, a, b);
+  }
+  // the length of a decimal literal without its sign and its leading zeros (a zero before a digit)
+  function significantLength(s) {
+    var a = s[0] === "+" || s[0] === "-" ? 1 : 0;
+    while (a < s.length - 1 && s[a] === "0" && s[a + 1] >= "0" && s[a + 1] <= "9") a++;
+    return s.length - a;
   }
   // 16.5.16 ToIntlMathematicalValue: a Number, or { d: decimal string } for an exact value (BigInt, a string)
   function ToIntlMathematicalValue(value) {
@@ -665,15 +686,15 @@
     if (typeof p === "string") {
       var s = trimWS(p);
       if (s === "") return 0;
-      if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) {
-        var n = +s;
-        if (!isFinite(n) || +("" + n) !== n || /[eE]/.test(s) || s.replace(/^[+-]/, "").replace(/^0+(?=\d)/, "").length > 15) {
-          if (isFinite(n) || /[eE]/.test(s)) return { d: s[0] === "+" ? s.slice(1) : s, n: n };
+      if (RegExpPrototypeExec(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/, s) !== null) {
+        var n = +s, exp = StringPrototypeIndexOf(s, "e") >= 0 || StringPrototypeIndexOf(s, "E") >= 0;
+        if (!GlobalIsFinite(n) || +("" + n) !== n || exp || significantLength(s) > 15) {
+          if (GlobalIsFinite(n) || exp) return { d: s[0] === "+" ? StringPrototypeSlice(s, 1) : s, n: n };
         }
         return n;
       }
-      if (/^0[xX][0-9a-fA-F]+$|^0[oO][0-7]+$|^0[bB][01]+$/.test(s)) {
-        var b = BigInt(s);
+      if (RegExpPrototypeExec(/^0[xX][0-9a-fA-F]+$|^0[oO][0-7]+$|^0[bB][01]+$/, s) !== null) {
+        var b = BigIntCtor(s);
         return Num(b) === Num(b) && b <= 9007199254740991n ? Num(b) : { d: "" + b };
       }
       return +s;
@@ -684,22 +705,22 @@
   var SIMPLE_UNITS = UNITS;
   function IsWellFormedUnitIdentifier(u) {
     if (listIndexOf(SIMPLE_UNITS, u) >= 0) return true;
-    var i = u.indexOf("-per-");
+    var i = StringPrototypeIndexOf(u, "-per-");
     if (i < 0) return false;
-    var a = u.slice(0, i), b = u.slice(i + 5);
+    var a = StringPrototypeSlice(u, 0, i), b = StringPrototypeSlice(u, i + 5);
     return listIndexOf(SIMPLE_UNITS, a) >= 0 && listIndexOf(SIMPLE_UNITS, b) >= 0;
   }
   function IsWellFormedCurrencyCode(c) {
     if (c.length !== 3) return false;
     for (var i = 0; i < 3; i++) {
-      var k = c.charCodeAt(i);
+      var k = StringPrototypeCharCodeAt(c, i);
       if (!(k >= 65 && k <= 90 || k >= 97 && k <= 122)) return false;
     }
     return true;
   }
   function asciiUpper(s) {
     var r = "";
-    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); r += c >= 97 && c <= 122 ? Str.fromCharCode(c - 32) : s[i]; }
+    for (var i = 0; i < s.length; i++) { var c = StringPrototypeCharCodeAt(s, i); r += c >= 97 && c <= 122 ? StringFromCharCode(c - 32) : s[i]; }
     return r;
   }
   // 16.1.1.1 SetNumberFormatUnitOptions
@@ -734,7 +755,7 @@
     var s = initNumberFormat(locales, options);
     new Slots(o, s);
     if (new.target === undefined && OrdinaryHasInstance(NumberFormat, this)) {
-      ObjectDefineProperty(this, FallbackSymbol, { value: o, writable: false, enumerable: false, configurable: false });
+      ObjectDefineProperty(this, FallbackSymbol, { __proto__: null, value: o, writable: false, enumerable: false, configurable: false });
       return this;
     }
     return o;
@@ -770,8 +791,8 @@
   function icuLocale(s) {
     if (s.icuLocale === undefined) {
       var l = removeUnicodeExtension(s.locale);
-      var px = l.indexOf("-x-");
-      if (px >= 0) l = l.slice(0, px);
+      var px = StringPrototypeIndexOf(l, "-x-");
+      if (px >= 0) l = StringPrototypeSlice(l, 0, px);
       s.icuLocale = s.numberingSystem ? l + "-u-nu-" + s.numberingSystem : l;
     }
     return s.icuLocale;
@@ -789,16 +810,16 @@
     return s.opts;
   }
   // parenthesized negative currency amounts for currencySign accounting (CLDR: not in German)
-  function usesAccounting(s) { return s.style === "currency" && s.currencySign === "accounting" && s.locale.slice(0, 2) !== "de"; }
+  function usesAccounting(s) { return s.style === "currency" && s.currencySign === "accounting" && StringPrototypeSlice(s.locale, 0, 2) !== "de"; }
   function FormatNumeric(s, x) {
     var r = typeof x === "number" ? intlOp(20, icuLocale(s), nfOpts(s), x, false, false) : intlOp(20, icuLocale(s), nfOpts(s), x.d, true, false);
     if (r === undefined) r = "" + (typeof x === "number" ? x : x.d);
-    if (usesAccounting(s) && r[0] === "-") r = "(" + r.slice(1) + ")";
+    if (usesAccounting(s) && r[0] === "-") r = "(" + StringPrototypeSlice(r, 1) + ")";
     return r;
   }
   // the part types ICU leaves to the caller
   function fixParts(s, x, p) {
-    var nan = typeof x === "number" && NumberIsNaN(x), inf = typeof x === "number" && !isFinite(x) && !nan;
+    var nan = typeof x === "number" && NumberIsNaN(x), inf = typeof x === "number" && !GlobalIsFinite(x) && !nan;
     for (var i = 0; i < p.length; i++) {
       if (p[i][0] === "integer" && (nan || inf)) p[i][0] = nan ? "nan" : "infinity";
       else if (s.style === "unit" && p[i][0] === "percentSign") p[i][0] = "unit";
@@ -843,7 +864,7 @@
     var s = thisNumberFormat(this, "Intl.NumberFormat.prototype.format");
     if (s.boundFormat === undefined) {
       var F = (value) => FormatNumeric(s, ToIntlMathematicalValue(value));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundFormat = F;
     }
     return s.boundFormat;
@@ -894,13 +915,12 @@
     return r;
   } }.resolvedOptions);
   // 21.1.3.4 Number.prototype.toLocaleString, 21.2.3.2 BigInt.prototype.toLocaleString
-  var NumberValueOf = Number.prototype.valueOf, BigIntValueOf = BigInt.prototype.valueOf;
-  def(Number.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
-    var x = NumberValueOf.call(this);
+    def(Number.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
+    var x = NumberPrototypeValueOf(this);
     return FormatNumeric(initNumberFormat(locales, options), x);
   } }.toLocaleString);
   def(BigInt.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
-    var x = BigIntValueOf.call(this);
+    var x = BigIntPrototypeValueOf(this);
     return FormatNumeric(initNumberFormat(locales, options), { d: "" + x });
   } }.toLocaleString);
 
@@ -917,9 +937,9 @@
   }
 
   // ---------------- 15 Locale ----------------
-  function isAlpha(s) { for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i) | 32; if (c < 97 || c > 122) return false; } return true; }
-  function isDigits(s) { for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); if (c < 48 || c > 57) return false; } return true; }
-  function isAlnum(s) { for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); if (!(c >= 48 && c <= 57 || (c | 32) >= 97 && (c | 32) <= 122)) return false; } return true; }
+  function isAlpha(s) { for (var i = 0; i < s.length; i++) { var c = StringPrototypeCharCodeAt(s, i) | 32; if (c < 97 || c > 122) return false; } return true; }
+  function isDigits(s) { for (var i = 0; i < s.length; i++) { var c = StringPrototypeCharCodeAt(s, i); if (c < 48 || c > 57) return false; } return true; }
+  function isAlnum(s) { for (var i = 0; i < s.length; i++) { var c = StringPrototypeCharCodeAt(s, i); if (!(c >= 48 && c <= 57 || (c | 32) >= 97 && (c | 32) <= 122)) return false; } return true; }
   function isLanguageSubtag(s) { return isAlpha(s) && (s.length >= 2 && s.length <= 3 || s.length >= 5 && s.length <= 8); }
   function isScriptSubtag(s) { return s.length === 4 && isAlpha(s); }
   function isRegionSubtag(s) { return s.length === 2 && isAlpha(s) || s.length === 3 && isDigits(s); }
@@ -928,7 +948,7 @@
   }
   // the unicode_language_id at the start of a canonical tag: { language, script, region, variants, end }
   function parseBaseName(tag) {
-    var parts = tag.split("-"), i = 0, r = rec();
+    var parts = StringPrototypeSplit(tag, "-"), i = 0, r = rec();
     r.language = parts[i++];
     r.script = undefined; r.region = undefined; r.variants = undefined;
     if (i < parts.length && isScriptSubtag(parts[i])) r.script = parts[i++];
@@ -956,13 +976,13 @@
     var variants = GetOption(options, "variants", "string", undefined, b.variants);
     if (variants !== undefined) {
       if (variants === "") throw rangeError("Invalid variants");
-      var vs = asciiLower(variants).split("-");
+      var vs = StringPrototypeSplit(asciiLower(variants), "-");
       for (var i = 0; i < vs.length; i++) {
         if (!isVariantSubtag(vs[i])) throw rangeError("Invalid variants: " + variants);
         for (var j = 0; j < i; j++) if (vs[j] === vs[i]) throw rangeError("Duplicate variant: " + vs[i]);
       }
     }
-    var rest = tag.slice(b.baseName.length);
+    var rest = StringPrototypeSlice(tag, b.baseName.length);
     var newTag = language;
     if (script !== undefined) newTag += "-" + script;
     if (region !== undefined) newTag += "-" + region;
@@ -976,9 +996,9 @@
   function MakeLocaleRecord(tag, opt) {
     var r = unicodeExtensionRange(tag), attributes = [], keywords = [], base = tag;
     if (r !== null) {
-      var comps = UnicodeExtensionComponents(tag.slice(r[0], r[1]));
+      var comps = UnicodeExtensionComponents(StringPrototypeSlice(tag, r[0], r[1]));
       attributes = comps.attributes; keywords = comps.keywords;
-      base = tag.slice(0, r[0]) + tag.slice(r[1]);
+      base = StringPrototypeSlice(tag, 0, r[0]) + StringPrototypeSlice(tag, r[1]);
     }
     var result = rec();
     for (var i = 0; i < LOCALE_KEYS.length; i++) {
@@ -1035,16 +1055,16 @@
     new Slots(o, s);
     return o;
   }
-  ObjectDefineProperty(Locale, "length", { value: 1, configurable: true });
-  ObjectDefineProperty(Locale, "name", { value: "Locale", configurable: true });
-  ObjectDefineProperty(Locale, "prototype", { value: LocaleProto, writable: false, enumerable: false, configurable: false });
+  ObjectDefineProperty(Locale, "length", { __proto__: null, value: 1, configurable: true });
+  ObjectDefineProperty(Locale, "name", { __proto__: null, value: "Locale", configurable: true });
+  ObjectDefineProperty(Locale, "prototype", { __proto__: null, value: LocaleProto, writable: false, enumerable: false, configurable: false });
   def(LocaleProto, "constructor", Locale);
   tag(LocaleProto, "Intl.Locale");
   def(Intl, "Locale", Locale);
   function loc(o, m) { return slotsOf(o, "Locale", "Intl.Locale.prototype." + m); }
   function reattach(s, base) {
     var r = unicodeExtensionRange(s.locale), b = parseBaseName(s.locale);
-    return base + s.locale.slice(b.baseName.length);
+    return base + StringPrototypeSlice(s.locale, b.baseName.length);
   }
   method(LocaleProto, "maximize", { maximize() {
     var s = loc(this, "maximize"), b = parseBaseName(s.locale).baseName;
@@ -1076,13 +1096,13 @@
   function regionOf(s) {
     var r = unicodeExtensionRange(s.locale), rg, sd;
     if (r !== null) {
-      var kw = UnicodeExtensionComponents(s.locale.slice(r[0], r[1])).keywords;
+      var kw = UnicodeExtensionComponents(StringPrototypeSlice(s.locale, r[0], r[1])).keywords;
       for (var i = 0; i < kw.length; i++) { if (kw[i].key === "rg") rg = kw[i].value; else if (kw[i].key === "sd") sd = kw[i].value; }
-      if (rg !== undefined && rg.length >= 3 && isAlpha(rg.slice(0, 2))) return asciiUpper(rg.slice(0, 2));
+      if (rg !== undefined && rg.length >= 3 && isAlpha(StringPrototypeSlice(rg, 0, 2))) return asciiUpper(StringPrototypeSlice(rg, 0, 2));
     }
     var b = parseBaseName(s.locale);
     if (b.region !== undefined) return b.region;
-    if (sd !== undefined && sd.length >= 3 && isAlpha(sd.slice(0, 2))) return asciiUpper(sd.slice(0, 2));
+    if (sd !== undefined && sd.length >= 3 && isAlpha(StringPrototypeSlice(sd, 0, 2))) return asciiUpper(StringPrototypeSlice(sd, 0, 2));
     var m = intlOp(8, b.baseName);
     return m === null ? undefined : parseBaseName(m).region;
   }
@@ -1196,15 +1216,15 @@
     var a = intlOp(7, locale, rg || "");
     return a.length > 0 ? a[0] : "h23";
   }
-  function hourCycle12(locale) { return locale.slice(0, 2) === "ja" ? "h11" : "h12"; }
+  function hourCycle12(locale) { return StringPrototypeSlice(locale, 0, 2) === "ja" ? "h11" : "h12"; }
   function hourCycle24(locale) { return "h23"; }
   // an offset time zone (+HH, +HHMM, +HH:MM) as +-HH:MM, or undefined
   // an offset time zone (UTCOffset[~SubMinutePrecision], ASCII signs only): its normalized form, null for a
   // string that starts like one but is not, undefined for a name
   function parseOffsetZone(tz) {
-    var c = tz.charCodeAt(0);
+    var c = StringPrototypeCharCodeAt(tz, 0);
     if (c !== 43 && c !== 45 && c !== 0x2212) return undefined;
-    var m = /^([+\-])(\d{2})(?::?(\d{2}))?$/.exec(tz);
+    var m = RegExpPrototypeExec(/^([+\-])(\d{2})(?::?(\d{2}))?$/, tz);
     if (m === null) return null;
     var h = +m[2], mi = m[3] === undefined ? 0 : +m[3];
     if (h > 23 || mi > 59) return null;
@@ -1283,7 +1303,7 @@
       if (off === null) throw rangeError("Invalid time zone specified: " + timeZone);
       if (off !== undefined) timeZone = off;
       else {
-        var id = timeZone.indexOf("\0") >= 0 ? null : intlOp(26, timeZone);
+        var id = StringPrototypeIndexOf(timeZone, "\0") >= 0 ? null : intlOp(26, timeZone);
         if (id === null) throw rangeError("Invalid time zone specified: " + timeZone);
         timeZone = id;
       }
@@ -1340,7 +1360,7 @@
     var o = createFrom(nt, DateTimeFormatProto);
     new Slots(o, CreateDateTimeFormat(locales, options, "any", "date"));
     if (new.target === undefined && OrdinaryHasInstance(DateTimeFormat, this)) {
-      ObjectDefineProperty(this, FallbackSymbol, { value: o, writable: false, enumerable: false, configurable: false });
+      ObjectDefineProperty(this, FallbackSymbol, { __proto__: null, value: o, writable: false, enumerable: false, configurable: false });
       return this;
     }
     return o;
@@ -1363,15 +1383,15 @@
   }
   function dtfLocale(s) {
     if (s.icuLocale === undefined) {
-      var l = removeUnicodeExtension(s.locale), px = l.indexOf("-x-");
-      if (px >= 0) l = l.slice(0, px);
+      var l = removeUnicodeExtension(s.locale), px = StringPrototypeIndexOf(l, "-x-");
+      if (px >= 0) l = StringPrototypeSlice(l, 0, px);
       s.icuLocale = l + "-u-ca-" + s.calendar + "-nu-" + s.numberingSystem;
     }
     return s.icuLocale;
   }
-  var DateNow = Date.now, DateValueOf = Date.prototype.valueOf;
+  var DateNow = Date.now;
   function TimeClip(t) {
-    if (!isFinite(t) || MathAbs(t) > 8.64e15) return NaN;
+    if (!GlobalIsFinite(t) || MathAbs(t) > 8.64e15) return NaN;
     return t < 0 ? -MathFloor(-t) + 0 : MathFloor(t) + 0;
   }
   function temporalKind(v) { return temporal !== undefined && isObject(v) ? temporal.kind(v) : undefined; }
@@ -1424,7 +1444,7 @@
     for (b = a; b < v.length && isDigits(v[b]); b++);
     if (a === b) return null;
     for (var i = b; i < v.length; i++) if (isDigits(v[i])) return null;
-    return [v.slice(0, a), v.slice(a, b), v.slice(b)];
+    return [StringPrototypeSlice(v, 0, a), StringPrototypeSlice(v, a, b), StringPrototypeSlice(v, b)];
   }
   // the leap marker around a numeric leap month in this formatter's locale, from 2023's leap month M02L
   function lunisolarLeapMarker(s, opts) {
@@ -1442,7 +1462,7 @@
     var m = splitMonthPart(value), mc;
     if (m === null) return value;
     try { mc = temporal.monthCode(s.calendar, tz, ms); } catch (e) { return value; }
-    var n = Num(mc.slice(1, 3)), leap = mc.length > 3, num = width === "2-digit" && n < 10 ? "0" + n : "" + n;
+    var n = Num(StringPrototypeSlice(mc, 1, 3)), leap = mc.length > 3, num = width === "2-digit" && n < 10 ? "0" + n : "" + n;
     if (leap === (m[0] + m[2] !== "")) return m[0] + num + m[2];
     if (!leap) return num;
     var mk = lunisolarLeapMarker(s, opts);
@@ -1473,7 +1493,7 @@
   function FormatDateTime(s, x) {
     var h = HandleDateTimeValue(s, x);
     var r = formatValue(s, h, h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain));
-    return r === undefined ? new Date(h.ms).toString() : r;
+    return r === undefined ? DatePrototypeToString(new DateCtor(h.ms)) : r;
   }
   function FormatDateTimeToParts(s, x) {
     var h = HandleDateTimeValue(s, x), opts = h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain);
@@ -1492,7 +1512,7 @@
     var s = thisDateTimeFormat(this, "Intl.DateTimeFormat.prototype.format");
     if (s.boundFormat === undefined) {
       var F = (date) => FormatDateTime(s, dateArg(date));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundFormat = F;
     }
     return s.boundFormat;
@@ -1551,7 +1571,7 @@
   } }.resolvedOptions);
   // 21.4.4.38-40 Date.prototype.toLocaleString, toLocaleDateString, toLocaleTimeString
   function dateLocale(d, locales, options, required, defaults) {
-    var x = DateValueOf.call(d);
+    var x = DatePrototypeValueOf(d);
     if (NumberIsNaN(x)) return "Invalid Date";
     return FormatDateTime(CreateDateTimeFormat(locales, options, required, defaults), x);
   }
@@ -1617,15 +1637,15 @@
     s.numeric = r.kn === "true";
     s.caseFirst = r.kf === undefined || r.kf === null ? "false" : r.kf;
     s.sensitivity = GetOption(options, "sensitivity", "string", ["base", "accent", "case", "variant"], "variant");
-    s.ignorePunctuation = GetOption(options, "ignorePunctuation", "boolean", undefined, r.dataLocale.slice(0, 2) === "th");
+    s.ignorePunctuation = GetOption(options, "ignorePunctuation", "boolean", undefined, StringPrototypeSlice(r.dataLocale, 0, 2) === "th");
     new Slots(o, s);
     return o;
   }
   makeService(Collator, "Collator", 0, CollatorProto);
   function collatorLocale(s) {
     if (s.icuLocale === undefined) {
-      var l = removeUnicodeExtension(s.locale), px = l.indexOf("-x-");
-      if (px >= 0) l = l.slice(0, px);
+      var l = removeUnicodeExtension(s.locale), px = StringPrototypeIndexOf(l, "-x-");
+      if (px >= 0) l = StringPrototypeSlice(l, 0, px);
       // usage "search": the locale's search collation (10.3.1: [[Usage]] selects the locale data)
       if (s.usage === "search") s.icuLocale = l + "-u-co-search";
       else s.icuLocale = s.collation !== "default" ? l + "-u-co-" + s.collation : l;
@@ -1639,7 +1659,7 @@
     var s = slotsOf(this, "Collator", "Intl.Collator.prototype.compare");
     if (s.boundCompare === undefined) {
       var F = (x, y) => CompareStrings(s, ToString(x), ToString(y));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundCompare = F;
     }
     return s.boundCompare;
@@ -1660,7 +1680,7 @@
   function transformCase(S, locales, upper) {
     var requested = CanonicalizeLocaleList(locales);
     var requestedLocale = requested.length > 0 ? requested[0] : DefaultLocale();
-    var lang = removeUnicodeExtension(requestedLocale).split("-")[0];
+    var lang = StringPrototypeSplit(removeUnicodeExtension(requestedLocale), "-")[0];
     if (lang !== "az" && lang !== "lt" && lang !== "tr") lang = "";
     return intlOp(60, lang, S, upper);
   }
@@ -1708,13 +1728,13 @@
   function rtfArgs(value, unit) {
     value = ToNumber(value);
     unit = ToString(unit);
-    if (!isFinite(value)) throw rangeError("Invalid value: " + value);
+    if (!GlobalIsFinite(value)) throw rangeError("Invalid value: " + value);
     return [value, SingularRelativeTimeUnit(unit)];
   }
   function rtfLocale(s) {
     if (s.icuLocale === undefined) {
-      var l = removeUnicodeExtension(s.locale), px = l.indexOf("-x-");
-      if (px >= 0) l = l.slice(0, px);
+      var l = removeUnicodeExtension(s.locale), px = StringPrototypeIndexOf(l, "-x-");
+      if (px >= 0) l = StringPrototypeSlice(l, 0, px);
       s.icuLocale = l + "-u-nu-" + s.numberingSystem;
     }
     return s.icuLocale;
@@ -1760,7 +1780,7 @@
   }
   // the parts of value in unit: [type, value, unit] triples (unit set on the number's parts)
   function relativeParts(s, value, unit) {
-    var lang = s.locale.slice(0, 2), past = value < 0 || (value === 0 && 1 / value < 0);
+    var lang = StringPrototypeSlice(s.locale, 0, 2), past = value < 0 || (value === 0 && 1 / value < 0);
     if (s.numeric === "auto" && lang === "en" && (value === -1 || value === 0 || value === 1)) {
       var name = EN_AUTO[unit][value + 1];
       if (name !== null) return [["literal", name]];
@@ -1778,11 +1798,11 @@
     var pat = intlOp(41, s.locale, unit), num = "";
     for (i = 0; i < numParts.length; i++) num += numParts[i].value;
     var t = pat === undefined ? "{0}" : past ? (pat[1] || pat[0]) : (pat[0] || pat[1]);
-    var k = t.indexOf("{0}");
+    var k = StringPrototypeIndexOf(t, "{0}");
     if (k < 0) return [["literal", t]];
-    if (k > 0) append(out, ["literal", t.slice(0, k)]);
+    if (k > 0) append(out, ["literal", StringPrototypeSlice(t, 0, k)]);
     for (i = 0; i < numParts.length; i++) append(out, [numParts[i].type, numParts[i].value, unit]);
-    if (k + 3 < t.length) append(out, ["literal", t.slice(k + 3)]);
+    if (k + 3 < t.length) append(out, ["literal", StringPrototypeSlice(t, k + 3)]);
     return out;
   }
   method(RelativeTimeFormatProto, "format", { format(value, unit) {
@@ -1838,7 +1858,7 @@
   // 12.5.1 CanonicalCodeForDisplayNames
   function CanonicalCodeForDisplayNames(type, code) {
     if (type === "language") {
-      var parts = code.split("-");
+      var parts = StringPrototypeSplit(code, "-");
       for (var i = 0; i < parts.length; i++) if (parts[i].length === 1) throw rangeError("Invalid language code: " + code);
       if (!IsStructurallyValidLanguageTag(code)) throw rangeError("Invalid language code: " + code);
       var b = parseBaseName(code);
@@ -1851,10 +1871,10 @@
     }
     if (type === "script") {
       if (!isScriptSubtag(code)) throw rangeError("Invalid script code: " + code);
-      return asciiUpper(code[0]) + asciiLower(code.slice(1));
+      return asciiUpper(code[0]) + asciiLower(StringPrototypeSlice(code, 1));
     }
     if (type === "calendar") {
-      if (!isUnicodeType(code) || code.indexOf("_") >= 0) throw rangeError("Invalid calendar code: " + code);
+      if (!isUnicodeType(code) || StringPrototypeIndexOf(code, "_") >= 0) throw rangeError("Invalid calendar code: " + code);
       return asciiLower(code);
     }
     if (type === "dateTimeField") {
@@ -1905,7 +1925,7 @@
       // no ICU: code points
       b = [];
       for (var i = 0; i < str.length; i++) {
-        var c = str.charCodeAt(i);
+        var c = StringPrototypeCharCodeAt(str, i);
         if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) i++;
         append(b, i + 1); append(b, false);
       }
@@ -1921,7 +1941,7 @@
   // 19.7.1 CreateSegmentDataObject
   function segmentData(seg, str, t, i) {
     var r = {}, start = t.starts[i], end = t.starts[i + 1];
-    cdp(r, "segment", str.slice(start, end));
+    cdp(r, "segment", StringPrototypeSlice(str, start, end));
     cdp(r, "index", start);
     cdp(r, "input", str);
     if (seg.granularity === "word") cdp(r, "isWordLike", t.wordLike[i]);
@@ -2052,23 +2072,23 @@
   function durationRecord(d) {
     if (TemporalDurationFrom === undefined) throw typeError("Temporal is not available");
     var td = TemporalDurationFrom(d), r = rec();
-    for (var i = 0; i < DURATION_UNITS.length; i++) r[DURATION_UNITS[i][0]] = durationGetters[DURATION_UNITS[i][0]].call(td);
-    r.sign = durationGetters.sign.call(td);
+    for (var i = 0; i < DURATION_UNITS.length; i++) r[DURATION_UNITS[i][0]] = ReflectApply(durationGetters[DURATION_UNITS[i][0]], td, []);
+    r.sign = ReflectApply(durationGetters.sign, td, []);
     return r;
   }
   // a decimal string of seconds-like value + the fractional units: exact (BigInt nanoseconds)
   function withFraction(s, d, unit) {
     var scale = { seconds: [1000000000n, ["milliseconds", 1000000n], ["microseconds", 1000n], ["nanoseconds", 1n]],
       milliseconds: [1000000n, ["microseconds", 1000n], ["nanoseconds", 1n]], microseconds: [1000n, ["nanoseconds", 1n]] }[unit];
-    var total = BigInt(d[unit]) * scale[0], digits = 0;
+    var total = BigIntCtor(d[unit]) * scale[0], digits = 0;
     for (var i = 1; i < scale.length; i++) {
-      if (s.units[scale[i][0]].style === "fractional") total += BigInt(d[scale[i][0]]) * scale[i][1];
+      if (s.units[scale[i][0]].style === "fractional") total += BigIntCtor(d[scale[i][0]]) * scale[i][1];
     }
     var neg = total < 0n;
     if (neg) total = -total;
     var str = "" + total, places = ("" + scale[0]).length - 1;
     while (str.length <= places) str = "0" + str;
-    var dec = str.slice(0, str.length - places) + "." + str.slice(str.length - places);
+    var dec = StringPrototypeSlice(str, 0, str.length - places) + "." + StringPrototypeSlice(str, str.length - places);
     return { d: (neg ? "-" : "") + dec };
   }
   function NextUnitFractional(s, unit) {
@@ -2089,7 +2109,7 @@
     return out;
   }
   function negZero(v) { return typeof v === "number" ? -0 : { d: "-0" }; }
-  function isZero(v) { return typeof v === "number" ? v === 0 : /^-?0*\.?0*$/.test(v.d); }
+  function isZero(v) { return typeof v === "number" ? v === 0 : RegExpPrototypeExec(/^-?0*\.?0*$/, v.d) !== null; }
   function FormatNumericUnits(s, d, first, signDisplayed) {
     var out = [], hv = d.hours, mv = d.minutes, sv = d.seconds;
     if (d.milliseconds !== 0 || d.microseconds !== 0 || d.nanoseconds !== 0) sv = withFraction(s, d, "seconds");

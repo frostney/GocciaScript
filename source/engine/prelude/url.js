@@ -8,10 +8,26 @@
   'use strict';
   const defineProperty = Object.defineProperty;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-  const toWellFormed = s => String.prototype.toWellFormed.call(s);
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into URL or URLSearchParams
+  const { TypeError, String, Number } = G;
+  const ObjectCreate = Object.create, ownKeys = Reflect.ownKeys, ReflectApply = Reflect.apply;
+  const SymIterator = Symbol.iterator;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const toWellFormed = uncurryThis(String.prototype.toWellFormed);
+  const StringPrototypeSlice = uncurryThis(String.prototype.slice), StringPrototypeIndexOf = uncurryThis(String.prototype.indexOf);
+  const StringPrototypeToLowerCase = uncurryThis(String.prototype.toLowerCase), StringPrototypeTrim = uncurryThis(String.prototype.trim);
+  const ArrayPrototypeJoin = uncurryThis(Array.prototype.join), RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  const WeakMapPrototypeGet = uncurryThis(WeakMap.prototype.get), WeakMapPrototypeSet = uncurryThis(WeakMap.prototype.set);
   const usv = v => toWellFormed(String(v));
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
+  // the pairs' index of name, or -1
+  const findPair = (list, k) => { for (let i = 0; i < list.length; i++) if (list[i][0] === k) return i; return -1; };
+  // the pairs that keep(pair, index) accepts
+  const keepPairs = (list, keep) => { const r = []; for (let i = 0; i < list.length; i++) if (keep(list[i], i)) append(r, list[i]); return r; };
 
-  function hidden(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function hidden(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function accessorsEnumerable(proto, names) {
     for (const k of names) {
       const d = getOwnPropertyDescriptor(proto, k);
@@ -30,28 +46,32 @@
     constructor(init = undefined) {
       if (init === undefined) return;
       if (init !== null && typeof init === 'object' && #list in init) {
-        for (const [k, v] of init.#list) this.#list.push([k, v]);
+        const l = init.#list;
+        for (let i = 0; i < l.length; i++) append(this.#list, [l[i][0], l[i][1]]);
       } else if (init !== null && (typeof init === 'object' || typeof init === 'function')) {
-        const iter = init[Symbol.iterator];
+        const iter = init[SymIterator];
         if (iter !== undefined && iter !== null) {
           if (typeof iter !== 'function')
             throw new TypeError('Failed to construct URLSearchParams: The provided value cannot be converted to a sequence');
+          // Web IDL sequence<sequence<USVString>>: the argument's and each pair's own iterator
           for (const pair of init) {
-            if (pair === null || (typeof pair !== 'object' && typeof pair !== 'function') || typeof pair[Symbol.iterator] !== 'function')
+            if (pair === null || (typeof pair !== 'object' && typeof pair !== 'function') || typeof pair[SymIterator] !== 'function')
               throw new TypeError('Failed to construct URLSearchParams: The provided value cannot be converted to a sequence');
             const items = [...pair];
             if (items.length !== 2)
               throw new TypeError('Failed to construct URLSearchParams: Sequence initializer must contain pairs with exactly two items');
-            this.#list.push([usv(items[0]), usv(items[1])]);
+            append(this.#list, [usv(items[0]), usv(items[1])]);
           }
         } else {
-          for (const key of Reflect.ownKeys(init)) {
+          const keys = ownKeys(init);
+          for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
             if (typeof key !== 'string') continue;
             const d = getOwnPropertyDescriptor(init, key);
             if (d === undefined || !d.enumerable) continue;
             const name = usv(key), value = usv(init[key]);
-            const at = this.#list.findIndex(p => p[0] === name);
-            if (at >= 0) this.#list[at][1] = value; else this.#list.push([name, value]);
+            const at = findPair(this.#list, name);
+            if (at >= 0) this.#list[at][1] = value; else append(this.#list, [name, value]);
           }
         }
       } else {
@@ -61,11 +81,15 @@
 
     #parse(s) {
       this.#list = [];
-      if (s.length > 0 && s[0] === '?') s = s.slice(1);
+      if (s.length > 0 && s[0] === '?') s = StringPrototypeSlice(s, 1);
       const flat = n.formParse(s);
-      for (let i = 0; i < flat.length; i += 2) this.#list.push([flat[i], flat[i + 1]]);
+      for (let i = 0; i < flat.length; i += 2) append(this.#list, [flat[i], flat[i + 1]]);
     }
-    #serialize() { return this.#list.map(([k, v]) => n.formSerialize(k, v)).join('&'); }
+    #serialize() {
+      const parts = [], l = this.#list;
+      for (let i = 0; i < l.length; i++) append(parts, n.formSerialize(l[i][0], l[i][1]));
+      return ArrayPrototypeJoin(parts, '&');
+    }
     #update() { if (this.#url !== null) urlSetQueryFromParams(this.#url, this.#serialize()); }
     static #check(o, what) {
       if (o === null || typeof o !== 'object' || !(#list in o))
@@ -76,47 +100,50 @@
     append(name, value) {
       URLSearchParams.#check(this, 'append');
       if (arguments.length < 2) throw new TypeError("Failed to execute 'append' on 'URLSearchParams': 2 arguments required");
-      this.#list.push([usv(name), usv(value)]);
+      append(this.#list, [usv(name), usv(value)]);
       this.#update();
     }
     delete(name, value = undefined) {
       URLSearchParams.#check(this, 'delete');
       if (arguments.length < 1) throw new TypeError("Failed to execute 'delete' on 'URLSearchParams': 1 argument required");
       const k = usv(name);
-      if (value === undefined) this.#list = this.#list.filter(p => p[0] !== k);
-      else { const v = usv(value); this.#list = this.#list.filter(p => !(p[0] === k && p[1] === v)); }
+      if (value === undefined) this.#list = keepPairs(this.#list, p => p[0] !== k);
+      else { const v = usv(value); this.#list = keepPairs(this.#list, p => !(p[0] === k && p[1] === v)); }
       this.#update();
     }
     get(name) {
       URLSearchParams.#check(this, 'get');
       if (arguments.length < 1) throw new TypeError("Failed to execute 'get' on 'URLSearchParams': 1 argument required");
       const k = usv(name);
-      const p = this.#list.find(q => q[0] === k);
-      return p === undefined ? null : p[1];
+      const at = findPair(this.#list, k);
+      return at < 0 ? null : this.#list[at][1];
     }
     getAll(name) {
       URLSearchParams.#check(this, 'getAll');
       if (arguments.length < 1) throw new TypeError("Failed to execute 'getAll' on 'URLSearchParams': 1 argument required");
       const k = usv(name);
-      return this.#list.filter(p => p[0] === k).map(p => p[1]);
+      const r = [], l = this.#list;
+      for (let i = 0; i < l.length; i++) if (l[i][0] === k) append(r, l[i][1]);
+      return r;
     }
     has(name, value = undefined) {
       URLSearchParams.#check(this, 'has');
       if (arguments.length < 1) throw new TypeError("Failed to execute 'has' on 'URLSearchParams': 1 argument required");
       const k = usv(name);
-      if (value === undefined) return this.#list.some(p => p[0] === k);
-      const v = usv(value);
-      return this.#list.some(p => p[0] === k && p[1] === v);
+      if (value === undefined) return findPair(this.#list, k) >= 0;
+      const v = usv(value), l = this.#list;
+      for (let i = 0; i < l.length; i++) if (l[i][0] === k && l[i][1] === v) return true;
+      return false;
     }
     set(name, value) {
       URLSearchParams.#check(this, 'set');
       if (arguments.length < 2) throw new TypeError("Failed to execute 'set' on 'URLSearchParams': 2 arguments required");
       const k = usv(name), v = usv(value);
-      const at = this.#list.findIndex(p => p[0] === k);
-      if (at < 0) this.#list.push([k, v]);
+      const at = findPair(this.#list, k);
+      if (at < 0) append(this.#list, [k, v]);
       else {
         this.#list[at][1] = v;
-        this.#list = this.#list.filter((p, i) => i <= at || p[0] !== k);
+        this.#list = keepPairs(this.#list, (p, i) => i <= at || p[0] !== k);
       }
       this.#update();
     }
@@ -137,8 +164,8 @@
       URLSearchParams.#check(this, 'forEach');
       if (typeof callback !== 'function') throw new TypeError('URLSearchParams.prototype.forEach: callback is not a function');
       for (let i = 0; i < this.#list.length; i++) {
-        const [k, v] = this.#list[i];
-        callback.call(thisArg, v, k, this);
+        const p = this.#list[i];
+        ReflectApply(callback, thisArg, [p[1], p[0], this]);
       }
     }
     keys() { URLSearchParams.#check(this, 'keys'); return makeIterator(this, 0); }
@@ -148,6 +175,7 @@
     static {
       paramsList = (p, s, url) => { p.#parse(s); if (url !== undefined) p.#url = url; };
       listOf = p => p.#list;
+      shared.isURLSearchParams = (v) => v !== null && typeof v === 'object' && #list in v;
     }
   }
   // the iterators see the list as it changes (an index into the owner's current pairs)
@@ -155,21 +183,21 @@
   const ParamsIteratorProto = Object.create(IteratorProto);
   const iterState = new WeakMap();
   hidden(ParamsIteratorProto, 'next', function next() {
-    const st = iterState.get(this);
+    const st = WeakMapPrototypeGet(iterState, this);
     if (st === undefined) throw new TypeError('next method called on incompatible receiver');
     const list = listOf(st.owner);
     if (st.i >= list.length) return { value: undefined, done: true };
     const p = list[st.i++];
     return { value: st.kind === 0 ? p[0] : st.kind === 1 ? p[1] : [p[0], p[1]], done: false };
   });
-  defineProperty(ParamsIteratorProto, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
+  defineProperty(ParamsIteratorProto, Symbol.toStringTag, { __proto__: null, value: 'URLSearchParams Iterator', configurable: true });
   function makeIterator(owner, kind) {
-    const it = Object.create(ParamsIteratorProto);
-    iterState.set(it, { i: 0, kind, owner });
+    const it = ObjectCreate(ParamsIteratorProto);
+    WeakMapPrototypeSet(iterState, it, { i: 0, kind, owner });
     return it;
   }
   hidden(URLSearchParams.prototype, Symbol.iterator, URLSearchParams.prototype.entries);
-  defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { value: 'URLSearchParams', configurable: true });
+  defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { __proto__: null, value: 'URLSearchParams', configurable: true });
   accessorsEnumerable(URLSearchParams.prototype, ['size']);
 
   // ---------------- URL ----------------
@@ -239,10 +267,10 @@
     set protocol(v) {
       const r = URL.#check(this, 'protocol setter');
       let s = usv(v);
-      const colon = s.indexOf(':');
-      if (colon >= 0) s = s.slice(0, colon);
-      s = s.toLowerCase();
-      if (s === '' || !/^[a-z][a-z0-9+\-.]*$/.test(s)) return;
+      const colon = StringPrototypeIndexOf(s, ':');
+      if (colon >= 0) s = StringPrototypeSlice(s, 0, colon);
+      s = StringPrototypeToLowerCase(s);
+      if (s === '' || RegExpPrototypeExec(/^[a-z][a-z0-9+\-.]*$/, s) === null) return;
       if (n.isSpecial(r[0]) !== n.isSpecial(s)) return;
       if ((r[0] === 'file') !== (s === 'file')) return;
       r[0] = s;
@@ -278,9 +306,9 @@
     set port(v) {
       const r = URL.#check(this, 'port setter');
       if (r[4] || r[0] === 'file') return;
-      const s = usv(v).trim();
+      const s = StringPrototypeTrim(usv(v));
       if (s === '') { r[5] = -1; return; }
-      if (!/^[+-]?\d+$/.test(s)) return;
+      if (RegExpPrototypeExec(/^[+-]?\d+$/, s) === null) return;
       const port = Number(s);
       if (port < 0 || port > 65535) return;
       r[5] = port === n.defaultPort(r[0]) ? -1 : port;
@@ -300,7 +328,7 @@
       let s = usv(v);
       if (s === '') { r[9] = true; r[8] = ''; }
       else {
-        if (s[0] === '?') s = s.slice(1);
+        if (s[0] === '?') s = StringPrototypeSlice(s, 1);
         r[9] = false;
         r[8] = n.urlEncode(1, s, n.isSpecial(r[0]));
       }
@@ -320,7 +348,7 @@
       let s = usv(v);
       if (s === '') { r[11] = true; r[10] = ''; }
       else {
-        if (s[0] === '#') s = s.slice(1);
+        if (s[0] === '#') s = StringPrototypeSlice(s, 1);
         r[11] = false;
         r[10] = n.urlEncode(2, s, false);
       }
@@ -334,7 +362,7 @@
       };
     }
   }
-  defineProperty(URL.prototype, Symbol.toStringTag, { value: 'URL', configurable: true });
+  defineProperty(URL.prototype, Symbol.toStringTag, { __proto__: null, value: 'URL', configurable: true });
   accessorsEnumerable(URL.prototype, ['href', 'origin', 'protocol', 'username', 'password', 'host', 'hostname', 'port',
     'pathname', 'search', 'searchParams', 'hash']);
 
