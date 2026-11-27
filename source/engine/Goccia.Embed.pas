@@ -997,7 +997,7 @@ end;
 
 function TGocciaEngine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
   var R: TGocciaRunResult): Boolean;
-var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName: UnicodeString; A: TGocciaArtifact;
+var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName, ModuleSource: UnicodeString; A: TGocciaArtifact;
 begin
   Result := False;
   Bytes := nil;
@@ -1032,7 +1032,9 @@ begin
     begin
       ModuleReturnLast := True;
       try
-        if not ParseAndCompileModule(Source, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
+        ModuleSource := Source;
+        if (ModuleSource <> '') and (ModuleSource[1] = #$FEFF) then Delete(ModuleSource, 1, 1);
+        if not ParseAndCompileModule(ModuleSource, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
         begin
           R.ErrorName := ErrName;
           R.ErrorLine := ParseErrorLine;
@@ -1383,8 +1385,6 @@ begin
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
       if not HasErrorLocation and LoadFailure(FailPath, FailLine, FailColumn) then
       begin
-        { an explicit Script's import declaration: the entry's own }
-        FailPath := ModuleDiagnosticPath(FailPath);
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
         begin

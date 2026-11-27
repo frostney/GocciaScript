@@ -179,6 +179,71 @@ begin
   end;
 end;
 
+procedure CheckCompanionIsolation(const AEntry, ACompanion: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.SourceKind := gskModule;
+    RunResult := Engine.Run(ACompanion, 'export const v = 23;');
+    Check(RunResult.Ok, 'regular module did not load: ' + RunResult.ErrorMessage);
+    Engine.SourceKind := gskScript;
+    RunResult := Engine.Run(AEntry, '  import "./absent.mjs";');
+    Check(not RunResult.Ok and (RunResult.ErrorFile = AEntry) and (RunResult.ErrorLine = 1) and
+      (RunResult.ErrorColumn = 3), 'earlier module changed the Script diagnostic: ' + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+  end;
+
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    Engine.SourceKind := gskScript;
+    RunResult := Engine.Run(AEntry, 'import { present } from "./dep.mjs"; present;');
+    Check(RunResult.Ok and (RunResult.ResultText = '1'), 'Script imports did not run: ' + RunResult.ErrorMessage);
+    Engine.SourceKind := gskModule;
+    RunResult := Engine.Run(ACompanion, 'export const v = 23; v;');
+    Check(RunResult.Ok and (RunResult.ResultText = '23'), 'Script companion displaced a later regular module');
+  finally
+    Engine.Free;
+  end;
+end;
+
+procedure CheckDuplicateScriptBinding(const AEntry: UnicodeString);
+const
+  Source = 'import { present, present } from "./dep.mjs"; present;';
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  Bytes: TBytes;
+  Artifact: RawByteString;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    Engine.SourceKind := gskScript;
+    RunResult := Engine.Run(AEntry, Source);
+    Check(RunResult.Ok and (RunResult.ResultText = '1'), 'duplicate Script import changed: ' + RunResult.ErrorMessage);
+    Check(Engine.CompileArtifact(AEntry, Source, Bytes, RunResult), 'duplicate Script import did not compile');
+  finally
+    Engine.Free;
+  end;
+  SetString(Artifact, PAnsiChar(@Bytes[0]), Length(Bytes));
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    RunResult := Engine.RunArtifact(ChangeFileExt(AEntry, '.gbc'), Artifact);
+    Check(RunResult.Ok and (RunResult.ResultText = '1'), 'artifact duplicate Script import changed');
+    Engine.SourceKind := gskModule;
+    RunResult := Engine.Run(ChangeFileExt(AEntry, '.module.mjs'), Source);
+    Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError'), 'ordinary Module accepted a duplicate binding');
+  finally
+    Engine.Free;
+  end;
+end;
+
 const
   PresentImport = 'import { present } from "./dep.mjs";';
   MissingImport = 'import { missing } from "./dep.mjs";';
@@ -195,6 +260,8 @@ begin
     Dependency.SaveToFile(Directory + 'dynamic.mjs');
     Dependency.Text := 'import "./absent.mjs";' + LineEnding;
     Dependency.SaveToFile(Directory + 'load-failure.mjs');
+    Dependency.Text := 'export const v = 23;' + LineEnding;
+    Dependency.SaveToFile(Directory + 'collides.mjs#script-imports');
   finally
     Dependency.Free;
   end;
@@ -214,6 +281,9 @@ begin
   CheckDynamic(Directory + 'dynamic-entry.mjs', Directory + 'dynamic.mjs');
   CheckLinkFailurePrecedence(Directory + 'precedence.mjs', Directory + 'dynamic.mjs');
   CheckSnapshot(Directory + 'snapshot.mjs', Directory + 'dynamic.mjs');
+  CheckCompanionIsolation(Directory + 'collides.mjs', Directory + 'collides.mjs#script-imports');
+  CheckDuplicateScriptBinding(Directory + 'repeated.mjs');
+  CheckCase(Directory + 'bom.mjs', #$FEFF + MissingImport, 1, 1);
   CheckInvalidLocation(Entry, 1, -1);
   CheckInvalidLocation(Entry, 0, 0);
   WriteLn('Artifact and source link locations: passed');

@@ -14,7 +14,7 @@ uses
 { 16.2.1.7.1 ParseModule + compile (goal 3): the template, and the module info (the caller owns it); Err /
   ErrName on failure }
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
-  var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
+  var Info: TModuleInfo; var Err, ErrName: UnicodeString; ScriptCompanion: Boolean = False): Boolean;
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer = 0): Boolean;
 procedure InitEval;
@@ -816,18 +816,29 @@ begin
 end;
 
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
-  var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
+  var Info: TModuleInfo; var Err, ErrName: UnicodeString; ScriptCompanion: Boolean): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
-  Locations: TModuleDeclarationLocations;
+  Locations: TModuleDeclarationLocations; N: TGocciaStatement;
 begin
   Info := nil;
   ExcludeHostSource(FileName);
-  if LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
+  if not ScriptCompanion and LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
   Result := False;
   L := nil; P := nil; Prog := nil;
   try
     try
-      if ActiveProfile.Restricted then
+      if ScriptCompanion then
+      begin
+        { Parse the explicit Script's declarations with its original goal. The parser's binding map
+          already coalesced repeated specifiers in the same import. The module compiler still checks
+          duplicate names across declarations. }
+        Prog := HostParse(Source, FileName, stScript, Settled, @Locations);
+        for N in Prog.Body do
+          if N is TGocciaImportDeclaration then TGocciaImportDeclaration(N).DuplicateBinding := ''
+          else if not (N is TGocciaReExportDeclaration) then
+            raise EEarlySyntaxError.Create('Expected a Script import or re-export declaration');
+      end
+      else if ActiveProfile.Restricted then
       begin
         Prog := HostParse(Source, FileName, stModule, Settled, @Locations);
         ReportModuleWarnings(FileName);

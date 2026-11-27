@@ -41,7 +41,6 @@ function ModuleRecordExists(const Key: UnicodeString): Boolean;
   lexical binding on the binding it imports, for the Script to run against; False with the error pending. }
 const ScriptImportsSuffix = '#script-imports';
 
-function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
@@ -167,13 +166,14 @@ type
     Path: UnicodeString;      { resolver spelling for diagnostics, coverage and import.meta }
     RealPath: UnicodeString;  { canonical load address and relative import base of a host file }
     ModuleType: UnicodeString;
+    { A Script's privately compiled imports are never a normal file or host module. }
+    ScriptOrigin: UnicodeString;
     VirtualKey: Boolean;
     function FilePath: UnicodeString;
   end;
   TModRec = class
     Id: Integer;
     Address: TModuleAddress;
-    ScriptOrigin: UnicodeString;
     { 16.2.1.5 [[Realm]]: the realm the record was made in. A module record is one realm's, so another realm that
       imports the same path (a ShadowRealm's importValue, a test262 realm's import) loads a record of its own: the
       records are found by realm and path (FindModule). }
@@ -217,7 +217,7 @@ const
 threadvar
   { A Script's imports form their own module for each entry. A REPL can reuse the same entry name. }
   ScriptImportRuns: Integer;
-  ScriptImportKey, ScriptImportEntry: UnicodeString;
+  ScriptImportsRecord: TModRec;
   Mods: TList<TModRec>;
   { (SetEntryModuleMark) and, while a host-owned module's import loads, True: the records it makes are the host's }
   EntryModuleMark: Integer;
@@ -242,7 +242,9 @@ threadvar
 
 function TModuleAddress.FilePath: UnicodeString;
 begin
-  if RealPath <> '' then Result := RealPath else Result := Path;
+  if ScriptOrigin <> '' then Result := ScriptOrigin
+  else if RealPath <> '' then Result := RealPath
+  else Result := Path;
 end;
 
 constructor TModRec.Create;
@@ -660,7 +662,7 @@ begin
   for M in Mods do
   begin
     if M.Superseded or (M.Realm <> CurRealm) or (M.Address.ModuleType <> Address.ModuleType) or
-       (M.Address.VirtualKey <> Address.VirtualKey) then Continue;
+       (M.Address.VirtualKey <> Address.VirtualKey) or (M.Address.ScriptOrigin <> Address.ScriptOrigin) then Continue;
     if Address.RealPath = '' then
     begin
       if (M.Address.RealPath = '') and (M.Address.Path = Address.Path) then Exit(M);
@@ -849,13 +851,20 @@ begin
   ProvidedArtifactBytes := Bytes;
 end;
 
-function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
+function LoadModule(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString = ''): Boolean; forward;
+
+function DiagnosticSource(M: TModRec): UnicodeString;
+begin
+  Result := M.Address.ScriptOrigin;
+  if Result = '' then Result := M.Address.Path;
+end;
 
 { M's requests resolved against its path and loaded, each in M.Deps }
 function LinkRequests(M: TModRec): Boolean;
 var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec;
 begin
-  Path := M.Address.Path;
+  Path := DiagnosticSource(M);
   M.RequestsState := 1;
   Result := False;
   SetLength(M.Deps, Length(M.Info.Requests));
@@ -983,7 +992,8 @@ begin
   Result := LoadArtifactRecord(Address, Gbc.Path, B, M);
 end;
 
-function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean;
+function LoadModule(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString): Boolean;
 var Path, Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
   Modified: TDateTime;
 begin
@@ -1005,7 +1015,8 @@ begin
      SameText(ExtractFileExt(string(Path)), '.gbc') then
     Exit(LoadArtifactModule(Address, M));
   M := FindModule(Address);
-  if (M = nil) and (Address.ModuleType = '') and (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
+  if (M = nil) and (Address.ScriptOrigin = '') and (Address.ModuleType = '') and
+    (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
     Exit(LoadArtifactRecord(Address, Path, ProvidedArtifactBytes, M));
   { a settled record whose file changed since it was read loads again (ADR 0139: a newer version, or a retry of
     one that failed): what imported it keeps it, this request and later ones get the new one }
@@ -1040,27 +1051,34 @@ begin
     M.Status := msEvaluated;
     Exit(True);
   end;
-  Src := '';
-  I := 0;
-  if Assigned(HostModules) then
-    if Address.VirtualKey then I := CallHostModules(Path, '', V)
-    else I := CallHostModules(Path, Address.FilePath, V);
-  case I of
-    1: Exit(MakeHostModule(Address, V, M));
-    2: Src := StrToUnicode(StrOf(V));
-    -1: Exit(False);
+  if Address.ScriptOrigin <> '' then
+  begin
+    Src := CompanionSource;
+    FromFile := False;
+  end
+  else
+  begin
+    Src := '';
+    I := 0;
+    if Assigned(HostModules) then
+      if Address.VirtualKey then I := CallHostModules(Path, '', V)
+      else I := CallHostModules(Path, Address.FilePath, V);
+    case I of
+      1: Exit(MakeHostModule(Address, V, M));
+      2: Src := StrToUnicode(StrOf(V));
+      -1: Exit(False);
+    end;
+    if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
+    { a file's modification time, taken before it is read: a change while it loads makes the next request load it
+      again }
+    Prov := ProvidedPath;
+    FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Address.FilePath, Modified);
+    if (I <> 2) and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Path));
   end;
-  if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
-  { a file's modification time, taken before it is read: a change while it loads makes the next request load it
-    again }
-  Prov := ProvidedPath;
-  FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Address.FilePath, Modified);
-  if (I <> 2) and not ReadSource(Address, Src) then Exit(ModuleReadFailed(Path));
   M := TModRec.Create;
   M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading or (FromFile and SameFileAsHostModule(Address));
-  if (ScriptImportEntry <> '') and (Path = ScriptImportKey) then M.ScriptOrigin := ScriptImportEntry;
   M.HasModified := FromFile;
   if FromFile then M.Modified := Modified;
   M.Hash := SourceHashOf(Src);
@@ -1068,7 +1086,7 @@ begin
   SetRoot(M, rError, VUndefined);
   ModuleReturnLast := IsCompletionEntry(M);
   try
-    Compiled := ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName);
+    Compiled := ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName, Address.ScriptOrigin <> '');
   finally
     ModuleReturnLast := False;
   end;
@@ -1077,7 +1095,7 @@ begin
     M.Errored := True;
     if (ParseFailPath = '') and (ParseErrorLine > 0) then
     begin
-      ParseFailPath := Path;
+      ParseFailPath := DiagnosticSource(M);
       ParseFailName := ErrName;
       ParseFailLine := ParseErrorLine;
       ParseFailColumn := ParseErrorColumn;
@@ -1313,8 +1331,7 @@ var Path, Location: UnicodeString;
 begin
   ThrowError('SyntaxError', AMessage);
   if AEntry.SourceLine = 0 then Exit;
-  Path := AModule.ScriptOrigin;
-  if Path = '' then Path := AModule.Address.Path;
+  Path := DiagnosticSource(AModule);
   Location := Path + ':' + IntToStr(AEntry.SourceLine) + ':' + IntToStr(AEntry.SourceColumn);
   SetEngineErrorStack(Pending, 'SyntaxError: ' + AMessage + #10'    at <module link> (' + Location + ')',
     ProfileStackTraces, Path, AEntry.SourceLine, AEntry.SourceColumn);
@@ -1774,9 +1791,10 @@ begin
   end;
 end;
 
-function LoadAndLink(const Address: TModuleAddress; var M: TModRec): Boolean;
+function LoadAndLink(const Address: TModuleAddress; var M: TModRec;
+  const CompanionSource: UnicodeString = ''): Boolean;
 begin
-  Result := LoadModule(Address, M);
+  Result := LoadModule(Address, M, CompanionSource);
   if Result and (M.Status = msNew) then Result := Link(M);
 end;
 
@@ -1811,8 +1829,8 @@ var M: TModRec;
 begin
   if Mods <> nil then
     for M in Mods do
-      if (M.Address.Path = Path) and (M.Address.ModuleType = '') and (M.Realm = CurRealm) and
-         not M.Superseded then Exit(M);
+      if (M.Address.Path = Path) and (M.Address.ModuleType = '') and (M.Address.ScriptOrigin = '') and
+         (M.Realm = CurRealm) and not M.Superseded then Exit(M);
   Result := nil;
 end;
 
@@ -1841,34 +1859,18 @@ begin
     end;
 end;
 
-function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
-var M: TModRec;
-begin
-  M := FindModuleByPath(Path);
-  if (M <> nil) and (M.ScriptOrigin <> '') then Result := M.ScriptOrigin else Result := Path;
-end;
-
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
-var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
+var M: TModRec; R: TValue; Address: TModuleAddress;
 begin
   Evaluation := VUndefined;
+  ScriptImportsRecord := nil;
   Inc(ScriptImportRuns);
-  Key := EntryPath + ScriptImportsSuffix;
-  if ScriptImportRuns > 1 then Key := Key + UnicodeString(IntToStr(ScriptImportRuns));
-  ScriptImportKey := Key;
-  ScriptImportEntry := EntryPath;
-  SavedPath := ProvidedPath;
-  SavedSrc := ProvidedSrc;
-  SetProvidedSource(Key, Source);
-  try
-    Address := Default(TModuleAddress);
-    Address.Path := Key;
-    Ok := LoadAndLink(Address, M);
-  finally
-    ScriptImportEntry := '';
-    SetProvidedSource(SavedPath, SavedSrc);
-  end;
-  if not Ok then Exit(False);
+  Address := Default(TModuleAddress);
+  Address.Path := EntryPath + ScriptImportsSuffix;
+  if ScriptImportRuns > 1 then Address.Path := Address.Path + UnicodeString(IntToStr(ScriptImportRuns));
+  Address.ScriptOrigin := EntryPath;
+  if not LoadAndLink(Address, M, Source) then Exit(False);
+  ScriptImportsRecord := M;
   PushRoot(EvaluateModule(M));
   if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
     if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
@@ -1886,7 +1888,7 @@ begin
   else
     Exit(ThrowTypeError('await: Promise did not settle'));
   end;
-  M := FindModuleByPath(ScriptImportKey);
+  M := ScriptImportsRecord;
   if (M = nil) or (M.Info = nil) then Exit(ThrowTypeError('The Script entry''s imports did not load'));
   for I := 0 to High(M.Info.Imports) do
     if M.Info.Imports[I].LocalName <> '' then
@@ -2405,8 +2407,7 @@ begin
   ParseFailSuggestion := '';
   SitePath := '';
   ProvidedArtifactPath := '';
-  ScriptImportKey := '';
-  ScriptImportEntry := '';
+  ScriptImportsRecord := nil;
 end;
 
 initialization
