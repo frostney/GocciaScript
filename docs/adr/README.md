@@ -207,3 +207,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0195 — The event loop pumps embedder host work in bounded turns](0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)
 - [0196 — An aborted fetch stops at its next socket poll](0196-an-aborted-fetch-stops-at-its-next-socket-poll.md)
 - [0197 — Engines share an instruction budget through reserves](0197-engines-share-an-instruction-budget-through-reserves.md)
+- [0199 — import.meta and Script imports follow the real path](0199-import-meta-and-script-imports-follow-the-real-path.md)

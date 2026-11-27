@@ -77,6 +77,40 @@ export function verifyModuleIdentity() {
     ]);
     assert.ok(run(RUNNER, "case.mjs").includes(`case aliases match: ${caseInsensitive}\n`));
 
+    // Names that differ only in non-ASCII case reach one record on a case-insensitive volume, as ASCII ones do.
+    write("real/\u00c4rger.mjs", ['console.log("non-ASCII case evaluated");', "export const identity = {};"]);
+    const unicodeCaseInsensitive = existsSync(join(real, "\u00e4rger.mjs"));
+    write("unicode-case.mjs", [
+      'import * as upper from "./real/\u00c4rger.mjs";',
+      `import * as lower from "./real/${unicodeCaseInsensitive ? "\u00e4" : "\u00c4"}rger.mjs";`,
+      'console.log("non-ASCII case aliases match:", upper === lower);',
+    ]);
+    const unicodeCaseOutput = run(RUNNER, "unicode-case.mjs");
+    assert.ok(unicodeCaseOutput.includes("non-ASCII case aliases match: true\n"), unicodeCaseOutput);
+    assert.equal(unicodeCaseOutput.match(/^non-ASCII case evaluated$/gm)?.length, 1, unicodeCaseOutput);
+
+    // import.meta names the real file, whichever spelling loaded the module first, and resolves from its directory.
+    write("real/meta.mjs", [
+      "export const url = import.meta.url;",
+      'export const resolved = import.meta.resolve("./sibling.mjs");',
+    ]);
+    const metaOf = (first: string, second: string) => {
+      write("meta-order.mjs", [
+        `import * as first from "./${first}/meta.mjs";`,
+        `import * as second from "./${second}/meta.mjs";`,
+        'console.log("meta:", first === second, first.url, first.resolved);',
+      ]);
+      const line = run(RUNNER, "meta-order.mjs").split("\n").find(text => text.startsWith("meta: "));
+      assert.ok(line, `no import.meta line for ${first} then ${second}`);
+      return line;
+    };
+    const linkFirst = metaOf("linked", "real");
+    assert.equal(linkFirst, metaOf("real", "linked"));
+    const [, sameRecord, metaUrl, metaResolved] = linkFirst.split(" ");
+    assert.equal(sameRecord, "true", linkFirst);
+    assert.match(metaUrl, /^file:\/\/.*\/real\/meta\.mjs$/, linkFirst);
+    assert.equal(metaResolved, metaUrl.replace(/meta\.mjs$/, "sibling.mjs"), linkFirst);
+
     if (process.platform !== "win32") {
       write("real/relative.mjs", [
         'export { identity } from "./dep.mjs";',
@@ -89,6 +123,78 @@ export function verifyModuleIdentity() {
         'console.log("file aliases match:", alias === direct && (await alias.load()).identity === direct.identity);',
       ]);
       assert.ok(run(RUNNER, "file-main.mjs").includes("file aliases match: true\n"));
+
+      // A symlinked file resolves its imports, import.meta and its Script entry's imports from the real file's
+      // directory, as Node does: each directory has its own sib.mjs.
+      mkdirSync(join(project, "fa"));
+      mkdirSync(join(project, "fb"));
+      write("fa/sib.mjs", ['export const who = "link directory";']);
+      write("fb/sib.mjs", ['export const who = "real directory";']);
+      write("fb/lib.mjs", [
+        'import { who } from "./sib.mjs";',
+        'const dynamic = await import("./sib.mjs");',
+        'const realm = await new ShadowRealm().importValue("./sib.mjs", "who");',
+        'console.log("lib imports:", who, "|", dynamic.who, "|", realm);',
+        'console.log("lib meta:", import.meta.url, import.meta.resolve("./sib.mjs"));',
+      ]);
+      symlinkSync(join(project, "fb", "lib.mjs"), join(project, "fa", "lib.mjs"));
+      write("lib-main.mjs", ['import "./fa/lib.mjs";']);
+      write("virtual-lib-main.mjs", ['import "./fa/vlib.mjs";']);
+      const libOutput = run(RUNNER, "lib-main.mjs", "--unsafe-shadowrealm");
+      assert.ok(libOutput.includes("lib imports: real directory | real directory | real directory\n"), libOutput);
+      assert.match(libOutput, /^lib meta: file:\/\/\S*\/fb\/lib\.mjs file:\/\/\S*\/fb\/sib\.mjs$/m, libOutput);
+
+      // A virtual module whose address is a symlink to another file resolves all three from its own address.
+      write("fb/vsib.mjs", ['export const who = "disk target";']);
+      write("fb/vlib.mjs", ['export const who = "disk module";']);
+      symlinkSync(join(project, "fb", "vlib.mjs"), join(project, "fa", "vlib.mjs"));
+      const virtualLib = join(project, "fa", "vlib.mjs");
+      const virtualOutput = run(
+        RUNNER, "virtual-lib-main.mjs", "--unsafe-shadowrealm",
+        "--module", `${virtualLib}=${[
+          'import { who } from "./vsib.mjs";',
+          'const dynamic = await import("./vsib.mjs");',
+          'const realm = await new ShadowRealm().importValue("./vsib.mjs", "who");',
+          'console.log("virtual imports:", who, "|", dynamic.who, "|", realm);',
+        ].join(" ")}`,
+        "--module", `${join(project, "fa", "vsib.mjs")}=export const who = "configured";`,
+      );
+      assert.ok(virtualOutput.includes("virtual imports: configured | configured | configured\n"), virtualOutput);
+
+      // importValue resolves from its caller's own record, even when the ShadowRealm holds a virtual module
+      // registered under the caller's path.
+      write("fb/who.mjs", ['export const who = "real directory";']);
+      write("fa/who.mjs", ['export const who = "link directory";']);
+      write("fb/realm-entry.mjs", [
+        "const realm = new ShadowRealm();",
+        `const preloaded = await realm.importValue(${JSON.stringify(join(project, "fa", "realm-entry.mjs"))}, "kind");`,
+        'const who = await realm.importValue("./who.mjs", "who");',
+        'console.log("realm caller:", preloaded, "|", who);',
+      ]);
+      symlinkSync(join(project, "fb", "realm-entry.mjs"), join(project, "fa", "realm-entry.mjs"));
+      const realmOutput = run(
+        RUNNER, "fa/realm-entry.mjs", "--unsafe-shadowrealm", "--allow-read=.",
+        "--module", `${join(project, "fa", "realm-entry.mjs")}=export const kind = "virtual";`,
+      );
+      assert.ok(realmOutput.includes("realm caller: virtual | real directory\n"), realmOutput);
+
+      write("fb/script.js", [
+        'import { who } from "./sib.mjs";',
+        'console.log("script static:", who);',
+        'import("./sib.mjs").then(m => console.log("script dynamic:", m.who));',
+      ]);
+      symlinkSync(join(project, "fb", "script.js"), join(project, "fa", "script.js"));
+      const scriptOutput = run(RUNNER, "fa/script.js", "--source-type=script", "--allow-read=.");
+      assert.ok(scriptOutput.includes("script static: real directory\n"), scriptOutput);
+      assert.ok(scriptOutput.includes("script dynamic: real directory\n"), scriptOutput);
+
+      // A Script compiled to bytecode whose source is gone resolves from the real bytecode file's directory.
+      run(BUNDLER, "fb/script.js", "--source-type=script");
+      renameSync(join(project, "fb", "script.gbc"), join(project, "fb", "standalone.gbc"));
+      symlinkSync(join(project, "fb", "standalone.gbc"), join(project, "fa", "standalone.gbc"));
+      const standaloneOutput = run(RUNNER, "fa/standalone.gbc", "--allow-read=.");
+      assert.ok(standaloneOutput.includes("script static: real directory\n"), standaloneOutput);
+      assert.ok(standaloneOutput.includes("script dynamic: real directory\n"), standaloneOutput);
 
       write("real/asset.payload", ['{"answer":42}']);
       for (const alias of ["asset.json", "asset-alias.json", "asset.txt"]) {
@@ -132,6 +238,15 @@ export function verifyModuleIdentity() {
       const artifactLinkOutput = run(RUNNER, "artifact-link-main.mjs");
       assert.match(artifactLinkOutput, /^bytecode payload$/m);
     }
+
+    // A Script's imports module has no file of its own: a file named like it is a module of its own.
+    write("hash-script.js", [
+      'import { identity } from "./real/dep.mjs";',
+      'import("./hash-script.js#script-imports").then(m => console.log("suffix-named file:", m.value));',
+    ]);
+    writeFileSync(join(project, "hash-script.js#script-imports"), "export const value = 42;\n");
+    const hashOutput = run(RUNNER, "hash-script.js", "--source-type=script");
+    assert.ok(hashOutput.includes("suffix-named file: 42\n"), hashOutput);
 
     write("real/self.mjs", [
       'import "../linked/self.mjs";',
