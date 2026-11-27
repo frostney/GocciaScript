@@ -512,6 +512,9 @@ initialization
   InitCriticalSection(WaitLock);
 
 finalization
+  { this unit finalizes before Goccia.ThreadCleanupRegistry, whose finalization runs GocciaSharedThreadvarCleanup on
+    the main thread: release the main thread's mailbox while WaitLock still exists }
+  SharedAsyncDiscard;
   DoneCriticalSection(WaitLock);
 
 end.
