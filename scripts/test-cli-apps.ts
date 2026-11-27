@@ -15,8 +15,8 @@
  *
  *   --section=<text>  Run only the sections whose name contains <text>,
  *                     ignoring case. Repeat it to run every section any of
- *                     the texts matches. A selection that matches no
- *                     section fails the run.
+ *                     the texts matches. A text that matches no section
+ *                     fails the run.
  *   --list            Print the section names, in run order, and run none.
  *
  * With no option every section runs. Each check sits in a section() call,
@@ -129,6 +129,7 @@ if (sectionFilters.some((text) => text === "")) {
   process.exit(2);
 }
 const listOnly = cliOptions.list === true;
+const matchedFilters = new Set<string>();
 let sectionsRun = 0;
 let sectionsSkipped = 0;
 
@@ -140,9 +141,13 @@ async function section(
     console.log(name);
     return;
   }
-  if (sectionFilters.length > 0 && !sectionFilters.some((text) => name.toLowerCase().includes(text))) {
-    sectionsSkipped++;
-    return;
+  if (sectionFilters.length > 0) {
+    const matching = sectionFilters.filter((text) => name.toLowerCase().includes(text));
+    if (matching.length === 0) {
+      sectionsSkipped++;
+      return;
+    }
+    for (const text of matching) matchedFilters.add(text);
   }
   sectionsRun++;
   console.log(name);
@@ -14172,6 +14177,8 @@ await section("Loader: local fetch smoke with --allow-net...", () => withFetchTe
 await section("Loader: fetch re-checks the net capability on every redirect hop...", async () => {
   // The first hop names an allowed address; the redirect names a host the
   // capability does not allow, so the request is refused mid-flight.
+  const tmp = makeTmp();
+  const audit = join(tmp, "redirect-audit.jsonl");
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -14185,8 +14192,6 @@ await section("Loader: fetch re-checks the net capability on every redirect hop.
       return new Response("final", { status: 200 });
     },
   });
-  const tmp = makeTmp();
-  const audit = join(tmp, "redirect-audit.jsonl");
   try {
     const { exitCode, json, stderr } = await runLoaderJsonAsync(
       [
@@ -17137,10 +17142,9 @@ await section("Runner and TestRunner: a cancelled fetch frees its worker slot on
 
 if (listOnly) process.exit(0);
 
-if (sectionsRun === 0) {
-  console.error(`\nNo section matched ${sectionFilters.map((text) => JSON.stringify(text)).join(", ")}; --list prints the names.`);
-  process.exit(1);
-}
+const unmatchedFilters = sectionFilters.filter((text) => !matchedFilters.has(text));
+if (unmatchedFilters.length > 0)
+  console.error(`\nNo section matched ${unmatchedFilters.map((text) => JSON.stringify(text)).join(", ")}; --list prints the names.`);
 
 if (sectionFailures.length > 0) {
   console.error(`\n${sectionFailures.length} section(s) failed:`);
@@ -17152,6 +17156,8 @@ if (sectionFailures.length > 0) {
   }
   process.exit(1);
 }
+
+if (unmatchedFilters.length > 0) process.exit(1);
 
 console.log(
   sectionsSkipped === 0

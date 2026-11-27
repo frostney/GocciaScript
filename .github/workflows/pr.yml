@@ -906,6 +906,9 @@ jobs:
       - name: Check shared CLI test assertions
         run: bun run scripts/test-cli-assertions.ts
 
+      - name: Check that test-cli-apps.ts runs only what a selection names
+        run: bun run scripts/test-cli-apps-selection.ts
+
       - name: Check CLI flags across all apps
         run: bun run scripts/test-cli.ts
 
