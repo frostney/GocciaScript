@@ -31,8 +31,9 @@ type
     GrowLock: LongInt;      { atomic: held while a grow zeroes the new bytes and publishes the length }
   end;
 
-{ the tick count a wait of TimeoutMs milliseconds ends at: High(QWord) for an infinite timeout and for one past
-  1e15 ms (some 31,000 years), which a deadline cannot hold; shared by Atomics.wait and Atomics.waitAsync }
+{ the tick count a wait of TimeoutMs milliseconds ends at, shared by Atomics.wait and Atomics.waitAsync: High(QWord)
+  for an infinite timeout and for one past 1e15 ms (some 31,000 years, the cutoff Atomics.waitAsync used), which no
+  run outlives and which keeps Ceil64 and the sum far from overflowing }
 function WaitDeadline(TimeoutMs: Double): QWord;
 function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
 procedure RetainBlock(B: PSharedBlock);
