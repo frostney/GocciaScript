@@ -277,6 +277,8 @@ function AuditSiteOverride(out Source: UnicodeString; out Line, Column: Integer)
 function NewPermissionDenied(const Capability, Scope, Suggestion: UnicodeString; var E: TValue): Boolean;
 { the milliseconds left before the run's timeout (LimitsArm), at least 1; 0 when the run has none }
 function LimitRemainingMs: Int64;
+{ True once the armed deadline has passed, whether or not the timer thread has fired it yet; spends nothing }
+function LimitDeadlinePassed: Boolean;
 { the run's deadline paused while the host runs something of its own on another thread (a sandbox's nested run,
   which the remaining time bounds): LimitsSuspend returns the milliseconds left (0: no deadline), LimitsResume
   starts that much again }
@@ -906,6 +908,11 @@ begin
   Now_ := GetTickCount64;
   if LimitTimer.Deadline <= Now_ then Exit(1);
   Result := LimitTimer.Deadline - Now_;
+end;
+
+function LimitDeadlinePassed: Boolean;
+begin
+  Result := (LimitTimer <> nil) and (GetTickCount64 >= LimitTimer.Deadline);
 end;
 
 function LimitsSuspend: Int64;

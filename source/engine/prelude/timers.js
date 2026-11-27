@@ -100,12 +100,13 @@
   }
 
   // ---------------- real timers: the event loop and the runner ----------------
-  // the next host task, else under real timers the next timer (intervals too when asked); false when neither runs
+  // the next host task, else under real timers the next timer (intervals too when asked); false when neither runs.
+  // dueOnly: only a timer due at the current virtual time, so the clock does not jump while real work is pending
   let budget = LOOP_LIMIT;
-  function fireNext(intervals) {
+  function fireNext(intervals, dueOnly) {
     if (hostTasks.length > 0) { ArrayPrototypeShift(hostTasks)(); return true; }
     if (fake) return false;
-    const t = earliest(Infinity, intervals);
+    const t = earliest(dueOnly ? now : Infinity, intervals);
     if (t === undefined || budget <= 0) return false;
     budget--;
     try { run(t); } catch (e) { if (parked === null) parked = { error: e }; }
