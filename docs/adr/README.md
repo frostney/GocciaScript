@@ -204,4 +204,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0192 — History reads ask for the strong ETag and project raw pointers](0192-history-reads-ask-for-the-strong-etag-and-project-raw-pointers.md)
 - [0193 — fetch requests past the worker cap wait their turn](0193-fetch-requests-past-the-worker-cap-wait-their-turn.md)
 - [0194 — JIT code mappings are sealed read-execute](0194-jit-code-mappings-are-sealed-read-execute.md)
+- [0196 — An aborted fetch stops at its next socket poll](0196-an-aborted-fetch-stops-at-its-next-socket-poll.md)
 - [0197 — Engines share an instruction budget through reserves](0197-engines-share-an-instruction-budget-through-reserves.md)
