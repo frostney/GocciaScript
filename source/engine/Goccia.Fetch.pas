@@ -108,8 +108,10 @@ type
     Redirect: THTTPRedirectMode;
     { the bytes of the entry charged against the memory limit (Charge), until it is removed }
     Bytes: Int64;
-    { GetTickCount64 at the request's signal deadline (0: none) }
+    { GetTickCount64 at the request's signal deadline (0: none), until the pump has had the signals observed for it }
     Deadline: QWord;
+    { the same deadline, kept for the socket's timeout when the request starts }
+    SignalDeadline: QWord;
     { the fetch() call, which the hop decisions are attributed to }
     Site: UnicodeString;
     Line, Column: Integer;
@@ -352,10 +354,10 @@ var W: TFetchWorker; Timeout, SignalMs: Int64; Now_: QWord;
 begin
   Timeout := LimitRemainingMs;
   if Timeout > 0 then Timeout := Timeout + FETCH_DEADLINE_SLACK_MS;
-  if P.Deadline <> 0 then
+  if P.SignalDeadline <> 0 then
   begin
     Now_ := GetTickCount64;
-    if P.Deadline > Now_ then SignalMs := P.Deadline - Now_ else SignalMs := 0;
+    if P.SignalDeadline > Now_ then SignalMs := P.SignalDeadline - Now_ else SignalMs := 0;
     if (Timeout = 0) or (SignalMs + FETCH_DEADLINE_SLACK_MS < Timeout) then
       Timeout := SignalMs + FETCH_DEADLINE_SLACK_MS;
   end;
@@ -378,10 +380,12 @@ begin
 end;
 
 { the waiting requests started, oldest first, while a slot is free; the slots of cancelled requests whose workers
-  finished free first }
+  finished free first. None starts once the run is interrupted (its abort discards them), and none whose signal's
+  deadline passed before the pump had the signals observed: that observation aborts it, which drops it unstarted }
 procedure StartWaiting;
-var I, Running: Integer;
+var I, Running: Integer; Now_: QWord;
 begin
+  if Interrupt <> 0 then Exit;
   Running := RunningCount;
   if Running = Length(Pendings) then Exit;
   if Running >= MAX_FETCH_WORKERS then
@@ -389,10 +393,11 @@ begin
     ReapCancelled;
     Running := RunningCount;
   end;
+  Now_ := GetTickCount64;
   for I := 0 to High(Pendings) do
   begin
     if Running >= MAX_FETCH_WORKERS then Exit;
-    if Pendings[I].Worker = nil then
+    if (Pendings[I].Worker = nil) and ((Pendings[I].Deadline = 0) or (Pendings[I].Deadline > Now_)) then
     begin
       StartWorker(Pendings[I]);
       Inc(Running);
@@ -405,7 +410,7 @@ end;
   headers is an array of [name, value] pairs; redirect 0 follow, 1 error, 2 manual; signalTimeoutMs the time left on
   the request's AbortSignal.timeout (-1 none). A RangeError when the request's storage would pass the memory limit }
 function Fetch_Start(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var URL, Method: string; S, H, P, E: TValue; I, N, Id, SignalMs: Integer; Len, Bytes: Int64;
+var URL, Method: string; S, H, P, E: TValue; I, N, Id: Integer; Len, Bytes, SignalMs: Int64;
   Src: UnicodeString; Line, Col: Integer; Headers: THTTPHeaders; Redirect: THTTPRedirectMode;
 begin
   if not ToStringV(ArgOf(Args, Argc, 1), S) then Exit(False);
@@ -433,8 +438,12 @@ begin
     2: Redirect := hrmManual;
   else Redirect := hrmFollow;
   end;
-  if IsNumber(ArgOf(Args, Argc, 5)) then SignalMs := Trunc(NumOf(Args[5])) else SignalMs := -1;
+  { the signal's time left, rounded up to whole milliseconds and held to a range a tick count adds safely }
+  if IsNumber(ArgOf(Args, Argc, 5)) then SignalMs := Ceil64(Max(0.0, Min(NumOf(Args[5]), 1.0 * High(Integer))))
+  else SignalMs := -1;
   if not AuditDecision(akNetDispatch, True, URL, 'fetch dispatch is allowed') then Exit(False);
+  { the entry keeps the normalized URL, which percent-encoding can make several times longer }
+  URL := NormalizeHTTPRequestURL(URL);
   Bytes := SizeOf(TPendingFetch) + (Int64(Length(URL)) + Length(Method)) * SizeOf(Char);
   for I := 0 to High(Headers) do
     Inc(Bytes, (Int64(Length(Headers[I].Name)) + Length(Headers[I].Value)) * SizeOf(Char) + SizeOf(THTTPHeader));
@@ -454,13 +463,15 @@ begin
   SetLength(Pendings, N + 1);
   Pendings[N].Id := Id;
   Pendings[N].Worker := nil;
-  Pendings[N].URL := NormalizeHTTPRequestURL(URL);
+  Pendings[N].URL := URL;
   Pendings[N].Method := Method;
   Pendings[N].Headers := Headers;
   Pendings[N].Redirect := Redirect;
   Pendings[N].Bytes := Bytes;
-  { the signal's deadline runs from the call, whether the request starts now or waits its turn }
-  if SignalMs >= 0 then Pendings[N].Deadline := GetTickCount64 + QWord(SignalMs) else Pendings[N].Deadline := 0;
+  { the signal's deadline runs from the call, whether the request starts now or waits its turn. A tick past the
+    signal's own: when the pump sees it pass, the signal has timed out too, so observing it aborts the request }
+  if SignalMs >= 0 then Pendings[N].Deadline := GetTickCount64 + QWord(SignalMs) + 1 else Pendings[N].Deadline := 0;
+  Pendings[N].SignalDeadline := Pendings[N].Deadline;
   Pendings[N].Site := Src;
   Pendings[N].Line := Line;
   Pendings[N].Column := Col;
@@ -672,6 +683,8 @@ var Taken: TList; I, K, Waits: Integer; W: TFetchWorker; P: TPendingFetch; Now_,
 begin
   Result := True;
   if Owner = nil then Exit;
+  { a slot a failed pump left free }
+  StartWaiting;
   if Block then
     while True do
     begin
@@ -745,8 +758,8 @@ begin
     end;
     Taken.Free;
   end;
-  { the slots that freed go to the requests waiting for one }
-  StartWaiting;
+  { the slots that freed go to the requests waiting for one, unless the run failed: its abort discards them }
+  if Result then StartWaiting;
 end;
 
 procedure FetchDone;

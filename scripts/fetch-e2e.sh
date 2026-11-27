@@ -478,6 +478,48 @@ try {
 }
 " "RangeError"
 
+# --- More than 16 concurrent requests (docs/built-ins-fetch.md) ---
+# A thread runs 16 requests at once; later ones wait their turn in call order.
+# /wave answers request i only once 16 * (i // 16 + 1) requests have arrived, so
+# with the cap and FIFO each wave of 16 holds exactly the next 16 requests.
+
+check "requests past the 16-worker cap wait their turn, in order, and all complete" 0 "
+await fetch('${BASE}/arrivals-reset')
+const responses = await Promise.all(Array.from({ length: 96 }, (_, i) => fetch('${BASE}/wave/' + i)))
+const bodies = await Promise.all(responses.map((r) => r.text()))
+const seen = await (await fetch('${BASE}/arrivals')).json()
+const fifo = seen.arrivals.length === 96 && seen.arrivals.every((tag, at) => Math.floor(Number(tag) / 16) === Math.floor(at / 16))
+console.log('done', bodies.filter((b) => b === 'ok').length, 'peak', seen.peak, 'fifo', fifo)
+" "done 96 peak 16 fifo true"
+
+check "an abort or a signal timeout drops a waiting request before it starts" 0 "
+await fetch('${BASE}/arrivals-reset')
+const busy = Array.from({ length: 16 }, (_, i) => fetch('${BASE}/sleep/1500/busy' + i))
+const controller = new AbortController()
+const aborted = fetch('${BASE}/sleep/0/aborted', { signal: controller.signal }).then(() => 'answered', (e) => e.name)
+const t0 = Date.now()
+const timed = fetch('${BASE}/sleep/0/timed', { signal: AbortSignal.timeout(200) }).then(() => 'answered', (e) => e.name + (Date.now() - t0 < 1200 ? ' early' : ' late'))
+const after = fetch('${BASE}/sleep/0/after').then((r) => r.status)
+controller.abort()
+const results = [await aborted, await timed, await after]
+await Promise.all(busy)
+const seen = await (await fetch('${BASE}/arrivals')).json()
+console.log(results.join(','), seen.arrivals.includes('aborted') || seen.arrivals.includes('timed') ? 'started' : 'never started')
+" "AbortError,TimeoutError early,200 never started"
+
+check "a waiting request whose signal timed out while the script was busy never starts" 0 "
+await fetch('${BASE}/arrivals-reset')
+const quick = Array.from({ length: 16 }, (_, i) => fetch('${BASE}/sleep/50/quick' + i))
+const late = fetch('${BASE}/sleep/0/late', { signal: AbortSignal.timeout(100) }).then(() => 'answered', (e) => e.name)
+const until = Date.now() + 400
+// busy without yielding: an iterator that ends once the time has passed
+for (const _ of { [Symbol.iterator]: () => ({ next: () => ({ done: Date.now() >= until }) }) }) {}
+const result = await late
+await Promise.all(quick)
+const seen = await (await fetch('${BASE}/arrivals')).json()
+console.log(result, seen.arrivals.includes('late') ? 'started' : 'never started')
+" "TimeoutError never started"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 
