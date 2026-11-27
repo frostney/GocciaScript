@@ -22,7 +22,9 @@ type
     FSequence: QWord;
     FRequest: array[0..1] of QWord;
   public
-    Stall, Ready, FailOnWait, Late: Boolean;
+    Stall, Ready, FailOnWait, Late, SettleThenFail, ForcePending: Boolean;
+    { waits after which the first request settles with FirstValue }
+    FirstAfterTurns: Integer;
     Discards, IdleTurns, ScopedDiscards: Integer;
     { the timeout of the pump that last delivered results }
     DeliveredTimeout: Int64;
@@ -38,10 +40,21 @@ type
 threadvar
   Work: TTestWork;
 
+var
+  { the result the first request settles with (FirstAfterTurns), rooted for the process }
+  FirstValue: TValue;
+
 function BeginWork(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
 begin
   if Work = nil then Exit(ThrowTypeError('host work is detached'));
   AResult := Work.BeginRequest;
+  Result := True;
+end;
+
+function SetFirstValue(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  if AArgc >= 1 then FirstValue := AArgs[1] else FirstValue := VUndefined;
+  AResult := VUndefined;
   Result := True;
 end;
 
@@ -75,13 +88,28 @@ end;
 
 function TTestWork.HasPending: Boolean;
 begin
-  Result := (FSlots^[0] <> VUndefined) or (FSlots^[1] <> VUndefined);
+  Result := ForcePending or (FSlots^[0] <> VUndefined) or (FSlots^[1] <> VUndefined);
 end;
 
 function TTestWork.Pump(ATimeoutMs: Cardinal): Boolean;
 var I: Integer;
 begin
   Result := True;
+  if (FirstAfterTurns > 0) and (ATimeoutMs > 0) then
+  begin
+    Dec(FirstAfterTurns);
+    if (FirstAfterTurns = 0) and (FSlots^[0] <> VUndefined) then
+    begin
+      ResolvePendingPromise(FSlots^[0], FirstValue);
+      FSlots^[0] := VUndefined;
+    end;
+  end;
+  if SettleThenFail and (FSlots^[0] <> VUndefined) then
+  begin
+    ResolvePendingPromise(FSlots^[0], MkInt(42));
+    FSlots^[0] := VUndefined;
+    Exit(ThrowTypeError('pump failed after a result'));
+  end;
   if not Ready then
   begin
     if ATimeoutMs = 0 then Exit;
@@ -131,6 +159,7 @@ end;
 procedure TTestWork.Discard;
 begin
   Inc(Discards);
+  ForcePending := False;
   FSlots^[0] := VUndefined;
   FSlots^[1] := VUndefined;
 end;
@@ -146,6 +175,8 @@ begin
     'could not install hostPromise');
   Check(InjectGlobalBinding('hostReady', NewNativeFunction(@ReadyWork, 'hostReady', 0)),
     'could not install hostReady');
+  Check(InjectGlobalBinding('hostFirstValue', NewNativeFunction(@SetFirstValue, 'hostFirstValue', 1)),
+    'could not install hostFirstValue');
 end;
 
 { a run whose host environment started work and then failed, or whose entry then failed, releases that work, and
@@ -185,6 +216,7 @@ var
   RunResult: TGocciaRunResult;
   PromiseSlots: TPromiseSlots;
   ProviderDir: string;
+  Discards: Integer;
 begin
   PromiseSlots[0] := VUndefined;
   PromiseSlots[1] := VUndefined;
@@ -198,6 +230,7 @@ begin
     Engine.SetHostWork(Work);
     Check(Engine.PrepareHost(ErrorText), ErrorText);
     AddRootRange(@PromiseSlots[0], Length(PromiseSlots));
+    AddRoot(@FirstValue);
     InstallHostNatives;
 
     if ABare then Source := 'await hostPromise();'
@@ -297,6 +330,40 @@ begin
       end;
     end;
 
+    if not ABare then
+    begin
+      { a pump that runs guest code without queuing a job (a thenable's getter) can make a timer runnable while
+        only a parked interval waited: the timer still fires, under an instruction limit too }
+      Engine.MaxInstructions := 1000000;
+      Engine.TimeoutMs := 2000;
+      Work.Stall := True;
+      Work.FirstAfterTurns := 3;
+      RunResult := Engine.Run('external-pump-getter.mjs',
+        'const parked = setInterval(() => {}, 1000);' +
+        'hostFirstValue({ get then() { setTimeout(() => hostReady(), 0); return undefined; } });' +
+        'hostPromise(); const value = await hostPromise(); clearInterval(parked); value;');
+      Check(RunResult.Ok and (RunResult.ResultText = '42'),
+        'a timer scheduled by guest code in a pump did not fire: ' + RunResult.ErrorMessage);
+      Work.Stall := False;
+      Work.Ready := False;
+      Engine.MaxInstructions := 0;
+      Engine.TimeoutMs := 0;
+      FirstValue := VUndefined;
+    end;
+
+    { a pump that settles one request and then fails: that request's reaction does not run in the next run }
+    Discards := Work.Discards;
+    Work.SettleThenFail := True;
+    RunResult := Engine.Run('external-settle-then-fail.mjs',
+      'globalThis.leaked = false; hostPromise().then(() => { globalThis.leaked = true; }); await hostPromise();');
+    Work.SettleThenFail := False;
+    Check(not RunResult.Ok and (Work.Discards = Discards + 1) and not Work.HasPending,
+      'a failed pump left host work behind: ' + RunResult.ErrorMessage);
+    { a leaked reaction was queued first, so it would run before this await resumes }
+    RunResult := Engine.Run('external-after-settle-then-fail.mjs', 'await null; String(globalThis.leaked);');
+    Check(RunResult.Ok and (RunResult.ResultText = 'false'),
+      'a reaction from a failed pump ran in the next run: ' + RunResult.ResultText + RunResult.ErrorMessage);
+
     Engine.SetHostWork(nil);
     FreeAndNil(Work);
     CollectMinor;
@@ -354,6 +421,30 @@ begin
       'a timed-out test did not drop only its own host work: ' + Json + Err);
   finally
     TestTimeoutMs := 0;
+    Engine.Free;
+    FreeAndNil(Work);
+  end;
+end;
+
+{ A host that cannot prepare releases the work its source already holds. }
+procedure CheckFailedPrepare;
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  PromiseSlots: TPromiseSlots;
+begin
+  PromiseSlots[0] := VUndefined;
+  PromiseSlots[1] := VUndefined;
+  Work := TTestWork.Create(@PromiseSlots);
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ConfigJson := '{ not json';
+    Engine.SetHostWork(Work);
+    Work.ForcePending := True;
+    RunResult := Engine.Run('external-unprepared.mjs', '42;');
+    Check(not RunResult.Ok and (Work.Discards = 1) and not Work.HasPending,
+      'a host that failed to prepare kept host work: ' + RunResult.ErrorMessage);
+  finally
     Engine.Free;
     FreeAndNil(Work);
   end;
@@ -422,8 +513,10 @@ begin
 end;
 
 begin
+  FirstValue := VUndefined;
   CheckRuns(False);
   CheckRuns(True);
+  CheckFailedPrepare;
   CheckTestTimeout;
   CheckLateDelivery;
   CheckFailedSuite;

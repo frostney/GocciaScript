@@ -1171,6 +1171,8 @@ begin
   if not PrepareHost(Err) then
   begin
     Result.ErrorMessage := Err;
+    { work the host source holds from before does not outlive the failed run }
+    DiscardEmbedderWork;
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
