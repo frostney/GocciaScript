@@ -241,8 +241,11 @@ procedure JitTakeThread;
   of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). The memory limit
   (HeapCeiling) is always in force: a full collection that leaves more live aborts the run the same way, with a
   RangeError (MemoryLimitMessage) and AbortKind 3. }
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean = False);
 procedure LimitsDisarm;
+{ The entry counter before disarming, including the step that refused an exhausted cap. }
+function ReadInstructionCount(out Count: QWord): Boolean;
+procedure StopInstructionMeasurement;
 { the spent limit that aborted the run until LimitsDisarm: 0 none, 1 the timeout, 2 the instruction budget, 3 the
   memory limit, 4 a host abort }
 function LimitAbortKind: Integer;
@@ -744,12 +747,35 @@ begin
   Result := False;
 end;
 
+function ReadInstructionCount(out Count: QWord): Boolean;
+var Initial: Int64;
+begin
+  Count := 0;
+  Result := InstrCounted;
+  if not Result then Exit;
+  if InstrMax > 0 then Initial := InstrMax else Initial := High(Int64);
+  if InstrLeft >= 0 then Count := QWord(Initial - InstrLeft)
+  else Count := QWord(Initial) + 1;
+end;
+
+{ False on the first charge past a positive cap. The measurement-only counter saturates. }
+function ChargeInstruction: Boolean; inline;
+begin
+  if InstrLeft > 0 then
+  begin
+    Dec(InstrLeft);
+    Exit(True);
+  end;
+  if InstrMax <= 0 then Exit(True);
+  InstrLeft := -1;
+  Result := False;
+end;
+
 function PollInterrupt: Boolean;
 begin
   if InstrCounted then
   begin
-    Dec(InstrLeft);
-    if InstrLeft < 0 then Exit(AbortInstructions);
+    if not ChargeInstruction then Exit(AbortInstructions);
   end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;
@@ -966,6 +992,14 @@ begin
   LimitTimer.Start;
 end;
 
+procedure StopInstructionMeasurement;
+begin
+  if (InstrMax > 0) or not InstrCounted then Exit;
+  InstrCounted := False;
+  InstrLeft := 0;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil);
+end;
+
 procedure LimitsDropTimer;
 begin
   if LimitTimer = nil then Exit;
@@ -998,17 +1032,15 @@ begin
   end;
 end;
 
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean);
 begin
   LimitsDisarm;
   LimitTimeoutMs := TimeoutMs;
   InstrMax := MaxInstructions;
-  if MaxInstructions > 0 then
-  begin
-    InstrCounted := True;
-    InstrLeft := MaxInstructions;
-  end;
-  if (TimeoutMs > 0) or (MaxInstructions > 0) or CoverageOn or ProfileOn then JitBlocked := True;
+  InstrCounted := (MaxInstructions > 0) or MeasureInstructions;
+  if MaxInstructions > 0 then InstrLeft := MaxInstructions
+  else if MeasureInstructions then InstrLeft := High(Int64);
+  if (TimeoutMs > 0) or InstrCounted or CoverageOn or ProfileOn then JitBlocked := True;
   if TimeoutMs > 0 then
   begin
     LimitTimer := TLimitTimer.Create(True);
@@ -4622,6 +4654,14 @@ begin
     okBound:
       begin
         if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+        { uncurryThis(f) (Function.prototype.call.bind(f), no bound arguments) called with (t, ...args): f called
+          with this t and the rest, as the call native would call it }
+        if (PValueArray(PtrOf(O^.Aux2))^.Len = 1) and IsObject(O^.Aux1) and (ObjOf(O^.Aux1)^.OKind = okNative) and
+           (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsCallable(PValueArray(PtrOf(O^.Aux2))^.Data[0]) then
+        begin
+          if Argc = 0 then Exit(CallValue(PValueArray(PtrOf(O^.Aux2))^.Data[0], VUndefined, nil, 0, Res));
+          Exit(CallValue(PValueArray(PtrOf(O^.Aux2))^.Data[0], Args^, PValue(PtrUInt(Args) + SizeOf(TValue)), Argc - 1, Res));
+        end;
         { 10.4.1.1: a chain of bound functions followed in a loop, each level's bound arguments in front of those
           of the level outside it, the innermost bound this }
         N := BoundChainArgs(O, Args, Argc, F, This, nil);
@@ -7319,6 +7359,21 @@ begin
   Result := 1;
 end;
 
+{ whether O is uncurryThis(f) for a native f other than Function.prototype.call: Function.prototype.call.bind(f) with
+  no bound arguments (the preludes' captured prototype methods), which the JIT's call paths call as f.call. FastLoop
+  leaves such a call to Execute: on x86_64-darwin any further code in its opCall breaks the test runner's files that
+  follow a ShadowRealm's (#2232) }
+function XUncurriedNative(O: PObj): Boolean; inline;
+var B: PValueArray;
+begin
+  B := PValueArray(PtrOf(O^.Aux2));
+  Result := (B^.Len = 1) and IsObject(O^.Aux1) and (ObjOf(O^.Aux1)^.OKind = okNative) and
+    (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsObject(B^.Data[0]) and (ObjOf(B^.Data[0])^.OKind = okNative) and
+    { f = Function.prototype.call itself: its shifted call would be one XJitCall hands back to the interpreter, which runs
+      the instruction again on the shifted registers }
+    (ObjOf(B^.Data[0])^.Native <> FuncCallNative);
+end;
+
 { FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }
 procedure XFastNewObj(R: PValue; A: NativeInt; N: Integer); noinline;
 begin
@@ -8711,7 +8766,6 @@ LReload:
   end;
   while True do
   begin
-    {$IFNDEF GOCCIA_OPSTATS}
     if Counted then
     begin
       if CoverageOn then CovStep(Fr, PC);
@@ -8719,8 +8773,7 @@ LReload:
       { an instruction limit: every instruction here, none in FastLoop }
       if InstrCounted then
       begin
-        Dec(InstrLeft);
-        if InstrLeft < 0 then
+        if not ChargeInstruction then
         begin
           Fr^.PC := PC + 1;
           XAbort(2);
@@ -8728,12 +8781,13 @@ LReload:
         end;
       end;
     end
+    {$IFNDEF GOCCIA_OPSTATS}
     else if FastOp[Code[PC] and $FF] then
     begin
       PC := FastLoop(Code, PC, R, K, ICB, Fr, StopFrame);
       if PC < 0 then goto LReload;
-    end;
-    {$ENDIF}
+    end
+    {$ENDIF};
     I := Code[PC];
     A := PWord(PByte(@Code[PC]) + 1)^;
     Inc(PC);
@@ -9676,9 +9730,27 @@ LReload:
             R[A] := V;
             Continue;
           end;
+          { uncurryThis(f), the preludes' captured prototype methods (Function.prototype.call.bind(f) with no bound
+            arguments), called with (t, ...args): f is called with this t and the rest, as the bound function's call
+            of the call native would call it, without that copy of the arguments and the native in between }
+          if (O^.OKind = okBound) and (PValueArray(PtrOf(O^.Aux2))^.Len = 1) and IsObject(O^.Aux1) and
+             (ObjOf(O^.Aux1)^.OKind = okNative) and (ObjOf(O^.Aux1)^.Native = FuncCallNative) and
+             IsObject(PValueArray(PtrOf(O^.Aux2))^.Data[0]) and
+             (ObjOf(PValueArray(PtrOf(O^.Aux2))^.Data[0])^.OKind in [okFunction, okNative]) then
+          begin
+            VA := PValueArray(PtrOf(O^.Aux2))^.Data[0];
+            R[A] := VA;
+            if Argc = 0 then R[A + 1] := VUndefined
+            else
+            begin
+              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+              Dec(Argc);
+            end;
+            O := ObjOf(VA);
+          end
           { f.call(t, ...args) with the intrinsic call and a bytecode or native f: the registers shift down a place
             (f the callee, t its this) and f is called here, without the call native's nested Execute }
-          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] shr 48) = TAG_PTR_HI) and
+          else if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] shr 48) = TAG_PTR_HI) and
              (PCell(PtrUInt(R[A + 1] and PTR_MASK))^.Kind = ckObject) and (ObjOf(R[A + 1])^.OKind in [okFunction, okNative]) then
           begin
             VA := R[A + 1];
@@ -10806,27 +10878,26 @@ end;
 
 { ---------------- entry ---------------- }
 
-{ the compiling thread's engine ends: its templates' code goes, the JIT's memory back to the end of the shared
-  stubs (no other thread's engine has compiled code: only this thread compiles), and instanceof's cache is
-  emptied before HeapDone frees the shapes its entries name }
+{ Release the engine's compiled code and clear the instanceof cache before HeapDone frees its shapes.
+  The compiling thread keeps the shared executable stubs for the next engine. }
 procedure JitEngineDone;
 {$IFDEF GOCCIA_JIT}
-var I: Integer;
+var I: Integer; Mapping: TJitCodeMapping;
 begin
+  for I := 0 to JitCodeMappingCount - 1 do
+  begin
+    Mapping := JitCodeMappings[I];
+    Fpmunmap(Mapping.Address, Mapping.Size);
+  end;
+  JitCodeMappings := nil;
+  JitCodeMappingCount := 0;
   if GetCurrentThreadId <> JitMainThread then Exit;
   FillChar(InstOfCache, SizeOf(InstOfCache), 0);
-  { the define and private-member caches of the code that goes now (every template's is past the mark) }
+  { the define and private-member caches of the engine's templates }
   for I := 0 to JitDefListCount - 1 do FreeMem(JitDefList[I]);
   for I := 0 to JitPrivListCount - 1 do FreeMem(JitPrivList[I]);
   JitDefList := nil; JitPrivList := nil; JitDefListCount := 0; JitPrivListCount := 0;
   ODblShapes := nil; ODblShapeCount := 0;
-  if JitMarkChunk = nil then Exit;
-  {$IFDEF UNIX}
-  for I := 0 to High(JitLaterChunks) do fpmunmap(JitLaterChunks[I], JIT_CHUNK);
-  {$ENDIF}
-  JitLaterChunks := nil;
-  JitChunk := JitMarkChunk;
-  JitChunkUsed := JitMarkUsed;
 end;
 {$ELSE}
 begin

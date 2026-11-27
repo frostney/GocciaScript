@@ -68,7 +68,7 @@ end.
 | Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, [`DefineNativeModule`](#native-modules), `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
 | Capabilities | `Capabilities`, `ProjectRoot`, `AuditSink`, `Audit`, `FetchMaxResponseBytes` |
-| Limits | `TimeoutMs`, `MaxInstructions`, `MaxMemory`, `MaxFrames` |
+| Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `MaxMemory`, `MaxFrames` |
 | Test and benchmark hosts | `RunTests`, `EndTests`, `LateRejection`, `RunBenchmarks`, `HeapSnapshotObserved`, `HeapSnapshotVerify` |
 | Profiling and coverage | `ProfileOpcodes`, `ProfileFunctions`, `Coverage` |
 
@@ -448,6 +448,7 @@ Engine.AuditSink := Log.Record_;
 | `Ok` | The run completed |
 | `Compiled` | The entry compiled; False for a syntax error |
 | `Aborted` | `gaNone`, or the limit or host abort that ended the run ([Execution Limits](#execution-limits)) |
+| `HasInstructionCount`, `InstructionCount` | Whether the entry's execution was counted and the number of units charged in that entry and its event loop |
 | `ErrorMessage` | The uncaught value as text (`TypeError: bad input`), or the limit's message |
 | `ErrorIsError` | The thrown value had a string `name` or `message`, or the source did not compile |
 | `ErrorName`, `ErrorText` | Its name and message |
@@ -494,6 +495,11 @@ Engine.MaxFrames := 5000;
 ### Instruction Limit
 
 `MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
+
+A capped entry reports its count in `TGocciaRunResult`, including the charge that found an exhausted cap.
+Set `MeasureInstructions` to count the same units in an uncapped entry. Both modes count the entry and its event
+loop on that engine thread, including native work charged there. Set neither setting to keep the ordinary fast
+path and leave `HasInstructionCount` false. Counter-enabled entries run in the interpreter.
 
 ### Memory Limit
 

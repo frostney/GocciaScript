@@ -6,11 +6,16 @@
 // and the file formats.
 (function (G, n, shared) {
   'use strict';
-  const parseJSON = JSON.parse, create = Object.create, defineProperty = Object.defineProperty;
+  const parseJSON = JSON.parse, create = Object.create, defineProperty = Object.defineProperty, setProto = Object.setPrototypeOf;
   const toObject = Object, reflectGet = Reflect.get, ownKeys = Reflect.ownKeys, ProxyCtor = Proxy;
   const ErrorCtor = G.Error, TypeErrorCtor = G.TypeError, WeakSetCtor = WeakSet;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const WeakSetPrototypeAdd = uncurryThis(WeakSet.prototype.add), WeakSetPrototypeHas = uncurryThis(WeakSet.prototype.has);
+  const StringCtor = String;
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const isTagged = new WeakSetCtor();
-  const addTagged = (v) => { isTagged.add(v); return v; };
+  const addTagged = (v) => { WeakSetPrototypeAdd(isTagged, v); return v; };
   const SPECIAL_NUMBERS = { NaN: NaN, Infinity: Infinity, '-Infinity': -Infinity, '-0': -0 };
   const KIND_YAML = 0, KIND_YAML_DOCUMENTS = 1, KIND_TOML = 2;
 
@@ -23,26 +28,27 @@
       }));
     }
     const box = value === null ? create(null) : toObject(value);
-    defineProperty(box, 'tagName', { value: tagName });
-    defineProperty(box, 'value', { value });
+    defineProperty(box, 'tagName', { __proto__: null, value: tagName });
+    defineProperty(box, 'value', { __proto__: null, value });
     return addTagged(box);
   }
 
-  const field = (value) => ({ value, writable: true, enumerable: true, configurable: true });
+  const field = (value) => ({ __proto__: null, value, writable: true, enumerable: true, configurable: true });
 
   // the value of entry 0 of Goccia.DataTree's JSON; a container is made empty when first named and filled in a
   // second pass, so a cycle finds it and the nesting needs no recursion
   function rebuild(json) {
     const entries = parseJSON(json);
-    const values = [], made = [], unfilled = [];
+    // the caches have no prototype: a read of an index not filled yet finds nothing a script put on Array.prototype
+    const values = setProto([], null), made = setProto([], null), unfilled = [];
     const valueOf = (i) => {
       if (made[i] === true) return values[i];
       const e = entries[i];
       let v;
       if (e === null || typeof e !== 'object') v = e;
       else if (e[0] === 0) v = SPECIAL_NUMBERS[e[1]];
-      else if (e[0] === 1) { v = []; unfilled.push(i); }
-      else if (e[0] === 2) { v = create(null); unfilled.push(i); }
+      else if (e[0] === 1) { v = []; append(unfilled, i); }
+      else if (e[0] === 2) { v = create(null); append(unfilled, i); }
       else v = tagged(e[1], valueOf(e[2]));
       defineProperty(values, i, field(v));
       defineProperty(made, i, field(true));
@@ -87,14 +93,15 @@
       throw new ErrorCtor(`YAML module "${specifier}" must contain at least one top-level document.`);
     const out = [];
     if (documents.length > 1) {
-      for (let i = 0; i < documents.length; i++) out.push(String(i), documents[i]);
+      for (let i = 0; i < documents.length; i++) { append(out, StringCtor(i)); append(out, documents[i]); }
       return shared.exportList(out);
     }
     const document = documents[0];
-    if (document === null || typeof document !== 'object' || isTagged.has(document)) {
+    if (document === null || typeof document !== 'object' || WeakSetPrototypeHas(isTagged, document)) {
       return shared.exportList(['default', document]);
     }
-    for (const key of ownKeys(document)) out.push(key, document[key]);
+    const keys = ownKeys(document);
+    for (let i = 0; i < keys.length; i++) { append(out, keys[i]); append(out, document[keys[i]]); }
     return shared.exportList(out);
   };
   shared.dataFormats['.yaml'] = yamlModule;

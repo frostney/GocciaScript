@@ -124,6 +124,27 @@ begin
   end;
 end;
 
+procedure CheckSyncWaitTimeout;
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    RunResult := Engine.Run('setup.js', 'globalThis.cells = new Int32Array(new SharedArrayBuffer(4));');
+    Check(RunResult.Ok, 'synchronous wait fixture setup: ' + RunResult.ErrorMessage);
+    Engine.TimeoutMs := 100;
+    RunResult := Engine.Run('wait.js', 'Atomics.wait(cells, 0, 0);');
+    Check(RunResult.Aborted = gaTimeout, 'a synchronous wait should respect the run deadline');
+    Engine.TimeoutMs := 0;
+    RunResult := Engine.Run('notify.js', 'Atomics.notify(cells, 0);');
+    Check(RunResult.Ok and (RunResult.ResultText = '0'), 'timeout should unregister the synchronous waiter');
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure CheckAsyncWaitTimeout;
 var
   Engine: TGocciaEngine;
@@ -294,6 +315,7 @@ begin
     CheckAbort(gaInstructionLimit, True);
     CheckAbort(gaTimeout);
     CheckAbort(gaMemoryLimit);
+    CheckSyncWaitTimeout;
     CheckAsyncWaitTimeout;
     CheckFinalizationAbort;
     if ParamCount = 1 then
