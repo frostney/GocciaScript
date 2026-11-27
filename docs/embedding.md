@@ -465,7 +465,7 @@ Engine.MaxFrames := 5000;
 
 ### Instruction Limit
 
-`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`). The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
+`MaxInstructions` counts dispatched instructions; a native loop whose trip count the script controls charges one step per poll (`PollInterrupt`), as every element loop of the `Array.prototype` and typed-array built-ins does. A copy between typed arrays of one element type moves bytes without an element loop and charges no steps. The run ends with `Aborted = gaInstructionLimit` and `Execution exceeded instruction limit of N`.
 
 A capped entry reports its count in `TGocciaRunResult`, including the charge that found an exhausted cap.
 Set `MeasureInstructions` to count the same units in an uncapped entry. Both modes count the entry and its event
