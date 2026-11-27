@@ -357,7 +357,7 @@ begin
       if not InstallBenchmarkAPI(Err) then
         raise Exception.Create('benchmark host setup failed: ' + UTF8Encode(Err));
       ExecStart := GetNanoseconds;
-      RunResult := Engine.Run(FileName, UTF8Decode(ASource.Text));
+      RunResult := Engine.Run(FileName, ASource.Text);
       Res.CompileTimeNanoseconds := RunResult.CompileNanoseconds;
       Res.DeterministicProfile := Deterministic;
       if not RunResult.Ok then

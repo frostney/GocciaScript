@@ -755,7 +755,7 @@ begin
       MemoryStart := Engine.Memory;
       Engine.HeapSnapshots := FHeapSnapshots.Present;
       SetUpEngine(Engine);
-      SrcText := UTF8Decode(ASource.Text);
+      SrcText := ASource.Text;
       HoistTestMocks(FileName, SrcText);
       RunResult := Engine.Run(FileName, SrcText);
       Res.CompileNanoseconds := RunResult.CompileNanoseconds;

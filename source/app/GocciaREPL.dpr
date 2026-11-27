@@ -235,7 +235,7 @@ begin
       Source.Clear;
       Source.Add(Line);
       Start := GetNanoseconds;
-      RunResult := Engine.Run(REPL_FILE_NAME, UTF8Decode(Line));
+      RunResult := Engine.Run(REPL_FILE_NAME, Line);
       if RunResult.Ok then
       begin
         if RunResult.HasResult then

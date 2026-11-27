@@ -5292,6 +5292,23 @@ await section("Loader: --globals file...", async () => {
   }
 });
 
+await section("Loader: --globals file keeps raw U+FFFE and U+FFFF...", async () => {
+  const tmp = makeTmp();
+  try {
+    const globalsPath = join(tmp, "globals.json");
+    // the noncharacters as raw UTF-8 bytes (EF BF BF, EF BF BE), not as JSON escapes
+    writeFileSync(globalsPath, Buffer.concat([
+      Buffer.from('{"name": "'),
+      Buffer.from([0xef, 0xbf, 0xbf, 0xef, 0xbf, 0xbe]),
+      Buffer.from('"}'),
+    ]));
+    const { json } = runLoaderJson("[name.charCodeAt(0), name.charCodeAt(1)].join();\n", [`--globals=${globalsPath}`]);
+    if (json.files?.[0]?.result !== "65535,65534") throw new Error(`--globals should keep U+FFFF and U+FFFE, got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 /**
  * Builds a throwaway project with a node_modules tree covering the shapes
  * docs/module-resolution.md describes: an exports map with a wildcard, a

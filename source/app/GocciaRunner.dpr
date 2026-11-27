@@ -1188,7 +1188,7 @@ begin
       if SameText(ExtractFileExt(AFileName), EXT_GBC) then
         RunResult := Engine.RunArtifact(AFileName, ReadBytecodeFile(AFileName))
       else
-        RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
+        RunResult := Engine.Run(AFileName, ASource.Text);
       if IsJsonOutput then
       begin
         Report := Default(TGocciaFileReport);

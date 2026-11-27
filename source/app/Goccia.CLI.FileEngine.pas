@@ -422,7 +422,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.LoadFromFile(APath);
-    Result := UTF8Decode(Lines.Text);
+    Result := Lines.Text;
   finally
     Lines.Free;
   end;

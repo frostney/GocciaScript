@@ -44,7 +44,8 @@ implementation
 
 uses
   Classes, SysUtils, Goccia.Core, Goccia.Instructions, Goccia.Compiler, Goccia.VM, Goccia.Eval, Goccia.Promise, Goccia.Atomics, Goccia.Agent,
-  Goccia.Engine, Goccia.TypedArrays, Goccia.Modules, Goccia.Builtins, Goccia.ThreadCleanupRegistry, Goccia.HostEnvironment;
+  Goccia.Engine, Goccia.TypedArrays, Goccia.Modules, Goccia.Builtins, Goccia.ThreadCleanupRegistry, Goccia.HostEnvironment,
+  TextEncoding;
 
 {$I Goccia.Test262Host.inc}
 
@@ -120,7 +121,7 @@ begin
     Exit;
   end;
   if (Length(Raw) >= 3) and (Raw[1] = #$EF) and (Raw[2] = #$BB) and (Raw[3] = #$BF) then Delete(Raw, 1, 3);
-  Src := UTF8Decode(Raw);
+  Src := UTF8DecodeKeepingNoncharacters(Raw);
   Result := True;
 end;
 
