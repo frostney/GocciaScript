@@ -299,6 +299,6 @@
   if (exposed) shared.hostModules['goccia:timers'] = () => timersModule;
   // the test runner, after a unit failed: what it left on the real timers does not run (fake timers are the suite's)
   function discard() { if (!fake) queue.clear(); }
-  shared.timers = { fireNext, drainTest, add, clear, discard, count: () => queue.size };
+  shared.timers = { fireNext, drainTest, add, clear, discard, count: () => queue.size, queue, hostTasks };
   if (exposed) shared.runtimeGlobals.push('setTimeout', 'setInterval', 'clearTimeout', 'clearInterval');
 })

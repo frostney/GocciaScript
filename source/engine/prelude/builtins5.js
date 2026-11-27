@@ -793,7 +793,7 @@
       var removed = false;
       for (var i = cells.length - 1; i >= 0; i--) {
         var c = cells[i];
-        if (c.done || c.token === undefined) continue;
+        if (c.done || c.token === undefined || weakGet(c.box) === null) continue;
         var t = weakGet(c.token);
         if (t !== undefined && sameValue(t, unregisterToken)) {
           // a cell whose target died stays registered until its job runs: removing it here cancels that job
@@ -813,7 +813,8 @@
           if (reg === undefined) continue;
           push(live, registries[i]);
           var cells = reg.#cells, keep = [];
-          for (var j = 0; j < cells.length; j++) if (!cells[j].done) push(keep, cells[j]);
+          for (var j = 0; j < cells.length; j++)
+            if (!cells[j].done && weakGet(cells[j].box) !== null) push(keep, cells[j]);
           reg.#cells = keep;
           for (var k = keep.length - 1; k >= 0; k--) {
             var c = keep[k];
@@ -836,7 +837,7 @@
           return cleanupQueue.length > 0;
         }
         return false;
-      });
+      }, cleanupQueue);
     }
   }
   defineProperty(FinalizationRegistry.prototype, SymToStringTag, { value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });

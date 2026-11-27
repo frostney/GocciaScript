@@ -377,6 +377,14 @@
   // rejecting with its reason inside abort(), before the abort event. The requests run on host workers; the event
   // loop settles them through settle below.
   const pendingFetches = new Map();   // id -> { resolve, reject, signal }
+  const getPending = Map.prototype.get, savePending = Map.prototype.set, forgetPending = Map.prototype.delete;
+  const onFetchAbort = (id) => () => {
+    const pending = apply(getPending, pendingFetches, [id]);
+    if (pending === undefined) return;
+    apply(forgetPending, pendingFetches, [id]);
+    n.fetchCancel(id);
+    pending.reject(pending.signal.reason);
+  };
   const REDIRECT_MODES = { follow: 0, error: 1, manual: 2 };
   function fetch(input, init = undefined) {
     if (arguments.length === 0) throw new TypeError('fetch requires a URL argument');
@@ -417,13 +425,9 @@
       const remaining = signal !== null ? shared.signalRemaining(signal) : -1;
       const id = n.fetchStart(url, method, headers, redirect, remaining);
       if (id < 0) { reject(new TypeError('fetch worker limit exceeded')); return; }
-      pendingFetches.set(id, { resolve, reject, signal });
+      apply(savePending, pendingFetches, [id, { resolve, reject, signal }]);
       // an abort algorithm: the rejection comes inside abort(), before the abort event
-      if (signal !== null) shared.onAbort(signal, () => {
-        if (!pendingFetches.delete(id)) return;
-        n.fetchCancel(id);
-        reject(signal.reason);
-      });
+      if (signal !== null) shared.onAbort(signal, onFetchAbort(id));
     });
   }
   function brandHeaders(h) { try { headersList(h); return true; } catch { return false; } }
@@ -435,12 +439,12 @@
       for (const p of [...pendingFetches.values()]) if (p.signal !== null) void p.signal.aborted;
       return;
     }
-    const p = pendingFetches.get(id);
+    const p = apply(getPending, pendingFetches, [id]);
     if (p === undefined) return;
-    pendingFetches.delete(id);
+    apply(forgetPending, pendingFetches, [id]);
     if (kind === 1) { p.reject(a); return; }
     p.resolve(makeResponse(a, b, c, d === null ? null : new Uint8Array(d), e, f));
-  });
+  }, pendingFetches);
   hidden(G, 'fetch', fetch);
   shared.headersList = headersList;
   shared.runtimeGlobals.unshift('Blob');

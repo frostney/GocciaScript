@@ -105,6 +105,8 @@ function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: 
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
+{ drops work after a run aborts, while its limits are still in force }
+procedure DiscardAbortedRunWork(WeakMark: Int64);
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 { the test file's vi.mock directives (Goccia.Vitest.MockHoist): each mock's module, served at the address its
@@ -170,7 +172,7 @@ function CurrentResolver: TModuleResolver;
 implementation
 
 uses
-  Math, MemoryDetection, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
+  Math, MemoryDetection, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -228,7 +230,7 @@ threadvar
   MockModules: TStringList;
   SharedV, LoadHostModuleV, HasHostModuleV: TValue;
 
-  FireNextV, DiscardTimersV: TValue;
+  FireNextV, DiscardTimersV, TimerQueue, TimerHostTasks: TValue;
   EventLoopRootedGen: Integer;
   TestApiV: TValue;
   TestApiRootedGen: Integer;
@@ -2012,9 +2014,12 @@ begin
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
     AddRoot(@DiscardTimersV);
+    AddRoot(@TimerQueue); AddRoot(@TimerHostTasks);
   end;
   FireNextV := VUndefined;
   DiscardTimersV := VUndefined;
+  TimerQueue := VUndefined;
+  TimerHostTasks := VUndefined;
   SharedV := VUndefined;
   LoadHostModuleV := VUndefined;
   HasHostModuleV := VUndefined;
@@ -2078,7 +2083,14 @@ begin
     Goccia := RootAt(TempTop - 1);
     { shared.timers.fireNext, for the event loop }
     if Result and GetV(RootAt(Base + 2), AtomOf('timers'), R) and IsObject(R) then
-      Result := GetV(R, AtomOf('fireNext'), FireNextV) and GetV(R, AtomOf('discard'), DiscardTimersV);
+    begin
+      PushRoot(R);
+      Result := GetV(RootAt(TempTop - 1), AtomOf('fireNext'), FireNextV) and
+        GetV(RootAt(TempTop - 1), AtomOf('discard'), DiscardTimersV) and
+        GetV(RootAt(TempTop - 1), AtomOf('queue'), TimerQueue) and
+        GetV(RootAt(TempTop - 1), AtomOf('hostTasks'), TimerHostTasks);
+      PopRoots(1);
+    end;
     SharedV := RootAt(Base + 2);
     if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV) and
       GetV(SharedV, AtomOf('hasHostModule'), HasHostModuleV);
@@ -2513,6 +2525,22 @@ end;
 function RunEventLoop: Boolean;
 begin
   Result := RunEventLoopIn(False);
+end;
+
+procedure DiscardAbortedRunWork(WeakMark: Int64);
+begin
+  DiscardJobs;
+  DiscardRejections;
+  TakeJobErrors;
+  JobErrorDropsTimers := False;
+  if SameEngine(EventLoopRootedGen) then
+  begin
+    if IsObject(TimerQueue) then DiscardMapEntries(TimerQueue);
+    if IsObject(TimerHostTasks) then ArraySetLength(ObjOf(TimerHostTasks), 0);
+  end;
+  DiscardFetches;
+  DiscardAsyncWaits;
+  DiscardWeakCleanup(WeakMark);
 end;
 
 function RunTestSuites(var Json, Err: UnicodeString): Boolean;

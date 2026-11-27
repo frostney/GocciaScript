@@ -448,6 +448,8 @@ if not R.Ok then
 
 Four limits bound a run. Each is a property read by `Run`; 0 means none (`MaxMemory` 0: the default ceiling). A run with a timeout, an instruction budget or a frame bound runs without the JIT, since compiled code counts no instructions and reaches the timeout's interrupt only at loop back edges, and so does a run with `Coverage` or a profile; the memory limit leaves the JIT on.
 
+When `Run` or `RunArtifact` returns an `Aborted` reason, the engine discards queued jobs, timers, finalization work and asynchronous waits. It stops waiting for outstanding fetches and drops their completions. A request already dispatched may finish on its worker. Globals and changes made before the abort remain visible to later runs on the same engine.
+
 ```pascal
 Engine.TimeoutMs := 2000;
 Engine.MaxInstructions := 100000000;

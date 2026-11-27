@@ -63,7 +63,7 @@ begin
   PushRoot(NewNativeFunction(WeakBoxNative, 'weakBox', 2));
   PushRoot(NewNativeFunction(WeakGetNative, 'weakGet', 1));
   PushRoot(NewNativeFunction(WeakKeepNative, 'weakKeep', 1));
-  PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 1));
+  PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 2));
   { Goccia.Weak's ephemeron tables: WeakMap and WeakSet }
   PushRoot(NewNativeFunction(TableNewNative, 'tableNew', 0));
   PushRoot(NewNativeFunction(TableGetNative, 'tableGet', 2));
