@@ -442,6 +442,13 @@ type
     LType: Byte;
   end;
 
+  TVarTypes = TDictionary<UnicodeString, Byte>;
+  PVarShadow = ^TVarShadow;
+  TVarShadow = record
+    Statement: TGocciaTryStatement;
+    Parent: PVarShadow;
+  end;
+
   TScope = class
     Bindings: array of TBinding;
     Count: Integer;
@@ -737,7 +744,8 @@ type
     procedure HoistBlock(L: TList<TGocciaASTNode>);
     procedure DeclareGlobals(T: PFuncTemplate; Nodes: TList<TGocciaASTNode>; VarNames: TStringList);
     procedure HoistFunctionsIn(Nodes: array of TGocciaASTNode);
-    procedure CollectVarNames(N: TGocciaASTNode; Names: TStringList); noinline;   { inlined, its threadvar cache trips the FPC TLS miscompile }
+    procedure CollectVarNames(N: TGocciaASTNode; Names: TStringList; Types: TVarTypes = nil;
+      Shadows: PVarShadow = nil); noinline;   { inlined, its threadvar cache trips the FPC TLS miscompile }
     { B.3.2: the block-level function declarations of a non-strict body that also get a var binding (their names
       into Names, the declarations into AnnexBFuncs); TopLex the names a var could not share at the top }
     procedure NoteLegacyArgumentsRead(O: TGocciaExpression);
@@ -760,7 +768,7 @@ type
       the caller's var ('%var N'), or the eval variable environment's when the caller has none. False when no catch
       binding hides N }
     function StoreEvalVarBinding(const N: UnicodeString; R: Integer): Boolean;
-    procedure CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList);
+    procedure CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList; Types: TVarTypes; Shadows: PVarShadow);
     procedure CompileVarDecl(D: TGocciaVariableDeclaration);
     procedure CompileIf(S: TGocciaIfStatement);
     procedure CompileFor(S: TGocciaForStatement);
@@ -2275,6 +2283,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
   SavedTail, SavedLine, SavedCol: Integer;
   CovFnIdx: Integer; CovLocBody, CovDecl: TGocciaCoverageLoc; CovHas: Boolean;
+  VarTypes: TVarTypes; VarType: Byte;
 begin
   { coverage: the function as the source wrote it (CovFunctionNote), registered with Istanbul's decl and loc }
   CovFnIdx := -1;
@@ -2677,8 +2686,10 @@ begin
     begin
       Names := NewNameList;
       ParamNames := nil;
+      VarTypes := nil;
       try
-        for I := 0 to Nodes.Count - 1 do CollectVarNames(Nodes[I], Names);
+        if ProfileStrictTypes then VarTypes := TVarTypes.Create;
+        for I := 0 to Nodes.Count - 1 do CollectVarNames(Nodes[I], Names, VarTypes);
         if not T^.SimpleParams then
         begin
           ParamNames := NewNameList;
@@ -2754,7 +2765,17 @@ begin
               (parameter defaults, destructuring, fields) can have left something in this one }
             if T^.CodeLen > NTNop + 1 then Emit(Ins(opLoadUndef, R, 0, 0));
           end;
+        { Every store uses the binding's type, including stores compiled before its declaration.
+          A var sharing a parameter keeps the parameter's type. }
+        if VarTypes <> nil then
+          for I := 0 to Names.Count - 1 do
+            if VarTypes.TryGetValue(Names[I], VarType) then
+            begin
+              K := FS.Scopes[0].Find(Names[I]);
+              if (K >= 0) and (FS.Scopes[0].Bindings[K].LType = 0) then FS.Scopes[0].Bindings[K].LType := VarType;
+            end;
       finally
+        VarTypes.Free;
         Names.Free;
         ParamNames.Free;
       end;
@@ -3175,7 +3196,11 @@ begin
   J := FS.Scopes[0].Find(FD.Name);
   if J >= 0 then
   begin
-    if FS.Scopes[0].Bindings[J].Reg <> Src then Emit(Ins(opMov, FS.Scopes[0].Bindings[J].Reg, Src, 0));
+    if FS.Scopes[0].Bindings[J].Reg <> Src then
+    begin
+      if FS.Scopes[0].Bindings[J].LType <> 0 then Emit(Ins(opCheckType, Src, 0, FS.Scopes[0].Bindings[J].LType));
+      Emit(Ins(opMov, FS.Scopes[0].Bindings[J].Reg, Src, 0));
+    end;
     Exit;
   end;
   { goal 4: the var binding is the caller's own (under a catch binding: '%var N'), or one of its eval variable
@@ -3525,18 +3550,32 @@ begin
   end;
 end;
 
-procedure TCompiler.CollectVarNames(N: TGocciaASTNode; Names: TStringList);
+procedure TCompiler.CollectVarNames(N: TGocciaASTNode; Names: TStringList; Types: TVarTypes; Shadows: PVarShadow);
 begin
   if (N <> nil) and (KindOf(VarNameKinds, VarNameClasses, N) < Length(VarNameClasses)) then
-    CollectVarNamesOf(N, Names);
+    CollectVarNamesOf(N, Names, Types, Shadows);
 end;
 
-procedure TCompiler.CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList);
-var I, K: Integer; VD: TGocciaVariableDeclaration;
+procedure TCompiler.CollectVarNamesOf(N: TGocciaASTNode; Names: TStringList; Types: TVarTypes; Shadows: PVarShadow);
+var I, K: Integer; VD: TGocciaVariableDeclaration; CatchShadow: TVarShadow;
+  procedure AddVarType(const V: TGocciaVariableInfo);
+  var Shadow: PVarShadow; Code: Integer;
+  begin
+    if Types = nil then Exit;
+    Shadow := Shadows;
+    while Shadow <> nil do
+    begin
+      if Shadow^.Statement.CatchParam = V.Name then Exit;
+      Shadow := Shadow^.Parent;
+    end;
+    Code := StrictTypeCode(V.TypeAnnotation, V.Initializer);
+    if Code <> 0 then Types.TryAdd(V.Name, Code);
+  end;
+
   procedure AddPatternNames(P: TGocciaDestructuringPattern);
   var K: Integer;
   begin
-    if P = nil then Exit;
+    if (P = nil) or (Names = nil) then Exit;
     if P is TGocciaIdentifierDestructuringPattern then Names.Add(TGocciaIdentifierDestructuringPattern(P).Name)
     else if P is TGocciaAssignmentDestructuringPattern then AddPatternNames(TGocciaAssignmentDestructuringPattern(P).Left)
     else if P is TGocciaRestDestructuringPattern then AddPatternNames(TGocciaRestDestructuringPattern(P).Argument)
@@ -3554,7 +3593,7 @@ begin
   { a block, the common container, without the chain below (VarNameClasses lists it third, as the chain does) }
   if KindOf(VarNameKinds, VarNameClasses, N) = 2 then
   begin
-    for I := 0 to TGocciaBlockStatement(N).Nodes.Count - 1 do CollectVarNames(TGocciaBlockStatement(N).Nodes[I], Names);
+    for I := 0 to TGocciaBlockStatement(N).Nodes.Count - 1 do CollectVarNames(TGocciaBlockStatement(N).Nodes[I], Names, Types, Shadows);
     Exit;
   end;
   if N is TGocciaVariableDeclaration then
@@ -3563,59 +3602,67 @@ begin
     if VD.IsVar then
       for I := 0 to High(VD.Variables) do
         if VD.Variables[I].IsPattern then AddPatternNames(VD.Variables[I].Pattern)
-        else Names.Add(VD.Variables[I].Name);
+        else
+        begin
+          if Names <> nil then Names.Add(VD.Variables[I].Name);
+          AddVarType(VD.Variables[I]);
+        end;
   end
   else if N is TGocciaDestructuringDeclaration then
   begin
     if TGocciaDestructuringDeclaration(N).IsVar then AddPatternNames(TGocciaDestructuringDeclaration(N).Pattern);
   end
-  else if N is TGocciaBlockStatement then
-  begin
-    for I := 0 to TGocciaBlockStatement(N).Nodes.Count - 1 do CollectVarNames(TGocciaBlockStatement(N).Nodes[I], Names);
-  end
   else if N is TGocciaIfStatement then
   begin
-    CollectVarNames(TGocciaIfStatement(N).Consequent, Names);
-    CollectVarNames(TGocciaIfStatement(N).Alternate, Names);
+    CollectVarNames(TGocciaIfStatement(N).Consequent, Names, Types, Shadows);
+    CollectVarNames(TGocciaIfStatement(N).Alternate, Names, Types, Shadows);
   end
   else if N is TGocciaForStatement then
   begin
-    CollectVarNames(TGocciaForStatement(N).Init, Names);
-    CollectVarNames(TGocciaForStatement(N).Body, Names);
+    CollectVarNames(TGocciaForStatement(N).Init, Names, Types, Shadows);
+    CollectVarNames(TGocciaForStatement(N).Body, Names, Types, Shadows);
   end
-  else if N is TGocciaWhileStatement then CollectVarNames(TGocciaWhileStatement(N).Body, Names)
-  else if N is TGocciaDoWhileStatement then CollectVarNames(TGocciaDoWhileStatement(N).Body, Names)
+  else if N is TGocciaWhileStatement then CollectVarNames(TGocciaWhileStatement(N).Body, Names, Types, Shadows)
+  else if N is TGocciaDoWhileStatement then CollectVarNames(TGocciaDoWhileStatement(N).Body, Names, Types, Shadows)
   else if N is TGocciaForOfStatement then
   begin
     if TGocciaForOfStatement(N).IsVar then
     begin
-      if TGocciaForOfStatement(N).BindingName <> '' then Names.Add(TGocciaForOfStatement(N).BindingName)
+      if TGocciaForOfStatement(N).BindingName <> '' then begin if Names <> nil then Names.Add(TGocciaForOfStatement(N).BindingName); end
       else AddPatternNames(TGocciaForOfStatement(N).BindingPattern);
     end;
-    CollectVarNames(TGocciaForOfStatement(N).Body, Names);
+    CollectVarNames(TGocciaForOfStatement(N).Body, Names, Types, Shadows);
   end
   else if N is TGocciaForInStatement then
   begin
     if TGocciaForInStatement(N).IsVar then
     begin
-      if TGocciaForInStatement(N).BindingName <> '' then Names.Add(TGocciaForInStatement(N).BindingName)
+      if TGocciaForInStatement(N).BindingName <> '' then begin if Names <> nil then Names.Add(TGocciaForInStatement(N).BindingName); end
       else AddPatternNames(TGocciaForInStatement(N).BindingPattern);
     end;
-    CollectVarNames(TGocciaForInStatement(N).Body, Names);
+    CollectVarNames(TGocciaForInStatement(N).Body, Names, Types, Shadows);
   end
   else if N is TGocciaTryStatement then
   begin
-    CollectVarNames(TGocciaTryStatement(N).Block, Names);
-    CollectVarNames(TGocciaTryStatement(N).CatchBlock, Names);
-    CollectVarNames(TGocciaTryStatement(N).FinallyBlock, Names);
+    CollectVarNames(TGocciaTryStatement(N).Block, Names, Types, Shadows);
+    if (Types <> nil) and (TGocciaTryStatement(N).CatchParam <> '') then
+    begin
+      { Annex B.3.4: a same-named var initializer in a simple catch stores into the catch parameter. }
+      CatchShadow.Statement := TGocciaTryStatement(N);
+      CatchShadow.Parent := Shadows;
+      CollectVarNames(TGocciaTryStatement(N).CatchBlock, Names, Types, @CatchShadow);
+    end
+    else
+      CollectVarNames(TGocciaTryStatement(N).CatchBlock, Names, Types, Shadows);
+    CollectVarNames(TGocciaTryStatement(N).FinallyBlock, Names, Types, Shadows);
   end
   else if N is TGocciaSwitchStatement then
   begin
     for I := 0 to TGocciaSwitchStatement(N).Cases.Count - 1 do
       for K := 0 to TGocciaSwitchStatement(N).Cases[I].Consequent.Count - 1 do
-        CollectVarNames(TGocciaSwitchStatement(N).Cases[I].Consequent[K], Names);
+        CollectVarNames(TGocciaSwitchStatement(N).Cases[I].Consequent[K], Names, Types, Shadows);
   end
-  else if N is TGocciaWithStatement then CollectVarNames(TGocciaWithStatement(N).Body, Names);
+  else if N is TGocciaWithStatement then CollectVarNames(TGocciaWithStatement(N).Body, Names, Types, Shadows);
 end;
 
 procedure TCompiler.DeclarePatternNames(P: TGocciaDestructuringPattern; IsConst: Boolean);
@@ -3663,7 +3710,13 @@ begin
       VD := TGocciaVariableDeclaration(N);
       for K := 0 to High(VD.Variables) do
         if VD.Variables[K].IsPattern then DeclarePatternNames(VD.Variables[K].Pattern, VD.IsConst)
-        else DeclareLocal(VD.Variables[K].Name, VD.IsConst);
+        else
+        begin
+          DeclareLocal(VD.Variables[K].Name, VD.IsConst);
+          if ProfileStrictTypes then
+            SetBindingType(VD.Variables[K].Name,
+              StrictTypeCode(VD.Variables[K].TypeAnnotation, VD.Variables[K].Initializer));
+        end;
     end
     else if (((HoistMask and Cardinal(2)) <> 0)) and not TGocciaDestructuringDeclaration(N).IsVar then
       DeclarePatternNames(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
@@ -4927,7 +4980,25 @@ begin
       FreeTo(T);
       Continue;
     end;
-    if D.IsVar and V.HasInitializer and (WithsFor(V.Name, WithIdxScratch) > 0) then
+    if not D.IsVar then
+    begin
+      R := DeclareLocal(V.Name, D.IsConst);
+      Own := BindingType(V.Name);
+      if not V.HasInitializer then Emit(Ins(opLoadUndef, R, 0, 0))
+      else if Own = 0 then CompileFieldValue(V.Initializer, R, V.Name)
+      else
+      begin
+        { Keep the binding uninitialized until its initializer passes the check. }
+        T := AllocReg;
+        CompileFieldValue(V.Initializer, T, V.Name);
+        Emit(Ins(opCheckType, T, 0, Own));
+        Emit(Ins(opMov, R, T, 0));
+        FreeTo(T);
+      end;
+      MarkInitialized(V.Name);
+      Continue;
+    end;
+    if V.HasInitializer and (WithsFor(V.Name, WithIdxScratch) > 0) then
     begin
       { 14.3.2.1: the initializer goes to ResolveBinding(name), resolved before it runs, which a with object
         around it can hold }
@@ -4938,28 +5009,18 @@ begin
       FreeTo(T);
       Continue;
     end;
-    if D.IsVar and V.HasInitializer then NoteWrite(V.Name);
-    if not D.IsVar then R := DeclareLocal(V.Name, D.IsConst)
-    else if not ResolveLocal(FS, V.Name, R) then
+    if V.HasInitializer then NoteWrite(V.Name);
+    if not ResolveLocal(FS, V.Name, R) then
     begin
-      if D.IsVar then
-      begin
-        { a var of the global environment: `var x;` leaves the binding's value alone }
-        if not V.HasInitializer then Continue;
-        T := FS.FreeReg; AllocReg;
-        if (V.Initializer is TGocciaFunctionExpression) or (V.Initializer is TGocciaArrowFunctionExpression) then
-          CompileFuncExpr(V.Initializer, T, V.Name)
-        else if V.Initializer is TGocciaClassExpression then
-          CompileClass(TGocciaClassExpression(V.Initializer).ClassDefinition, T, V.Name)
-        else
-          ExprTo(V.Initializer, T);
-        StoreIdent(V.Name, T, True);
-        FreeTo(T);
-        Continue;
-      end;
-      R := DeclareLocal(V.Name, D.IsConst);
+      { a var of the global environment: `var x;` leaves the binding's value alone }
+      if not V.HasInitializer then Continue;
+      T := AllocReg;
+      CompileFieldValue(V.Initializer, T, V.Name);
+      StoreIdent(V.Name, T, True);
+      FreeTo(T);
+      Continue;
     end;
-    if D.IsVar and V.HasInitializer and ProfileStrictTypes and
+    if V.HasInitializer and ProfileStrictTypes and
        ((BindingType(V.Name) <> 0) or (StrictTypeCode(V.TypeAnnotation, V.Initializer) <> 0)) then
     begin
       { strict-types: a var store whose binding or own declaration is typed goes to a temporary, is checked
@@ -4989,7 +5050,7 @@ begin
       begin
         CompileClass(TGocciaClassExpression(V.Initializer).ClassDefinition, R, V.Name);
       end
-      else if D.IsVar and WritesName(V.Initializer, V.Name) then
+      else if WritesName(V.Initializer, V.Name) then
       begin
         { a var's initializer can update the var itself (var x = x++): its value goes to the binding after it ran }
         T := FS.FreeReg; AllocReg;
@@ -4999,21 +5060,7 @@ begin
       end
       else
         ExprTo(V.Initializer, R);
-    end
-    else if not D.IsVar then
-      Emit(Ins(opLoadUndef, R, 0, 0));
-    { strict-types: the declaration's type, checked on its initial value (an annotated binding without one starts
-      undefined) and on every later store }
-    if V.HasInitializer then T := StrictTypeCode(V.TypeAnnotation, V.Initializer)
-    else T := StrictTypeCode(V.TypeAnnotation, nil);
-    { a var redeclared keeps the type its first declaration gave it }
-    if D.IsVar and (BindingType(V.Name) <> 0) then T := BindingType(V.Name);
-    if T <> 0 then
-    begin
-      if V.HasInitializer then Emit(Ins(opCheckType, R, 0, T));
-      SetBindingType(V.Name, T);
     end;
-    if not D.IsVar then MarkInitialized(V.Name);
   end;
 end;
 
@@ -5543,6 +5590,7 @@ end;
 
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
 var Outer, Inner, ExcReg, JEnd, JEnd2, R, J, K: Integer; HasFinally: Boolean; MissL: TJumpList; PN: TStringList;
+  CatchTypes: TVarTypes; CatchType: Byte;
 begin
   HasFinally := Assigned(S.FinallyBlock);
   ExcReg := AllocReg;   { kept for the whole statement }
@@ -5583,6 +5631,16 @@ begin
     if S.CatchParam <> '' then
     begin
       R := DeclareLocal(S.CatchParam, False);
+      if ProfileStrictTypes then
+      begin
+        CatchTypes := TVarTypes.Create;
+        try
+          CollectVarNames(S.CatchBlock, nil, CatchTypes);
+          if CatchTypes.TryGetValue(S.CatchParam, CatchType) then SetBindingType(S.CatchParam, CatchType);
+        finally
+          CatchTypes.Free;
+        end;
+      end;
       Emit(Ins(opMov, R, ExcReg, 0));
     end
     else if Assigned(S.CatchBindingPattern) then
