@@ -264,7 +264,11 @@ def start_ipv6(port_file):
             raise
         return None
     stalled = ()
-    if os.environ.get("GOCCIA_FETCH_IPV6_HOST"):
+    # Only Linux leaves a connection pending behind a full accept queue: on
+    # macOS the second connection completed (CI run 45949336473). Elsewhere
+    # nothing listens on this port over IPv4, so the fallback check meets a
+    # refused connection instead of a pending one.
+    if os.environ.get("GOCCIA_FETCH_IPV6_HOST") and sys.platform.startswith("linux"):
         stalled = stall_ipv4(server.server_address[1])
     with open(port_file, "w") as f:
         f.write(str(server.server_address[1]))
