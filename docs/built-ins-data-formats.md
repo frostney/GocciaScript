@@ -93,7 +93,7 @@ Tagged values preserve runtime metadata through `.tagName` and `.value`. Custom 
 
 Explicit keys (`? key`) are supported, including omitted explicit values and zero-indented sequence values. Because GocciaScript mappings are backed by string-keyed objects, non-scalar YAML keys are canonicalized into stable JSON-like strings during parsing, and anchored mapping keys now parse instead of being rejected outright.
 
-Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation. Historical decision context lives in [Architecture Decision Records](adr/), and the official parse-validity check can be rerun with `python3 scripts/run_yaml_test_suite.py`.
+Compatibility goal: GocciaScript is targeting full YAML 1.2 support over time while keeping Bun-compatible YAML runtime behavior where practical. The current parser is still a partial implementation: the native `GocciaYAMLComplianceRunner` checks it against the official `yaml-test-suite` at the pinned commit, comparing the parsed documents with each case's JSON values and rejecting each invalid case, and `tests/compliance/yaml-test-suite.known-failures` lists the cases it does not pass yet ([Testing](testing.md)). Pull-request, main-branch and release CI run it, and a failing case outside that list fails the run. Historical decision context lives in [Architecture Decision Records](adr/).
 
 ## JSONL (`goccia:jsonl`)
 

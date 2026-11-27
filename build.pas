@@ -20,12 +20,13 @@ type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner,
+    btYAMLComplianceRunner,
     btBenchmarkRunner, btBundler, btREPL, btEngine);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
-    'test262runner', 'tomlcompliancerunner',
+    'test262runner', 'tomlcompliancerunner', 'yamlcompliancerunner',
     'benchmarkrunner', 'bundler', 'repl', 'engine');
 
   { The JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
@@ -1286,6 +1287,20 @@ begin
   WriteLn('GocciaTOMLComplianceRunner built successfully');
 end;
 
+procedure BuildYAMLComplianceRunner;
+var
+  Output: string;
+begin
+  WriteLn('Building GocciaYAMLComplianceRunner...');
+  if not CompileWithStaleRetry(
+      'source/app/compliance/GocciaYAMLComplianceRunner.dpr',
+      TargetUnitOutputDirectory('yamlcompliancerunner'),
+      'yamlcompliancerunner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaYAMLComplianceRunner build failed');
+  WriteLn(Output);
+  WriteLn('GocciaYAMLComplianceRunner built successfully');
+end;
+
 procedure BuildFFIFixture;
 var
   Output: string;
@@ -1353,6 +1368,7 @@ begin
       end;
     btTest262Runner: BuildTest262Runner;
     btTOMLComplianceRunner: BuildTOMLComplianceRunner;
+    btYAMLComplianceRunner: BuildYAMLComplianceRunner;
     btBenchmarkRunner: BuildBenchmarkRunner;
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;

@@ -58,6 +58,10 @@ jobs:
       - name: Build all
         run: ./build.pas --prod
 
+      # ci.yml runs the same script on every target.
+      - name: Run YAML 1.2.2 compliance suite
+        run: bash .github/scripts/run-yaml-compliance.sh build "$RUNNER_TEMP" yaml-test-results.json
+
       - name: Stage build artifacts
         run: bash ./.github/scripts/stage-build-artifacts.sh build pr-artifacts --include-tests
 
