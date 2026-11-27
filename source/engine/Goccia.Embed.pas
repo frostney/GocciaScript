@@ -993,6 +993,7 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
+    if FSetupAborted <> gaNone then Err := AbortErrorMessage;
     { the work a globals module that failed left goes with it; a module that loads leaves its jobs to the entry }
     if (FSetupAborted <> gaNone) or not Result then DiscardFailedRunWork(WeakMark, ModuleMark, VUndefined, Err);
     LimitsDisarm;
@@ -1167,7 +1168,7 @@ function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString):
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean; EnvAbort: Integer;
+  Compiled: Boolean; EnvAbort: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1213,6 +1214,12 @@ begin
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
+        { the abort's error, read while the limits are still in force }
+        if EnvAbort <> 0 then
+        begin
+          EnvAbortName := AbortErrorName;
+          EnvAbortMessage := AbortErrorMessage;
+        end;
         if (EnvAbort <> 0) or not Compiled then
           DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, Pending);
         LimitsDisarm;
@@ -1227,16 +1234,26 @@ begin
   begin
     PushRoot(Pending);
     Pending := VUndefined;
-    Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
-    if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
-    Pending := VUndefined;
     case EnvAbort of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;
       3: Result.Aborted := gaMemoryLimit;
       4: Result.Aborted := gaHostAbort;
     end;
-    DescribeThrown(RootAt(TempTop - 1), Result);
+    { an abort reports its own error, as the entry's does }
+    if EnvAbort <> 0 then
+    begin
+      Result.ErrorMessage := EnvAbortName + ': ' + EnvAbortMessage;
+      Result.ErrorName := EnvAbortName;
+      Result.ErrorText := EnvAbortMessage;
+    end
+    else
+    begin
+      Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
+      if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
+      Pending := VUndefined;
+      DescribeThrown(RootAt(TempTop - 1), Result);
+    end;
     PopRoots(1);
     Pending := VUndefined;
     SetHostResolver(nil);
@@ -1442,6 +1459,7 @@ end;
 
 function TGocciaEngine.RunTests(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
+  TakeHostError;
   Aborted := gaNone;
   Json := '';
   Err := '';
@@ -1456,18 +1474,16 @@ begin
     case AbortKind of
       1: Aborted := gaTimeout;
       2: Aborted := gaInstructionLimit;
-      3:
-        begin
-          Aborted := gaMemoryLimit;
-          Err := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Aborted := gaHostAbort;
-          Err := HostAbortMessage;
-        end;
+      3: Aborted := gaMemoryLimit;
+      4: Aborted := gaHostAbort;
     end;
-    if Aborted <> gaNone then Result := False;
+    { an abort's own error: a job that met the limit may have taken the one it threw }
+    if Aborted <> gaNone then
+    begin
+      Err := AbortErrorMessage;
+      Result := False;
+    end
+    else if not Result and (Err = '') then Err := 'the test suites did not finish';
   finally
     { suites that did not finish take their pending work with them, as a failed run does }
     if (AbortKind <> 0) or not Result then
@@ -1506,6 +1522,7 @@ end;
 function TGocciaEngine.RunBenchmarks(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
   out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
+  TakeHostError;
   BenchDescribeThrown := @DescribeBenchThrown;
   Aborted := gaNone;
   Err := '';
@@ -1521,18 +1538,15 @@ begin
     case AbortKind of
       1: Aborted := gaTimeout;
       2: Aborted := gaInstructionLimit;
-      3:
-        begin
-          Aborted := gaMemoryLimit;
-          Err := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Aborted := gaHostAbort;
-          Err := HostAbortMessage;
-        end;
+      3: Aborted := gaMemoryLimit;
+      4: Aborted := gaHostAbort;
     end;
-    if Aborted <> gaNone then Result := False;
+    { an abort's own error: a job that met the limit may have taken the one it threw }
+    if Aborted <> gaNone then
+    begin
+      Err := AbortErrorMessage;
+      Result := False;
+    end;
   finally
     if (AbortKind <> 0) or not Result then
       DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err);

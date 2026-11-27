@@ -185,6 +185,33 @@ begin
   end;
 end;
 
+procedure WriteModule(const APath, ASource: string); forward;
+
+{ a limit met while the host-environment provider loads, after its top-level await, reports its own error too }
+procedure CheckHostEnvironmentAbort(const ADir: string);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  WriteModule(ADir + 'env-loop.mjs', 'await Promise.resolve(); while (true) {}' + LineEnding +
+    'export const epochNanoseconds = () => 0n; export const monotonicNanoseconds = () => 0n;' +
+    'export const timeZoneIdentifier = () => "UTC"; export const random = () => 0.5;');
+  Engine := NewWhileEngine;
+  try
+    Engine.HostEnvironment := UnicodeString(ADir + 'env-loop.mjs');
+    Engine.MaxInstructions := 100000;
+    RunResult := Engine.Run('entry.js', '1;');
+    Check(RunResult.Aborted = gaInstructionLimit, 'the provider should meet the instruction limit: ' +
+      RunResult.ErrorMessage);
+    Check((RunResult.ErrorMessage = 'Error: Execution exceeded instruction limit of 100000') and
+      (RunResult.ErrorName = 'Error') and (RunResult.ErrorText = 'Execution exceeded instruction limit of 100000'),
+      'the provider''s abort reported ' + RunResult.ErrorMessage + ' (' + RunResult.ErrorName + ', ' +
+      RunResult.ErrorText + ')');
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure WriteModule(const APath, ASource: string);
 var F: TextFile;
 begin
@@ -459,6 +486,7 @@ begin
     CheckAbortMessage('a limit met in a promise job', 'job.js', 'Promise.resolve().then(() => { while (true) {} });');
     CheckAbortMessage('a limit met after a top-level await', 'tla.mjs', 'await Promise.resolve(); while (true) {}');
     CheckModuleRecords(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
+    CheckHostEnvironmentAbort(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
     if ParamCount = 1 then
     begin
       CheckFetchAbort(ParamStr(1));

@@ -110,7 +110,8 @@ function RunEventLoop: Boolean;
   rejections it left, its timers and intervals, fetch completions, Atomics.waitAsync waits and the FinalizationRegistry
   cleanup and registrations since WeakMark, so none of it runs in the engine's next run. The module evaluations it
   started after ModuleMark fail first (Goccia.Modules FailModuleEvaluationsSince), with the abort's error, or with
-  Thrown, the value the run failed with, or for an entry point that kept only its text (FailText) an Error of it. }
+  Thrown, the value the run failed with: when that is undefined, the error an entry point kept for the host
+  (TakeHostError), else an Error of FailText. }
 procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString = '');
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
@@ -699,6 +700,19 @@ begin
   if not SameEngine(HostErrorRootedGen) then Exit(VUndefined);
   Result := HostErrorV;
   HostErrorV := VUndefined;
+end;
+
+{ the pending exception's string form (Error: message), taken; the error itself stays for the host, as
+  TakePendingText's does }
+function TakePendingString: UnicodeString;
+var S: TValue;
+begin
+  if FirstInEngine(HostErrorRootedGen) then AddRoot(@HostErrorV);
+  HostErrorV := Pending;
+  Pending := VUndefined;
+  if ToStringV(HostErrorV, S) and IsString(S) then Result := StrToUnicode(StrOf(S))
+  else Result := 'uncaught exception';
+  Pending := VUndefined;
 end;
 
 function TakePendingText: UnicodeString;
@@ -2593,7 +2607,9 @@ begin
     { an abort's own error: a job that met the limit may have taken the one it threw. Pending stays the run's. }
     if AbortKind = 3 then Thrown := MakeError(RangeErrorProto, AbortErrorMessage)
     else if AbortKind <> 0 then Thrown := MakeError(ErrorProto, AbortErrorMessage)
-    else if FailText <> '' then Thrown := MakeError(ErrorProto, FailText);
+    else if Thrown = VUndefined then
+      if SameEngine(HostErrorRootedGen) and (HostErrorV <> VUndefined) then Thrown := HostErrorV
+      else if FailText <> '' then Thrown := MakeError(ErrorProto, FailText);
     FailModuleEvaluationsSince(ModuleMark, Thrown);
   end;
   DiscardJobs;
@@ -2611,7 +2627,7 @@ begin
 end;
 
 function RunTestSuites(var Json, Err: UnicodeString): Boolean;
-var A: array[0..0] of TValue; Report, R, S: TValue;
+var A: array[0..0] of TValue; Report, R: TValue;
 begin
   ReportJson := ''; ReportErr := ''; ReportDone := False;
   if not GetV(TestApiV, AtomOf('report'), Report) then Exit(False);
@@ -2624,8 +2640,7 @@ begin
   PopRoots(2);
   if not Result then
   begin
-    if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S)) else Err := 'uncaught exception';
-    Pending := VUndefined;
+    Err := TakePendingString;
     Exit;
   end;
   if not ReportDone then Exit(False);
@@ -2789,7 +2804,7 @@ end;
 
 function RunBenchmarkSuites(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
   out DurationNanoseconds: Int64; var Err: UnicodeString): Boolean;
-var A: array[0..1] of TValue; Report, R, S: TValue;
+var A: array[0..1] of TValue; Report, R: TValue;
 begin
   Entries := nil;
   Total := 0;
@@ -2806,8 +2821,7 @@ begin
   PopRoots(1);
   if not Result then
   begin
-    if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S)) else Err := 'uncaught exception';
-    Pending := VUndefined;
+    Err := TakePendingString;
     Exit;
   end;
   if not ReportDone then

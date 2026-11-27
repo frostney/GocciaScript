@@ -17085,6 +17085,28 @@ await section("Runner: a globals module and a host-environment provider run unde
   }
 });
 
+await section("TestRunner: a test that meets the instruction limit inside a promise job reports the limit...", async () => {
+  const tmp = makeTmp();
+  try {
+    const spin = "const it = { [Symbol.iterator]() { return { next: () => ({ done: false }) }; } };";
+    writeFileSync(
+      join(tmp, "spin.test.js"),
+      `${spin}\ntest("spins after an await", async () => { await Promise.resolve(); for (const _ of it) {} });\n`,
+    );
+    const run = Bun.spawnSync([resolve(TESTRUNNER), "spin.test.js", "-P", "--max-instructions=100000", "--no-progress"], {
+      cwd: tmp,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 30000,
+    });
+    const out = normalizeLineEndings(run.stdout.toString() + run.stderr.toString());
+    if (run.exitCode === 0 || !out.includes("Execution exceeded instruction limit of 100000") || out.includes(": undefined"))
+      throw new Error(`the test runner should report the instruction limit, got (exit ${run.exitCode}):\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --test-timeout stops every test that runs past it, not only the first...", async () => {
   const tmp = makeTmp();
   try {
