@@ -8,15 +8,17 @@ uses
   Goccia.Core,
   Goccia.Embed,
   Goccia.HostAPI,
+  Goccia.Modules,
   Goccia.VM;
 
 type
   TFactory = class
   public
-    Calls: Integer;
+    Calls, CycleCalls: Integer;
     function CreateExports(var AExports: TValue): Boolean;
     function InvalidExports(var AExports: TValue): Boolean;
     function MissingExports(var AExports: TValue): Boolean;
+    function CyclicExports(var AExports: TValue): Boolean;
   end;
 
 function Answer(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
@@ -63,9 +65,59 @@ begin
   Result := True;
 end;
 
+{ Loads a dependency that imports this same module while the factory runs. The first two calls see that load
+  refused and fail with it; later calls create the exports. }
+function TFactory.CyclicExports(var AExports: TValue): Boolean;
+var
+  Namespace: TValue;
+begin
+  Inc(CycleCalls);
+  if CycleCalls <= 2 then
+  begin
+    if EvaluateModuleNamespace('host:cycle-dependency', Namespace) then
+      raise Exception.Create('a recursive load reached the native factory again');
+    Exit(False);
+  end;
+  Result := CreateExports(AExports);
+end;
+
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
 begin
   if not ACondition then raise Exception.Create(AMessage);
+end;
+
+procedure CheckRecursiveFactory;
+var
+  Engine: TGocciaEngine;
+  Factory: TFactory;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+begin
+  Factory := TFactory.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    Check(Engine.DefineNativeModule('host:cycle', Factory.CyclicExports, ErrorText), ErrorText);
+    Check(Engine.DefineInlineVirtualModule(
+      'host:cycle-dependency=import { answer } from "host:cycle"; export const value = answer;', '', ErrorText),
+      ErrorText);
+    RunResult := Engine.Run('cycle.mjs',
+      'await import("host:cycle").then(() => "loaded", e => e instanceof TypeError && e.message);');
+    Check(RunResult.Ok and (Pos('host:cycle is still being created', RunResult.ResultText) > 0) and
+      (Factory.CycleCalls = 1), 'a recursive native load was not refused: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    RunResult := Engine.Run('cycle-again.mjs',
+      'await import("host:cycle").then(() => "loaded", e => e instanceof TypeError && e.message);');
+    Check(RunResult.Ok and (Pos('still being created', RunResult.ResultText) > 0) and (Factory.CycleCalls = 2),
+      'a failed native factory was not run again: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    RunResult := Engine.Run('cycle-retry.mjs',
+      'import * as first from "host:cycle"; const second = await import("host:cycle"); ' +
+      '(first === second) + ":" + first.answer();');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true:42') and (Factory.CycleCalls = 3),
+      'a retried native factory did not publish one module: ' + RunResult.ResultText + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Factory.Free;
+  end;
 end;
 
 procedure CheckRegistration(ABare: Boolean);
@@ -213,6 +265,7 @@ end;
 begin
   {$IFDEF UNIX}CheckBareFileIdentity;{$ENDIF}
   CheckOptionalHostConflicts;
+  CheckRecursiveFactory;
   CheckRegistration(False);
   CheckRegistration(True);
   WriteLn('Native module factories: passed');

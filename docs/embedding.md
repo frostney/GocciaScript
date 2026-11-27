@@ -374,8 +374,10 @@ source or an artifact. Registration refuses an existing module key. It also work
 The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
 loads. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
 string. Build the list with `NewArray` and `ArrayPush` and release temporary roots after setting `ExportList`.
-Return `False` with a pending error when initialization fails. The module loader retains the exports for that
-realm, and repeated imports use the same namespace object. Keep the callback's owner live until the engine is
+Return `False` with a pending error when initialization fails; a later import calls the factory again. The module
+loader retains the exports for that realm, and repeated imports use the same namespace object. A load that reaches
+the same module in the same realm while its factory is still running fails with a `TypeError` instead of calling
+the factory again. Keep the callback's owner live until the engine is
 destroyed. Registrations end with that engine.
 
 ```pascal

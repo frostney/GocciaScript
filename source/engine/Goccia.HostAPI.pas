@@ -637,6 +637,9 @@ type
 
 threadvar
   NativeModuleFactories: TNativeModuleFactories;
+  { realm and key of each native factory still running: a load that reaches the same module again before the
+    factory returned is refused, because its record is published only after the factory succeeds }
+  ActiveNativeFactories: TList<UnicodeString>;
 
 function NativeModuleRegistered(const Key: UnicodeString): Boolean;
 var Factories: TNativeModuleFactories;
@@ -653,6 +656,7 @@ end;
 { Goccia.Modules's host hook: native factories and shared.loadHostModule(Key, FilePath) }
 function HostModule(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
 var A: array[0..1] of TValue; I: Integer; Factory: TNativeModuleFactory; Factories: TNativeModuleFactories;
+  Marker: UnicodeString;
 begin
   if (FilePath = '') and Assigned(MockModules) then
   begin
@@ -667,9 +671,22 @@ begin
   if (FilePath = '') and (Factories <> nil) and Factories.TryGetValue(Key, Factory) then
   begin
     if SourceOnly then Exit(0);
-    Exp := VUndefined;
-    if Factory(Exp) then Exit(1);
-    Exit(-1);
+    Marker := IntToStr(CurRealm) + #0 + Key;
+    if ActiveNativeFactories = nil then ActiveNativeFactories := TList<UnicodeString>.Create;
+    if ActiveNativeFactories.IndexOf(Marker) >= 0 then
+    begin
+      ThrowTypeError('The native module ' + Key + ' is still being created');
+      Exit(-1);
+    end;
+    ActiveNativeFactories.Add(Marker);
+    try
+      Exp := VUndefined;
+      if Factory(Exp) then Result := 1 else Result := -1;
+    finally
+      I := ActiveNativeFactories.IndexOf(Marker);
+      if I >= 0 then ActiveNativeFactories.Delete(I);
+    end;
+    Exit;
   end;
   if not IsObject(LoadHostModuleV) then Exit(0);
   PushRoot(StrFromUnicode(Key));
@@ -704,6 +721,7 @@ procedure HostModulesDone;
 begin
   RealmHostInit := nil;
   FreeAndNil(NativeModuleFactories);
+  FreeAndNil(ActiveNativeFactories);
   FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
   FreeAndNil(ImportSpecifiers);
