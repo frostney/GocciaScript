@@ -284,7 +284,8 @@ export const ARRAY_ITERATION = ["Array.prototype[Symbol.iterator]", "%ArrayItera
 const DESCRIPTOR_FIELDS = ["value", "writable", "get", "set", "enumerable", "configurable"];
 const RECORD_FIELDS = ["years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds",
   "nanoseconds", "year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond", "microsecond",
-  "nanosecond", "era", "eraYear", "offset", "timeZone", "calendar", "f", "type", "kind"];
+  "nanosecond", "era", "eraYear", "offset", "timeZone", "calendar", "f", "type", "kind", "alphabet", "lastChunkHandling",
+  "omitPadding", "read", "written", "a", "b", "x"];
 const INDICES = Array.from({ length: 64 }, (_, i) => StringCtor(i));
 export const withPrototypeAdditions = (fn) => {
   const hits = [];

@@ -83,7 +83,11 @@
     if (!isObject(it)) throw new TypeErr("iterator is not an object");
     return direct(it);
   }
-  function copyList(list, first) { var a = [], n = 0; if (first !== undefined) a[n++] = first; for (var i = 0; i < list.length; i++) a[n++] = list[i]; return a; }
+  // the helpers' own lists: no prototype, so an index store reaches no setter a script put on Array.prototype or
+  // Object.prototype (what a script receives is a new array, arrayOf)
+  var setProto = Object.setPrototypeOf;
+  function list() { return setProto([], null); }
+  function copyList(list_, first) { var a = list(), n = 0; if (first !== undefined) a[n++] = first; for (var i = 0; i < list_.length; i++) a[n++] = list_[i]; return a; }
   function arrayOf(list) { var a = [], n = list.length; for (var i = 0; i < n; i++) defineProperty(a, i, { __proto__: null, value: list[i], writable: true, enumerable: true, configurable: true }); return a; }
 
   // %IteratorHelperPrototype% objects and %WrapForValidIteratorPrototype% objects: internal slots as private fields
@@ -202,20 +206,20 @@
     }
   }
   function* chunksGen(rec, size) {
-    var buf = [];
+    var buf = list();
     for (;;) {
       var v = stepValue(rec);
       if (v === DONE) { if (buf.length > 0) yield arrayOf(buf); return; }
       buf[buf.length] = v;
       if (buf.length === size) {
         var ok = false, out = arrayOf(buf);
-        buf = [];
+        buf = list();
         try { yield out; ok = true; } finally { if (!ok) closeNormal(rec.it); }
       }
     }
   }
   function* windowsGen(rec, size, partial) {
-    var buf = [];
+    var buf = list();
     for (;;) {
       var v = stepValue(rec);
       if (v === DONE) { if (partial && buf.length > 0 && buf.length < size) yield arrayOf(buf); return; }
@@ -245,7 +249,7 @@
     var n = iters.length;
     if (n === 0) return;
     for (;;) {
-      var results = [];
+      var results = list();
       for (var i = 0; i < n; i++) {
         var rec = iters[i], r;
         if (rec === null) r = padding[i];
@@ -316,7 +320,7 @@
       }
     },
     toArray() {
-      var rec = direct(thisObj(this)), items = [];
+      var rec = direct(thisObj(this)), items = list();
       for (;;) { var v = stepValue(rec); if (v === DONE) return arrayOf(items); items[items.length] = v; }
     },
     forEach(fn) {
@@ -449,7 +453,7 @@
     },
     // 27.1.3.2.1
     concat(...items) {
-      var iterables = [];
+      var iterables = list();
       for (var i = 0; i < items.length; i++) {
         var item = items[i];
         if (!isObject(item)) throw new TypeErr("Iterator.concat: not an object");
@@ -467,7 +471,7 @@
         padOpt = options.padding;
         if (padOpt !== undefined && !isObject(padOpt)) throw new TypeErr("padding must be an object");
       }
-      var iters = [], padding = [], input = getIterator(iterables), next;
+      var iters = list(), padding = list(), input = getIterator(iterables), next;
       for (;;) {
         try { next = stepValue(input); } catch (e) { closeAll(iters, { e: e }); }
         if (next === DONE) break;
@@ -504,7 +508,7 @@
         padOpt = options.padding;
         if (padOpt !== undefined && !isObject(padOpt)) throw new TypeErr("padding must be an object");
       }
-      var iters = [], padding = [], keys = [], all = ownKeys(iterables);
+      var iters = list(), padding = list(), keys = list(), all = ownKeys(iterables);
       for (var i = 0; i < all.length; i++) {
         var key = all[i], d, v;
         try { d = getOwnDesc(iterables, key); } catch (e) { closeAll(iters, { e: e }); }

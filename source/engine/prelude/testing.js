@@ -415,7 +415,7 @@
       if (s === undefined) return not(this, false);
       // one match from the start, whatever the global or sticky state
       re.lastIndex = 0;
-      return not(this, re.test(s));
+      return not(this, RegExpPrototypeExec(re, s) !== null);
     }, (spec) => ({
       equivalent: (other) => other.kind === spec.kind && other.inverse === spec.inverse &&
         other.sample.source === re.source && other.sample.flags === re.flags,

@@ -328,7 +328,7 @@
 
     function quoteString(s) {
       const quotes = { "'": 0.1, '"': 0.2 };
-      const replacements = { "'": "\\'", '"': '\\"', '\\': '\\\\', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r',
+      const replacements = { __proto__: null, "'": "\\'", '"': '\\"', '\\': '\\\\', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r',
         '\t': '\\t', '\v': '\\v', '\0': '\\0', '\u2028': '\\u2028', '\u2029': '\\u2029' };
       let product = '';
       for (let i = 0; i < s.length; i++) {

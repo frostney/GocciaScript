@@ -72,6 +72,9 @@
     return m;
   }
   // AddDisposableResource(capability, V, hint)
+  // a stack's capability list: no prototype, so an index store reaches no setter a script put on Array.prototype or
+  // Object.prototype
+  function capList() { return setProto([], null); }
   function add(cap, v, async) {
     if (v === null || v === undefined) {
       if (async) { var n = cap.length; cap[n] = undefined; cap[n + 1] = undefined; cap[n + 2] = true; }
@@ -158,7 +161,7 @@
 
   // 27.3 DisposableStack
   class DisposableStack {
-    #state = "pending"; #cap = [];
+    #state = "pending"; #cap = capList();
     constructor() {}
     static #check(s, name) {
       if (!isObject(s) || !(#state in s)) throw new TypeErr("DisposableStack.prototype." + name + " called on an incompatible receiver");
@@ -196,7 +199,7 @@
       if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
       var n = new DisposableStack();
       n.#cap = this.#cap;
-      this.#cap = [];
+      this.#cap = capList();
       this.#state = "disposed";
       return n;
     }
@@ -204,7 +207,7 @@
 
   // 27.4 AsyncDisposableStack
   class AsyncDisposableStack {
-    #state = "pending"; #cap = [];
+    #state = "pending"; #cap = capList();
     constructor() {}
     static #check(s, name) {
       if (!isObject(s) || !(#state in s)) throw new TypeErr("AsyncDisposableStack.prototype." + name + " called on an incompatible receiver");
@@ -245,7 +248,7 @@
       if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
       var n = new AsyncDisposableStack();
       n.#cap = this.#cap;
-      this.#cap = [];
+      this.#cap = capList();
       this.#state = "disposed";
       return n;
     }

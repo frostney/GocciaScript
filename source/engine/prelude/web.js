@@ -118,7 +118,7 @@
     if (s.length % 4 === 0) s = s[s.length - 1] !== '=' ? s : StringPrototypeSlice(s, 0, s[s.length - 2] === '=' ? -2 : -1);
     if (s.length % 4 === 1 || RegExpPrototypeExec(/[^A-Za-z0-9+/]/, s) !== null)
       throw new DOMException("Failed to execute 'atob': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
-    const bytes = fromBase64(s, { lastChunkHandling: 'loose' });
+    const bytes = fromBase64(s, { __proto__: null, lastChunkHandling: 'loose' });
     let out = '';
     // by chunks, each a view of the bytes with an own length (subarray would look up the species, and apply would
     // read the length through %TypedArray%.prototype's getter)

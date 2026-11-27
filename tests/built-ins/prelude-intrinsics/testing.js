@@ -97,6 +97,11 @@ test("toThrow, snapshots, mocks and expect.extend", () => {
   })).toEqual([]);
 });
 
+test("expect.stringMatching with a string runs its own pattern", () => {
+  // the matcher's pattern is its own RegExp: matching it looks up nothing on RegExp.prototype
+  watched(() => expect("abc").toEqual(expect.stringMatching("b")));
+});
+
 test.each([[1, 2, 3], [2, 3, 5]])("test.each %i + %i is %i", (a, b, sum) => {
   expect(watched(() => a + b)).toBe(sum);
 });

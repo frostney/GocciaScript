@@ -604,7 +604,8 @@
     for (var i = 0; i < bytes.length; i++) ta[i] = bytes[i];
     return ta;
   }
-  function resultObj(read, written) { var o = {}; o.read = read; o.written = written; return o; }
+  // defined by the literal (CreateDataPropertyOrThrow): an assignment would reach a setter on Object.prototype
+  function resultObj(read, written) { return { read: read, written: written }; }
   var u8Statics = {
     fromBase64(string, options) {
       if (typeof string !== "string") throw new TypeErr("Uint8Array.fromBase64 requires a string");

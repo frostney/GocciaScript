@@ -2563,7 +2563,7 @@
   function subSecondNs(t) { return t.millisecond * 1e6 + t.microsecond * 1e3 + t.nanosecond; }
   function TimeRecordToString(t, precision) { return FormatTimeString(t.hour, t.minute, t.second, subSecondNs(t), precision); }
   function ToTemporalTimeRecord(v, completeness) {
-    var r = completeness === "partial" ? {} : { hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0, nanosecond: 0 };
+    var r = completeness === "partial" ? ObjectCreate(null) : { __proto__: null, hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0, nanosecond: 0 };
     var any = false, order = ["hour", "microsecond", "millisecond", "minute", "nanosecond", "second"];
     for (var i = 0; i < order.length; i++) {
       var x = v[order[i]];
