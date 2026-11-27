@@ -110,9 +110,10 @@ function RunEventLoop: Boolean;
   rejections it left, its timers and intervals, fetch completions, Atomics.waitAsync waits and the FinalizationRegistry
   cleanup and registrations since WeakMark, so none of it runs in the engine's next run. The module evaluations it
   started after ModuleMark fail first (Goccia.Modules FailModuleEvaluationsSince), with the abort's error, or with
-  Thrown, the value the run failed with: when that is undefined, the error an entry point kept for the host
-  (TakeHostError), else an Error of FailText. }
-procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString = '');
+  Thrown, the value the run failed with. An entry point that reports only text (HasThrown False) has them fail with
+  the thrown value it kept for the host (TakeHostError), else with an Error of FailText. }
+procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString = '';
+  HasThrown: Boolean = True);
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 { the test file's vi.mock directives (Goccia.Vitest.MockHoist): each mock's module, served at the address its
@@ -694,9 +695,12 @@ end;
 threadvar
   HostErrorV: TValue;
   HostErrorRootedGen: Integer;
+  { HostErrorV holds a thrown value (which may be undefined) }
+  HostErrorHeld: Boolean;
 
 function TakeHostError: TValue;
 begin
+  HostErrorHeld := False;
   if not SameEngine(HostErrorRootedGen) then Exit(VUndefined);
   Result := HostErrorV;
   HostErrorV := VUndefined;
@@ -709,6 +713,7 @@ var S: TValue;
 begin
   if FirstInEngine(HostErrorRootedGen) then AddRoot(@HostErrorV);
   HostErrorV := Pending;
+  HostErrorHeld := True;
   Pending := VUndefined;
   if ToStringV(HostErrorV, S) and IsString(S) then Result := StrToUnicode(StrOf(S))
   else Result := 'uncaught exception';
@@ -721,6 +726,7 @@ begin
   { the error itself stays for the host to describe (TakeHostError) }
   if FirstInEngine(HostErrorRootedGen) then AddRoot(@HostErrorV);
   HostErrorV := Pending;
+  HostErrorHeld := True;
   PushRoot(Pending);
   Pending := VUndefined;
   if IsObject(RootAt(TempTop - 1)) and GetV(RootAt(TempTop - 1), AtomMessage, S) and IsString(S) then
@@ -1001,6 +1007,7 @@ begin
           if What <> '' then
           begin
             HostErrorV := VUndefined;
+            HostErrorHeld := False;
             Err := 'export "' + Where + '" is ' + What + '; a config''s globals module may export data only';
             Exit;
           end;
@@ -2600,16 +2607,17 @@ begin
   Result := RunEventLoopIn(False);
 end;
 
-procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString);
+procedure DiscardFailedRunWork(WeakMark, ModuleMark: Int64; Thrown: TValue; const FailText: UnicodeString;
+  HasThrown: Boolean);
 begin
   if ModuleEvaluationsPendingSince(ModuleMark) then
   begin
     { an abort's own error: a job that met the limit may have taken the one it threw. Pending stays the run's. }
     if AbortKind = 3 then Thrown := MakeError(RangeErrorProto, AbortErrorMessage)
     else if AbortKind <> 0 then Thrown := MakeError(ErrorProto, AbortErrorMessage)
-    else if Thrown = VUndefined then
-      if SameEngine(HostErrorRootedGen) and (HostErrorV <> VUndefined) then Thrown := HostErrorV
-      else if FailText <> '' then Thrown := MakeError(ErrorProto, FailText);
+    else if not HasThrown then
+      if HostErrorHeld and SameEngine(HostErrorRootedGen) then Thrown := HostErrorV
+      else Thrown := MakeError(ErrorProto, FailText);
     FailModuleEvaluationsSince(ModuleMark, Thrown);
   end;
   DiscardJobs;

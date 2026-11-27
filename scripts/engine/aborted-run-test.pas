@@ -212,6 +212,35 @@ begin
   end;
 end;
 
+{ a globals module that fails takes the module evaluations it started with it, and they record the very value it
+  threw, undefined included }
+procedure CheckGlobalsModuleFailure(const ADir: string);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  ErrorText: UnicodeString;
+begin
+  WriteModule(ADir + 'globals-pending.mjs',
+    'globalThis.pendingRuns = (globalThis.pendingRuns ?? 0) + 1; await new Promise((r) => setTimeout(r, 0));');
+  WriteModule(ADir + 'globals-throws.mjs',
+    'import("./globals-pending.mjs"); await Promise.resolve(); await Promise.resolve(); throw undefined;' +
+    'export const x = 1;');
+  Engine := NewWhileEngine;
+  try
+    ErrorText := '';
+    Check(not Engine.InjectModuleGlobals(UnicodeString(ADir + 'globals-throws.mjs'), ErrorText),
+      'the globals module should fail');
+    RunResult := Engine.Run(ADir + 'after-globals.mjs',
+      'try { await import("./globals-pending.mjs"); "imported" }' +
+      'catch (e) { (e === undefined) + " runs=" + pendingRuns }');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true runs=1'),
+      'a module the failed globals module started should reject with its undefined, got ' + RunResult.ResultText +
+      RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure WriteModule(const APath, ASource: string);
 var F: TextFile;
 begin
@@ -487,6 +516,7 @@ begin
     CheckAbortMessage('a limit met after a top-level await', 'tla.mjs', 'await Promise.resolve(); while (true) {}');
     CheckModuleRecords(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
     CheckHostEnvironmentAbort(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
+    CheckGlobalsModuleFailure(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))));
     if ParamCount = 1 then
     begin
       CheckFetchAbort(ParamStr(1));

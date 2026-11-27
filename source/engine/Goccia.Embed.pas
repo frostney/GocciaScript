@@ -995,7 +995,7 @@ begin
     end;
     if FSetupAborted <> gaNone then Err := AbortErrorMessage;
     { the work a globals module that failed left goes with it; a module that loads leaves its jobs to the entry }
-    if (FSetupAborted <> gaNone) or not Result then DiscardFailedRunWork(WeakMark, ModuleMark, VUndefined, Err);
+    if (FSetupAborted <> gaNone) or not Result then DiscardFailedRunWork(WeakMark, ModuleMark, VUndefined, Err, False);
     LimitsDisarm;
   end;
 end;
@@ -1487,7 +1487,7 @@ begin
   finally
     { suites that did not finish take their pending work with them, as a failed run does }
     if (AbortKind <> 0) or not Result then
-      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err);
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err, False);
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1549,7 +1549,7 @@ begin
     end;
   finally
     if (AbortKind <> 0) or not Result then
-      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err);
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err, False);
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
