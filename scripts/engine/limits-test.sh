@@ -36,7 +36,7 @@ check typed-from-array-like-budget "$TA_CAP" "$TA_LIMIT" 'Int32Array.from({ leng
 check typed-map-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.map(Math.abs); console.log(42);'
 check typed-for-each-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.forEach(Math.abs); console.log(42);'
 check typed-every-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.every(Number.isInteger); console.log(42);'
-check typed-reduce-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.reduce(Math.max); console.log(42);'
+check typed-reduce-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.reduce(Math.abs); console.log(42);'
 check typed-index-of-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.indexOf(1); console.log(42);'
 check typed-last-index-of-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.lastIndexOf(1); console.log(42);'
 check typed-includes-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.includes(1); console.log(42);'
