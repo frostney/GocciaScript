@@ -1469,7 +1469,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Exit(ThrowTypeError(E.Message));
       end;
     end;
@@ -1493,7 +1493,7 @@ begin
     except
       on Ex: Exception do
       begin
-        if IsEngineIntegrityFault(Ex) then raise;
+        if IsEngineFault(Ex) then raise;
         Exit(ThrowTypeError(Ex.Message));
       end;
     end;
@@ -1519,7 +1519,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Sig.Free;
       Exit(ThrowTypeError(E.Message));
     end;
@@ -1549,7 +1549,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowTypeError(E.Message));
     end;
   end;
@@ -1626,7 +1626,7 @@ var LibPath, LoadPath, URLPath, PinnedLoadPath, PinnedPath, Reported, Detail: Un
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         if not AuditOpen(False, LibPath, UTF8Decode(E.Message)) then Exit(False);
         Exit(ThrowTypeError(UTF8Decode(E.Message)));
       end;
@@ -1719,7 +1719,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Exit(VerifyProvider(False));
       end;
     end;
@@ -1732,7 +1732,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Exit(ThrowTypeError(E.Message));
       end;
     end;
@@ -1807,7 +1807,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Exit(ThrowTypeError(E.Message));
       end;
     end;
@@ -1839,7 +1839,7 @@ begin
     except
       on Ex: Exception do
       begin
-        if IsEngineIntegrityFault(Ex) then raise;
+        if IsEngineFault(Ex) then raise;
         Exit(ThrowTypeError(Ex.Message));
       end;
     end;

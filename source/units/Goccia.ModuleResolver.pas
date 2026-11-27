@@ -520,7 +520,7 @@ begin
       raise;
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       raise EModuleNotFound.CreateNotFound(AModulePath, ManifestPath);
     end;

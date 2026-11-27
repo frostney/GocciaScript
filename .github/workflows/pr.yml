@@ -128,7 +128,7 @@ jobs:
         env:
           GOCCIA_VARIANT: FaultInjection
           GOCCIA_FPC_FLAGS: -dGOCCIA_FAULT_INJECTION
-        run: ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner
+        run: ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness
 
       - name: Upload the fault-injection applications
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -182,7 +182,9 @@ jobs:
         run: bun run scripts/check-test-structure.ts
 
       - name: Check that catch-all handlers guard against engine faults
-        run: bun run scripts/check-fault-guards.ts
+        run: |
+          bun run scripts/check-fault-guards.ts --self-test
+          bun run scripts/check-fault-guards.ts
 
       - name: Check parallel CI compilation
         run: python3 .github/scripts/test-compile-programs.py

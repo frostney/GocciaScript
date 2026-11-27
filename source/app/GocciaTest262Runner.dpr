@@ -843,7 +843,7 @@ begin
         except
           on E: Exception do
           begin
-            if IsEngineIntegrityFault(E) then
+            if IsEngineFault(E) then
               raise;
             Modes := [trmNonStrict];
           end;
@@ -1319,7 +1319,7 @@ begin
     FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FApp.FCases[FIndex].Path);
   end;
 end;
 
@@ -1495,7 +1495,7 @@ begin
         except
           on E: Exception do
           begin
-            if IsEngineIntegrityFault(E) then
+            if IsEngineFault(E) then
               raise;
             WorkerMessage := 'Invalid worker result: ' + E.Message;
           end;
@@ -1872,7 +1872,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         Result := False;
       end;

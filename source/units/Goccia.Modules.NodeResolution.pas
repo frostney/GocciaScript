@@ -1434,7 +1434,7 @@ begin
       a module-format accusation. }
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       Result := False;
     end;

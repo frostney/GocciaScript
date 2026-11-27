@@ -1312,7 +1312,7 @@ begin
     ' aux1 ', IntToHex(O^.Aux1, 16), ' aux2 ', IntToHex(O^.Aux2, 16), ' not a nursery cell');
   if (O^.OKind = 2) and Assigned(GCDescribeNative) then Write(ErrOutput, ' fn ', GCDescribeNative(O^.Native));
   WriteLn(ErrOutput, ' minor ', GCMinorCount);
-  Halt(9);
+  StopOnEngineCheck('collector scan');
 end;
 
 procedure ScanCell(C: PCell);
@@ -2165,7 +2165,7 @@ var I: Integer; P: PPage; Q: PByte; C: PCell; L: PLarge;
       IntToHex(PtrUInt(C), 16), ' kind ', C^.Kind, ' flags ', C^.Flags);
     if C^.Kind = ckObject then Write(ErrOutput, ' okind ', PObj(C)^.OKind, ' oflags ', PObj(C)^.OFlags);
     WriteLn(ErrOutput, ' field ', Field, ' = ', IntToHex(V, 16));
-    Halt(9);
+    StopOnEngineCheck('heap verification');
   end;
   procedure CheckP(C: PCell; const Field: string; Ptr: Pointer);
   var B: PByte;
@@ -2232,7 +2232,7 @@ begin
     if ((AllShapes[I]^.Proto shr 48) = TAG_PTR_HI) and IsYoung(PtrOf(AllShapes[I]^.Proto)) then
     begin
       WriteLn(ErrOutput, 'after minor ', GCMinorCount, ': shape ', I, ' still points into the nursery: ', IntToHex(AllShapes[I]^.Proto, 16));
-      Halt(9);
+      StopOnEngineCheck('shape verification');
     end;
 end;
 
@@ -2252,7 +2252,7 @@ begin
   begin
     WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', Where, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
       ' nursery ', IntToHex(PtrUInt(NurseryStart), 16));
-    Halt(9);
+    StopOnEngineCheck('root pointer');
   end;
 end;
 
@@ -2265,7 +2265,7 @@ begin
     begin
       WriteLn(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' has a nil prototype; count ', AllShapes[I]^.Count,
         ' minor ', GCMinorCount, ' inminor ', InMinor);
-      Halt(9);
+      StopOnEngineCheck('shape prototype');
     end;
     if GCVerify then
     begin
@@ -2278,7 +2278,7 @@ begin
           ') has a bad prototype ', IntToHex(V, 16), ' kind ', PCell(PtrOf(V))^.Kind, ' minor ', GCMinorCount, '; keys:');
         for J := 0 to AllShapes[I]^.Count - 1 do Write(ErrOutput, ' ', StrToUnicode(AllShapes[I]^.Keys[J]));
         WriteLn(ErrOutput);
-        Halt(9);
+        StopOnEngineCheck('shape prototype');
       end;
     end;
     { a minor collection keeps every shape's prototype (it moves the young ones); a major one marks a prototype

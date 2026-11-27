@@ -32,9 +32,10 @@ test, because reaching it needed a fault on request in the runner.
 `GocciaRunner` (host and sandbox mode), `GocciaTestRunner`,
 `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`,
 `GocciaScriptLoaderBare`, and the coordinators of `GocciaTest262Runner` and
-`GocciaTOMLComplianceRunner`. The handler that catches the fault calls
-`Goccia.EngineFault.AbortOnEngineFault`, from whichever thread it runs on. It
-writes two lines to stderr, flushed:
+`GocciaTOMLComplianceRunner`, from the application's construction to its
+destruction and in each worker thread up to its last cleanup. The handler that
+catches the fault calls `Goccia.EngineFault.AbortOnEngineFault`, from whichever
+thread it runs on. It writes two lines to stderr, flushed:
 
 ```text
 Engine fault: EAccessViolation in tests/example.test.js: Access violation
@@ -48,24 +49,33 @@ on to print the summary or JSON report it would print for a run that finished.
 No other file is started and nothing more is reported. The mechanics are ADR
 0109's, moved from the test runner into the shared unit: a first-fault gate so
 only one thread writes, and a bounded wait so a second faulting thread cannot
-end the process in the middle of that write. One thing is new: before writing,
-the faulting thread flushes its own buffered stdout, so what the script printed
-before the fault comes out ahead of the diagnostic. Output other threads still
-buffer dies with the process.
+end the process in the middle of that write. Three things are new. Before
+writing, the faulting thread flushes its own buffered stdout, so what the
+script printed before the fault comes out ahead of the diagnostic; output other
+threads still buffer dies with the process. A write to a closed stderr pipe
+fails instead of raising `SIGPIPE`, and a watchdog thread ends the process with
+`70` if the write blocks on a full pipe, so a broken stderr changes neither the
+exit status nor whether the process ends. And the engine's own integrity checks
+(a heap cell, a shape, a closure or a root count found broken, often in the
+middle of a collection) write what they found and then call
+`StopOnEngineCheck`, which ends the process the same way without raising,
+instead of `Halt(9)`, which ran unit finalization from the thread that found
+it.
 
 The prefix is `Engine fault:` rather than ADR 0109's `Integrity fault:`,
 because the family below now includes assertions and stack overflows, and every
 application prints it.
 
-**The family.** `IsEngineIntegrityFault` keeps ADR 0109's classes and adds
-`EAssertionFailed` (an internal `Assert`) and `EAbstractError` (a call that
-reached an abstract method). No script can cause either by design, so a script
-boundary re-raises them too. A host uses `IsEngineFault`, which also counts
-`EStackOverflow`: the engine bounds a script's recursion and reports a
-`RangeError` the script can catch, so an `EStackOverflow` that gets past every
-script boundary means native code ran out of stack without that bound noticing.
-Anything else a host catches (a script error, a missing file, an invalid
-option, a usage error) keeps its own report and exit code.
+**The family.** One predicate, `IsEngineFault`, serves script boundaries and
+hosts alike. It keeps ADR 0109's classes and adds `EAssertionFailed` (an
+internal `Assert`), `EAbstractError` (a call that reached an abstract method)
+and `EStackOverflow`. ADR 0109 kept `EStackOverflow` convertible because the old
+engine turned it into the guest's "Maximum call stack size exceeded". The new
+engine bounds every recursion a script can drive (call frames, the parser's
+nesting, JSON, RegExp) and throws that `RangeError` itself, so an
+`EStackOverflow` means native code outran the engine's bound. Anything else a
+handler catches (a script error, a missing file, an invalid option, a usage
+error, a refused allocation) keeps its own report and exit code.
 
 **An engine check raises; it never halts.** `RunError` is a program's own
 exit request: it runs `Halt`, with unit finalization, on the calling thread,
@@ -74,7 +84,9 @@ more roots than it pushed used it, so a broken root count ended the process
 with exit status `204` from whichever thread found it. Such a check now calls
 `Goccia.EngineFault.RaiseRuntimeError`, the path the RTL's own internal errors
 take (`FPC_HANDLEERROR`), which raises the mapped exception (`EInvalidPointer`
-for `204`) for the handlers above to stop on.
+for `204`) for the handlers above to stop on. A check inside a collection, where
+raising would unwind through the collector, stops with `StopOnEngineCheck`
+instead (above).
 
 **Where the guard goes.** Every catch-all handler in `source/engine`,
 `source/units` and `source/app` that turns an exception into something other
@@ -85,7 +97,8 @@ On a thread whose exception would otherwise end the thread silently (a
 must not unwind (an FFI callback entered from native code), it calls
 `AbortOnEngineFault` instead. `scripts/check-fault-guards.ts` fails CI on a
 catch-all handler that neither re-raises, tests for a fault, nor carries a
-`fault-guard:` comment saying why it does neither.
+`fault-guard:` comment saying why it does neither; its `--self-test` keeps the
+check itself from passing handlers it should flag.
 
 **Three applications keep a contract of their own**, each stated at the
 handler:
@@ -104,12 +117,17 @@ handler:
 **The fault build.** The contract is tested with real faults: a build with
 `-dGOCCIA_FAULT_INJECTION` (`GOCCIA_VARIANT=FaultInjection`) has a
 `__gocciaInjectFault(kind)` global in every realm and a `GOCCIA_FAULT_INJECTION`
-variable that faults at application startup, when the bundler compiles an
-entry, or inside the engine's handler that makes a failure to compile an entry
-its `SyntaxError` (`Goccia.FaultInjection`). `scripts/test-engine-faults.ts` runs every
-application against it on every CI platform and checks the exit code, both
-diagnostic lines and the absence of any summary or report. It also checks that
-the shipped binaries carry neither name. ADR 0109 decided against a fault hook
+variable that faults at application startup, as it ends, as a worker thread
+releases its engine state, when the bundler compiles an entry, or inside the
+engine's handler that makes a failure to compile an entry its `SyntaxError`
+(`Goccia.FaultInjection`). `scripts/test-engine-faults.ts` runs every
+engine-running application against it on every CI platform and checks the exit
+code, both diagnostic lines and the absence of any summary or report, and, on
+POSIX, that a closed or full stderr pipe still ends the process with `70`. It
+also checks that the shipped binaries carry neither name.
+`GocciaTOMLComplianceRunner` runs no engine and is not a build.pas engine
+program, which the variant mechanism builds, so its coordinator's handler is
+the shared one without a fault test of its own. ADR 0109 decided against a fault hook
 in the runner because it would ship in the production binary. A hook that only
 a build no shipped target makes can contain does not ship.
 

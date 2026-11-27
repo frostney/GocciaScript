@@ -359,7 +359,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         AResult.Outcome := coInfrastructure;
         AResult.MessageText := E.Message;

@@ -12,10 +12,10 @@ uses
 type
   TEngineFaultTests = class(TTestSuite)
   private
-    procedure TestIntegrityFamily;
+    procedure TestFaultFamily;
     procedure TestConvertibleClasses;
-    procedure TestHostFamily;
     procedure TestDescendantsInherit;
+    procedure TestRuntimeErrorRaises;
   public
     procedure SetupTests; override;
   end;
@@ -25,22 +25,13 @@ type
 
 procedure TEngineFaultTests.SetupTests;
 begin
-  Test('the integrity family is what a script boundary must re-raise', TestIntegrityFamily);
-  Test('a refusal, a limit and a domain error stay convertible', TestConvertibleClasses);
-  Test('a host also stops on a stack overflow that got past the engine', TestHostFamily);
+  Test('the fault family is what every handler must stop on', TestFaultFamily);
+  Test('a refusal, a limit and a domain error stay ordinary failures', TestConvertibleClasses);
   Test('a descendant of a family member is a fault too', TestDescendantsInherit);
+  Test('an engine check raises the mapped exception instead of halting', TestRuntimeErrorRaises);
 end;
 
-function IntegrityFault(const AException: Exception): Boolean;
-begin
-  try
-    Result := IsEngineIntegrityFault(AException);
-  finally
-    AException.Free;
-  end;
-end;
-
-function HostFault(const AException: Exception): Boolean;
+function Fault(const AException: Exception): Boolean;
 begin
   try
     Result := IsEngineFault(AException);
@@ -49,47 +40,57 @@ begin
   end;
 end;
 
-procedure TEngineFaultTests.TestIntegrityFamily;
+procedure TEngineFaultTests.TestFaultFamily;
 begin
-  Expect<Boolean>(IntegrityFault(EObjectCheck.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EAccessViolation.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EInvalidPointer.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EDivByZero.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EPrivilege.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EExternalException.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EAssertionFailed.Create('x'))).ToBe(True);
-  Expect<Boolean>(IntegrityFault(EAbstractError.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EObjectCheck.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EAccessViolation.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EInvalidPointer.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EDivByZero.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EPrivilege.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EExternalException.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EAssertionFailed.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EAbstractError.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EStackOverflow.Create('x'))).ToBe(True);
 end;
 
 procedure TEngineFaultTests.TestConvertibleClasses;
 begin
-  Expect<Boolean>(IntegrityFault(EStackOverflow.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EOutOfMemory.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(ERangeError.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EIntOverflow.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EConvertError.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EInvalidOpException.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EInvalidCast.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(EOrdinaryFailure.Create('x'))).ToBe(False);
-  Expect<Boolean>(IntegrityFault(Exception.Create('x'))).ToBe(False);
-end;
-
-procedure TEngineFaultTests.TestHostFamily;
-begin
-  Expect<Boolean>(HostFault(EAccessViolation.Create('x'))).ToBe(True);
-  Expect<Boolean>(HostFault(EAssertionFailed.Create('x'))).ToBe(True);
-  Expect<Boolean>(HostFault(EStackOverflow.Create('x'))).ToBe(True);
-  Expect<Boolean>(HostFault(EOutOfMemory.Create('x'))).ToBe(False);
-  Expect<Boolean>(HostFault(EConvertError.Create('x'))).ToBe(False);
-  Expect<Boolean>(HostFault(EOrdinaryFailure.Create('x'))).ToBe(False);
-  Expect<Boolean>(HostFault(Exception.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EOutOfMemory.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(ERangeError.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EIntOverflow.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EConvertError.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EInvalidOpException.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EInvalidCast.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(EOrdinaryFailure.Create('x'))).ToBe(False);
+  Expect<Boolean>(Fault(Exception.Create('x'))).ToBe(False);
 end;
 
 procedure TEngineFaultTests.TestDescendantsInherit;
 begin
   { EBusError, a misaligned or unmapped access, descends from EAccessViolation }
-  Expect<Boolean>(IntegrityFault(EBusError.Create('x'))).ToBe(True);
-  Expect<Boolean>(HostFault(EBusError.Create('x'))).ToBe(True);
+  Expect<Boolean>(Fault(EBusError.Create('x'))).ToBe(True);
+end;
+
+procedure TEngineFaultTests.TestRuntimeErrorRaises;
+var
+  Raised: string;
+begin
+  Raised := '';
+  try
+    RaiseRuntimeError(204);
+  except
+    on E: Exception do
+      Raised := E.ClassName;
+  end;
+  Expect<string>(Raised).ToBe('EInvalidPointer');
+  Raised := '';
+  try
+    RaiseRuntimeError(202);
+  except
+    on E: Exception do
+      Raised := E.ClassName;
+  end;
+  Expect<string>(Raised).ToBe('EStackOverflow');
 end;
 
 begin

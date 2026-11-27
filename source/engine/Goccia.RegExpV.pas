@@ -81,7 +81,7 @@ begin
       on E: EHeapExternalMemoryLimit do raise;
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Msg := 'Invalid regular expression: /' + Pattern + '/' + Flags + ': ' + UnicodeString(E.Message);
         Exit(False);
       end;

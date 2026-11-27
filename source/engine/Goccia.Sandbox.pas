@@ -347,7 +347,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'readFile', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -395,7 +395,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, Op, Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -415,7 +415,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'mkdir', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -435,7 +435,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'readdir', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -459,7 +459,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'stat', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -491,7 +491,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'exists', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -510,7 +510,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'rm', Path, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -534,7 +534,7 @@ begin
       else Exit(ThrowFsError(E, 'rename', Path, Dest, True));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -574,7 +574,7 @@ begin
     on E: ESandboxGlobError do Result := ThrowTypeError(Method + ': ' + E.Message);
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Result := ThrowOther(E);
     end;
   end;
@@ -599,7 +599,7 @@ begin
     on E: ESandboxFsError do Exit(ThrowFsError(E, 'glob', Cwd, '', False));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -627,7 +627,7 @@ begin
     on E: ESandboxFsError do Result := ThrowFsError(E, 'search', Cwd, '', False);
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Result := ThrowOther(E);
     end;
   end;
@@ -657,7 +657,7 @@ begin
     on E: ERegExpRuntimeError do Exit(ThrowError('Error', E.Message));
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowOther(E));
     end;
   end;
@@ -756,7 +756,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(NestedFailure(E));
     end;
   end;
@@ -834,7 +834,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(NestedFailure(E));
     end;
   end;

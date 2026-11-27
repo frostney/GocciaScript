@@ -108,7 +108,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       raise EGocciaProviderTransportError.CreateFmt(
         'not a provider URL: %s', [AURL]);
@@ -136,7 +136,7 @@ begin
         raise;
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         raise EGocciaProviderTransportError.Create(E.Message);
       end;

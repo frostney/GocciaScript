@@ -323,7 +323,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         raise EGocciaCrawlError.CreateFmt('%s does not parse: %s',
           [AFileName, E.Message]);

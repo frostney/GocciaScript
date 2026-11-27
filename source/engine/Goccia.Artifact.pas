@@ -880,7 +880,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Err := UnicodeString(E.Message);
       Result := False;
     end;
@@ -930,7 +930,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Err := UnicodeString(E.Message);
       FreeAndNil(A.Info);
       A.Top := nil;

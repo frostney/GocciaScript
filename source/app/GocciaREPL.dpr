@@ -85,7 +85,7 @@ begin
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(REPL_FILE_NAME);
   end;
 end;
 

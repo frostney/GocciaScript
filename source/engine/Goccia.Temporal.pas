@@ -53,7 +53,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit;
     end;
   end;

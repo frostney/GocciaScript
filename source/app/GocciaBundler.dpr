@@ -109,7 +109,7 @@ begin
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FApp.FPlan[FIndex].InputFile);
   end;
 end;
 

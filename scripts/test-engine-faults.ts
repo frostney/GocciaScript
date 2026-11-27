@@ -11,7 +11,7 @@
  * (Goccia.FaultInjection):
  *
  *   GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS=-dGOCCIA_FAULT_INJECTION \
- *     ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner
+ *     ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness
  *
  * writes build/GocciaRunnerFaultInjection and the others. The shipped binaries
  * in build/ are read too, to show that they carry no trace of the hook.
@@ -35,6 +35,7 @@ const F = {
   repl: faultBuild("GocciaREPL"),
   bare: faultBuild("GocciaScriptLoaderBare"),
   test262Runner: faultBuild("GocciaTest262Runner"),
+  fuzzHarness: faultBuild("GocciaFuzzHarness"),
 };
 const SHIPPED = [RUNNER, TESTRUNNER, BENCHRUNNER, BUNDLER, REPL, BARE, TEST262RUNNER];
 
@@ -101,6 +102,22 @@ function expectNoFault(r: Run, code: number): void {
 }
 
 const STARTUP = { GOCCIA_FAULT_INJECTION: "access-violation@startup" };
+
+function writeTestFiles(dir: string, files: Record<string, string>): string[] {
+  return Object.entries(files).map(([name, body]) => {
+    const path = join(dir, name);
+    writeFileSync(path, body);
+    return path;
+  });
+}
+
+const FAULTING_TEST = [
+  "test('faults', () => {",
+  "  try { __gocciaInjectFault('access-violation'); } catch (e) { console.log('test caught'); }",
+  "});",
+  "test('after the fault', () => { console.log('LATER TEST RAN'); });",
+].join("\n");
+const PASSING_TEST = (marker: string) => `test('passes', () => { console.log('${marker}'); expect(1).toBe(1); });\n`;
 
 for (const path of Object.values(F)) {
   if (!existsSync(path)) {
@@ -215,6 +232,120 @@ await section("GocciaRunner: a fault inside the engine's own compile handler is 
   }
 });
 
+await section("GocciaRunner: every fault kind inside the compile handler, a stack overflow included, stops the run", () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "entry.js");
+    writeFileSync(file, "console.log('ran');\n");
+    for (const [kind, exceptionClass] of [
+      ["stack-overflow", "EStackOverflow"],
+      ["assertion", "EAssertionFailed"],
+      ["invalid-pointer", "EInvalidPointer"],
+    ]) {
+      const r = run([F.runner, file], { env: { GOCCIA_FAULT_INJECTION: `${kind}@compile-entry` } });
+      expectFault(r, exceptionClass, "entry.js");
+      expectAbsent(r, "SyntaxError", "the fault was reported as a script's syntax error");
+    }
+    // a script's own deep recursion stays the catchable RangeError the engine bounds it with
+    const deep = join(tmp, "deep.js");
+    writeFileSync(deep, [
+      "const down = (n) => 1 + down(n + 1);",
+      "try { down(0); } catch (e) { console.log(e instanceof RangeError ? 'range error' : String(e)); }",
+    ].join("\n"));
+    const recursion = run([F.runner, deep]);
+    expectNoFault(recursion, 0);
+    if (!recursion.stdout.includes("range error")) throw new Error(`deep recursion: ${describe(recursion)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Every application: a fault in a worker's cleanup, or as the application ends, stops it", () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "fine.js");
+    writeFileSync(file, "console.log('fine');\n");
+    const [test] = writeTestFiles(tmp, { "a.test.js": PASSING_TEST("A RAN") });
+    expectFault(run([F.runner, file], { env: { GOCCIA_FAULT_INJECTION: "access-violation@thread-cleanup" } }),
+      "EAccessViolation", "fine.js");
+    const r = run([F.testRunner, "-P", test], { env: { GOCCIA_FAULT_INJECTION: "access-violation@thread-cleanup" } });
+    expectFault(r, "EAccessViolation", "a.test.js");
+    expectAbsent(r, "Test Results", "a summary was printed");
+    expectFault(run([F.runner, file], { env: { GOCCIA_FAULT_INJECTION: "access-violation@shutdown" } }),
+      "EAccessViolation", "GocciaRunner");
+    expectFault(run([F.testRunner, "-P", test], { env: { GOCCIA_FAULT_INJECTION: "assertion@shutdown" } }),
+      "EAssertionFailed", "GocciaTestRunner");
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Every application: a failed engine integrity check stops it the same way, without unwinding", () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "check.js");
+    writeFileSync(file, "try { __gocciaInjectFault('engine-check'); } finally { console.log('finally'); }\n");
+    for (const binary of [F.runner, F.bare]) {
+      const r = run([binary, file]);
+      const lines = r.stderr.split("\n").filter((line) => line.startsWith(PREFIX));
+      if (r.code !== EXIT_ENGINE_FAULT || lines.length !== 2 ||
+        lines[0] !== `${PREFIX}the engine's injected check failed (see above)` || lines[1] !== SECOND_LINE ||
+        !r.stderr.includes("injected engine check: the state it found"))
+        throw new Error(`expected the engine-check diagnostic and exit 70, got ${describe(r)}`);
+      expectAbsent(r, "finally", "a finally block ran");
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Every application: a broken stderr cannot change the exit status or hang the fault", () => {
+  if (process.platform === "win32") return;
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "fault.js");
+    writeFileSync(file, "__gocciaInjectFault('access-violation');\n");
+    // stderr is a pipe whose reader has gone: the diagnostic's write fails
+    const closed = run(["sh", "-c", `exec 3>&1; { sleep 1; "$0" "$1" 2>&1 >/dev/null; echo "status=$?" >&3; } | true`,
+      F.runner, file]);
+    if (!closed.stdout.includes("status=70"))
+      throw new Error(`a closed stderr pipe should still give exit 70, got ${describe(closed)}`);
+    // stderr is a pipe already full that nobody reads: the write blocks until the watchdog ends the process
+    const full = run(["python3", "-I", "-c", [
+      "import fcntl, os, subprocess, sys",
+      "r, w = os.pipe()",
+      "fl = fcntl.fcntl(w, fcntl.F_GETFL)",
+      "fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)",
+      "try:",
+      "    while True: os.write(w, b'x' * 4096)",
+      "except BlockingIOError: pass",
+      "fcntl.fcntl(w, fcntl.F_SETFL, fl)",
+      "p = subprocess.Popen([sys.argv[1], sys.argv[2]], stdout=subprocess.DEVNULL, stderr=w)",
+      "try:",
+      "    print('status=%d' % p.wait(timeout=20))",
+      "except subprocess.TimeoutExpired:",
+      "    p.kill(); p.wait(); print('status=hung')",
+    ].join("\n"), F.runner, file]);
+    if (!full.stdout.includes("status=70"))
+      throw new Error(`a full stderr pipe should end in exit 70 within the bound, got ${describe(full)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("GocciaFuzzHarness: a fault is a finding, exit 1 with its class (the fuzzer's contract)", () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "input.js");
+    writeFileSync(file, "__gocciaInjectFault('access-violation');\n");
+    const r = run([F.fuzzHarness, file]);
+    if (r.code !== 1 || !/unexpected fault in the bytecode run: EAccessViolation/.test(r.stderr) || r.stderr.includes(PREFIX))
+      throw new Error(`expected the harness's finding and exit 1, got ${describe(r)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("GocciaRunner: a fault at startup, outside any file, names the application", () => {
   const tmp = makeTmp();
   try {
@@ -241,22 +372,6 @@ await section("GocciaRunner: a script error and an unknown fault kind stay ordin
     clean(tmp);
   }
 });
-
-function writeTestFiles(dir: string, files: Record<string, string>): string[] {
-  return Object.entries(files).map(([name, body]) => {
-    const path = join(dir, name);
-    writeFileSync(path, body);
-    return path;
-  });
-}
-
-const FAULTING_TEST = [
-  "test('faults', () => {",
-  "  try { __gocciaInjectFault('access-violation'); } catch (e) { console.log('test caught'); }",
-  "});",
-  "test('after the fault', () => { console.log('LATER TEST RAN'); });",
-].join("\n");
-const PASSING_TEST = (marker: string) => `test('passes', () => { console.log('${marker}'); expect(1).toBe(1); });\n`;
 
 await section("GocciaTestRunner: a fault stops the run at that file, with no summary (--jobs=1)", () => {
   const tmp = makeTmp();

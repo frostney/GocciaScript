@@ -473,7 +473,7 @@ var
         except
           on E: Exception do
           begin
-            if IsEngineIntegrityFault(E) then
+            if IsEngineFault(E) then
               raise;
             if Assigned(ALog) then
               ALog('Skipped ' + Path + ': ' + E.Message);
@@ -662,7 +662,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       FailUsage(Format('cannot read %s: %s', [FImportMapPath, E.Message]));
     end;

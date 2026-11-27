@@ -428,7 +428,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       Exit(False);
     end;
@@ -1019,7 +1019,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         PipelineResult := nil;
       end;
@@ -1034,7 +1034,7 @@ begin
       except
         on E: Exception do
         begin
-          if IsEngineIntegrityFault(E) then
+          if IsEngineFault(E) then
             raise;
           Exit;
         end;

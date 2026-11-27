@@ -771,7 +771,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
         Exit(HostAbort('capability audit delivery failed: ' + E.Message));
     end;
   end;
@@ -1072,7 +1072,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         R.ErrorName := 'Error';
         R.ErrorText := UnicodeString(E.Message);
         R.ErrorMessage := R.ErrorText;

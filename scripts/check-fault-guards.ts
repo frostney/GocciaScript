@@ -9,8 +9,8 @@
  *
  * - re-raise unconditionally (`raise;` as a statement of its own, the
  *   free-and-re-raise cleanup handlers);
- * - test the exception with `IsEngineIntegrityFault` or `IsEngineFault`, or
- *   stop the process with `AbortOnEngineFault`;
+ * - test the exception with `IsEngineFault`, or stop the process with
+ *   `AbortOnEngineFault`;
  * - carry a `fault-guard:` comment in the handler, or on the lines just above
  *   its `on` or `except`, saying why a fault there is not reported as an
  *   ordinary result (a fuzz harness that counts it as a finding, a
@@ -19,8 +19,13 @@
  * The check reads the code's layout, which ./format.pas keeps regular: a
  * handler's `except` and its closing `end` share an indentation.
  *
+ * A catch-all arm is an `on ...: Exception do` arm or an except block's
+ * `else` arm; a re-raise counts only as a statement at the handler's own
+ * level, not one nested in an `if` or an inner block.
+ *
  * Usage:
  *   bun run scripts/check-fault-guards.ts
+ *   bun run scripts/check-fault-guards.ts --self-test
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -33,7 +38,7 @@ const SKIPPED_DIRECTORIES = new Set(["source/engine/tools"]);
 // the engine's own development programs (build/engine/goccia and its threads
 // probe), which are not applications under source/app
 const SKIPPED_FILES = new Set(["source/engine/goccia.dpr", "source/engine/gocciathreads.dpr"]);
-const GUARD = /\b(IsEngineIntegrityFault|IsEngineFault|AbortOnEngineFault)\s*\(/;
+const GUARD = /\b(IsEngineFault|AbortOnEngineFault)\s*\(/;
 const EXEMPTION = /fault-guard:/;
 const CATCH_ALL_ARM = /^on\s+(?:\w+\s*:\s*)?Exception\s+do\b/i;
 const ANY_ARM = /^on\s+(?:\w+\s*:\s*)?[\w.]+\s+do\b/i;
@@ -98,27 +103,42 @@ function code(line: string): string {
   return line.trim();
 }
 
-// Whether the handler lines re-raise unconditionally: a `raise;` whose line is
-// not the branch of an `if`, `else` or `do` on the line before it.
-function reraises(lines: string[]): boolean {
-  for (let i = 0; i < lines.length; i++) {
-    const text = code(lines[i]);
-    if (!/^raise\s*;/.test(text) && !/\braise\s*;\s*$/.test(text)) continue;
-    if (/\b(then|else|do)\s+raise\s*;/i.test(text)) continue;
-    let j = i - 1;
-    while (j >= 0 && code(lines[j]) === "") j--;
-    if (j >= 0 && /\b(then|else|do)$/i.test(code(lines[j]))) continue;
-    return true;
-  }
-  return false;
+// Whether a handler body re-raises unconditionally: a `raise;` statement at
+// the body's own level, not one nested in an `if`, a loop or an inner block.
+// `inline` is the code after an arm's `do` on its own line, if any.
+// A bare handler's statements: any `raise;` at the level of its first one.
+function bareReraises(lines: string[]): boolean {
+  const first = lines.findIndex((line) => code(line) !== "");
+  if (first < 0) return false;
+  const level = indentation(lines[first]);
+  return lines.some((line) => indentation(line) === level && /^raise\s*;/i.test(code(line)));
 }
 
-function check(path: string, findings: Finding[]): void {
-  const raw = readFileSync(join(ROOT, path), "utf8");
-  const rawLines = raw.split("\n");
-  const lines = stripComments(raw).split("\n");
+function reraises(lines: string[], inline = ""): boolean {
+  if (/^raise\s*;/i.test(inline)) return true;
+  if (inline !== "") return false;
+  const first = lines.findIndex((line) => code(line) !== "");
+  if (first < 0) return false;
+  let level = indentation(lines[first]);
+  let statements = lines.slice(first);
+  if (/^begin$/i.test(code(lines[first]))) {
+    level += 2;
+    statements = statements.slice(1);
+  } else {
+    // a single statement after `do`
+    return /^raise\s*;/i.test(code(lines[first]));
+  }
+  return statements.some((line) => indentation(line) === level && /^raise\s*;/i.test(code(line)));
+}
+
+type Source = { path: string; text: string };
+
+function check(source: Source, findings: Finding[]): void {
+  const path = source.path;
+  const rawLines = source.text.split("\n");
+  const lines = stripComments(source.text).split("\n");
   for (let i = 0; i < lines.length; i++) {
-    if (!/^except\b/i.test(lines[i].trim()) || code(lines[i]) !== "except") continue;
+    if (code(lines[i]).toLowerCase() !== "except") continue;
     const depth = indentation(lines[i]);
     let end = i + 1;
     while (end < lines.length &&
@@ -126,43 +146,100 @@ function check(path: string, findings: Finding[]): void {
     const body = lines.slice(i + 1, end);
     const rawBody = rawLines.slice(i + 1, end);
     const above = rawLines.slice(Math.max(0, i - 3), i);
-    const firstCode = body.map(code).find((text) => text !== "");
-    if (firstCode === undefined || !ANY_ARM.test(firstCode)) {
+    const firstIndex = body.findIndex((line) => code(line) !== "");
+    if (firstIndex < 0 || !ANY_ARM.test(code(body[firstIndex]))) {
       // a bare handler: everything is caught
-      if (!reraises(body) && !GUARD.test(body.join("\n")) &&
+      if (!bareReraises(body) && !GUARD.test(body.join("\n")) &&
         !EXEMPTION.test([...above, ...rawBody].join("\n"))) {
         findings.push({ file: path, line: i + 1, message: "bare except handler swallows engine faults" });
       }
       continue;
     }
-    // the arms, each to the next arm at its own indentation
+    // the arms, each to the next arm at their indentation; an `else` there is
+    // an arm too, and catches everything the `on` arms did not
+    const armIndent = indentation(body[firstIndex]);
     const arms: number[] = [];
-    for (let k = 0; k < body.length; k++) {
-      if (ANY_ARM.test(code(body[k]))) {
-        if (arms.length === 0 || indentation(body[k]) === indentation(body[arms[0]])) arms.push(k);
-      }
+    for (let k = firstIndex; k < body.length; k++) {
+      const at = indentation(body[k]);
+      if (at === armIndent && ANY_ARM.test(code(body[k]))) arms.push(k);
+      else if ((at === armIndent || at === depth) && /^else\b/i.test(code(body[k]))) arms.push(k);
     }
-    // the `else` arm of an except block catches everything the `on` arms did not
     for (let a = 0; a < arms.length; a++) {
       const start = arms[a];
       const stop = a + 1 < arms.length ? arms[a + 1] : body.length;
-      if (!CATCH_ALL_ARM.test(code(body[start]))) continue;
+      const head = code(body[start]);
+      const isElse = /^else\b/i.test(head);
+      if (!isElse && !CATCH_ALL_ARM.test(head)) continue;
+      const inline = isElse ? head.replace(/^else\b/i, "").trim() : head.replace(/^.*?\bdo\b/i, "").trim();
       const arm = body.slice(start, stop);
       const context = [...rawBody.slice(Math.max(0, start - 3), stop)];
       if (start < 3) context.unshift(...above);
-      if (reraises(arm.slice(1)) || GUARD.test(arm.join("\n")) || EXEMPTION.test(context.join("\n"))) continue;
-      findings.push({ file: path, line: i + 2 + start, message: "catch-all arm swallows engine faults" });
+      if (reraises(arm.slice(1), inline) || GUARD.test(arm.join("\n")) || EXEMPTION.test(context.join("\n"))) continue;
+      findings.push({
+        file: path,
+        line: i + 2 + start,
+        message: isElse ? "except-else arm swallows engine faults" : "catch-all arm swallows engine faults",
+      });
     }
   }
 }
 
+// Handlers the check must flag, and handlers it must accept.
+function selfTest(): number {
+  const flagged: Record<string, string> = {
+    "unguarded catch-all": "  try\n    X;\n  except\n    on E: Exception do\n      Y := 1;\n  end;\n",
+    "unguarded catch-all block": "  try\n    X;\n  except\n    on E: Exception do\n    begin\n      Y := 1;\n    end;\n  end;\n",
+    "nameless catch-all": "  try\n    X;\n  except\n    on Exception do\n      Exit(False);\n  end;\n",
+    "bare handler": "  try\n    X;\n  except\n    Y := 1;\n  end;\n",
+    "except-else arm": "  try\n    X;\n  except\n    on E: EConvertError do\n      raise;\n  else\n    Y := 1;\n  end;\n",
+    "raise nested in a block": "  try\n    X;\n  except\n    on E: Exception do\n    begin\n      if Z then\n      begin\n        raise;\n      end;\n      Y := 1;\n    end;\n  end;\n",
+    "raise after then": "  try\n    X;\n  except\n    on E: Exception do\n    begin\n      if Z then\n        raise;\n      Y := 1;\n    end;\n  end;\n",
+    "raise inline after then": "  try\n    X;\n  except\n    Y := 1;\n    if Z then raise;\n  end;\n",
+  };
+  const accepted: Record<string, string> = {
+    "guarded catch-all": "  try\n    X;\n  except\n    on E: Exception do\n    begin\n      if IsEngineFault(E) then\n        raise;\n      Y := 1;\n    end;\n  end;\n",
+    "free and re-raise": "  try\n    X;\n  except\n    Y.Free;\n    raise;\n  end;\n",
+    "inline re-raise": "  try\n    X;\n  except\n    on E: Exception do raise;\n  end;\n",
+    "single-statement re-raise": "  try\n    X;\n  except\n    on E: Exception do\n      raise;\n  end;\n",
+    "specific arm only": "  try\n    X;\n  except\n    on E: EConvertError do\n      Y := 1;\n  end;\n",
+    "exempted": "  try\n    X;\n  except\n    { fault-guard: graded as a crash }\n    on E: Exception do\n      Y := 1;\n  end;\n",
+    "guarded else": "  try\n    X;\n  except\n    on E: EConvertError do\n      Y := 1;\n  else\n    raise;\n  end;\n",
+  };
+  let failures = 0;
+  for (const [name, text] of Object.entries(flagged)) {
+    const found: Finding[] = [];
+    check({ path: name, text }, found);
+    if (found.length !== 1) {
+      console.error(`self-test: "${name}" should be flagged once, got ${found.length}`);
+      failures++;
+    }
+  }
+  for (const [name, text] of Object.entries(accepted)) {
+    const found: Finding[] = [];
+    check({ path: name, text }, found);
+    if (found.length !== 0) {
+      console.error(`self-test: "${name}" should pass, got ${found.map((f) => f.message).join(", ")}`);
+      failures++;
+    }
+  }
+  return failures;
+}
+
+if (process.argv.includes("--self-test")) {
+  const failures = selfTest();
+  if (failures > 0) process.exit(1);
+  console.log("fault guards: self-test passed");
+  process.exit(0);
+}
+
 const findings: Finding[] = [];
-for (const tree of TREES) for (const file of sourceFiles(tree)) check(file, findings);
+for (const tree of TREES)
+  for (const file of sourceFiles(tree)) check({ path: file, text: readFileSync(join(ROOT, file), "utf8") }, findings);
 for (const f of findings) console.error(`${f.file}:${f.line}: ${f.message}`);
 if (findings.length > 0) {
-  console.error(`\n${findings.length} handler(s) without a fault guard. Test the exception with ` +
-    "IsEngineIntegrityFault (a script boundary: re-raise it) or IsEngineFault (a host: AbortOnEngineFault), " +
-    "or say why not in a `fault-guard:` comment. See docs/adr/0196-every-application-stops-on-an-engine-fault.md.");
+  console.error(`\n${findings.length} handler(s) without a fault guard. Test the exception with IsEngineFault and ` +
+    "re-raise it (a script boundary) or stop with AbortOnEngineFault (a host, or a thread that would end silently), " +
+    "or say why neither in a `fault-guard:` comment. See docs/adr/0196-every-application-stops-on-an-engine-fault.md.");
   process.exit(1);
 }
 console.log(`fault guards: every catch-all handler in ${TREES.join(", ")} is guarded`);

@@ -1527,7 +1527,7 @@ begin
       Result := DenyResolution(E.Capability, E.Scope, E.Suggestion);
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Resolved := UTF8Decode(E.Message);
       if E is EModuleNotFound then ResolveCandidate := UTF8Decode(EModuleNotFound(E).ResolvedCandidatePath);
       Result := -1;
@@ -1746,7 +1746,7 @@ begin
     { any other parser failure is still the text's: never let a Pascal exception into the VM }
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
     end;
   end;
@@ -1881,7 +1881,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
       end;
     end;
   end;
@@ -2222,7 +2222,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(SnapshotFailed(E));
     end;
   end;
@@ -2249,7 +2249,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       Exit(SnapshotFailed(E));
     end;
   end;
@@ -2277,7 +2277,7 @@ begin
       except
         on E: Exception do
         begin
-          if IsEngineIntegrityFault(E) then raise;
+          if IsEngineFault(E) then raise;
           Errors.Add('Snapshot finalization failed: ' + E.Message);
         end;
       end;

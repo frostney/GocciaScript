@@ -89,7 +89,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         T := NaN;
       end;
     end;

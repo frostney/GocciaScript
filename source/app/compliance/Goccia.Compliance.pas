@@ -189,7 +189,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         Result.ErrorMessage := E.Message;
       end;

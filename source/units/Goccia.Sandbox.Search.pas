@@ -260,7 +260,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       raise ESandboxGrepPatternError.Create(E.Message);
     end;

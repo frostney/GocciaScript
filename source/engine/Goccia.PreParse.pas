@@ -1494,7 +1494,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         if Pos('quantifier bound too large', E.Message) > 0 then Msg := '' else Msg := UnicodeString(E.Message);
       end;
     end;

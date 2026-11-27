@@ -125,7 +125,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then raise;
+      if IsEngineFault(E) then raise;
       WriteLn(ErrOutput, 'artifact round trip: ', FileName, ': cannot write: ', E.Message);
       Halt(70);
     end;
@@ -483,7 +483,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Err := UnicodeString(E.Message);
         ParseErrorName := ParseFailureName(E);
         ParseErrorLine := 0;
@@ -556,7 +556,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Err := UnicodeString(E.Message);
         ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
@@ -636,7 +636,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Err := UnicodeString(E.Message);
         if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
         ParseErrorName := ParseFailureName(E);
@@ -819,7 +819,7 @@ begin
     except
       on Ex: Exception do
       begin
-        if IsEngineIntegrityFault(Ex) then raise;
+        if IsEngineFault(Ex) then raise;
         Msg := UnicodeString(Ex.Message);
         if Ex is EHeapExternalMemoryLimit then ErrorName := 'RangeError';
       end;
@@ -886,7 +886,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Err := UnicodeString(E.Message);
         ErrName := ParseFailureName(E);
         { where in the module, for the host's report of an import whose module did not parse }
@@ -947,7 +947,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         Err := UnicodeString(E.Message);
         if (E is EEarlySyntaxError) or (E is EHeapExternalMemoryLimit) then CompileFailKind := 1;
         ParseErrorName := ParseFailureName(E);

@@ -950,7 +950,7 @@ begin
       { A config error belongs to that file's own run, which reports it. }
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then
+        if IsEngineFault(E) then
           raise;
         Continue;
       end;
@@ -1603,7 +1603,7 @@ begin
       except
         on E: Exception do
         begin
-          if IsEngineIntegrityFault(E) then
+          if IsEngineFault(E) then
             raise;
           // Fall through to the runner's own load-error handling.
           Result.Add(FileName);

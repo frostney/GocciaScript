@@ -25,7 +25,9 @@ unit Goccia.FaultInjection;
                                  the bundler's engine compiles an entry; or
                                  "compile-entry", inside the handler that makes
                                  a failure to compile a script's entry its
-                                 SyntaxError (Goccia.Eval)
+                                 SyntaxError (Goccia.Eval); "thread-cleanup", as
+                                 a worker thread releases its engine state; or
+                                 "shutdown", as an application ends
 
   The kinds, each a real fault raised the way the engine's own bugs raise it:
 
@@ -44,7 +46,9 @@ unit Goccia.FaultInjection;
                        x86-64 Linux has no stack check that raises it (a real
                        overflow ends the process by SIGSEGV before any handler
                        runs), so this kind raises it the way the RTL's check
-                       does where it has one }
+                       does where it has one
+    engine-check       one of the engine's own integrity checks failing
+                       (StopOnEngineCheck), which stops without raising }
 
 {$I Goccia.inc}
 {$C+}
@@ -86,6 +90,11 @@ begin
     RaiseRuntimeError(204)
   else if AKind = 'stack-overflow' then
     RaiseRuntimeError(202)
+  else if AKind = 'engine-check' then
+  begin
+    WriteLn(ErrOutput, 'injected engine check: the state it found');
+    StopOnEngineCheck('injected');
+  end
   else
     raise Exception.CreateFmt('unknown fault kind: %s', [AKind]);
 end;

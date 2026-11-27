@@ -100,16 +100,30 @@ var
   App: TGocciaApplication;
 begin
   Result := 1;
-  App := AClass.Create(AName);
+  { Run stops on a fault inside Execute; this handler stops on one in the
+    application's construction, its ending and its destruction (ADR 0196) }
   try
-    Result := App.Run;
-  finally
-    if Result <> 0 then
-      AClass.ProcessEnding(Result)
-    else
-      AClass.ProcessEnding(ExitCode);
-    App.Free;
-    AClass.ProcessEnded;
+    App := AClass.Create(AName);
+    try
+      Result := App.Run;
+    finally
+      {$IFDEF GOCCIA_FAULT_INJECTION}
+      InjectFaultAt('shutdown');
+      {$ENDIF}
+      if Result <> 0 then
+        AClass.ProcessEnding(Result)
+      else
+        AClass.ProcessEnding(ExitCode);
+      App.Free;
+      AClass.ProcessEnded;
+    end;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(AName, E);
+      raise;
+    end;
   end;
 end;
 

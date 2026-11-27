@@ -560,7 +560,7 @@ begin
       raise;
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       raise EGocciaLockfileError.CreateFmt('%s is not valid JSON: %s',
         [FLocation, E.Message]);
@@ -660,7 +660,7 @@ begin
   except
     on E: Exception do
     begin
-      if IsEngineIntegrityFault(E) then
+      if IsEngineFault(E) then
         raise;
       raise EGocciaLockfileError.CreateFmt('cannot read %s: %s',
         [APath, E.Message]);

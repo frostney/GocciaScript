@@ -1288,7 +1288,7 @@ begin
     except
       on E: Exception do
       begin
-        if IsEngineIntegrityFault(E) then raise;
+        if IsEngineFault(E) then raise;
         NativeStackReturn(Loan);
         AbandonRealm(Old, NewR);
         Pending := VUndefined;
@@ -2448,7 +2448,7 @@ end;
 procedure XBadClosure(T: PFuncTemplate; C: PObj); noinline;
 begin
   WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', TEMP_ROOTS_MAX);
-  Halt(9);
+  StopOnEngineCheck('closure upvalue');
 end;
 
 function NewClosure(T: PFuncTemplate; Upvals: TValue): PObj;
@@ -7174,7 +7174,7 @@ begin
   if RootCheck and (TempTop <> NP) then
   begin
     XReportRootImbalance(O, TempTop - NP, Result, Fr^.Tpl);
-    Halt(9);
+    StopOnEngineCheck('native root balance');
   end;
   CurNewTarget := RootAt(TempTop - 1);
   PopRoots(1);
@@ -7214,7 +7214,7 @@ begin
       if GCVerify and not NurseryCellOK(R[A]) then
       begin
         XReportBadUps(J, NP2, Fr^.Base + A, Fr^.Base, Fr^.Tpl);
-        Halt(9);
+        StopOnEngineCheck('captured register');
       end;
       ValueArrayStore(PValueArray(PtrOf(R[A])), J, V);
     end;
@@ -7421,7 +7421,7 @@ begin
   if RootCheck and (TempTop <> NP) then
   begin
     XReportRootImbalance(O, TempTop - NP, Result, nil);
-    Halt(9);
+    StopOnEngineCheck('native root balance');
   end;
   CurNewTarget := RootAt(TempTop - 1);
   PopRoots(1);
@@ -9808,7 +9808,7 @@ LReload:
             if RootCheck and (TempTop <> NP2) then
             begin
               XReportRootImbalance(O, TempTop - NP2, Ok, Tpl);
-              Halt(9);
+              StopOnEngineCheck('native root balance');
             end;
             CurNewTarget := RootAt(TempTop - 1);
             PopRoots(1);
@@ -10134,7 +10134,7 @@ LReload:
               if GCVerify and not NurseryCellOK(R[A]) then
               begin
                 XReportBadUps(J, NP2, Fr^.Base + A, Fr^.Base, Tpl);
-                Halt(9);
+                StopOnEngineCheck('captured register');
               end;
               ValueArrayStore(PValueArray(PtrOf(R[A])), J, V);
             end;
