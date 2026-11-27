@@ -520,6 +520,16 @@ const seen = await (await fetch('${BASE}/arrivals')).json()
 console.log(result, seen.arrivals.includes('late') ? 'started' : 'never started')
 " "TimeoutError never started"
 
+check "slow answers past two seconds arrive, with no signal, a controller's signal, or after waiting" 0 "
+await fetch('${BASE}/arrivals-reset')
+const controller = new AbortController()
+const first = fetch('${BASE}/sleep/2500/signal', { signal: controller.signal })
+const plain = Array.from({ length: 15 }, (_, i) => fetch('${BASE}/sleep/2500/plain' + i))
+const waiting = fetch('${BASE}/sleep/2500/waiting')
+const all = await Promise.allSettled([first, ...plain, waiting])
+console.log(all.map((r) => r.status === 'fulfilled' ? r.value.status : r.reason.message).join(' ') === Array(17).fill(200).join(' '))
+" "true"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 

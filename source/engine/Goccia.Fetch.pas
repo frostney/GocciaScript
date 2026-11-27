@@ -438,9 +438,12 @@ begin
     2: Redirect := hrmManual;
   else Redirect := hrmFollow;
   end;
-  { the signal's time left, rounded up to whole milliseconds and held to a range a tick count adds safely }
-  if IsNumber(ArgOf(Args, Argc, 5)) then SignalMs := Ceil64(Max(0.0, Min(NumOf(Args[5]), 1.0 * High(Integer))))
-  else SignalMs := -1;
+  { the signal's time left, rounded up to whole milliseconds and held to a range a tick count adds safely; a
+    negative value (no signal, or one without a timeout) means none }
+  if IsNumber(ArgOf(Args, Argc, 5)) and (NumOf(Args[5]) >= 0) then
+    SignalMs := Ceil64(Min(NumOf(Args[5]), 1.0 * High(Integer)))
+  else
+    SignalMs := -1;
   if not AuditDecision(akNetDispatch, True, URL, 'fetch dispatch is allowed') then Exit(False);
   { the entry keeps the normalized URL, which percent-encoding can make several times longer }
   URL := NormalizeHTTPRequestURL(URL);
