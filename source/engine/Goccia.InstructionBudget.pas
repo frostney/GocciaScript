@@ -9,13 +9,14 @@ type
     and spends them locally, so the shared counter is touched once per reserve, not once per instruction. }
   IGocciaInstructionBudget = interface
     function Limit: Int64;
-    { A capped counter includes the first refused unit and then stays fixed. It includes units engines hold in
-      reserve, so it is exact once every engine of the job has ended. }
+    { A capped counter includes the first refused unit and then stays fixed at Limit + 1. Otherwise it includes units
+      engines hold in reserve, so it is exact once every engine of the job has ended. }
     function Count: QWord;
     { A nonzero charge succeeds in full or is refused. A zero charge checks whether a cap has been exceeded. }
     function TryCharge(AUnits: QWord): Boolean;
-    { At least AMin and at most AMax units, as many as a cap leaves; 0 and the cap spent when fewer than AMin are
-      left. AMin is at least 1. }
+    { At least AMin and at most AMax units; under a cap also at most an eighth of what is left (but AMin when that is
+      less), so engines that share a nearly spent cap are refused late, not early. 0 and the cap spent when fewer than
+      AMin are left. AMin is at least 1. }
     function Reserve(AMin, AMax: QWord): QWord;
     { returns reserved units an engine did not spend; nothing once a cap was refused }
     procedure Refund(AUnits: QWord);
@@ -104,7 +105,9 @@ begin
         FState := -1;
         Exit(0);
       end;
-      if AMax <= QWord(FState) then Result := AMax else Result := QWord(FState);
+      Result := QWord(FState) div 8;
+      if Result > AMax then Result := AMax;
+      if Result < AMin then Result := AMin;
       Dec(FState, Int64(Result));
     end
     else

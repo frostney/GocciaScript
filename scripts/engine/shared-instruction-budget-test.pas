@@ -64,7 +64,24 @@ begin
 end;
 
 const
-  Entry = 'const values = new Array(64).fill(7); values[0];';
+  { several thousand units, so two engines that share a cap both take several reserves }
+  Entry = 'console.log("started"); const values = new Array(4096).fill(7); values[0];';
+
+type
+  { counts the entries that started, from any thread }
+  TStartCounter = class
+  public
+    Started: Integer;
+    procedure Console(const AMethod, ALine: UnicodeString);
+  end;
+
+procedure TStartCounter.Console(const AMethod, ALine: UnicodeString);
+begin
+  if ALine = 'started' then InterLockedIncrement(Started);
+end;
+
+var
+  Starts: TStartCounter;
 
 function RunEntry(const ABudget: IGocciaInstructionBudget): TGocciaRunResult;
 var
@@ -72,6 +89,7 @@ var
 begin
   Engine := TGocciaEngine.Create;
   try
+    Engine.OnConsole := Starts.Console;
     Engine.InstructionBudget := ABudget;
     Engine.MeasureInstructions := True;
     Engine.ResultForm := grfString;
@@ -103,11 +121,14 @@ begin
   RunResult := RunEntry(FBudget);
 end;
 
-procedure CheckSharedEntries(ASharedLimit: Int64; AExpectedCount: QWord);
+{ Two engines on two threads share one budget: uncapped (ALimit 0), capped with room for both, or capped below what
+  both need, when both start, one is refused and the count is fixed past the cap. }
+procedure CheckSharedEntries(ASharedLimit: Int64; AExpectedCount: QWord; ARefused: Boolean);
 var
   Shared: IGocciaInstructionBudget;
   First, Second: TEntryThread;
 begin
+  Starts.Started := 0;
   Shared := NewInstructionBudget(ASharedLimit);
   First := TEntryThread.Create(Shared);
   Second := TEntryThread.Create(Shared);
@@ -117,8 +138,10 @@ begin
     First.WaitFor;
     Second.WaitFor;
     Check((First.FatalException = nil) and (Second.FatalException = nil), 'a shared entry thread failed');
-    Check(Shared.Count = AExpectedCount, 'entries did not charge the same budget');
-    if ASharedLimit > 0 then
+    Check(Shared.Count = AExpectedCount, 'entries did not charge the same budget: ' + IntToStr(Shared.Count));
+    Check(Starts.Started = 2, 'an engine was refused before it did any work');
+    { running at once, both can be refused near the cap; at least one is }
+    if ARefused then
       Check((First.RunResult.Aborted = gaInstructionLimit) or (Second.RunResult.Aborted = gaInstructionLimit),
         'neither entry observed the spent shared limit')
     else
@@ -164,11 +187,12 @@ var
   Budget: IGocciaInstructionBudget;
 begin
   Budget := NewInstructionBudget(100);
-  Check(Budget.Reserve(10, 1024) = 100, 'a reserve did not take what the cap left');
-  Check(Budget.Count = 100, 'reserved units were not counted');
+  Check(Budget.Reserve(1, 1024) = 12, 'a reserve took more than an eighth of what the cap left');
+  Check(Budget.Reserve(30, 1024) = 30, 'a reserve below its minimum was not raised to it');
+  Check(Budget.Count = 42, 'reserved units were not counted');
   Budget.Refund(40);
-  Check(Budget.Count = 60, 'a refund did not return unspent units');
-  Check(Budget.Reserve(41, 41) = 0, 'a reserve larger than the remainder was granted');
+  Check(Budget.Count = 2, 'a refund did not return unspent units');
+  Check(Budget.Reserve(99, 99) = 0, 'a reserve larger than the remainder was granted');
   Check(Budget.Count = 101, 'a refused reserve did not fix the count past the cap');
   Budget.Refund(5);
   Check((Budget.Count = 101) and not Budget.TryCharge(0), 'a refund after refusal changed the count');
@@ -194,6 +218,7 @@ var
   Budget: IGocciaInstructionBudget;
   OneEntry: TGocciaRunResult;
 begin
+  Starts := TStartCounter.Create;
   CheckReserves;
   CheckConcurrentCharges(12000, 12000, 12001);
   CheckConcurrentCharges(0, 48000, 48000);
@@ -207,8 +232,10 @@ begin
   OneEntry := RunEntry(nil);
   Check(OneEntry.Ok and OneEntry.HasInstructionCount and (OneEntry.InstructionCount >= 64), 'single entry count unavailable');
   CheckReportedCount(OneEntry.InstructionCount);
-  CheckSharedEntries(0, 2 * OneEntry.InstructionCount);
-  CheckSharedEntries(Int64(2 * OneEntry.InstructionCount) - 1, 2 * OneEntry.InstructionCount);
+  CheckSharedEntries(0, 2 * OneEntry.InstructionCount, False);
+  CheckSharedEntries(Int64(2 * OneEntry.InstructionCount) + 3 * 1024, 2 * OneEntry.InstructionCount, False);
+  CheckSharedEntries(Int64(OneEntry.InstructionCount + OneEntry.InstructionCount div 2),
+    OneEntry.InstructionCount + OneEntry.InstructionCount div 2 + 1, True);
   CheckNativeCharges;
   WriteLn('Shared instruction budget: passed');
 end.

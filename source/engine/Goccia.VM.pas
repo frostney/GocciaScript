@@ -826,6 +826,12 @@ end;
 function PollInstructionUnits(AUnits: QWord): Boolean;
 begin
   if InstrCounted and not ChargeInstructions(AUnits) then Exit(AbortInstructions);
+  { a zero charge also sees a shared cap another engine spent, which the local units do not show }
+  if (AUnits = 0) and (SharedInstructionBudget <> nil) and not SharedInstructionBudget.TryCharge(0) then
+  begin
+    InstrLeft := -1;
+    Exit(AbortInstructions);
+  end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;
 

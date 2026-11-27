@@ -320,7 +320,9 @@ type
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     { Count instructions when MaxInstructions is zero. Capped runs always report a count. }
     property MeasureInstructions: Boolean read FMeasureInstructions write FMeasureInstructions;
-    { Engines sharing a job attach the same budget before Run. It provides both the limit and count when assigned. }
+    { Engines sharing a job attach the same budget before Run. While one is attached it provides both the limit and
+      the count, and MaxInstructions and MeasureInstructions are ignored; setup work (a globals module, the host
+      environment) is charged to it too. }
     property InstructionBudget: IGocciaInstructionBudget read FInstructionBudget write FInstructionBudget;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its

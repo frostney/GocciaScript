@@ -485,19 +485,24 @@ path and leave `HasInstructionCount` false. Counter-enabled entries run in the i
 Create `NewInstructionBudget(Limit)` from `Goccia.InstructionBudget` and assign it to
 `Engine.InstructionBudget` on every engine in the job before running them, on one thread or
 several. A positive limit caps their combined work. Zero measures the combined work without
-setting a cap. The shared budget supplies the limit and reported count while attached. Set a
-fresh budget for each job.
+setting a cap. While attached, the shared budget supplies the limit and the reported count, and
+the engine's own `MaxInstructions` and `MeasureInstructions` are ignored; setup work (a globals
+module, the host environment) is charged to it as well. Set a fresh budget for each job.
 
-Each engine takes units from the budget 1,024 at a time and spends them on its own counter, so
-the dispatch loop does no shared write per instruction. The job never spends more than the
-limit, but an engine can be refused while others still hold up to 1,024 unspent units each, and
-it learns of a cap another engine spent when its own units run out. An engine returns what it did
-not spend when its run ends. `Budget.Count` is exact once every engine has ended; a run's
-reported count is the job's count so far without that engine's unspent units.
+Each engine takes units from the budget in reserves and spends them on its own counter, so the
+dispatch loop does no shared write per instruction. A reserve is at most 1,024 units and, under a
+cap, at most an eighth of what is left, so the units other engines hold unspent when one is
+refused are a small part of the cap. The job never spends more than the limit. An engine learns
+of a cap another engine spent when its own units run out, or at a zero charge. An engine returns
+what it did not spend when its run ends. For a job that was never refused, `Budget.Count` is
+exact once every engine has ended; a refused job reports `Limit + 1`. A run's reported count is
+the job's count so far without that engine's unspent units.
+[ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) records the design.
 
 Native code on an engine's thread can call `PollInstructionUnits(N)` in `Goccia.VM` before a
 bounded chunk of work. An accepted charge counts the whole chunk. A refused charge ends the run
-at its limit. A zero charge checks the limits without spending an instruction.
+at its limit. A zero charge checks the limits, a shared one included, without spending an
+instruction.
 
 ### Call Stack Depth Limit
 
