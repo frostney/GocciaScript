@@ -231,6 +231,7 @@ begin
     Fin := Min(Fin, TALength(O));
     while K < Fin do
     begin
+      if not PollInterrupt then begin PopRoots(1); Exit(False); end;
       StoreElem(O, K, RootAt(TempTop - 1));
       Inc(K);
     end;
