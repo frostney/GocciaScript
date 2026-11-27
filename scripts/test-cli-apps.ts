@@ -9677,9 +9677,11 @@ await section("REPL: Maps, Sets and RegExps display their contents, whatever a s
     "",
   ].join("\n");
   const out = await $`printf '%s' ${input} | ${REPL} 2>&1`.text();
-  // each result on a line of its own (the input lines echo the source, /x/g; among them)
+  // each result on a line of its own (the input lines echo the source, /x/g; among them); where the input is not
+  // echoed (Windows) a result line starts with the prompt
+  const lines = normalizeLineEndings(out).split("\n").map((line) => line.replace(/^> /, "").trim());
   for (const shown of ["Map(1) { 1 => 'a' }", "Set(1) { 2 }", "/x/g"])
-    if (!containsLine(out, shown)) throw new Error(`REPL should display ${shown}, got: ${out}`);
+    if (!lines.includes(shown)) throw new Error(`REPL should display ${shown}, got: ${out}`);
 });
 
 await section("REPL: ASI mode...", async () => {
