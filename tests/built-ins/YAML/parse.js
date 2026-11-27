@@ -971,6 +971,12 @@ name: app
     ).toThrow(SyntaxError);
   });
 
+  test("merges only a mapping or a sequence of mappings", () => {
+    expect(() => YAML.parse("a: &x [*x]\nb:\n  <<: *x\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: &x [[{k: 1}]]\nb:\n  <<: *x\n")).toThrow(SyntaxError);
+    expect(YAML.parse("a: &x [{k: 1}, {j: 2}]\nb:\n  <<: *x\n").b).toEqual({ k: 1, j: 2 });
+  });
+
   test("throws on unknown aliases", () => {
     expect(() =>
       YAML.parse(`

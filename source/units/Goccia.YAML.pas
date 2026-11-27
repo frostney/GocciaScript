@@ -665,12 +665,28 @@ begin
 end;
 
 { "<<": the mapping, or each mapping of a sequence, adds the keys the target
-  does not have yet (yaml.org/type/merge.html) }
+  does not have yet (yaml.org/type/merge.html). A sequence holds mappings
+  only, so a sequence that holds itself through an alias is no cycle here. }
 procedure TGocciaYAMLParser.MergeMappingValue(const ATarget, AValue: TGocciaDataNode;
   const AMark: TGocciaYAMLMarker);
+
+  procedure MergeMapping(const AMapping: TGocciaDataNode);
+  var
+    Key: string;
+    Source: TGocciaDataNode;
+  begin
+    Source := AMapping;
+    if Source.Kind = dnkTagged then
+      Source := Source.TaggedValue;
+    if Source.Kind <> dnkObject then
+      RaiseError(AMark, 'Merge keys must reference a mapping or a sequence of mappings.');
+    for Key in Source.OwnKeys do
+      if not ATarget.HasProperty(Key) then
+        ATarget.SetProperty(Key, Source.GetProperty(Key));
+  end;
+
 var
   I: Integer;
-  Key: string;
   Source: TGocciaDataNode;
 begin
   Source := AValue;
@@ -679,14 +695,10 @@ begin
   if Source.Kind = dnkArray then
   begin
     for I := 0 to Source.Count - 1 do
-      MergeMappingValue(ATarget, Source.Items[I], AMark);
+      MergeMapping(Source.Items[I]);
     Exit;
   end;
-  if Source.Kind <> dnkObject then
-    RaiseError(AMark, 'Merge keys must reference a mapping or a sequence of mappings.');
-  for Key in Source.OwnKeys do
-    if not ATarget.HasProperty(Key) then
-      ATarget.SetProperty(Key, Source.GetProperty(Key));
+  MergeMapping(Source);
 end;
 
 function TGocciaYAMLParser.KeyName(const AEvent: TGocciaYAMLEvent;
