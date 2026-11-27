@@ -108,6 +108,27 @@ const CROSS_SURFACE_CONTRACT_ALLOWLIST = new Map<string, AllowlistEntry>([
     },
   ],
   [
+    "tests/built-ins/global-properties/annex-b-globals-absent.js",
+    {
+      reason:
+        "one default-profile absence contract for escape and unescape, which compat-annex-b installs together",
+    },
+  ],
+  [
+    "tests/built-ins/ShadowRealm/annex-b-globals-absent.js",
+    {
+      reason:
+        "one new-realm absence contract for escape and unescape, which compat-annex-b installs together",
+    },
+  ],
+  [
+    "tests/built-ins/ShadowRealm/annex-b/escape-unescape-in-new-realm.js",
+    {
+      reason:
+        "one new-realm installation contract for escape and unescape under compat-annex-b",
+    },
+  ],
+  [
     "tests/built-ins/Date/prototype/receiver-branding.js",
     {
       reason:
