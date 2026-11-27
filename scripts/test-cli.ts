@@ -4,7 +4,7 @@
  *
  * Common CLI options tested across all apps: stdin smoke, --help, --allow-ffi,
  * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
- * --compat-for-in-loop, --compat-while-loops, --warning-unsupported-features,
+ * --compat-for-in-loop, --compat-while-loops, --compat-annex-b, --warning-unsupported-features,
  * --timeout, --max-instructions, --max-memory, --max-stack, --log,
  * example scripts.
  */
@@ -1088,6 +1088,15 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     writeFileSync(forInSrc, "const obj = { a: 1, b: 2 };\nlet out = '';\nfor (const k in obj) { out = out + k; }\nout;\n");
     const forInOut = await $`${BARE} --print ${forInSrc} --compat-for-in-loop 2>&1`.text();
     if (forInOut.trim() !== "ab") throw new Error(`Bare --compat-for-in-loop expected ab, got: ${forInOut}`);
+
+    const annexBSrc = join(tmp, "use-annex-b.js");
+    writeFileSync(annexBSrc, "typeof escape === 'function' ? escape('a b') + ' ' + unescape('%41%u0042') : typeof escape;\n");
+    const annexBOffOut = await $`${BARE} --print ${annexBSrc} 2>&1`.text();
+    if (annexBOffOut.trim() !== "undefined") throw new Error(`Bare without --compat-annex-b expected undefined, got: ${annexBOffOut}`);
+    const annexBOut = await $`${BARE} --print ${annexBSrc} --compat-annex-b 2>&1`.text();
+    if (annexBOut.trim() !== "a%20b AB") throw new Error(`Bare --compat-annex-b expected a%20b AB, got: ${annexBOut}`);
+    const annexBLoaderOut = await $`${RUNNER} --print ${annexBSrc} --compat-annex-b 2>&1`.text();
+    if (!containsLine(annexBLoaderOut, "a%20b AB")) throw new Error(`Loader --compat-annex-b expected a%20b AB, got: ${annexBLoaderOut}`);
 
     const whileSrc = join(tmp, "use-while.js");
     writeFileSync(whileSrc, "let s = 0;\nlet i = 1;\nwhile (i <= 5) { s = s + i; i++; }\ns;\n");

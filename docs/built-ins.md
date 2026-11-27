@@ -305,7 +305,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 
 **Goccia.shims**
 
-Goccia.shims lists the names of the legacy surfaces the engine treats as shims. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation. A new Annex B surface goes behind an off-by-default compatibility flag rather than into this default list, while the Annex B shims that already ship stay on. See [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
+Goccia.shims lists the names of the legacy surfaces the engine treats as shims. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation. A new Annex B surface, such as `escape` and `unescape`, goes behind the off-by-default `--compat-annex-b` flag rather than into this default list, while the Annex B shims that already ship stay on. See [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 
 Current default shims:
 

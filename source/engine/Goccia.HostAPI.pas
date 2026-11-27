@@ -38,9 +38,10 @@ function TakeHostError: TValue;
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals. Bare: GocciaScriptLoaderBare's
   surface, the core engine without a runtime (Goccia, DOMException, atob, btoa, PermissionDenied and the conformance
-  host's print; no console, performance, timers, web APIs or host modules) }
+  host's print; no console, performance, timers, web APIs or host modules). AnnexB keeps the conformance host's
+  Annex B globals escape and unescape (B.2.1.1, B.2.1.2) in this realm and every realm made after it }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString; ExposeTimers: Boolean = True; Bare: Boolean = False): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean = True; Bare: Boolean = False; AnnexB: Boolean = False): Boolean;
 { the heap limit when none is given: half the memory available to the process, at most 8 GB (700 MB on a 32-bit
   build) }
 function DefaultHeapCeiling: Int64;
@@ -875,6 +876,8 @@ threadvar
   GuestLoadsOn: Boolean;   { (GuestLoads, which is declared further down) }
   { the realm the host's globals are in (InstallHostGlobals) }
   HostRealm: Integer;
+  { the host keeps escape and unescape (InstallHostGlobals' AnnexB) }
+  HostAnnexB: Boolean;
 
 { a module the host evaluates for itself, or for a config (GuestLoadsOn) in a realm of its own: what it leaves on its
   global object does not reach the script's }
@@ -2040,22 +2043,26 @@ begin
 end;
 
 { a new realm of a CLI host: the conformance host's extras left out, as host.js leaves them out of the first realm
-  (eval stays off: no flag, config key or engine setting installs it) }
+  (eval stays off: no flag, config key or engine setting installs it; escape and unescape stay under compat-annex-b) }
 procedure CLIRealmInit;
 begin
   DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('print'));
   DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('eval'));
-  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('escape'));
-  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('unescape'));
+  if not HostAnnexB then
+  begin
+    DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('escape'));
+    DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('unescape'));
+  end;
 end;
 
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString; ExposeTimers: Boolean; Bare: Boolean): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean; Bare: Boolean; AnnexB: Boolean): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
   RealmHostInit := @CLIRealmInit;
   HostRealm := CurRealm;
+  HostAnnexB := AnnexB;
   if FirstInEngine(EventLoopRootedGen) then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@FindHostModuleV);
@@ -2077,6 +2084,8 @@ begin
   PushRoot(MkPtr(NewArray(0, 16)));
   DefineOwn(RootAt(Base + 2), AtomOf('runtimeGlobals'), RootAt(TempTop - 1), pfHidden);
   PopRoots(1);
+  { host.js keeps escape and unescape (compat-annex-b) }
+  if AnnexB then DefineOwn(RootAt(Base + 2), AtomOf('annexB'), VTrue, pfDefault);
   PushRoot(StrFromUnicode(InfoJson));
   PushRoot(MkBool(TestMode));
   PushRoot(MkBool(ShadowRealm));

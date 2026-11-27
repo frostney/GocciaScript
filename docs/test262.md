@@ -472,9 +472,9 @@ staging`, every top-level category in `suite/test`.
 - `annexB` (legacy browser behavior) is part of the conformance target
   and a release gate from 0.18.0. It runs by default and counts toward
   the published pass rate and the PR comparison like any other category.
-  New Annex B surfaces will go behind a compatibility flag, added by the
-  0.18.0 Annex B work; the test262 engine's unrestricted profile includes
-  every such form (see [Strict mode](#strict-mode)). See
+  New Annex B surfaces go behind `--compat-annex-b`; the test262 engine's
+  unrestricted profile includes every such form (see
+  [Strict mode](#strict-mode)). See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.

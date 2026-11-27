@@ -372,6 +372,7 @@ begin
   Result.ArgumentsObject := True;
   Result.Labels := True;
   Result.ForIn := True;
+  Result.AnnexB := True;
 end;
 
 function NewFuzzEngine(ABounded: Boolean): TGocciaEngine;

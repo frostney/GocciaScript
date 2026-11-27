@@ -668,6 +668,8 @@ const
      HelpText: 'Enable labeled break and continue targets (compatibility)'),
     (OptionName: 'compat-for-in-loop';
      HelpText: 'Enable for...in property enumeration loops (compatibility)'),
+    (OptionName: 'compat-annex-b';
+     HelpText: 'Enable the Annex B legacy globals escape and unescape (compatibility)'),
     (OptionName: 'experimental-js-module-source';
      HelpText: 'Enable experimental JavaScript ModuleSource objects')
   );

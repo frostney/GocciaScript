@@ -908,7 +908,8 @@ begin
   else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);
   SetInspectDepth(FInspectDepth);
   SetModuleLoadingUnsupported(FBare);
-  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers, FBare);
+  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers, FBare,
+    not FProfile.Restricted or FProfile.AnnexB);
   if Result and FHasCapabilities and FCapabilities.Grants(gcFFI) then Result := InstallFFI(FCapabilities, Err);
   FHostReady := Result;
   if not Result then Exit;

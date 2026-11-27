@@ -163,6 +163,7 @@ begin
   Profile.ArgumentsObject := cfArgumentsObject in ASettings.Compatibility;
   Profile.Labels := ASettings.LabelStatements;
   Profile.ForIn := ASettings.ForInLoops;
+  Profile.AnnexB := cfAnnexB in ASettings.Compatibility;
   Profile.WarningUnsupported := ASettings.WarningUnsupportedFeatures;
   Profile.StrictTypes := ASettings.StrictTypes;
   Profile.FunctionCtor := ASettings.FunctionConstructor;
