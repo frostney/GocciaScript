@@ -340,6 +340,98 @@ begin
   Expect<Integer>(Length(Input)).ToBe(0);
 end;
 
+procedure TTransportSecurityTests.TestHeldRestOfAResponseIsReadWithoutTheSocket;
+const
+  { A last record of 12,204 bytes of plaintext, as the issue's server sent:
+    a request of 8,192 takes the first part, and the 4,012 that are left are
+    the end of the response. }
+  LAST_RECORD_LENGTH = 12204;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(LAST_RECORD_LENGTH, 3);
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := Expected;
+    ReadResponseOf(Layer, Expected);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestHeldPlaintextLongerThanARequestIsReadInRequests;
+const
+  { Each record is longer than a request, so every one is held in part and
+    the last 808 bytes of the response are held when the request before them
+    returns. }
+  RECORD_LENGTH = 16384;
+  LAST_RECORD_LENGTH = 9000;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(RECORD_LENGTH + LAST_RECORD_LENGTH, 5);
+    SetLength(Layer.Records, 2);
+    Layer.Records[0] := Copy(Expected, 0, RECORD_LENGTH);
+    Layer.Records[1] := Copy(Expected, RECORD_LENGTH, LAST_RECORD_LENGTH);
+    ReadResponseOf(Layer, Expected);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(2);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestReadWithNothingHeldReadsOneRecord;
+const
+  RECORD_LENGTH = 239;
+var
+  Layer: TFakeRecordLayer;
+  Buffer: array[0..RESPONSE_READ_LENGTH - 1] of Byte;
+  Status: Integer;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := PatternBytes(RECORD_LENGTH, 7);
+    Expect<Integer>(ReadSecureTransportRecords(Layer, FakeRecordRead,
+      FakeBufferedSize, Buffer, RESPONSE_READ_LENGTH, Status))
+      .ToBe(RECORD_LENGTH);
+    Expect<Integer>(Status).ToBe(SECURE_TRANSPORT_SUCCESS);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+  finally
+    Layer.Free;
+  end;
+end;
+
+procedure TTransportSecurityTests.TestReadThatWouldBlockBeforeAnyByteIsTriedAgain;
+const
+  RECORD_LENGTH = 4000;
+var
+  Layer: TFakeRecordLayer;
+  Expected: TBytes;
+begin
+  Layer := TFakeRecordLayer.Create;
+  try
+    Expected := PatternBytes(RECORD_LENGTH, 11);
+    SetLength(Layer.Records, 1);
+    Layer.Records[0] := Expected;
+    Layer.WouldBlockFirst := 2;
+    ReadResponseOf(Layer, Expected);
+    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(3);
+    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
+  finally
+    Layer.Free;
+  end;
+end;
+
 { A TCP connection on loopback, made in one thread: the listener's backlog
   holds the connection until it is accepted. }
 procedure CreateConnectedPair(out AClient, AServer: TSocket);
@@ -510,98 +602,6 @@ end;
   socket's buffers and then blocks. The socket's own send timeout is long: only
   the deadline can end the send in time. Without the deadline the send waited
   out the socket's timeout, counted from before the request (issue #1818). }
-procedure TTransportSecurityTests.TestHeldRestOfAResponseIsReadWithoutTheSocket;
-const
-  { A last record of 12,204 bytes of plaintext, as the issue's server sent:
-    a request of 8,192 takes the first part, and the 4,012 that are left are
-    the end of the response. }
-  LAST_RECORD_LENGTH = 12204;
-var
-  Layer: TFakeRecordLayer;
-  Expected: TBytes;
-begin
-  Layer := TFakeRecordLayer.Create;
-  try
-    Expected := PatternBytes(LAST_RECORD_LENGTH, 3);
-    SetLength(Layer.Records, 1);
-    Layer.Records[0] := Expected;
-    ReadResponseOf(Layer, Expected);
-    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
-    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
-  finally
-    Layer.Free;
-  end;
-end;
-
-procedure TTransportSecurityTests.TestHeldPlaintextLongerThanARequestIsReadInRequests;
-const
-  { Each record is longer than a request, so every one is held in part and
-    the last 808 bytes of the response are held when the request before them
-    returns. }
-  RECORD_LENGTH = 16384;
-  LAST_RECORD_LENGTH = 9000;
-var
-  Layer: TFakeRecordLayer;
-  Expected: TBytes;
-begin
-  Layer := TFakeRecordLayer.Create;
-  try
-    Expected := PatternBytes(RECORD_LENGTH + LAST_RECORD_LENGTH, 5);
-    SetLength(Layer.Records, 2);
-    Layer.Records[0] := Copy(Expected, 0, RECORD_LENGTH);
-    Layer.Records[1] := Copy(Expected, RECORD_LENGTH, LAST_RECORD_LENGTH);
-    ReadResponseOf(Layer, Expected);
-    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
-    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(2);
-  finally
-    Layer.Free;
-  end;
-end;
-
-procedure TTransportSecurityTests.TestReadWithNothingHeldReadsOneRecord;
-const
-  RECORD_LENGTH = 239;
-var
-  Layer: TFakeRecordLayer;
-  Buffer: array[0..RESPONSE_READ_LENGTH - 1] of Byte;
-  Status: Integer;
-begin
-  Layer := TFakeRecordLayer.Create;
-  try
-    SetLength(Layer.Records, 1);
-    Layer.Records[0] := PatternBytes(RECORD_LENGTH, 7);
-    Expect<Integer>(ReadSecureTransportRecords(Layer, FakeRecordRead,
-      FakeBufferedSize, Buffer, RESPONSE_READ_LENGTH, Status))
-      .ToBe(RECORD_LENGTH);
-    Expect<Integer>(Status).ToBe(SECURE_TRANSPORT_SUCCESS);
-    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(1);
-    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
-  finally
-    Layer.Free;
-  end;
-end;
-
-procedure TTransportSecurityTests.TestReadThatWouldBlockBeforeAnyByteIsTriedAgain;
-const
-  RECORD_LENGTH = 4000;
-var
-  Layer: TFakeRecordLayer;
-  Expected: TBytes;
-begin
-  Layer := TFakeRecordLayer.Create;
-  try
-    Expected := PatternBytes(RECORD_LENGTH, 11);
-    SetLength(Layer.Records, 1);
-    Layer.Records[0] := Expected;
-    Layer.WouldBlockFirst := 2;
-    ReadResponseOf(Layer, Expected);
-    Expect<Integer>(Layer.ReadsFromTheSocket).ToBe(3);
-    Expect<Boolean>(Layer.WaitedForARecordThatNeverCame).ToBe(False);
-  finally
-    Layer.Free;
-  end;
-end;
-
 procedure TTransportSecurityTests.TestSendEndsAtTheDeadlineWhateverTheSocketTimeout;
 const
   DEADLINE_MILLISECONDS = 500;
