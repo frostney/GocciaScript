@@ -27,8 +27,9 @@ module's configured address. `import.meta.resolve` still computes its result lex
 A Script entry's imports module, keyed by the entry's path plus `#script-imports`, carries the entry's real path
 plus the same suffix as its real address, so its requests resolve from the real directory and its record never
 matches the entry file's own. An `import()` made by code with no module record resolves from the real path of
-the module or Script file its code is in; a Script compiled to bytecode uses the same address a bytecode module
-there would.
+the module or Script file its code is in, found in any realm, since a ShadowRealm's `importValue` runs in the
+realm it evaluates in. A Script compiled to bytecode uses the same address a bytecode module there would, for as
+long as the engine keeps its modules, so a closure a later run calls resolves as it did in its own run.
 
 Diagnostics and stack traces keep the spelling the module was first loaded under. Sandbox mode has no host
 paths to canonicalize and is unchanged.
