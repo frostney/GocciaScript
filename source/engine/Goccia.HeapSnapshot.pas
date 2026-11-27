@@ -859,6 +859,7 @@ var R: TSnapReader; Base, NB, NR, NT, NC, I, J, K, N, Ix, RootNo, Cnt: Integer; 
       if not IsObject(TableAt(I)) then Continue;
       O := ObjOf(TableAt(I));
       case O^.OKind of
+        okError: Ok := ValidErrorStackProvenance(O^.Aux2);
         okBoolean: Ok := (O^.Aux1 = VTrue) or (O^.Aux1 = VFalse);
         okNumber: Ok := IsNumber(O^.Aux1);
         okStringObj: Ok := IsString(O^.Aux1);

@@ -363,12 +363,8 @@ location and suggestion. Not yet supported: `.gbc` benchmark files.
 ### Bytecode files
 
 The engine has its own `.gbc` format (`Goccia.Artifact`), read as untrusted input
-([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). The header carries format version 201, the runtime
-tag `goccia-engine`, an instruction-set fingerprint, the source path and the compile profile (the old wire fields
-and the engine's unrestricted flag). Regenerate older `.gbc` files with this build. Format 201 retains the
-version-200 register layout and records each import and re-export declaration separately, so link diagnostics
-point to the failing declaration even when several declarations share one request. The body holds the module
-record or a Script's imports, the source text once, and every function compiled eagerly. Constants carry explicit kinds, so a file cannot forge a pointer. The
+([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). Regenerate older `.gbc` files with this build.
+The artifact carries the compile profile, source path and module link information, and every function is compiled eagerly. Constants carry explicit kinds, so a file cannot forge a pointer. The
 reader bounds every length and count (64 MiB, 256 nested functions). The verifier (`Goccia.ArtifactVerify.inc`)
 checks every operand of every instruction, the jump targets, a terminator at the end, the exception handler
 depth at each instruction, the prologue and direct eval descriptions. It refuses instructions the compiler never

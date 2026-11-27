@@ -63,7 +63,7 @@ threadvar
 implementation
 
 uses
-  Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.Scan,
+  Classes, TimingUtils, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, Goccia.OriginMap, Goccia.Scan,
   Goccia.PreParse, Goccia.Lazy, Goccia.Snapshot, Goccia.Artifact, Goccia.Profiler.Compile, Goccia.ThreadCleanupRegistry;
 
 function ParseFailureName(E: Exception): UnicodeString;
@@ -235,9 +235,31 @@ begin
   if Module then Result := HostPipelineOptions(stModule) else Result := HostPipelineOptions(stScript);
 end;
 
+type PModuleDeclarationLocations = ^TModuleDeclarationLocations;
+
+{ The JSX origin map identifies unchanged ranges by offset, including text after
+  an expansion on the same line. The diagnostic source map is line-oriented. }
+procedure MapModuleDeclarationLocations(Prog: TGocciaProgram; Origin: TGocciaOriginMap;
+  const Source: string; out Locations: TModuleDeclarationLocations);
+var Coordinates: IGocciaSourceCoordinates; I, Offset: Integer; N: TGocciaStatement; Span: TGocciaSourceSpan;
+begin
+  if Origin = nil then Exit;
+  Coordinates := TGocciaSourceCoordinates.Create(Source);
+  SetLength(Locations, Prog.Body.Count);
+  for I := 0 to Prog.Body.Count - 1 do
+  begin
+    N := Prog.Body[I];
+    if not ((N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration)) then Continue;
+    Span := N.Span;
+    if (Span.Length = 0) or not Origin.MapVerbatim(Span.StartOffset, Span.EndOffset, Offset) then Continue;
+    Coordinates.PositionAtOffset(Offset, Locations[I].Line, Locations[I].Column);
+    Coordinates.PositionAtOffset(Offset + Span.Length - 1, Locations[I].EndLine, Locations[I].EndColumn);
+  end;
+end;
+
 { Source parsed by the CLIs' front end; Settled the goal it was parsed with }
 function HostParse(const Source, FileName: UnicodeString; SourceType: TGocciaSourceType;
-  out Settled: TGocciaSourceType): TGocciaProgram;
+  out Settled: TGocciaSourceType; Locations: PModuleDeclarationLocations = nil): TGocciaProgram;
 var Lines: TStringList; R: TGocciaSourcePipelineResult; I: Integer;
 begin
   EntryWarningCount := 0;
@@ -258,6 +280,8 @@ begin
         EntryWarningColumns[I] := R.Warnings[I].Column;
       end;
       Settled := R.SourceType;
+      if (Locations <> nil) and (R.OriginMap <> nil) then
+        MapModuleDeclarationLocations(R.ProgramNode, R.OriginMap, StringListToSourceText(Lines), Locations^);
       Result := R.TakeProgramNode;
     finally
       R.Free;
@@ -347,8 +371,8 @@ end;
 
 { Keep each original declaration in its place in the companion module. The parser's span includes its
   full text, so a combined import and two imports on the same line keep their original coordinates. }
-function ScriptImportsAsModule(Prog: TGocciaProgram): UnicodeString;
-var I, AtLine, AtColumn: Integer; N: TGocciaStatement;
+function ScriptImportsAsModule(Prog: TGocciaProgram; const Locations: TModuleDeclarationLocations): UnicodeString;
+var I, AtLine, AtColumn: Integer; N: TGocciaStatement; Location: TModuleDeclarationLocation;
 begin
   Result := '';
   AtLine := 1;
@@ -357,15 +381,24 @@ begin
   begin
     N := Prog.Body[I];
     if not ((N is TGocciaImportDeclaration) or (N is TGocciaReExportDeclaration)) then Continue;
-    if N.Line > AtLine then
+    if (I < Length(Locations)) and (Locations[I].Line > 0) then
+      Location := Locations[I]
+    else
     begin
-      Result := Result + StringOfChar(#10, N.Line - AtLine);
+      Location.Line := N.Line;
+      Location.Column := N.Column;
+      Location.EndLine := N.Span.EndLine;
+      Location.EndColumn := N.Span.EndColumn;
+    end;
+    if Location.Line > AtLine then
+    begin
+      Result := Result + StringOfChar(#10, Location.Line - AtLine);
       AtColumn := 1;
     end;
-    if N.Column > AtColumn then Result := Result + StringOfChar(' ', N.Column - AtColumn);
+    if Location.Column > AtColumn then Result := Result + StringOfChar(' ', Location.Column - AtColumn);
     Result := Result + N.Span.Text;
-    AtLine := N.Span.EndLine;
-    AtColumn := N.Span.EndColumn + 1;
+    AtLine := Location.EndLine;
+    AtColumn := Location.EndColumn + 1;
   end;
   for I := Prog.Body.Count - 1 downto 0 do
     if (Prog.Body[I] is TGocciaImportDeclaration) or (Prog.Body[I] is TGocciaReExportDeclaration) then
@@ -374,7 +407,7 @@ end;
 
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean): Boolean;
-var Prog: TGocciaProgram; Goal: TGocciaSourceType; NoInfo: TModuleInfo;
+var Prog: TGocciaProgram; Goal: TGocciaSourceType; NoInfo: TModuleInfo; Locations: TModuleDeclarationLocations;
 begin
   Result := False;
   IsModule := False;
@@ -388,7 +421,7 @@ begin
       else
         Goal := stDetect;
       end;
-      Prog := HostParse(Source, FileName, Goal, Goal);
+      Prog := HostParse(Source, FileName, Goal, Goal, @Locations);
       if Goal = stModule then
       begin
         IsModule := True;
@@ -398,7 +431,7 @@ begin
         type): each declares its binding as it would without export, and an export list declares nothing }
       if SourceType = 1 then
       begin
-        ScriptImportSource := ScriptImportsAsModule(Prog);
+        ScriptImportSource := ScriptImportsAsModule(Prog, Locations);
         ScriptExportsAsDeclarations(Prog);
       end;
       { detection reads a top-level for await as Script; it is top-level await, so the entry is a Module }
@@ -785,6 +818,7 @@ end;
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
   var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
+  Locations: TModuleDeclarationLocations;
 begin
   Info := nil;
   ExcludeHostSource(FileName);
@@ -795,7 +829,7 @@ begin
     try
       if ActiveProfile.Restricted then
       begin
-        Prog := HostParse(Source, FileName, stModule, Settled);
+        Prog := HostParse(Source, FileName, stModule, Settled, @Locations);
         ReportModuleWarnings(FileName);
       end
       else
@@ -808,7 +842,7 @@ begin
         L.Tokens.Clear;
       end;
       CompilingModuleId := Id;
-      T := CompileProgram(Prog, FileName, ModuleReturnLast, 3);
+      T := CompileProgram(Prog, FileName, ModuleReturnLast, 3, Locations);
       Info := LastModuleInfo;
       LastModuleInfo := nil;
       if RoundTripOn then RoundTrip(T, Info, FileName, Id);

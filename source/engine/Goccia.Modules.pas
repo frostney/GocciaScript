@@ -173,6 +173,7 @@ type
   TModRec = class
     Id: Integer;
     Address: TModuleAddress;
+    ScriptOrigin: UnicodeString;
     { 16.2.1.5 [[Realm]]: the realm the record was made in. A module record is one realm's, so another realm that
       imports the same path (a ShadowRealm's importValue, a test262 realm's import) loads a record of its own: the
       records are found by realm and path (FindModule). }
@@ -1059,6 +1060,7 @@ begin
   M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading or (FromFile and SameFileAsHostModule(Address));
+  if (ScriptImportEntry <> '') and (Path = ScriptImportKey) then M.ScriptOrigin := ScriptImportEntry;
   M.HasModified := FromFile;
   if FromFile then M.Modified := Modified;
   M.Hash := SourceHashOf(Src);
@@ -1306,22 +1308,16 @@ begin
   Result := False;
 end;
 
-function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
-begin
-  Result := Path;
-  if (ScriptImportKey <> '') and (Path = ScriptImportKey) then Result := ScriptImportEntry;
-end;
-
 procedure ThrowLinkSyntaxError(const AModule: TModRec; const AEntry: TModEntry; const AMessage: UnicodeString);
 var Path, Location: UnicodeString;
 begin
   ThrowError('SyntaxError', AMessage);
   if AEntry.SourceLine = 0 then Exit;
-  Path := ModuleDiagnosticPath(AModule.Address.Path);
+  Path := AModule.ScriptOrigin;
+  if Path = '' then Path := AModule.Address.Path;
   Location := Path + ':' + IntToStr(AEntry.SourceLine) + ':' + IntToStr(AEntry.SourceColumn);
-  SetErrorSourceLocation(Pending, Path, AEntry.SourceLine, AEntry.SourceColumn);
   SetEngineErrorStack(Pending, 'SyntaxError: ' + AMessage + #10'    at <module link> (' + Location + ')',
-    ProfileStackTraces);
+    ProfileStackTraces, Path, AEntry.SourceLine, AEntry.SourceColumn);
 end;
 
 function NoSourceFail(L: TList<TModRec>; const AModule: TModRec; const AEntry: TModEntry): Boolean;
@@ -1845,6 +1841,13 @@ begin
     end;
 end;
 
+function ModuleDiagnosticPath(const Path: UnicodeString): UnicodeString;
+var M: TModRec;
+begin
+  M := FindModuleByPath(Path);
+  if (M <> nil) and (M.ScriptOrigin <> '') then Result := M.ScriptOrigin else Result := Path;
+end;
+
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean; Address: TModuleAddress;
 begin
@@ -1862,6 +1865,7 @@ begin
     Address.Path := Key;
     Ok := LoadAndLink(Address, M);
   finally
+    ScriptImportEntry := '';
     SetProvidedSource(SavedPath, SavedSrc);
   end;
   if not Ok then Exit(False);

@@ -395,7 +395,8 @@ procedure AttachStack(E: TValue);
 function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
 { an engine-made error's stack replaced by the engine (an import() failure takes its call's frames): the
   property and the provenance both; E rooted by the caller }
-procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; AExposeToGuest: Boolean = True);
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; ExposeToGuest: Boolean = True;
+  const Source: UnicodeString = ''; Line: Integer = 0; Column: Integer = 0);
 { the frames running now as an error's stack lists them (the lines after its first), for an error made later on
   their behalf (a dynamic import's failure, made in a job) }
 function StackFramesNow: UnicodeString;
@@ -403,8 +404,8 @@ function StackFramesNow: UnicodeString;
   script cannot see or change; E rooted by the caller }
 procedure SetErrorHostSuggestion(E: TValue; const Text: UnicodeString);
 function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
-procedure SetErrorSourceLocation(E: TValue; const Source: UnicodeString; Line, Column: Integer);
 function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
+function ValidErrorStackProvenance(V: TValue): Boolean;
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
 { throws the TypeError for an iterator result V that is not an object (False) }
 function ThrowIterResultNotObject(V: TValue): Boolean;
@@ -2247,8 +2248,6 @@ end;
 threadvar
   SuggestionKey: PStr;
   SuggestionKeyGen: Integer;
-  ErrorLocationKey: PStr;
-  ErrorLocationKeyGen: Integer;
 
 function SuggestionKeyNow: PStr;
 begin
@@ -2275,42 +2274,6 @@ begin
   I := GetOwnSlot(ObjOf(E), SuggestionKeyNow);
   if (I < 0) or not IsString(GetSlot(ObjOf(E), I)) then Exit;
   Text := StrToUnicode(StrOf(GetSlot(ObjOf(E), I)));
-  Result := True;
-end;
-
-function ErrorLocationKeyNow: PStr;
-begin
-  if FirstInEngine(ErrorLocationKeyGen) then ErrorLocationKey := NewKeyAtom('%errorLocation', kfInternal);
-  Result := ErrorLocationKey;
-end;
-
-procedure SetErrorSourceLocation(E: TValue; const Source: UnicodeString; Line, Column: Integer);
-var Base: Integer; Key: PStr;
-begin
-  if not IsObject(E) or (ObjOf(E)^.OKind <> okError) then Exit;
-  Base := TempTop;
-  PushRoot(E);
-  Key := ErrorLocationKeyNow;
-  PushRoot(StrFromUnicode(Source));
-  PushRoot(MkPtr(NewArray(0, 3)));
-  ArrayPush(ObjOf(RootAt(Base + 2)), RootAt(Base + 1));
-  ArrayPush(ObjOf(RootAt(Base + 2)), MkInt(Line));
-  ArrayPush(ObjOf(RootAt(Base + 2)), MkInt(Column));
-  DefineOwn(RootAt(Base), Key, RootAt(Base + 2), pfHidden);
-  PopRoots(TempTop - Base);
-end;
-
-function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
-var I: Integer; Fields: PValueArray;
-begin
-  Result := False;
-  if not IsObject(E) or (ObjOf(E)^.OKind <> okError) or not SameEngine(ErrorLocationKeyGen) then Exit;
-  I := GetOwnSlot(ObjOf(E), ErrorLocationKey);
-  if I < 0 then Exit;
-  Fields := ObjOf(GetSlot(ObjOf(E), I))^.Elements;
-  Source := StrToUnicode(StrOf(Fields^.Data[0]));
-  Line := IntOf(Fields^.Data[1]);
-  Column := IntOf(Fields^.Data[2]);
   Result := True;
 end;
 
@@ -2371,28 +2334,77 @@ begin
   PopRoots(2);
 end;
 
-procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; AExposeToGuest: Boolean);
+{ Aux2 is undefined, a stack string, or [stack, source, line, column]. Its values
+  are traced by the collector and saved by the ordinary Error snapshot codec. }
+function ErrorStackFields(V: TValue): PValueArray;
+var Fields: PValueArray;
 begin
+  Result := nil;
+  if not IsObject(V) or (ObjOf(V)^.OKind <> okArray) then Exit;
+  Fields := ObjOf(V)^.Elements;
+  if (Fields = nil) or (Fields^.Len <> 4) then Exit;
+  if IsString(Fields^.Data[0]) and IsString(Fields^.Data[1]) and
+     IsInt(Fields^.Data[2]) and (IntOf(Fields^.Data[2]) > 0) and
+     IsInt(Fields^.Data[3]) and (IntOf(Fields^.Data[3]) > 0) then Result := Fields;
+end;
+
+function ValidErrorStackProvenance(V: TValue): Boolean;
+begin
+  Result := (V = VUndefined) or IsString(V) or (ErrorStackFields(V) <> nil);
+end;
+
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString; ExposeToGuest: Boolean;
+  const Source: UnicodeString; Line, Column: Integer);
+var Base: Integer; O: PObj; Provenance: TValue;
+begin
+  Base := TempTop;
   PushRoot(E);
   PushRoot(StrFromUnicode(Text));
-  if AExposeToGuest then DefineOwn(RootAt(TempTop - 2), AtomStack, RootAt(TempTop - 1), pfHidden);
-  if ObjOf(RootAt(TempTop - 2))^.OKind = okError then
+  if ExposeToGuest then DefineOwn(RootAt(Base), AtomStack, RootAt(Base + 1), pfHidden);
+  if ObjOf(RootAt(Base))^.OKind = okError then
   begin
-    ObjOf(RootAt(TempTop - 2))^.Aux2 := RootAt(TempTop - 1);
-    WriteBarrier(PCell(ObjOf(RootAt(TempTop - 2))), RootAt(TempTop - 1));
+    Provenance := RootAt(Base + 1);
+    if (Line > 0) and (Column > 0) then
+    begin
+      PushRoot(StrFromUnicode(Source));
+      PushRoot(MkPtr(NewArray(0, 4)));
+      ArrayPush(ObjOf(RootAt(Base + 3)), RootAt(Base + 1));
+      ArrayPush(ObjOf(RootAt(Base + 3)), RootAt(Base + 2));
+      ArrayPush(ObjOf(RootAt(Base + 3)), MkInt(Line));
+      ArrayPush(ObjOf(RootAt(Base + 3)), MkInt(Column));
+      Provenance := RootAt(Base + 3);
+    end;
+    O := ObjOf(RootAt(Base));
+    O^.Aux2 := Provenance;
+    WriteBarrier(PCell(O), Provenance);
   end;
-  PopRoots(2);
+  PopRoots(TempTop - Base);
 end;
 
 function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
-var V: TValue;
+var V: TValue; Fields: PValueArray;
 begin
   Stack := '';
   Result := IsObject(E) and (ObjOf(E)^.OKind = okError);
   if not Result then Exit;
   V := ObjOf(E)^.Aux2;
+  Fields := ErrorStackFields(V);
+  if Fields <> nil then V := Fields^.Data[0];
   Result := IsString(V);
   if Result then Stack := StrToUnicode(StrOf(V));
+end;
+
+function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
+var Fields: PValueArray;
+begin
+  Result := False;
+  if not IsObject(E) or (ObjOf(E)^.OKind <> okError) then Exit;
+  Fields := ErrorStackFields(ObjOf(E)^.Aux2);
+  if Fields = nil then Exit;
+  Source := StrToUnicode(StrOf(Fields^.Data[1]));
+  Line := IntOf(Fields^.Data[2]);
+  Column := IntOf(Fields^.Data[3]);
+  Result := True;
 end;
 
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;

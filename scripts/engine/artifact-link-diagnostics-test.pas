@@ -7,7 +7,11 @@ uses
   Classes,
   SysUtils,
   Goccia.Artifact,
-  Goccia.Embed;
+  Goccia.Core,
+  Goccia.Embed,
+  Goccia.HeapSnapshot,
+  Goccia.HostAPI,
+  Goccia.VM;
 
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
 begin
@@ -108,6 +112,73 @@ begin
   end;
 end;
 
+procedure CheckLinkFailurePrecedence(const AEntry, AImportPath: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    RunResult := Engine.Run(AEntry,
+      'const failed = await import("./load-failure.mjs").then(() => false, error => error.message.includes("absent.mjs"));'#10 +
+      'if (!failed) throw new Error("expected the first load to fail");'#10 +
+      'await import("./dynamic.mjs");');
+    CheckError('link rejection after a caught load failure', AImportPath, RunResult, 2, 1);
+  finally
+    Engine.Free;
+  end;
+end;
+
+procedure CheckSnapshot(const AEntry, AImportPath: UnicodeString);
+const
+  Source = 'try { await import("./dynamic.mjs"); } catch (error) { expect(error).toBeDefined(); }';
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  Roots: TArray<TGocciaHeapRoot>;
+  ErrorText, SourcePath: UnicodeString;
+  Observations, SourceLine, SourceColumn: Integer;
+  Restored: TValue;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.TestMode := True;
+    Engine.HeapSnapshots := True;
+    Check(Engine.PrepareHost(ErrorText), 'could not prepare snapshot host: ' + ErrorText);
+    Check(InstallTestingAPI(ErrorText), 'could not prepare snapshot observer: ' + ErrorText);
+    RunResult := Engine.Run(AEntry, Source);
+    Engine.EndTests;
+    Check(RunResult.Ok, 'catching the link error failed: ' + RunResult.ErrorMessage);
+    Roots := Engine.HeapSnapshotObserved(Observations);
+    Check((Observations = 1) and (Length(Roots) = 1), 'expected to observe exactly one caught error');
+    Check(Length(Roots[0].Data) > 0, 'caught error refused a snapshot: ' + Roots[0].Refusal);
+  finally
+    Engine.Free;
+  end;
+
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.TestMode := True;
+    Engine.HeapSnapshots := True;
+    Check(Engine.PrepareHost(ErrorText), 'could not prepare restore host: ' + ErrorText);
+    Check(InstallTestingAPI(ErrorText), 'could not prepare restore observer: ' + ErrorText);
+    Check(Engine.HeapSnapshotVerify(Roots[0], AEntry, Source, ErrorText) = ghvPassed,
+      'caught error did not round-trip: ' + ErrorText);
+    Check(SnapshotRestore(Roots[0].Data, Restored, ErrorText), 'could not restore the caught error: ' + ErrorText);
+    PushRoot(Restored);
+    try
+      Check(ErrorSourceLocation(RootAt(TempTop - 1), SourcePath, SourceLine, SourceColumn),
+        'restored error did not retain its declaration location');
+      Check((SourcePath = AImportPath) and (SourceLine = 2) and (SourceColumn = 1),
+        'restored error has the wrong declaration location');
+    finally
+      PopRoots(1);
+    end;
+  finally
+    Engine.Free;
+  end;
+end;
+
 const
   PresentImport = 'import { present } from "./dep.mjs";';
   MissingImport = 'import { missing } from "./dep.mjs";';
@@ -122,6 +193,8 @@ begin
     Dependency.SaveToFile(Directory + 'dep.mjs');
     Dependency.Text := PresentImport + LineEnding + MissingImport + LineEnding;
     Dependency.SaveToFile(Directory + 'dynamic.mjs');
+    Dependency.Text := 'import "./absent.mjs";' + LineEnding;
+    Dependency.SaveToFile(Directory + 'load-failure.mjs');
   finally
     Dependency.Free;
   end;
@@ -135,7 +208,12 @@ begin
     1, Length(PresentImport) + 3, gskScript);
   CheckCase(Directory + 'script-combined.mjs', '  import missing, * as ns from "./dep.mjs";',
     1, 3, gskScript, 'default');
+  CheckCase(Directory + 'script-combined.mjs#script-imports', MissingImport, 1, 1);
+  CheckCase(Directory + 'module.jsx', 'const x = <x/>; ' + MissingImport, 1, 17);
+  CheckCase(Directory + 'script.jsx', 'const x = <x/>; ' + MissingImport, 1, 17, gskScript);
   CheckDynamic(Directory + 'dynamic-entry.mjs', Directory + 'dynamic.mjs');
+  CheckLinkFailurePrecedence(Directory + 'precedence.mjs', Directory + 'dynamic.mjs');
+  CheckSnapshot(Directory + 'snapshot.mjs', Directory + 'dynamic.mjs');
   CheckInvalidLocation(Entry, 1, -1);
   CheckInvalidLocation(Entry, 0, 0);
   WriteLn('Artifact and source link locations: passed');
