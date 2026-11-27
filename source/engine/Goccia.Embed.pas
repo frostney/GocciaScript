@@ -161,6 +161,8 @@ type
     function ProviderRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
     function LoadHostEnvironment: Boolean;
+    { a run that ended before its entry ran: the shared budget's count, so the setup work it charged is reported }
+    procedure ReportSharedCount(var R: TGocciaRunResult);
     function InstallHost(var Err: UnicodeString): Boolean;
     procedure SetHeapSnapshots(V: Boolean);
     procedure SetOnModuleWarning(const Value: TGocciaModuleWarningEvent);
@@ -726,6 +728,13 @@ begin
   Result := True;
 end;
 
+procedure TGocciaEngine.ReportSharedCount(var R: TGocciaRunResult);
+begin
+  if FInstructionBudget = nil then Exit;
+  R.HasInstructionCount := True;
+  R.InstructionCount := FInstructionBudget.Count;
+end;
+
 procedure TGocciaEngine.SetCapabilities(const Value: TGocciaCapabilities);
 begin
   FCapabilities := Value;
@@ -1234,12 +1243,7 @@ begin
       3: Result.Aborted := gaMemoryLimit;
       4: Result.Aborted := gaHostAbort;
     end;
-    { the host environment ran under a shared budget: the job's count so far, as an entry reports it }
-    if FInstructionBudget <> nil then
-    begin
-      Result.HasInstructionCount := True;
-      Result.InstructionCount := FInstructionBudget.Count;
-    end;
+    ReportSharedCount(Result);
     DescribeThrown(RootAt(TempTop - 1), Result);
     PopRoots(1);
     Pending := VUndefined;
@@ -1270,6 +1274,7 @@ begin
     Result.CompileNanoseconds := GetNanoseconds - Start;
     if not Compiled then
     begin
+      ReportSharedCount(Result);
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1291,6 +1296,7 @@ begin
     Result.ErrorLine := ParseErrorLine;
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
+    ReportSharedCount(Result);
     Exit;
   end;
   Result.Compiled := True;

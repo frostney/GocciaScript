@@ -42,8 +42,10 @@ type
     FLimit: Int64;
     { a capped job: the units left, -1 once refused }
     FLeft: Int64;
-    { an uncapped job: the units charged and reserved, saturating at High(QWord) }
+    { an uncapped job: the units charged and reserved; FOverflowed once a reserve went past High(QWord), after which
+      the total stays saturated }
     FUsed: QWord;
+    FOverflowed: Boolean;
     FLock: TRTLCriticalSection;
   public
     constructor Create(ALimit: Int64);
@@ -63,6 +65,7 @@ begin
   FLimit := ALimit;
   FLeft := ALimit;
   FUsed := 0;
+  FOverflowed := False;
 end;
 
 destructor TInstructionBudget.Destroy;
@@ -135,7 +138,12 @@ begin
     else
     begin
       Result := MaxUnits;
-      if MaxUnits <= High(QWord) - FUsed then Inc(FUsed, MaxUnits) else FUsed := High(QWord);
+      if MaxUnits <= High(QWord) - FUsed then Inc(FUsed, MaxUnits)
+      else
+      begin
+        FUsed := High(QWord);
+        FOverflowed := True;
+      end;
     end;
   finally
     LeaveCriticalSection(FLock);
@@ -153,8 +161,8 @@ begin
       if Units > QWord(FLimit - FLeft) then Units := QWord(FLimit - FLeft);
       Inc(FLeft, Int64(Units));
     end
-    { a saturated total lost track of what it held, so it stays saturated }
-    else if FUsed = High(QWord) then Exit
+    { a total that overflowed lost track of what it held, so it stays saturated }
+    else if FOverflowed then Exit
     else if Units >= FUsed then FUsed := 0
     else Dec(FUsed, Units);
   finally

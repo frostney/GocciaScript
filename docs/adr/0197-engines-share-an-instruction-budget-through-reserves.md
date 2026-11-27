@@ -18,9 +18,10 @@ are the common case for a host that sets limits at all.
 them on its own counter.**
 
 - The dispatch loop's fast path stays the per-engine counter; only an exhausted reserve reaches the budget.
-- A reserve is at most 1,024 units and, under a cap, at most an eighth of what is left, so engines sharing a nearly
-  spent cap are refused close to it rather than with thousands of units still held elsewhere. A native charge larger
-  than that reserves what it needs.
+- An engine takes a reserve only when its own units run out, so it holds at most one at a time. A reserve is the
+  units the pending charge needs (one for an instruction, N for `PollInstructionUnits(N)`) or more: up to 1,024 and,
+  under a cap, up to an eighth of what is left, but never less than what the charge needs. So engines sharing a nearly
+  spent cap are refused close to it, each holding at most about an eighth of the remainder unspent.
 - An engine returns its unspent reserve when its limits disarm. A refusal fixes the count at `Limit + 1`, as an
   engine's own cap does, and later refunds do not change it.
 - The budget uses a lock, not 64-bit atomics, which 32-bit targets lack. The lock is taken once per reserve.

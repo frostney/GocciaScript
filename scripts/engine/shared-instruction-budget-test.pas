@@ -72,6 +72,8 @@ type
   TStartCounter = class
   public
     Started, Expected: Integer;
+    { set when an entry stopped waiting for the other before it started: the run proved no overlap }
+    TimedOut: Boolean;
     procedure Console(const AMethod, ALine: UnicodeString);
   end;
 
@@ -83,6 +85,7 @@ begin
   InterLockedIncrement(Started);
   Deadline := GetTickCount64 + 5000;
   while (InterLockedCompareExchange(Started, 0, 0) < Expected) and (GetTickCount64 < Deadline) do Sleep(1);
+  if InterLockedCompareExchange(Started, 0, 0) < Expected then TimedOut := True;
 end;
 
 var
@@ -135,6 +138,7 @@ var
 begin
   Starts.Started := 0;
   Starts.Expected := 2;
+  Starts.TimedOut := False;
   Shared := NewInstructionBudget(ASharedLimit);
   First := TEntryThread.Create(Shared);
   Second := TEntryThread.Create(Shared);
@@ -145,7 +149,7 @@ begin
     Second.WaitFor;
     Check((First.FatalException = nil) and (Second.FatalException = nil), 'a shared entry thread failed');
     Check(Shared.Count = AExpectedCount, 'entries did not charge the same budget: ' + IntToStr(Shared.Count));
-    Check(Starts.Started = 2, 'an engine was refused before it did any work');
+    Check((Starts.Started = 2) and not Starts.TimedOut, 'the two engines did not hold reserves at the same time');
     { running at once, both can be refused near the cap; at least one is }
     if ARefused then
       Check((First.RunResult.Aborted = gaInstructionLimit) or (Second.RunResult.Aborted = gaInstructionLimit),
@@ -274,6 +278,11 @@ begin
   Check(Budget.Reserve(2, 2) = 2, 'an uncapped reserve past High(Int64) failed');
   Budget.Refund(2);
   Check(Budget.Count = QWord(High(Int64)) - 1, 'a refund near saturation was lost: ' + IntToStr(Budget.Count));
+  { a reserve of the whole range is no overflow: returning it all leaves nothing counted }
+  Budget := NewInstructionBudget(0);
+  Check(Budget.Reserve(1, High(QWord)) = High(QWord), 'a full-range uncapped reserve failed');
+  Budget.Refund(High(QWord));
+  Check(Budget.Count = 0, 'a full refund left the uncapped count saturated: ' + IntToStr(Budget.Count));
 end;
 
 { A host environment refused by the shared cap reports the job's count with the abort. }
@@ -303,6 +312,19 @@ begin
     Check((RunResult.Aborted = gaInstructionLimit) and RunResult.HasInstructionCount and
       (RunResult.InstructionCount = 501) and (Shared.Count = 501),
       'a host environment refused by the shared cap did not report the count: ' + IntToStr(RunResult.InstructionCount));
+  finally
+    Engine.Free;
+  end;
+  { a host environment that loads under the budget, then an entry that does not compile: the setup's units count }
+  Engine := TGocciaEngine.Create;
+  try
+    Shared := NewInstructionBudget(0);
+    Engine.InstructionBudget := Shared;
+    Engine.HostEnvironment := UnicodeString(ProviderPath);
+    RunResult := Engine.Run('provider-invalid.mjs', 'const = ;');
+    Check(not RunResult.Ok and not RunResult.Compiled and RunResult.HasInstructionCount and
+      (RunResult.InstructionCount >= 4096) and (RunResult.InstructionCount = Shared.Count),
+      'setup work before an entry that did not compile was not reported: ' + IntToStr(RunResult.InstructionCount));
   finally
     Engine.Free;
     Lines.Free;

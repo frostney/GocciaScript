@@ -824,19 +824,23 @@ begin
   Result := ChargeInstructionsSlow(Units);
 end;
 
-function PollInstructionUnits(Units: QWord): Boolean;
+{ a zero charge's look at a shared budget: whether a cap another engine spent ends this run too. Apart, so the
+  managed interface reference and its exception frame stay off PollInstructionUnits' positive path }
+function SharedCapSpent: Boolean; noinline;
 var Shared: IGocciaInstructionBudget;
+begin
+  Shared := SharedInstructionBudget;
+  Result := (Shared <> nil) and not Shared.TryCharge(0);
+end;
+
+function PollInstructionUnits(Units: QWord): Boolean;
 begin
   if InstrCounted and not ChargeInstructions(Units) then Exit(AbortInstructions);
   { a zero charge also sees a shared cap another engine spent, which the local units do not show }
-  if Units = 0 then
+  if (Units = 0) and SharedCapSpent then
   begin
-    Shared := SharedInstructionBudget;
-    if (Shared <> nil) and not Shared.TryCharge(0) then
-    begin
-      InstrLeft := -1;
-      Exit(AbortInstructions);
-    end;
+    InstrLeft := -1;
+    Exit(AbortInstructions);
   end;
   Result := (Interrupt = 0) or AbortInterrupted;
 end;

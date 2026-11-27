@@ -491,10 +491,11 @@ the engine's own `MaxInstructions` and `MeasureInstructions` are ignored; setup 
 module, the host environment) is charged to it as well. Set a fresh budget for each job.
 
 Each engine takes units from the budget in reserves and spends them on its own counter, so the
-dispatch loop does no shared write per instruction. A reserve is normally at most 1,024 units
-and, under a cap, at most an eighth of what is left; a native charge larger than that reserves
-what it needs. So the units other engines hold unspent when one is refused are a small part of
-the cap. The job never spends more than the limit. An engine learns
+dispatch loop does no shared write per instruction. Each engine holds at most one reserve at a
+time, of up to 1,024 units and, under a cap, about an eighth of what is left, so the units other
+engines hold unspent when one is refused are a small part of the cap
+([ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) gives the exact
+rule). The job never spends more than the limit. An engine learns
 of a cap another engine spent when its own units run out, or at a zero charge. An engine returns
 what it did not spend when its run ends. For a job that was never refused, `Budget.Count` is
 exact once every engine has ended; a refused job reports `Limit + 1`. A run's reported count is
