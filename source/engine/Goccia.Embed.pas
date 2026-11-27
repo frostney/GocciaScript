@@ -518,7 +518,8 @@ begin
     Exit('[object ' + Tag + ']');
   end;
   Result := '';
-  if ToStringV(V, S) and IsString(S) then Result := StrToUnicode(StrOf(S));
+  if ToStringV(V, S) and IsString(S) then Result := StrToUnicode(StrOf(S))
+  else if (AbortKind <> 0) and IsObject(Pending) then Result := ThrownText(Pending);
   Pending := VUndefined;
 end;
 
@@ -1356,24 +1357,7 @@ begin
       Result.HasResult := Result.Ok;
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
-    Result.HasInstructionCount := ReadInstructionCount(Result.InstructionCount);
-    case AbortKind of
-      1: Result.Aborted := gaTimeout;
-      2: Result.Aborted := gaInstructionLimit;
-      3:
-        begin
-          Result.Aborted := gaMemoryLimit;
-          Result.ErrorName := 'RangeError';
-          Result.ErrorText := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Result.Aborted := gaHostAbort;
-          Result.ErrorName := 'Error';
-          Result.ErrorText := HostAbortMessage;
-        end;
-    end;
-    if not Result.Ok or (Result.Aborted <> gaNone) then
+    if not Result.Ok or (AbortKind <> 0) then
     begin
       Result.Ok := False;
       Thrown := Pending;
@@ -1382,7 +1366,7 @@ begin
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
-      if Result.Aborted = gaNone then DescribeThrown(RootAt(TempTop - 1), Result);
+      if AbortKind = 0 then DescribeThrown(RootAt(TempTop - 1), Result);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
@@ -1413,6 +1397,23 @@ begin
         end;
       end;
     end;
+    Result.HasInstructionCount := ReadInstructionCount(Result.InstructionCount);
+    case AbortKind of
+      1: Result.Aborted := gaTimeout;
+      2: Result.Aborted := gaInstructionLimit;
+      3:
+        begin
+          Result.Aborted := gaMemoryLimit;
+          Result.ErrorName := 'RangeError';
+          Result.ErrorText := MemoryLimitMessage;
+        end;
+      4:
+        begin
+          Result.Aborted := gaHostAbort;
+          Result.ErrorName := 'Error';
+          Result.ErrorText := HostAbortMessage;
+        end;
+    end;
   finally
     if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
     ProfileStop;
@@ -1423,7 +1424,8 @@ begin
     SetProviderGraphCheck(nil);
     PopRoots(1);
     { a test or benchmark file's limits cover its suites too (RunTests and RunBenchmarks disarm them) }
-    if (AbortKind <> 0) or (not FTestMode and not FBenchMode) then LimitsDisarm;
+    if (AbortKind <> 0) or (not FTestMode and not FBenchMode) then LimitsDisarm
+    else StopInstructionMeasurement;
   end;
 end;
 

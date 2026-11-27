@@ -241,10 +241,11 @@ procedure JitTakeThread;
   of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). The memory limit
   (HeapCeiling) is always in force: a full collection that leaves more live aborts the run the same way, with a
   RangeError (MemoryLimitMessage) and AbortKind 3. }
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; AMeasureInstructions: Boolean = False);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean = False);
 procedure LimitsDisarm;
 { The entry counter before disarming, including the step that refused an exhausted cap. }
-function ReadInstructionCount(out ACount: QWord): Boolean;
+function ReadInstructionCount(out Count: QWord): Boolean;
+procedure StopInstructionMeasurement;
 { the spent limit that aborted the run until LimitsDisarm: 0 none, 1 the timeout, 2 the instruction budget, 3 the
   memory limit, 4 a host abort }
 function LimitAbortKind: Integer;
@@ -746,25 +747,28 @@ begin
   Result := False;
 end;
 
-function ReadInstructionCount(out ACount: QWord): Boolean;
+function ReadInstructionCount(out Count: QWord): Boolean;
 var Initial: Int64;
 begin
-  ACount := 0;
+  Count := 0;
   Result := InstrCounted;
   if not Result then Exit;
   if InstrMax > 0 then Initial := InstrMax else Initial := High(Int64);
-  if InstrLeft >= 0 then ACount := QWord(Initial - InstrLeft)
-  else ACount := QWord(Initial) + QWord(-(InstrLeft + 1)) + 1;
+  if InstrLeft >= 0 then Count := QWord(Initial - InstrLeft)
+  else Count := QWord(Initial) + 1;
 end;
 
 { False on the first charge past a positive cap. The measurement-only counter saturates. }
 function ChargeInstruction: Boolean; inline;
 begin
-  Dec(InstrLeft);
-  if InstrLeft >= 0 then Exit(True);
-  if InstrMax > 0 then Exit(False);
-  InstrLeft := 0;
-  Result := True;
+  if InstrLeft > 0 then
+  begin
+    Dec(InstrLeft);
+    Exit(True);
+  end;
+  if InstrMax <= 0 then Exit(True);
+  InstrLeft := -1;
+  Result := False;
 end;
 
 function PollInterrupt: Boolean;
@@ -988,6 +992,14 @@ begin
   LimitTimer.Start;
 end;
 
+procedure StopInstructionMeasurement;
+begin
+  if (InstrMax > 0) or not InstrCounted then Exit;
+  InstrCounted := False;
+  InstrLeft := 0;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil);
+end;
+
 procedure LimitsDropTimer;
 begin
   if LimitTimer = nil then Exit;
@@ -1020,14 +1032,14 @@ begin
   end;
 end;
 
-procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; AMeasureInstructions: Boolean);
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean);
 begin
   LimitsDisarm;
   LimitTimeoutMs := TimeoutMs;
   InstrMax := MaxInstructions;
-  InstrCounted := (MaxInstructions > 0) or AMeasureInstructions;
+  InstrCounted := (MaxInstructions > 0) or MeasureInstructions;
   if MaxInstructions > 0 then InstrLeft := MaxInstructions
-  else if AMeasureInstructions then InstrLeft := High(Int64);
+  else if MeasureInstructions then InstrLeft := High(Int64);
   if (TimeoutMs > 0) or InstrCounted or CoverageOn or ProfileOn then JitBlocked := True;
   if TimeoutMs > 0 then
   begin

@@ -68,7 +68,7 @@ end.
 | Modules | `Resolver`, `ModuleContentCheck`, `ProviderGraph`, `DefineInlineVirtualModule`, `DefineManifestVirtualModules`, `DefineConfigVirtualModules`, `DefineModuleManifestVirtualModules`, `ModuleLoaded` |
 | Globals | `InjectInlineGlobal`, `InjectDataGlobals`, `InjectModuleGlobals` |
 | Capabilities | `Capabilities`, `ProjectRoot`, `AuditSink`, `Audit`, `FetchMaxResponseBytes` |
-| Limits | `TimeoutMs`, `MaxInstructions`, `MaxMemory`, `MaxFrames` |
+| Limits | `TimeoutMs`, `MaxInstructions`, `MeasureInstructions`, `MaxMemory`, `MaxFrames` |
 | Test and benchmark hosts | `RunTests`, `EndTests`, `LateRejection`, `RunBenchmarks`, `HeapSnapshotObserved`, `HeapSnapshotVerify` |
 | Profiling and coverage | `ProfileOpcodes`, `ProfileFunctions`, `Coverage` |
 
