@@ -194,6 +194,10 @@ const
   TLS_READ_ERROR = 'TLS read failed';
   TLS_WRITE_ERROR = 'TLS write failed';
   TLS_TIMEOUT_ERROR = 'TLS handshake timed out';
+  { SecureTransport's OSStatus codes that ReadSecureTransportRecords, which
+    builds on every platform, reads. }
+  ERR_SEC_SUCCESS = 0;
+  ERR_SSL_WOULD_BLOCK = -9803;
 
 type
   ETransportSecurityError = class(Exception);
@@ -228,9 +232,6 @@ function ReadSecureTransportRecords(const AContext: Pointer;
   const ABufferedSize: TSecureTransportBufferedSize;
   var ABuffer: array of Byte; const ALength: Integer;
   out AStatus: LongInt): Integer;
-const
-  SECURE_TRANSPORT_SUCCESS = 0;
-  SECURE_TRANSPORT_WOULD_BLOCK = -9803;
 var
   Buffered: NativeUInt;
   Requested: NativeUInt;
@@ -238,13 +239,13 @@ var
 begin
   Requested := ALength;
   Buffered := 0;
-  if (ABufferedSize(AContext, Buffered) = SECURE_TRANSPORT_SUCCESS) and
+  if (ABufferedSize(AContext, Buffered) = ERR_SEC_SUCCESS) and
      (Buffered > 0) and (Buffered < Requested) then
     Requested := Buffered;
   Processed := 0;
   repeat
     AStatus := ARead(AContext, @ABuffer[0], Requested, Processed);
-  until (AStatus <> SECURE_TRANSPORT_WOULD_BLOCK) or (Processed > 0);
+  until (AStatus <> ERR_SSL_WOULD_BLOCK) or (Processed > 0);
   Result := Processed;
 end;
 
@@ -473,8 +474,6 @@ type
   SSLProtocol = Integer;
 
 const
-  ERR_SEC_SUCCESS = 0;
-  ERR_SSL_WOULD_BLOCK = -9803;
   ERR_SSL_CLOSED_GRACEFUL = -9805;
   ERR_SSL_CLOSED_ABORT = -9806;
   K_SSL_CLIENT_SIDE = 1;
