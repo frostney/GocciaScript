@@ -174,6 +174,23 @@ m:
     expect(value).toEqual([{ id: 1, label: "demo" }]);
   });
 
+  test("parses compact mappings within explicit keys and values", () => {
+    const value = YAML.parse(`
+- sun: yellow
+- ? earth: blue
+  : moon: white
+`);
+
+    expect(value).toEqual([
+      { sun: "yellow" },
+      { '{"earth": "blue"}': { moon: "white" } },
+    ]);
+  });
+
+  test("rejects compact mappings as values of implicit keys", () => {
+    expect(() => YAML.parse("- outer: inner: value")).toThrow(SyntaxError);
+  });
+
   test("parses flow collections, comments, and scalar values", () => {
     const value = YAML.parse(`
 items: [1, 2, { ok: true }, foo: bar]

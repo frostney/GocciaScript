@@ -76,17 +76,16 @@ type
     procedure ParseSequenceEntry(const AEntryText: string;
       const AIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
     function ParseMappingValueText(const AValueText: string; const ALineIndent,
-      ALineNumber: Integer): TGocciaDataNode;
+      ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
     procedure ParseMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
     procedure ParseExplicitMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
-    procedure ParseSequenceEntryMappingInto(const AMappingIndent: Integer;
+    procedure ParseCompactMappingInto(const AMappingIndent: Integer;
       const AEntryText: string; const ALineNumber: Integer;
       const AObject: TGocciaDataNode);
     function ParseNodeValue(const AValueText: string; const ALineIndent,
-      ASequenceEntryContentIndent,
-      ALineNumber: Integer; const ATagName, AAnchorName: string;
+      ACompactIndent, ALineNumber: Integer; const ATagName, AAnchorName: string;
       const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
       ARequireIndentedQuotedContinuation,
       AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
@@ -139,7 +138,7 @@ uses
   Goccia.Temporal.Utils;
 
 const
-  NO_SEQUENCE_ENTRY_CONTENT_INDENT = -1;
+  NO_COMPACT_INDENT = -1;
   DOCUMENT_START_MARKER = '---';
   DOCUMENT_END_MARKER = '...';
   DOUBLE_QUOTE = '"';
@@ -2082,7 +2081,7 @@ begin
 
     ParseNodeProperties(CurrentLine.Text, TagName, AnchorName, RemainingText, LineNumber);
     Result := ParseNodeValue(RemainingText, AIndent,
-      NO_SEQUENCE_ENTRY_CONTENT_INDENT, LineNumber, TagName,
+      NO_COMPACT_INDENT, LineNumber, TagName,
       AnchorName, True, False, (RemainingText = '') and
       ((TagName <> '') or (AnchorName <> '')), False, True);
   finally
@@ -2300,14 +2299,16 @@ begin
 end;
 
 function TGocciaYAMLParser.ParseMappingValueText(const AValueText: string;
-  const ALineIndent, ALineNumber: Integer): TGocciaDataNode;
+  const ALineIndent, ALineNumber, ACompactIndent: Integer): TGocciaDataNode;
 var
-  AnchorName, RemainingText, TagName, ValueText: string;
+  AnchorName, RemainingText, TagName: string;
 begin
-  ValueText := AValueText;
-  ParseNodeProperties(ValueText, TagName, AnchorName, RemainingText, ALineNumber);
-  Result := ParseNodeValue(RemainingText, ALineIndent,
-    NO_SEQUENCE_ENTRY_CONTENT_INDENT, ALineNumber, TagName,
+  ParseNodeProperties(AValueText, TagName, AnchorName, RemainingText, ALineNumber);
+  if (ACompactIndent = NO_COMPACT_INDENT) and not StartsSequenceEntry(RemainingText) and
+     StartsBlockMappingEntry(RemainingText) then
+    RaiseParseError('A compact block mapping requires an explicit key.', ALineNumber);
+  Result := ParseNodeValue(RemainingText, ALineIndent, ACompactIndent,
+    ALineNumber, TagName,
     AnchorName, True, False, False, True, False);
 end;
 
@@ -2324,7 +2325,7 @@ begin
 
   KeyText := Trim(Copy(ALineText, 1, SeparatorIndex - 1));
   ValueText := Trim(Copy(ALineText, SeparatorIndex + 1, MaxInt));
-  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber);
+  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber, NO_COMPACT_INDENT);
   KeyText := ParseKeyName(KeyText, ALineNumber);
   if KeyText = '<<' then
     MergeMappingValue(AContainer, Value, ALineNumber)
@@ -2340,8 +2341,8 @@ var
   KeyLineText, ValueLineText: string;
   KeyValue, Value: TGocciaDataNode;
 begin
-  KeyLineText := Trim(Copy(ALineText, 2, MaxInt));
-  if KeyLineText = '' then
+  KeyLineText := Copy(ALineText, 2, MaxInt);
+  if Trim(KeyLineText) = '' then
   begin
     Inc(FIndex);
     KeyValue := ParseExplicitNestedNode(ALineIndent);
@@ -2354,6 +2355,13 @@ begin
     begin
       KeyValue := FTree.NewString('');
       Inc(FIndex);
+    end
+    else if not StartsSequenceEntry(KeyRemainingText) and
+            StartsBlockMappingEntry(KeyRemainingText) then
+    begin
+      KeyValue := FTree.NewObject;
+      ParseCompactMappingInto(ALineIndent + 1 + CountIndentation(KeyLineText),
+        KeyRemainingText, ALineNumber, KeyValue);
     end
     else
       KeyValue := ParseInlineValueWithContinuations(KeyRemainingText,
@@ -2375,14 +2383,15 @@ begin
     Exit;
   end;
 
-  ValueLineText := Trim(Copy(CurrentLine.Text, 2, MaxInt));
-  if ValueLineText = '' then
+  ValueLineText := Copy(CurrentLine.Text, 2, MaxInt);
+  if Trim(ValueLineText) = '' then
   begin
     Inc(FIndex);
     Value := ParseExplicitNestedNode(ALineIndent);
   end
   else
-    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number);
+    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number,
+      ALineIndent + 1 + CountIndentation(ValueLineText));
   KeyLineText := CanonicalizeKeyValue(KeyValue);
   if KeyLineText = '<<' then
     MergeMappingValue(AContainer, Value, CurrentLine.Number)
@@ -2408,7 +2417,7 @@ begin
   end;
 end;
 
-procedure TGocciaYAMLParser.ParseSequenceEntryMappingInto(
+procedure TGocciaYAMLParser.ParseCompactMappingInto(
   const AMappingIndent: Integer; const AEntryText: string;
   const ALineNumber: Integer; const AObject: TGocciaDataNode);
 begin
@@ -2420,7 +2429,7 @@ begin
 end;
 
 function TGocciaYAMLParser.ParseNodeValue(const AValueText: string;
-  const ALineIndent, ASequenceEntryContentIndent, ALineNumber: Integer;
+  const ALineIndent, ACompactIndent, ALineNumber: Integer;
   const ATagName, AAnchorName: string;
   const AAdvanceBeforeNested, AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
   ARequireIndentedQuotedContinuation,
@@ -2442,8 +2451,7 @@ begin
           not StartsSequenceEntry(CurrentLine.Text) and
           ((CurrentLine.Text = '') or
            ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{')))) or
-         ((ASequenceEntryContentIndent <> NO_SEQUENCE_ENTRY_CONTENT_INDENT) and
-          StartsSequenceEntry(CurrentLine.Text)))) then
+         (AStopAtIndentedSequenceEntry and StartsSequenceEntry(CurrentLine.Text)))) then
       Result := FTree.NewNull
     else if StartsSequenceEntry(CurrentLine.Text) then
     begin
@@ -2482,10 +2490,10 @@ begin
   begin
     Arr := FTree.NewArray;
     RegisterAnchor(AAnchorName, Arr, ALineNumber);
-    if ASequenceEntryContentIndent <> NO_SEQUENCE_ENTRY_CONTENT_INDENT then
+    if ACompactIndent <> NO_COMPACT_INDENT then
     begin
-      ParseSequenceEntry(AValueText, ASequenceEntryContentIndent, ALineNumber, Arr);
-      ParseSequenceInto(ASequenceEntryContentIndent, Arr);
+      ParseSequenceEntry(AValueText, ACompactIndent, ALineNumber, Arr);
+      ParseSequenceInto(ACompactIndent, Arr);
     end
     else
       ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
@@ -2495,8 +2503,8 @@ begin
   begin
     Obj := FTree.NewObject;
     RegisterAnchor(AAnchorName, Obj, ALineNumber);
-    if ASequenceEntryContentIndent <> NO_SEQUENCE_ENTRY_CONTENT_INDENT then
-      ParseSequenceEntryMappingInto(ASequenceEntryContentIndent, AValueText, ALineNumber, Obj)
+    if ACompactIndent <> NO_COMPACT_INDENT then
+      ParseCompactMappingInto(ACompactIndent, AValueText, ALineNumber, Obj)
     else
       ParseMappingInto(ALineIndent, Obj);
     Result := Obj;
