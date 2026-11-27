@@ -10,11 +10,15 @@ type PutCall = {
 };
 
 const putCalls: PutCall[] = [];
+let listError: Error | null = null;
 
 mock.module("@vercel/blob", () => ({
   BlobNotFoundError: class BlobNotFoundError extends Error {},
   get: async () => null,
-  list: async () => ({ blobs: [], cursor: undefined, hasMore: false }),
+  list: async () => {
+    if (listError) throw listError;
+    return { blobs: [], cursor: undefined, hasMore: false };
+  },
   put: async (
     pathname: string,
     body: unknown,
@@ -392,6 +396,78 @@ describe("Performance Barometer data", () => {
     expect(data.targets[0]?.name).toBe("tiny");
   });
 
+  test("lets a failed read reject so the data cache never keeps it", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    // unstable_cache stores what its function resolves to and nothing when it
+    // rejects, and keeps serving the stale entry when a revalidation rejects.
+    listError = new Error("Vercel Blob: Failed to fetch blob: 500");
+    try {
+      await expect(
+        performanceDashboardTestApi.loadUncachedPerformanceDashboardData(),
+      ).rejects.toThrow("Failed to fetch blob: 500");
+    } finally {
+      listError = null;
+    }
+    expect(
+      (await performanceDashboardTestApi.loadUncachedPerformanceDashboardData())
+        .status,
+    ).toBe("empty");
+  });
+
+  test("keeps a run's stored payload out of its timeline point", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    // A run read from Blob carries its summary, report descriptor and, in
+    // older JetStream pointers, the whole report. The page serializes every
+    // timeline point, so none of that may ride along.
+    const run = {
+      runId: 1,
+      runNumber: 1,
+      artifactId: 1,
+      runUrl: "https://example.test/run/1",
+      headSha: "abcdef01",
+      shortSha: "abcdef01",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      title: "CI",
+      report: { path: "jetstream/runs/1/report.json.gz" },
+      reportJson: "x".repeat(4096),
+      summary: { workloadCount: 1, failedWorkloadCount: 0 },
+    };
+    const point = performanceDashboardTestApi.timelinePoint(
+      "jetstream",
+      run,
+      run.summary,
+    );
+    expect(Object.keys(point).sort()).toEqual(
+      [
+        "suite",
+        "runId",
+        "runNumber",
+        "artifactId",
+        "runUrl",
+        "headSha",
+        "shortSha",
+        "createdAt",
+        "complete",
+        "stale",
+        "quickjsRatio",
+        "nodeRatio",
+        "nodeJitlessRatio",
+        "jscRatio",
+        "failedWorkloadCount",
+        "workloadCount",
+        "repetitions",
+        "engineVersions",
+        "corpusCommit",
+        "driverVersion",
+        "compatibilityKey",
+      ].sort(),
+    );
+  });
+
   test("summarizes JetStream failures and version boundaries", () => {
     expect(
       summaryFromReport({
@@ -697,6 +773,10 @@ describe("JetStream Blob store", () => {
     expect(gunzipSync(putCalls[0]?.body as Uint8Array).toString("utf8")).toBe(
       `${reportJson}\n`,
     );
+    // The report lives in its own blob; the daily pointer only points at it.
+    const pointer = JSON.parse(String(putCalls[1]?.body));
+    expect("reportJson" in pointer).toBe(false);
+    expect(pointer.report.path).toBe("jetstream/runs/1001/report.json.gz");
     expect(runs.map((run) => run.runId)).toEqual([101, 102]);
     expect(runs[0]?.summary.referenceRatios.node).toBe(4);
   });

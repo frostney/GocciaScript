@@ -26,6 +26,7 @@ const getCalls: BlobGetCall[] = [];
 const putCalls: BlobPutCall[] = [];
 const listCalls: BlobListCall[] = [];
 let failedPutPath: string | null = null;
+let listError: Error | null = null;
 
 class BlobNotFoundError extends Error {
   constructor() {
@@ -150,6 +151,7 @@ mock.module("@vercel/blob", () => ({
   },
   list: async (options: Record<string, unknown>) => {
     listCalls.push({ options });
+    if (listError) throw listError;
     if (!options.cursor) {
       return {
         blobs: [
@@ -387,6 +389,20 @@ describe("test262 Blob store", () => {
       "benchmark-profiles/runs/4004/details.tar.gz",
     );
     expect(runs.map((run) => run.artifactId)).toEqual([4004]);
+  });
+
+  test("lets a failed dashboard read reject so the data cache never keeps it", async () => {
+    const { test262DashboardTestApi } = await import("@/lib/test262-dashboard");
+    // unstable_cache stores what its function resolves to and nothing when it
+    // rejects, and keeps serving the stale entry when a revalidation rejects.
+    listError = new Error("Vercel Blob: Failed to fetch blob: 500");
+    try {
+      await expect(
+        test262DashboardTestApi.loadUncachedTest262DashboardData(),
+      ).rejects.toThrow("Failed to fetch blob: 500");
+    } finally {
+      listError = null;
+    }
   });
 
   test("lists daily run blobs and ignores malformed daily JSON", async () => {

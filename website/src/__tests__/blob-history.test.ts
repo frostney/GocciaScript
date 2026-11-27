@@ -59,7 +59,10 @@ mock.module("@vercel/blob", () => ({
       hasMore: offset + pageSize < entries.length,
     };
   },
-  get: async (pathname: string, options: { access: string }) => {
+  get: async (
+    pathname: string,
+    options: { access: string; headers?: HeadersInit },
+  ) => {
     accesses.push(options.access);
     gets.push(pathname);
     active++;
@@ -73,10 +76,18 @@ mock.module("@vercel/blob", () => ({
         throw new Error("transport failed");
       const blob = stale.get(pathname) ?? blobs.get(pathname);
       if (!blob) throw new BlobNotFoundError();
+      // Like the Blob CDN: a compressed response, which fetch asks for by
+      // default, carries a weak ETag; only the identity encoding keeps the
+      // strong one.
+      const identity =
+        new Headers(options.headers).get("accept-encoding") === "identity";
       return {
         statusCode: 200,
         stream: new Response(new Uint8Array(blob.body)).body,
-        blob: { etag: `"${blob.etag}"`, size: blob.body.byteLength },
+        blob: {
+          etag: identity ? `"${blob.etag}"` : `W/"${blob.etag}"`,
+          size: blob.body.byteLength,
+        },
       };
     } finally {
       active--;
@@ -518,7 +529,7 @@ test("projects large JetStream reports without duplicating their raw payload in 
   await publish("jetstream", 1, undefined, reportJson);
   const raw = blobs.get("jetstream/daily/2026-09-01/1.json");
   expect(raw).toBeDefined();
-  expect(JSON.parse(raw?.body.toString() ?? "{}").reportJson).toBe(reportJson);
+  expect("reportJson" in JSON.parse(raw?.body.toString() ?? "{}")).toBe(false);
   expect(snapshots()).toHaveLength(1);
   gets.length = 0;
   const runs = await load("jetstream");
@@ -529,4 +540,30 @@ test("projects large JetStream reports without duplicating their raw payload in 
   expect(await rebuild("jetstream")).toBe(1);
   expect(blobs.get("jetstream/daily/2026-09-01/1.json")).toEqual(raw);
   expect(blobs.has("jetstream/runs/1/report.json.gz")).toBe(true);
+});
+
+test("drops the report embedded in legacy JetStream pointers from raw reads", async () => {
+  // Pointers published before the publisher stopped spreading reportJson
+  // still carry it. Without a snapshot, the raw read gets the same projection.
+  store(
+    "jetstream/daily/2026-09-01/1.json",
+    JSON.stringify({
+      ...rawRun("jetstream", 1),
+      reportJson: JSON.stringify({ retainedPayload: "x".repeat(4096) }),
+    }),
+  );
+  const runs = await load("jetstream");
+  expect(runs.map((run) => run.runId)).toEqual([1]);
+  expect("reportJson" in runs[0]).toBe(false);
+  expect(snapshots()).toHaveLength(0);
+});
+
+test("builds snapshots from pointers the CDN would compress", async () => {
+  // Every pointer read below goes through the CDN path that weakens ETags
+  // unless the reader asks for the identity encoding.
+  for (let id = 1; id <= 3; id++) seed("awfy", id);
+  expect(await rebuild("awfy")).toBe(1);
+  gets.length = 0;
+  expect((await load("awfy")).map((run) => run.runId)).toEqual([1, 2, 3]);
+  expect(rawGets()).toHaveLength(0);
 });
