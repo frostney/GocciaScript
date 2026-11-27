@@ -269,59 +269,66 @@ begin
 end;
 
 {$IFDEF LINUX}
-function CreateIPv6LoopbackListener(out APort: Word): cint;
+{ A TCP listener bound to ::1 on ARequestedPort. -1 when another socket
+  already holds that port on ::1. }
+function TryCreateIPv6LoopbackListener(const ARequestedPort: Word): cint;
 var
   Address: TInetSockAddr6;
-  AddressLength: TSockLen;
+  BindError: cint;
 begin
   Result := fpSocket(AF_INET6, SOCK_STREAM, 0);
   if Result < 0 then
     raise Exception.Create('IPv6 socket failed');
   FillChar(Address, SizeOf(Address), 0);
   Address.sin6_family := AF_INET6;
+  Address.sin6_port := htons(ARequestedPort);
   Address.sin6_addr := StrToNetAddr6('::1');
-  AddressLength := SizeOf(Address);
-  if (fpBind(Result, @Address, SizeOf(Address)) <> 0) or
-     (fpListen(Result, 1) <> 0) or
-     (fpGetSockName(Result, @Address, @AddressLength) <> 0) then
+  if fpBind(Result, @Address, SizeOf(Address)) <> 0 then
+  begin
+    BindError := SocketError;
+    CloseSocket(Result);
+    if BindError = ESysEADDRINUSE then
+      Exit(-1);
+    raise Exception.Create('IPv6 loopback listener failed');
+  end;
+  if fpListen(Result, 1) <> 0 then
   begin
     CloseSocket(Result);
     raise Exception.Create('IPv6 loopback listener failed');
   end;
-  APort := ntohs(Address.sin6_port);
 end;
 
-{ Binds ::1 and 127.0.0.1 on one port number, so a client that resolves
+{ Binds 127.0.0.1 and ::1 on one port number, so a client that resolves
   localhost to both reaches either address on the same port. ::1 listens;
   127.0.0.1 listens only when AListenIPv4, so without it a connection there
-  is refused. The kernel picks the IPv6 port and knows nothing of what holds
-  that number on 127.0.0.1, so a pair whose IPv4 half is taken is dropped
-  and a fresh one tried, up to ATTEMPTS times. A dropped port can be picked
-  again. }
-procedure CreateLoopbackPortPair(out AIPv6Listener, AIPv4Listener: cint;
+  is refused. The kernel picks the IPv4 port, one that nothing on 127.0.0.1
+  holds, where a test run's other sockets are. ::1 then takes the same
+  number, and a pair whose IPv6 half is taken is dropped and a fresh one
+  tried, up to ATTEMPTS times. }
+procedure CreateLoopbackPortPair(out AIPv4Listener, AIPv6Listener: cint;
   out APort: Word; const AListenIPv4: Boolean);
 const
   ATTEMPTS = 1000;
 var
   Attempt: Integer;
-  IPv4Port: Word;
 begin
   for Attempt := 1 to ATTEMPTS do
   begin
-    AIPv6Listener := CreateIPv6LoopbackListener(APort);
+    AIPv4Listener := TryCreateLoopbackListener(APort, 0, AListenIPv4);
+    if AIPv4Listener < 0 then
+      raise Exception.Create('loopback listener failed');
     try
-      AIPv4Listener := TryCreateLoopbackListener(IPv4Port, APort,
-        AListenIPv4);
+      AIPv6Listener := TryCreateIPv6LoopbackListener(APort);
     except
-      CloseSocket(AIPv6Listener);
+      CloseSocket(AIPv4Listener);
       raise;
     end;
-    if AIPv4Listener >= 0 then
+    if AIPv6Listener >= 0 then
       Exit;
-    CloseSocket(AIPv6Listener);
+    CloseSocket(AIPv4Listener);
   end;
   raise Exception.CreateFmt(
-    'found no port free on both ::1 and 127.0.0.1 in %d tries', [ATTEMPTS]);
+    'found no port free on both 127.0.0.1 and ::1 in %d tries', [ATTEMPTS]);
 end;
 {$ENDIF}
 
@@ -2280,27 +2287,31 @@ type
     Served: Integer;
     { Serves on an ephemeral 127.0.0.1 port. }
     constructor Create(const AResponses: array of RawByteString); overload;
-    { Serves on AListener, a listening socket on APort, and closes it when
-      freed, also when this constructor raises. }
+    { Serves on AListener, a listening socket on APort, which it takes over:
+      AListener is -1 once this constructor runs, and the server closes the
+      socket when freed, also when this constructor raises. }
     constructor Create(const AResponses: array of RawByteString;
-      const AListener: cint; const APort: Word); overload;
+      var AListener: cint; const APort: Word); overload;
     destructor Destroy; override;
   end;
 
 constructor TKeepAliveServer.Create(
   const AResponses: array of RawByteString);
+var
+  Listener: cint;
 begin
   FListener := -1;
-  FListener := CreateLoopbackListener(Port);
-  Create(AResponses, FListener, Port);
+  Listener := CreateLoopbackListener(Port);
+  Create(AResponses, Listener, Port);
 end;
 
 constructor TKeepAliveServer.Create(const AResponses: array of RawByteString;
-  const AListener: cint; const APort: Word);
+  var AListener: cint; const APort: Word);
 var
   I: Integer;
 begin
   FListener := AListener;
+  AListener := -1;
   Port := APort;
   SetLength(FResponses, Length(AResponses));
   for I := 0 to High(AResponses) do
@@ -2709,7 +2720,7 @@ begin
     { With a grant, bind IPv4 without listening so it fails and IPv6
       wins the race. Without a grant, a listening IPv4 socket would
       reveal any connection attempted before the denial. }
-    CreateLoopbackPortPair(IPv6Listener, IPv4Listener, Port, DenyIPv4);
+    CreateLoopbackPortPair(IPv4Listener, IPv6Listener, Port, DenyIPv4);
     try
       Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE],
         IPv6Listener, Port);
@@ -2735,6 +2746,9 @@ begin
       end;
     finally
       CloseSocket(IPv4Listener);
+      { Still open only when the server never took it over }
+      if IPv6Listener >= 0 then
+        CloseSocket(IPv6Listener);
     end;
   end;
 end;
