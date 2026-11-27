@@ -106,8 +106,12 @@
   // runner's install registers its own)
   if (!testMode && !shared.bare) shared.hostModules['goccia:test'] = () => n.testingModule();
 
-  // the test runner's vitest compatibility shim, over goccia:test and goccia:timers (--no-vitest-compat: none)
-  if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource();
+  // Vitest uses goccia:test and goccia:timers. A normal embedder with timers can opt in without the runner's
+  // globals; its shim refuses module mocks, which only a host that runs test files hoists. Without the shim, the
+  // host's resolver decides.
+  if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource(false);
+  else if (!testMode && !shared.bare && shared.exposeTimers !== false && configFlag('vitest-compat'))
+    shared.hostModules.vitest = () => n.vitestSource(true);
 
   // the REPL's value display (Goccia.REPL.Formatter): primitives as literals, functions, promises, errors, regexps,
   // Maps and Sets by their kind, anything else as JSON with a two-space indent; color: ANSI colors
