@@ -39,18 +39,19 @@
   const viewLength = (v) => (taTagOf(v) !== undefined ? taByteLengthOf(v) : dvByteLengthOf(v));
   // a list append that defines the index (a setter on Array.prototype must not see it)
   const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
-  // s without the characters in set at its ends (where), or anywhere (everywhere)
-  const strip = (s, set, everywhere) => {
+  // ASCII whitespace (the Infra standard's: tab, LF, FF, CR, space)
+  const isASCIIWhitespace = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
+  // s without ASCII whitespace at its ends, or anywhere (everywhere)
+  const strip = (s, everywhere) => {
     let a = 0, b = s.length;
     if (!everywhere) {
-      while (a < b && StringPrototypeIncludes(set, s[a])) a++;
-      while (b > a && StringPrototypeIncludes(set, s[b - 1])) b--;
+      while (a < b && isASCIIWhitespace(s[a])) a++;
+      while (b > a && isASCIIWhitespace(s[b - 1])) b--;
     }
     let r = '';
-    for (let i = a; i < b; i++) if (!everywhere || !StringPrototypeIncludes(set, s[i])) r += s[i];
+    for (let i = a; i < b; i++) if (!everywhere || !isASCIIWhitespace(s[i])) r += s[i];
     return r;
   };
-  const StringPrototypeIncludes = uncurryThis(String.prototype.includes);
 
   // ---------------- DOMException ----------------
   // the legacy codes of the names that have one (Web IDL, DOMException names table)
@@ -113,7 +114,7 @@
   function atob(data) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'atob': 1 argument required, but only 0 present.");
     let s = String(data);
-    if (RegExpPrototypeExec(/[\t\n\f\r ]/, s) !== null) s = strip(s, '\t\n\f\r ', true);
+    if (RegExpPrototypeExec(/[\t\n\f\r ]/, s) !== null) s = strip(s, true);
     if (s.length % 4 === 0) s = s[s.length - 1] !== '=' ? s : StringPrototypeSlice(s, 0, s[s.length - 2] === '=' ? -2 : -1);
     if (s.length % 4 === 1 || RegExpPrototypeExec(/[^A-Za-z0-9+/]/, s) !== null)
       throw new DOMException("Failed to execute 'atob': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
@@ -394,7 +395,7 @@
     #pending = [];        // the bytes of an incomplete sequence a streaming decode kept
     #bomSeen = false;
     constructor(label = 'utf-8', options = undefined) {
-      const l = StringPrototypeToLowerCase(strip(String(label), '\t\n\f\r ', false));
+      const l = StringPrototypeToLowerCase(strip(String(label), false));
       if (!ArrayPrototypeIncludes(UTF8_LABELS, l)) throw new RangeError(`The encoding label provided ('${String(label)}') is invalid.`);
       if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'function')
         throw new TypeError("Failed to construct 'TextDecoder': The provided value is not of type 'TextDecoderOptions'.");
