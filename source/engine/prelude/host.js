@@ -6,6 +6,21 @@
   'use strict';
   const gc = n.gc, gcBytes = n.gcBytes, gcMaxBytes = n.gcMaxBytes, gcSuggestedMaxBytes = n.gcSuggestedMaxBytes;
   const defineProperty = Object.defineProperty;
+  // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
+  // global does not reach into the host's built-ins
+  const ObjectCreate = Object.create, ObjectKeys = Object.keys, getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  const ArrayIsArray = Array.isArray, JSONParse = JSON.parse, ReflectApply = Reflect.apply;
+  const StringCtor = String, NumberCtor = Number, TypeErrorCtor = TypeError, ErrorCtor = Error;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt);
+  const StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const StringPrototypeToUpperCase = uncurryThis(String.prototype.toUpperCase);
+  const StringPrototypePadStart = uncurryThis(String.prototype.padStart);
+  const NumberPrototypeToString = uncurryThis(Number.prototype.toString);
+  const ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
+  const WeakSetPrototypeHas = uncurryThis(WeakSet.prototype.has);
+  // a list append that defines the index (a setter on Array.prototype must not see it)
+  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
   const info = JSON.parse(infoJson);
   // the host's configuration: the goccia.json keys and their values (strings, or arrays of strings)
   shared.config = JSON.parse(configJson);
@@ -55,21 +70,26 @@
   // prototypes and its tokens ordinary objects, as the Pascal engines materialize them
   if (configFlag('experimental-ast')) {
     const rebuild = (v, plain) => {
-      if (Array.isArray(v)) return v.map((x) => rebuild(x, plain));
+      if (ArrayIsArray(v)) {
+        const a = [];
+        for (let i = 0; i < v.length; i++) append(a, rebuild(v[i], plain));
+        return a;
+      }
       if (v === null || typeof v !== 'object') return v;
-      const o = plain ? {} : Object.create(null);
-      for (const k of Object.keys(v)) o[k] = rebuild(v[k], plain);
+      const o = plain ? {} : ObjectCreate(null);
+      const keys = ObjectKeys(v);
+      for (let i = 0; i < keys.length; i++) defineProperty(o, keys[i], { value: rebuild(v[keys[i]], plain), writable: true, enumerable: true, configurable: true });
       return o;
     };
     const parse = {
       parse(source, options = undefined) {
-        if (typeof source !== 'string') throw new TypeError('parse expects the source text as a string');
+        if (typeof source !== 'string') throw new TypeErrorCtor('parse expects the source text as a string');
         const o = options !== null && typeof options === 'object' ? options : {};
         const flag = (k, d) => (o[k] === undefined ? d : !!o[k]);
         const fileName = typeof o.fileName === 'string' ? o.fileName : '<source>';
-        const raw = JSON.parse(n.astParse(source, flag('jsx', false), flag('module', true), flag('tokens', false),
+        const raw = JSONParse(n.astParse(source, flag('jsx', false), flag('module', true), flag('tokens', false),
           flag('expressions', false), fileName));
-        const result = Object.create(null);
+        const result = ObjectCreate(null);
         result.source = raw.source;
         result.comments = rebuild(raw.comments, false);
         result.root = rebuild(raw.root, false);
@@ -94,35 +114,40 @@
     const paint = (text, code, color) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
     const escapeText = (s) => {
       let out = '';
-      for (const c of s) {
-        const k = c.charCodeAt(0);
+      // by code unit: a surrogate is never escaped, so a pair comes out as it went in
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i], k = StringPrototypeCharCodeAt(s, i);
         if (c === "'") out += "\\'";
         else if (c === '\\') out += '\\\\';
         else if (k === 8) out += '\\b';
         else if (k === 9) out += '\\t';
         else if (k === 10) out += '\\n';
         else if (k === 13) out += '\\r';
-        else if (k < 32) out += '\\x' + k.toString(16).toUpperCase().padStart(2, '0');
+        else if (k < 32) out += '\\x' + StringPrototypePadStart(StringPrototypeToUpperCase(NumberPrototypeToString(k, 16)), 2, '0');
         else out += c;
       }
       return out;
     };
-    const tryCall = (fn, v) => { try { fn.call(v); return true; } catch { return false; } };
-    const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size').get;
-    const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size').get;
-    const regexpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
-    const isError = typeof Error.isError === 'function' ? Error.isError : (v) => v instanceof Error;
+    const tryCall = (fn, v) => { try { ReflectApply(fn, v, []); return true; } catch { return false; } };
+    const mapSize = uncurryThis(getOwnPropertyDescriptor(Map.prototype, 'size').get);
+    const setSize = uncurryThis(getOwnPropertyDescriptor(Set.prototype, 'size').get);
+    const regexpSource = uncurryThis(getOwnPropertyDescriptor(RegExp.prototype, 'source').get);
+    const RegExpProto = RegExp.prototype, RegExpPrototypeToString = uncurryThis(RegExp.prototype.toString);
+    const MapPrototypeEntries = uncurryThis(Map.prototype.entries), SetPrototypeValues = uncurryThis(Set.prototype.values);
+    const MapIteratorNext = uncurryThis(Object.getPrototypeOf(new Map().entries()).next);
+    const SetIteratorNext = uncurryThis(Object.getPrototypeOf(new Set().values()).next);
+    const isError = typeof Error.isError === 'function' ? Error.isError : (v) => v instanceof ErrorCtor;
     const stringify = JSON.stringify;
     const format = (v, color) => {
       if (v === undefined) return paint('undefined', '90', color);
       if (v === null) return paint('null', '1', color);
       switch (typeof v) {
         case 'string': return paint("'" + escapeText(v) + "'", '32', color);
-        case 'number': case 'boolean': return paint(String(v), '33', color);
-        case 'bigint': return paint(String(v) + 'n', '33', color);
-        case 'symbol': return paint(String(v), '32', color);
+        case 'number': case 'boolean': return paint(StringCtor(v), '33', color);
+        case 'bigint': return paint(StringCtor(v) + 'n', '33', color);
+        case 'symbol': return paint(StringCtor(v), '32', color);
         case 'function': {
-          const name = String(v.name);
+          const name = StringCtor(v.name);
           return paint(name !== '' ? `[Function: ${name}]` : '[Function (anonymous)]', '36', color);
         }
       }
@@ -133,33 +158,29 @@
         if (state[0] === 1) return 'Promise { ' + inner + ' }';
         return 'Promise { ' + paint('<rejected>', '31', color) + ' ' + inner + ' }';
       }
-      if (isError(v)) return paint(String(v.name) + ': ' + String(v.message), '31', color);
-      if (v !== RegExp.prototype && tryCall(regexpSource, v)) return paint(RegExp.prototype.toString.call(v), '31', color);
+      if (isError(v)) return paint(StringCtor(v.name) + ': ' + StringCtor(v.message), '31', color);
+      if (v !== RegExpProto && tryCall(regexpSource, v)) return paint(RegExpPrototypeToString(v), '31', color);
       if (tryCall(mapSize, v)) {
-        const size = mapSize.call(v);
+        const size = mapSize(v);
         if (size === 0) return `Map(0) {}`;
-        const parts = [];
-        let i = 0;
-        for (const [k, x] of Map.prototype.entries.call(v)) {
-          if (i >= MAX_ITEMS) { parts.push(`... ${size - MAX_ITEMS} more`); break; }
-          parts.push(format(k, color) + ' => ' + format(x, color));
-          i++;
+        const parts = [], it = MapPrototypeEntries(v);
+        for (let r = MapIteratorNext(it), i = 0; !r.done; r = MapIteratorNext(it), i++) {
+          if (i >= MAX_ITEMS) { append(parts, `... ${size - MAX_ITEMS} more`); break; }
+          append(parts, format(r.value[0], color) + ' => ' + format(r.value[1], color));
         }
-        return `Map(${size}) { ` + parts.join(', ') + ' }';
+        return `Map(${size}) { ` + ArrayPrototypeJoin(parts, ', ') + ' }';
       }
       if (tryCall(setSize, v)) {
-        const size = setSize.call(v);
+        const size = setSize(v);
         if (size === 0) return `Set(0) {}`;
-        const parts = [];
-        let i = 0;
-        for (const x of Set.prototype.values.call(v)) {
-          if (i >= MAX_ITEMS) { parts.push(`... ${size - MAX_ITEMS} more`); break; }
-          parts.push(format(x, color));
-          i++;
+        const parts = [], it = SetPrototypeValues(v);
+        for (let r = SetIteratorNext(it), i = 0; !r.done; r = SetIteratorNext(it), i++) {
+          if (i >= MAX_ITEMS) { append(parts, `... ${size - MAX_ITEMS} more`); break; }
+          append(parts, format(r.value, color));
         }
-        return `Set(${size}) { ` + parts.join(', ') + ' }';
+        return `Set(${size}) { ` + ArrayPrototypeJoin(parts, ', ') + ' }';
       }
-      return String(stringify(v, null, '  '));
+      return StringCtor(stringify(v, null, '  '));
     };
     shared.replFormat = format;
   }
@@ -172,11 +193,11 @@
     // the engine's time origin (the epoch time it started at, taken again once a host's clock is in place: a
     // deterministic run's is 0); every realm of the engine shares it
     const brand = new WeakSet();
-    const check = (o) => { if (!brand.has(o)) throw new TypeError('Illegal invocation'); };
-    const Performance = { Performance() { throw new TypeError('Illegal constructor'); } }.Performance;
+    const check = (o) => { if (!WeakSetPrototypeHas(brand, o)) throw new TypeErrorCtor('Illegal invocation'); };
+    const Performance = { Performance() { throw new TypeErrorCtor('Illegal constructor'); } }.Performance;
     const proto = {};
     const members = {
-      now() { check(this); return Reflect.apply(nowFn, host, []); },
+      now() { check(this); return ReflectApply(nowFn, host, []); },
       get timeOrigin() { check(this); return n.timeOrigin(); },
       toJSON() { check(this); return { timeOrigin: n.timeOrigin() }; }
     };
@@ -195,14 +216,17 @@
   // PlainMonthDay.from converts it
   const Temporal = G.Temporal;
   if (Temporal && Temporal.PlainMonthDay && !Object.prototype.hasOwnProperty.call(Temporal.PlainMonthDay, 'compare')) {
-    const PMD = Temporal.PlainMonthDay;
-    const monthOf = (md) => Number(md.monthCode.slice(1, 3));
+    const PMD = Temporal.PlainMonthDay, PMDFrom = PMD.from;
+    const monthCodeOf = uncurryThis(getOwnPropertyDescriptor(PMD.prototype, 'monthCode').get);
+    const dayOf = uncurryThis(getOwnPropertyDescriptor(PMD.prototype, 'day').get);
+    const monthOf = (md) => NumberCtor(StringPrototypeSlice(monthCodeOf(md), 1, 3));
     const compare = {
       compare(one, two) {
-        const a = PMD.from(one), b = PMD.from(two);
+        const a = ReflectApply(PMDFrom, PMD, [one]), b = ReflectApply(PMDFrom, PMD, [two]);
         const ma = monthOf(a), mb = monthOf(b);
         if (ma !== mb) return ma < mb ? -1 : 1;
-        return a.day === b.day ? 0 : a.day < b.day ? -1 : 1;
+        const da = dayOf(a), db = dayOf(b);
+        return da === db ? 0 : da < db ? -1 : 1;
       }
     }.compare;
     defineProperty(PMD, 'compare', { value: compare, writable: true, enumerable: false, configurable: true });
@@ -212,7 +236,7 @@
 
   // PermissionDenied (docs/permissions.md): the error a permission check throws, an Error subclass callable without
   // new, like the native error constructors (its instances have [[ErrorData]], so Error.isError holds)
-  const reflectConstruct = Reflect.construct, ErrorCtor = Error;
+  const reflectConstruct = Reflect.construct;
   const PermissionDenied = function PermissionDenied(message) {
     const args = arguments.length > 1 ? [message, arguments[1]] : [message];
     return reflectConstruct(ErrorCtor, args, new.target === undefined ? PermissionDenied : new.target);
