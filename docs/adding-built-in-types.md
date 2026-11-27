@@ -188,10 +188,43 @@ def(G, "WeakMap", WeakMap);
 
 - **`markIntrinsic`** marks the class a built-in, so a construction whose new.target has no object `prototype` falls back to the class's own prototype, as a built-in constructor's does.
 - **Non-enumerable globals.** `def` defines the global writable, configurable and not enumerable, as built-ins are.
-- **Captured intrinsics.** Call through captured functions (`apply`, `defineProperty`, `MapCtor`), never through globals a script can replace.
+- **Captured intrinsics.** Call only what the prelude captured when it ran, never a global or a prototype method a script can replace; see [Captured intrinsics](#captured-intrinsics).
 - **Native source.** A prelude's functions keep no source text: `Function.prototype.toString` gives them native-function syntax.
 - **ASCII only.** The build turns each prelude into a Pascal string constant and fails on a non-ASCII character; write `\u` escapes instead.
 - **The whole language.** Preludes compile under the unrestricted language profile, whatever the host's compatibility flags.
+
+### Captured intrinsics
+
+A prelude runs before any script, so what it captures then is the realm's own. A built-in it defines looks up
+nothing a script can replace at call time, except where the specification says the lookup is observable (a
+species constructor, a user iterator's `next`, `Get(options, "calendar")`), as an ECMA-262 algorithm calls abstract
+operations rather than observable methods.
+
+- **Globals.** Bind each global a function body uses at the top: `const { TypeError, String } = G;`, or a
+  renamed local (`var TypeErr = TypeError`). Capture static functions too (`var ObjectKeys = Object.keys`,
+  `MathFloor = Math.floor`): `Math.floor(x)` reads `floor` from the live `Math`.
+- **Prototype methods.** Capture each one uncurried and call it with the receiver first:
+  `var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);`
+  `var StringPrototypeSlice = uncurryThis(String.prototype.slice);` then `StringPrototypeSlice(s, 1, 2)`. Getters
+  the same way (`uncurryThis(getOwnPropertyDescriptor(Map.prototype, 'size').get)`), including a typed array's
+  `length`, `buffer` and `byteOffset`. `ReflectApply(f, this, args)` replaces `f.call` and `f.apply`.
+- **Lists.** Append with `defineProperty` (an index setter on `Array.prototype` must not see the value). Do not call
+  `map`, `filter`, `slice`, `concat`, `splice` or `flat` on a list the prelude made: they look up the array's
+  `constructor` and `Symbol.species`; write the loop. The same holds for a typed array's `slice` and `subarray`
+  and an `ArrayBuffer`'s `slice`.
+- **Iteration.** No `for...of`, spread or array destructuring over a list, string, `Map` or `Set` the prelude
+  made: each looks up `Symbol.iterator` and `next` on the live prototypes. Index loops, `MapPrototypeForEach`, and
+  `ReflectApply(f, undefined, args)` instead of `f(...args)`. Keep the protocol where the specification iterates a
+  value the caller passed (Web IDL sequences, `GetIterator`).
+- **RegExp.** `RegExpPrototypeExec(re, s)` (RegExpBuiltinExec) for a pattern the prelude made; `test`, `match`,
+  `replace` and `split` look up `exec`, `flags` and the `Symbol` methods.
+- **Promises.** `await` a promise rather than calling its `then`, as the specification's Await does.
+
+`tests/built-ins/prelude-intrinsics` holds a tripwire test for each prelude: `installTripwire()` turns every
+configurable property of the global object, of each intrinsic it reaches and of the hidden iterator prototypes into
+an accessor that records its own lookup, and `invoke` / `construct` / `covers` run a built-in and return those
+lookups. A test allows only what the specification makes observable for its input, and `uncovered(owner)` requires
+a case for each method and getter. `scripts/check-test-structure.ts` fails when a prelude has no tripwire test.
 
 ### A new prelude file
 
@@ -388,7 +421,7 @@ Use this checklist when adding a new built-in type:
 2. **Heap values in untraced fields** — `Native` and `Pad` are not traced: a value kept there is freed or moved under it.
 3. **A missing write barrier** — Storing a young object into an old object's `Aux1` without `WriteBarrier` hides it from the next minor collection, which then moves it and leaves `Aux1` pointing at its old place.
 4. **Unregistered realm state** — A threadvar the Init procedure fills but does not pass to `RealmVals` is not saved and restored by `SwitchRealm`, so every realm sees the value the newest realm's Init procedure left there. `GOCCIA_REALMCHECK` finds these.
-5. **Calling through replaceable globals in a prelude** — `Array.prototype.push` or `Object.defineProperty` read at call time observe a script's changes. Capture them when the prelude runs.
+5. **Calling through replaceable globals in a prelude** — `Array.prototype.push`, `Math.floor`, a `for...of` over an array or `re.test(s)` read at call time observe a script's changes. Capture what the prelude calls when it runs ([Captured intrinsics](#captured-intrinsics)); the prelude's tripwire test fails on any lookup it missed.
 6. **Forgetting `markIntrinsic`** — Without it, `Reflect.construct(PreludeClass, [], newTargetWithoutPrototype)` gets `Object.prototype` instead of the class's prototype.
 7. **Exceptions for JavaScript errors** — A native signals a throw by returning `False` with `Pending` set, never by raising a Pascal exception.
 8. **Formatting** — The engine's Pascal is outside `./format.pas`; follow the style of the surrounding unit.

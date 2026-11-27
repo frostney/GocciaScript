@@ -878,10 +878,16 @@
     }
     return closeWithComma ? out + s.spacingOuter + indentation : out + indentation;
   }
+  const Int8ArrayCtor = global.Int8Array, TAP = ObjectGetPrototypeOf(global.Int8Array.prototype);
+  const taBuffer = uncurryThis(getOwnPropertyDescriptor(TAP, 'buffer').get);
+  const taByteOffset = uncurryThis(getOwnPropertyDescriptor(TAP, 'byteOffset').get);
+  const taLength = uncurryThis(getOwnPropertyDescriptor(TAP, 'length').get);
+  const symbolValueOf = Symbol.prototype.valueOf;
   function formatBytes(name, view, s, indentation) {
-    if (view.length === 0) return name + ' []';
-    const signed = new Int8Array(view.buffer, view.byteOffset, view.length);
-    return name + ' [' + listBody(signed.length, (i) => String(signed[i]), s, indentation, false) + ']';
+    const length = taLength(view);
+    if (length === 0) return name + ' []';
+    const signed = new Int8ArrayCtor(taBuffer(view), taByteOffset(view), length);
+    return name + ' [' + listBody(length, (i) => String(signed[i]), s, indentation, false) + ']';
   }
   function format(v, s, indentation, depth, refs, calledToJSON) {
     const fromPlugin = formatWithSerializer(v, s, indentation, depth, refs);
@@ -898,7 +904,7 @@
     }
     if (isMock(v)) return formatMockValue(v, s, indentation, depth, refs);
     if (typeof v === 'function') return '[Function]';
-    if (brand(Symbol.prototype.valueOf)(v)) return String(apply(Symbol.prototype.valueOf, v, []));
+    if (brand(symbolValueOf)(v)) return String(apply(symbolValueOf, v, []));
     if (isWeakMap(v)) return 'WeakMap {}';
     if (isWeakSet(v)) return 'WeakSet {}';
     if (isError(v)) {
@@ -1080,7 +1086,7 @@
       const matched = !hasProperties || snapshotPartialEqual(actual, properties);
       const received = addSnapshotLineBreaks(formatSnapshot(matched && hasProperties ?
         mergePropertyShape(actual, properties) : actual));
-      const [ok, message] = snapshotNatives.matchExternal(snapshotTestName, hint, received, matched);
+      const outcome = snapshotNatives.matchExternal(snapshotTestName, hint, received, matched), ok = outcome[0], message = outcome[1];
       if (ok) passed(); else failed(message);
     }
     toMatchInlineSnapshot(...args) {
@@ -1106,8 +1112,9 @@
       const matched = !hasProperties || snapshotPartialEqual(actual, properties);
       const received = addSnapshotLineBreaks(formatSnapshot(matched && hasProperties ?
         mergePropertyShape(actual, properties) : actual));
-      const [ok, message] = snapshotNatives.matchInline(snapshotTestName, hint, received, inline, hasInline, matched,
+      const outcome = snapshotNatives.matchInline(snapshotTestName, hint, received, inline, hasInline, matched,
         argumentIndex);
+      const ok = outcome[0], message = outcome[1];
       if (ok) passed(); else failed(message);
     }
     toContainEqual(...args) {
@@ -1410,11 +1417,13 @@
       return apply(promiseThen, actual, [
         (v) => {
           if (mode === 'rejects') failed('Expected Promise to reject but it resolved with: ' + show(v));
-          return new Expectation(v, negated, false)[name](...args);
+          const ex = new Expectation(v, negated, false);
+          return apply(ex[name], ex, args);
         },
         (e) => {
           if (mode === 'resolves') failed('Expected Promise to resolve but it rejected with: ' + show(e));
-          return new Expectation(e, negated, true)[name](...args);
+          const ex = new Expectation(e, negated, true);
+          return apply(ex[name], ex, args);
         }]);
     }
     static forward(name) {
@@ -1521,7 +1530,7 @@
   }
   function spyOn(...args) {
     if (args.length < 2) requireExactly(args, 2, 'spyOn');
-    const [obj, key, access] = args;
+    const obj = args[0], key = args[1], access = args[2];
     if (!isObject(obj)) throw new TypeError('spyOn expects first argument to be an object');
     if (typeof key !== 'string') throw new TypeError('spyOn expects second argument to be a string (method name)');
     if (!(key in obj)) throw new TypeError(`spyOn: cannot spy on non-existent property "${key}"`);
