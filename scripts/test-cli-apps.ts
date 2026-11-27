@@ -9864,6 +9864,7 @@ await section("Runner: an aborted fetch frees its slot at once, so requests queu
   // handshakes (OpenSSL, SecureTransport or SChannel). The first runs have no
   // deadline, so the hung sockets have no timeout; the last has a run
   // deadline, which sends each connection attempt through a thread of its own.
+  // Then the same through the test runner's per-test timeout.
   let connections = 0;
   const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { connections++; }, data() {} } });
   const answering = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
@@ -9907,6 +9908,29 @@ await section("Runner: an aborted fetch frees its slot at once, so requests queu
       if (connections !== 16)
         throw new Error(`${label}: sixteen requests should have run and the waiting four never connected: ${connections} connections`);
     }
+
+    // A timed-out test drops its requests as an abort does: sixteen tests that
+    // each time out on the silent server leave the last test the slots. The
+    // per-test timeout also gives each socket a timeout, 100 ms plus 2 s of
+    // slack, which the sixteen tests end well before.
+    const suite = join(tmp, "slots.test.js");
+    const lines = ['describe("slots", () => {'];
+    for (const i of Array.from({ length: 16 }, (_, k) => k))
+      lines.push(`  test("hangs ${i}", async () => { await fetch("http://127.0.0.1:${silent.port}/${i}"); });`);
+    lines.push(`  test("still fetches", async () => { expect((await fetch("http://127.0.0.1:${answering.port}/")).status).toBe(200); });`);
+    lines.push("});", "");
+    writeFileSync(suite, lines.join("\n"));
+    const reportPath = join(tmp, "slots.json");
+    const tests = Bun.spawn(
+      [resolve(TESTRUNNER), suite, "-P", "--allow-net=127.0.0.1", "--test-timeout=100", "--no-progress", `--output=${reportPath}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+    );
+    await new Response(tests.stdout).text();
+    await tests.exited;
+    const report = JSON.parse(readFileSync(reportPath, "utf-8"));
+    const failures: string[] = report.files?.[0]?.failedTests ?? [];
+    if (report.failed !== 16 || report.passed !== 1)
+      throw new Error(`16 tests timed out on a silent server should leave the last test a slot, got ${report.passed}/${report.failed}: ${failures.join(", ")}`);
   } finally {
     silent.stop(true);
     answering.stop(true);
