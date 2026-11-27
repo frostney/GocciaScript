@@ -110,6 +110,8 @@ with tempfile.TemporaryDirectory(prefix="goccia-yaml-runner-check-") as director
 
     code, outcomes, output = run(root, suite, extra=[f"--known-failures={root / 'pin'}"])
     expect(code == 2, f"the removed --known-failures option is an unusable invocation, got {code}", output)
+    code, outcomes, output = run(root, suite, extra=["--known-failures"])
+    expect(code == 2, f"a bare --known-failures is an unusable invocation, got {code}", output)
 
     root = Path(directory) / "failing"
     root.mkdir()

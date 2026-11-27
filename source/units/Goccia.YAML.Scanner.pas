@@ -129,6 +129,9 @@ type
     FMark: TGocciaYAMLMarker;
     { the Unicode characters before FPosition, a surrogate pair counting once }
     FCharacterIndex: Integer;
+    { inside a quoted scalar, where any character but a C0 control may stand
+      (nb-json, 7.3) }
+    FInQuotedScalar: Boolean;
     { the queued tokens: FTokenCount of them from FTokenHead on }
     FTokenBuffer: array of TGocciaYAMLToken;
     FTokenHead: Integer;
@@ -384,6 +387,30 @@ begin
   Result := IsURICharacter(C) and not IsFlowCharacter(C) and (C <> '!');
 end;
 
+{ a verbatim tag is not resolved, so it is a local tag ("!" and a name) or a
+  global one, a URI, which starts with a scheme (RFC 3986 3.1) (6.9.1) }
+function IsVerbatimTagName(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  if AName = '' then
+    Exit(False);
+  if AName[1] = '!' then
+    Exit(Length(AName) > 1);
+  if not (((AName[1] >= 'a') and (AName[1] <= 'z')) or
+          ((AName[1] >= 'A') and (AName[1] <= 'Z'))) then
+    Exit(False);
+  for I := 2 to Length(AName) do
+  begin
+    if AName[I] = ':' then
+      Exit(True);
+    if not (IsAlphaCharacter(AName[I]) and (AName[I] <> '_')) and
+       (AName[I] <> '+') and (AName[I] <> '.') then
+      Exit(False);
+  end;
+  Result := False;
+end;
+
 { the UTF-16 text of a code point }
 function CodePointText(const ACodePoint: Cardinal): string;
 var
@@ -527,13 +554,34 @@ end;
 { the code unit at FPosition starts a character unless it is the low half of
   a surrogate pair }
 procedure TGocciaYAMLScanner.CountCharacter;
+var
+  Code: Integer;
+  PairedLow, PairedHigh: Boolean;
 begin
-  if not ((FPosition > 1) and (FPosition <= Length(FText)) and
-          (Ord(FText[FPosition]) >= LOW_SURROGATE_BASE) and
-          (Ord(FText[FPosition]) <= LAST_SURROGATE) and
-          (Ord(FText[FPosition - 1]) >= HIGH_SURROGATE_BASE) and
-          (Ord(FText[FPosition - 1]) < LOW_SURROGATE_BASE)) then
+  if FPosition > Length(FText) then
+    Exit;
+  Code := Ord(FText[FPosition]);
+  PairedLow := (Code >= LOW_SURROGATE_BASE) and (Code <= LAST_SURROGATE) and
+    (FPosition > 1) and (Ord(FText[FPosition - 1]) >= HIGH_SURROGATE_BASE) and
+    (Ord(FText[FPosition - 1]) < LOW_SURROGATE_BASE);
+  if not PairedLow then
     Inc(FCharacterIndex);
+  // the printable characters (5.1): no unpaired surrogate anywhere, and
+  // outside a quoted scalar no DEL, no C1 control but NEL, and no
+  // U+FFFE or U+FFFF
+  if (Code >= FIRST_SURROGATE) and (Code <= LAST_SURROGATE) and not PairedLow then
+  begin
+    PairedHigh := (Code < LOW_SURROGATE_BASE) and (FPosition < Length(FText)) and
+      (Ord(FText[FPosition + 1]) >= LOW_SURROGATE_BASE) and
+      (Ord(FText[FPosition + 1]) <= LAST_SURROGATE);
+    if not PairedHigh then
+      RaiseError(FMark, Format('found the unpaired surrogate U+%.4X', [Code]));
+  end
+  else if not FInQuotedScalar and ((Code = $7F) or
+          ((Code >= $80) and (Code <= $9F) and (Code <> $85)) or
+          (Code = $FFFE) or (Code = $FFFF)) then
+    RaiseError(FMark, Format(
+      'found the character U+%.4X, which YAML text holds only in a quoted scalar', [Code]));
 end;
 
 procedure TGocciaYAMLScanner.SkipBlank;
@@ -1394,6 +1442,8 @@ begin
       'while scanning a verbatim tag, did not find the expected ''>''');
   SkipNonBlank;
   Result := Buffer.ToString;
+  if not IsVerbatimTagName(Result) then
+    RaiseError(AMark, 'a verbatim tag must be a local tag "!name" or a URI');
 end;
 
 { a tag's suffix: AHead, without its "!", and the tag characters after it }
@@ -1898,6 +1948,7 @@ begin
 
   // the opening quote
   SkipNonBlank;
+  FInQuotedScalar := True;
   while True do
   begin
     if (FMark.Column = 0) and NextIsDocumentIndicator then
@@ -1999,6 +2050,7 @@ begin
 
   // the closing quote, then nothing but a comment, a flow indicator or a
   // ":" may follow on the line
+  FInQuotedScalar := False;
   SkipNonBlank;
   SkipWhitespaceToEndOfLine(True);
   if not (((FFlowLevel > 0) and ((Peek = ',') or (Peek = '}') or (Peek = ']'))) or
@@ -2295,6 +2347,7 @@ procedure TGocciaYAMLScanner.FetchValue;
 var
   IsExplicitValue, IsImplicitFlowMapping, TabSeparated: Boolean;
   Key: TSimpleKey;
+  StartCharacterIndex: Integer;
   StartMark: TGocciaYAMLMarker;
   Top: Integer;
 begin
@@ -2302,6 +2355,7 @@ begin
     RaiseError(FMark, 'simple key expected');
   Key := FSimpleKeys[LastSimpleKey];
   StartMark := FMark;
+  StartCharacterIndex := FCharacterIndex;
   Top := FFlowStateCount - 1;
   IsImplicitFlowMapping := (Top >= 0) and
     (FImplicitFlowMappingStates[Top] <> imsNone) and not FFlowMappingStarted[Top];
@@ -2321,6 +2375,9 @@ begin
     begin
       if Key.Mark.Line < StartMark.Line then
         RaiseError(StartMark, 'illegal placement of '':'' indicator');
+      // a pair's implicit key is short too (7.4.2), unlike a key in braces
+      if Key.CharacterIndex + MAX_SIMPLE_KEY_LENGTH < StartCharacterIndex then
+        RaiseError(StartMark, 'an implicit key is at most 1024 characters long');
       InsertToken(Key.TokenNumber - FTokensParsed,
         NewToken(ytkFlowMappingStart, Key.Mark, Key.Mark));
     end;

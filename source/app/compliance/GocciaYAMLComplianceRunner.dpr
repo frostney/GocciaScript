@@ -719,7 +719,8 @@ begin
     Exit(2);
   end;
   // the known-failures list is gone: every case must pass
-  if ReadOptionValue('known-failures', OutputPath) then
+  if ReadOptionValue('known-failures', OutputPath) or
+     HasCommandLineFlag('known-failures') then
   begin
     WriteLn(StdErr, 'Error: --known-failures was removed; every case must pass, ',
       'so run without it');

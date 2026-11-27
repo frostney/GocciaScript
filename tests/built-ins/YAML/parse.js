@@ -332,6 +332,33 @@ m:
     expect(() => YAML.parse("x".repeat(1025) + ": 1")).toThrow(SyntaxError);
   });
 
+  test("limits a flow sequence pair's implicit key to 1024 characters", () => {
+    expect(() => YAML.parse("[" + "x".repeat(1025) + ": 1]")).toThrow(SyntaxError);
+    expect(YAML.parse("[" + "x".repeat(1024) + ": 1]")[0]["x".repeat(1024)]).toBe(1);
+    // a key in braces has no limit
+    expect(YAML.parse("{" + "x".repeat(1025) + ": 1}")["x".repeat(1025)]).toBe(1);
+  });
+
+  test("holds DEL, C1 controls and noncharacters only in quoted scalars", () => {
+    expect(() => YAML.parse("a: \u007fb\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: \u0086b\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("# \u007f\na: 1\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: |\n  \uffff\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: \ud800\n")).toThrow(SyntaxError);
+    expect(YAML.parse('a: "\u007f\u0086\uffff"\nb: x\u0085y\n')).toEqual({
+      a: "\u007f\u0086\uffff",
+      b: "x\u0085y",
+    });
+  });
+
+  test("rejects verbatim tags that are no tag", () => {
+    // YAML 1.2.2 6.9.1
+    expect(() => YAML.parse("!<> x")).toThrow(SyntaxError);
+    expect(() => YAML.parse("!<!> 12")).toThrow(SyntaxError);
+    expect(() => YAML.parse("!<$:?> x")).toThrow(SyntaxError);
+    expect(YAML.parse("!<!bar> x").tagName).toBe("!bar");
+  });
+
   test("rejects C0 control characters in the text", () => {
     expect(() => YAML.parse("a: \u0001b\n")).toThrow(SyntaxError);
     expect(() => YAML.parse('"a\u0007"\n')).toThrow(SyntaxError);
