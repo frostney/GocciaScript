@@ -251,19 +251,17 @@ begin
   APort := ntohs(Address.sin_port);
 end;
 
-{ Opens a TCP listener on an ephemeral 127.0.0.1 port into AListener, which
-  stays -1 until the listener is open, so a server whose constructor raises
-  here has nothing for CloseListener to close when it is freed. }
-procedure OpenLoopbackListener(out AListener: cint; out APort: Word);
+{ A TCP listener on an ephemeral 127.0.0.1 port. }
+function CreateLoopbackListener(out APort: Word): cint;
 begin
-  AListener := -1;
-  AListener := TryCreateLoopbackListener(APort, 0, True);
-  if AListener < 0 then
+  Result := TryCreateLoopbackListener(APort, 0, True);
+  if Result < 0 then
     raise Exception.Create('loopback listener failed');
 end;
 
-{ Closes a server's listener unless it was never opened (-1). A descriptor
-  field left at its initial 0 would close the process's standard input. }
+{ Closes a server's listener unless it was never opened. Each server sets
+  its listener to -1 before anything in its constructor can raise: left at
+  its initial 0, it would close the process's standard input. }
 procedure CloseListener(const AListener: cint);
 begin
   if AListener >= 0 then
@@ -298,7 +296,8 @@ end;
   127.0.0.1 listens only when AListenIPv4, so without it a connection there
   is refused. The kernel picks the IPv6 port and knows nothing of what holds
   that number on 127.0.0.1, so a pair whose IPv4 half is taken is dropped
-  and a fresh one tried. }
+  and a fresh one tried, up to ATTEMPTS times. A dropped port can be picked
+  again. }
 procedure CreateLoopbackPortPair(out AIPv6Listener, AIPv4Listener: cint;
   out APort: Word; const AListenIPv4: Boolean);
 const
@@ -322,7 +321,7 @@ begin
     CloseSocket(AIPv6Listener);
   end;
   raise Exception.CreateFmt(
-    'no port was free on both ::1 and 127.0.0.1 in %d tries', [ATTEMPTS]);
+    'found no port free on both ::1 and 127.0.0.1 in %d tries', [ATTEMPTS]);
 end;
 {$ENDIF}
 
@@ -534,11 +533,12 @@ constructor TCannedResponseServer.Create(
 var
   I: Integer;
 begin
+  FListener := -1;
   SetLength(FResponses, Length(AResponses));
   SetLength(FRequestHeads, Length(AResponses));
   for I := 0 to High(AResponses) do
     FResponses[I] := AResponses[I];
-  OpenLoopbackListener(FListener, Port);
+  FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
 
@@ -714,7 +714,8 @@ end;
 
 constructor TTricklingTLSServer.Create;
 begin
-  OpenLoopbackListener(FListener, Port);
+  FListener := -1;
+  FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
 
@@ -903,17 +904,19 @@ type
 
 constructor TSilentTLSServer.Create(const ACertificateFile, AKeyFile: string);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FRelease := RTLEventCreate;
-  OpenLoopbackListener(FListener, Port);
+  FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
 
 destructor TSilentTLSServer.Destroy;
 begin
   CloseListener(FListener);
-  RTLEventDestroy(FRelease);
+  if FRelease <> nil then
+    RTLEventDestroy(FRelease);
   inherited Destroy;
 end;
 
@@ -1411,10 +1414,11 @@ type
 constructor TResettingTLSServer.Create(const ACertificateFile,
   AKeyFile: string; const AResetBeforeNextRequest: Boolean);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FResetBeforeNextRequest := AResetBeforeNextRequest;
-  OpenLoopbackListener(FListener, Port);
+  FListener := CreateLoopbackListener(Port);
   inherited Create;
 end;
 
@@ -1577,10 +1581,11 @@ type
 constructor TAnsweringTLSServer.Create(const ACertificateFile,
   AKeyFile: string; const AConnections: Integer);
 begin
+  FListener := -1;
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
   FConnections := AConnections;
-  OpenLoopbackListener(FListener, Port);
+  FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
 
@@ -2285,7 +2290,8 @@ type
 constructor TKeepAliveServer.Create(
   const AResponses: array of RawByteString);
 begin
-  OpenLoopbackListener(FListener, Port);
+  FListener := -1;
+  FListener := CreateLoopbackListener(Port);
   Create(AResponses, FListener, Port);
 end;
 
