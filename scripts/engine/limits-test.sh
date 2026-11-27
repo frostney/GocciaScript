@@ -32,7 +32,7 @@ check typed-fill-budget --max-instructions=50 'Fatal error: Execution exceeded i
 TA_CAP=--max-instructions=200
 TA_LIMIT='Fatal error: Execution exceeded instruction limit of 200'
 check typed-loop-control "$TA_CAP" '42' 'const a = new Int32Array(1); a.indexOf(1); console.log(42);'
-check typed-from-array-like-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); Int32Array.from({ length: 100000 }); console.log(42);'
+check typed-from-array-like-budget "$TA_CAP" "$TA_LIMIT" 'Int32Array.from({ length: 100000 }); console.log(42);'
 check typed-map-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.map(Math.abs); console.log(42);'
 check typed-for-each-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.forEach(Math.abs); console.log(42);'
 check typed-every-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.every(Number.isInteger); console.log(42);'
@@ -48,6 +48,7 @@ check typed-slice-same-type-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Arr
 check typed-to-reversed-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.toReversed(); console.log(42);'
 check typed-with-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); a.with(0, 1); console.log(42);'
 check typed-construct-convert-budget "$TA_CAP" "$TA_LIMIT" 'const a = new Int32Array(100000); new Float64Array(a); console.log(42);'
+check typed-construct-bigint-convert-budget "$TA_CAP" "$TA_LIMIT" 'new BigUint64Array(new BigInt64Array(100000)); console.log(42);'
 check typed-slice-convert-budget "$TA_CAP" "$TA_LIMIT" \
   'class G extends Float64Array { static get [Symbol.species]() { return Int32Array; } } new G(100000).slice(); console.log(42);'
 check typed-filter-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
