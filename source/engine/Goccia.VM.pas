@@ -11038,11 +11038,13 @@ end;
 { ---------------- entry ---------------- }
 
 {$IFDEF GOCCIA_JIT}
-{ unmaps the code this thread's engine published, and empties its list }
+{ unmaps the code this thread's engine published, and empties its list. At process exit the registry's cleanup runs
+  after the RTL released the main thread's managed threadvars: the list is gone while its count is not, and the
+  kernel takes the mappings with the process }
 procedure JitReleaseCodeMappings;
 var I: Integer; Mapping: TJitCodeMapping;
 begin
-  for I := 0 to JitCodeMappingCount - 1 do
+  for I := 0 to Min(JitCodeMappingCount, Length(JitCodeMappings)) - 1 do
   begin
     Mapping := JitCodeMappings[I];
     Fpmunmap(Mapping.Address, Mapping.Size);
