@@ -49,6 +49,7 @@ type
     synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
     has no such module (a file is then read as JavaScript), -1 with an error pending }
   THostModuleHook = function(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
+  THostModuleKeyHook = function(const Key: UnicodeString): Boolean;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
     an absolute path), RealPath the canonical file path checked by the host when available, and VirtualKey set for
@@ -57,7 +58,7 @@ type
     out VirtualKey: Boolean): Integer;
 
 { this thread's host module hook (nil: none) }
-procedure SetHostModuleHook(Hook: THostModuleHook);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil);
 { 16.2.1.10 HostGetImportMetaProperties / HostFinalizeImportMeta: the host fills a module's import.meta (made
   with a null prototype) once, given the module's path; nil leaves it empty }
 var ImportMetaInitHook: function(Meta: TValue; const Path: UnicodeString): Boolean = nil;
@@ -286,6 +287,7 @@ end;
 
 threadvar
   HostModules: THostModuleHook;
+  HostModuleKey: THostModuleKeyHook;
   HostResolve: THostResolveHook;
   FileRead: TFileReadHook;
   FileTime: TFileTimeHook;
@@ -454,9 +456,10 @@ begin
   Result := True;
 end;
 
-procedure SetHostModuleHook(Hook: THostModuleHook);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook);
 begin
   HostModules := Hook;
+  HostModuleKey := KeyHook;
 end;
 
 procedure SetHostResolveHook(Hook: THostResolveHook);
@@ -798,22 +801,29 @@ begin
   ArtifactCheck := Check;
 end;
 
-procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
-var Gbc: TModuleAddress;
-begin
-  ProvidedArtifactPath := Path;
-  Gbc := HostFileAddress(GbcPath);
-  if Gbc.RealPath <> '' then ProvidedArtifactRealPath := ArtifactModulePath(Gbc.RealPath, Path)
-  else ProvidedArtifactRealPath := '';
-  ProvidedArtifactBytes := Bytes;
-end;
-
 function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
 var Ext: UnicodeString;
 begin
   Ext := UnicodeString(ExtractFileExt(string(SourcePath)));
   if (Ext = '') or SameText(string(Ext), '.gbc') then Ext := '.js';
   Result := UnicodeString(ChangeFileExt(string(GbcPath), string(Ext)));
+end;
+
+{ Follow a source file alias too. A standalone artifact still has a logical source address. }
+function ArtifactRealModulePath(const Gbc: TModuleAddress; const Path: UnicodeString): UnicodeString;
+var SourcePath: UnicodeString;
+begin
+  if Gbc.RealPath = '' then Exit(HostRealFilePath(Path));
+  SourcePath := ArtifactModulePath(Gbc.RealPath, Path);
+  Result := HostRealFilePath(SourcePath);
+  if Result = '' then Result := SourcePath;
+end;
+
+procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
+begin
+  ProvidedArtifactPath := Path;
+  ProvidedArtifactRealPath := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
+  ProvidedArtifactBytes := Bytes;
 end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
@@ -936,7 +946,7 @@ begin
     Exit(ThrowError('Error', 'Cannot load bytecode module ''' + Gbc.Path + ''': ' + Err));
   Address := Default(TModuleAddress);
   Address.Path := ArtifactModulePath(Gbc.Path, Src);
-  if Gbc.RealPath <> '' then Address.RealPath := ArtifactModulePath(Gbc.RealPath, Src);
+  Address.RealPath := ArtifactRealModulePath(Gbc, Address.Path);
   M := FindModule(Address);
   if Assigned(M) then
   begin
@@ -969,7 +979,7 @@ begin
   end;
   { bytecode: the provided entry, or a .gbc file }
   if not Address.VirtualKey and (Address.ModuleType = '') and
-     SameText(ExtractFileExt(string(Address.FilePath)), '.gbc') then
+     SameText(ExtractFileExt(string(Path)), '.gbc') then
     Exit(LoadArtifactModule(Address, M));
   M := FindModule(Address);
   if (M = nil) and (Address.ModuleType = '') and (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) then
@@ -2246,11 +2256,20 @@ begin
 end;
 
 function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
-var M: TModRec;
+var M: TModRec; Address: TModuleAddress; IsHostKey: THostModuleKeyHook;
 begin
   T := nil;
   Hash := 0;
-  Result := LoadModule(HostFileAddress(Path), M);
+  { The snapshot stores a resolved address. Check the registry without applying import maps again. }
+  IsHostKey := HostModuleKey;
+  if (Path <> ProvidedPath) and Assigned(IsHostKey) and IsHostKey(Path) then
+  begin
+    Address := Default(TModuleAddress);
+    Address.Path := Path;
+    Address.VirtualKey := True;
+  end
+  else Address := HostFileAddress(Path);
+  Result := LoadModule(Address, M);
   if Result then
   begin
     T := M.Tpl;

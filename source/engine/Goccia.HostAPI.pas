@@ -2098,7 +2098,7 @@ begin
       GetV(SharedV, AtomOf('hasHostModule'), HasHostModuleV);
     if Result then
     begin
-      SetHostModuleHook(@HostModule);
+      SetHostModuleHook(@HostModule, @IsHostModuleKey);
       ImportMetaInitHook := @HostInitImportMeta;
       JSONExportsHook := @HostJSONExports;
       SetHostResolveHook(@HostResolveSpec);

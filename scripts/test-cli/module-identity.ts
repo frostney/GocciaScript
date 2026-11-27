@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BUNDLER, RUNNER, TESTRUNNER } from "./binaries";
 import { clean, mkdtemp } from "./tmpdir";
@@ -17,9 +17,9 @@ export function verifyModuleIdentity() {
 
   function run(binary: string, ...args: string[]) {
     const proc = Bun.spawnSync([resolve(binary), ...args], { cwd: project, stdout: "pipe", stderr: "pipe" });
-    const stdout = proc.stdout.toString();
-    assert.equal(proc.exitCode, 0, `${binary} ${args.join(" ")}\n${stdout}${proc.stderr}`);
-    return stdout.replaceAll("\r\n", "\n");
+    const output = `${proc.stdout}${proc.stderr}`.replaceAll("\r\n", "\n");
+    assert.equal(proc.exitCode, 0, `${binary} ${args.join(" ")}\n${output}`);
+    return output;
   }
 
   try {
@@ -89,6 +89,35 @@ export function verifyModuleIdentity() {
         'console.log("file aliases match:", alias === direct && (await alias.load()).identity === direct.identity);',
       ]);
       assert.ok(run(RUNNER, "file-main.mjs").includes("file aliases match: true\n"));
+
+      run(BUNDLER, "file-link.mjs");
+      write("artifact-main.mjs", [
+        'import * as compiled from "./file-link.gbc";',
+        'import * as direct from "./real/relative.mjs";',
+        'console.log("artifact and source match:", compiled === direct && (await compiled.load()).identity === direct.identity);',
+      ]);
+      const artifactOutput = run(RUNNER, "artifact-main.mjs");
+      assert.ok(artifactOutput.includes("artifact and source match: true\n"), artifactOutput);
+
+      write("real/artifact-self.mjs", [
+        'import "./artifact-self.mjs";',
+        'console.log("file-linked entry evaluated");',
+      ]);
+      symlinkSync(join(real, "artifact-self.mjs"), join(project, "artifact-self-link.mjs"));
+      run(BUNDLER, "artifact-self-link.mjs");
+      const artifactEntryOutput = run(RUNNER, "artifact-self-link.gbc");
+      assert.equal(artifactEntryOutput.match(/^file-linked entry evaluated$/gm)?.length, 1, artifactEntryOutput);
+
+      write("real/payload.mjs", ['export const label = "bytecode payload";']);
+      run(BUNDLER, "real/payload.mjs");
+      renameSync(join(real, "payload.gbc"), join(real, "payload.bin"));
+      symlinkSync(join(real, "payload.bin"), join(project, "payload-link.gbc"));
+      write("artifact-link-main.mjs", [
+        'import { label } from "./payload-link.gbc";',
+        'console.log(label);',
+      ]);
+      const artifactLinkOutput = run(RUNNER, "artifact-link-main.mjs");
+      assert.match(artifactLinkOutput, /^bytecode payload$/m);
     }
 
     write("real/self.mjs", [
@@ -148,6 +177,22 @@ export function verifyModuleIdentity() {
       RUNNER, "virtual.mjs", "--module", `${join(outside, "disallowed.mjs")}=export default "registered fixture";`,
     );
     assert.ok(outputWithOverlay.includes("virtual source: registered fixture true\n"), outputWithOverlay);
+
+    const snapshotPath = join(real, "snapshot-state.mjs");
+    write("real/snapshot-state.mjs", ["export const read = () => 'disk';"]);
+    write("overlay-snapshot.mjs", [
+      `import { read } from ${JSON.stringify(snapshotPath)};`,
+      'test("round trips a registered module closure", () => {',
+      '  expect(read()).toBe("overlay");',
+      '  const observed = { read };',
+      '  expect(observed).toBe(observed);',
+      '});',
+    ]);
+    const snapshotOutput = run(
+      TESTRUNNER, "-P", "overlay-snapshot.mjs", "--heap-snapshots", "--no-progress",
+      "--module", `${snapshotPath}=export const read = () => 'overlay';`,
+    );
+    assert.match(snapshotOutput, /Heap snapshots: observations=1 objects=1 passed=1 refused=0 failed=0/);
   } finally {
     clean(tmp);
   }
