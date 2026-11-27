@@ -68,6 +68,14 @@ T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
 check atomics-wait --timeout=200 "$T" \
   'const a = new Int32Array(new SharedArrayBuffer(4)); try { Atomics.wait(a, 0, 0, 15000); } catch { console.log("caught"); }' 5
+# a huge finite timeout waits as an infinite one, until the run's deadline, rather than returning at once
+check atomics-wait-huge-timeout --timeout=200 "$T" \
+  'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1e300); console.log("returned");'
+check atomics-wait-max-timeout --timeout=200 "$T" \
+  'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number.MAX_VALUE); console.log("returned");'
+# a long finite timeout past 32 bits of milliseconds (about 49.7 days) is a real wait, not one that wraps to zero
+check atomics-wait-long-timeout --timeout=200 "$T" \
+  'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2 ** 32); console.log("returned");'
 check atomics-guest-timeout --timeout=2000 'timed-out' \
   'const a = new Int32Array(new SharedArrayBuffer(4)); console.log(Atomics.wait(a, 0, 0, 10));' 5
 # the process exits cleanly after an asynchronous Atomics.waitAsync, settled or still pending at the run's deadline
