@@ -348,8 +348,10 @@ begin
   if WaitTail = nil then WaitHead := @W else WaitTail^.Next := @W;
   WaitTail := @W;
   LeaveCriticalSection(WaitLock);
+  { a timeout past 1e15 ms (some 31,000 years) waits as an infinite one does, as Atomics.waitAsync's does: converting
+    it would overflow and end the wait at once }
   Deadline := High(QWord);
-  if not IsInfinite(TimeoutMs) then Deadline := GetTickCount64 + QWord(Ceil(TimeoutMs));
+  if not IsInfinite(TimeoutMs) and (TimeoutMs <= 1e15) then Deadline := GetTickCount64 + QWord(Ceil(TimeoutMs));
   repeat
     EnterCriticalSection(WaitLock);
     Notified := W.Notified;
