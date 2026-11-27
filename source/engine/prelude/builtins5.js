@@ -7,7 +7,7 @@
   var create = Object.create, isArray = Array.isArray;
   // the intrinsics the code below calls, captured now: a script that replaces Array.prototype.push or a string
   // method later does not reach into these built-ins (nor see their internal records)
-  var strIndexOf = String.prototype.indexOf, strCharAt = String.prototype.charAt;
+  var strCharCodeAt = String.prototype.charCodeAt;
   var strSlice = String.prototype.slice;
   function push(a) { var n = arguments.length; for (var i = 1; i < n; i++) defineProperty(a, a.length, { value: arguments[i], writable: true, enumerable: true, configurable: true }); return a.length; }
   var SymIterator = Symbol.iterator, SymAsyncIterator = Symbol.asyncIterator;
@@ -854,38 +854,58 @@
   markIntrinsic(FinalizationRegistry);
   def(G, "FinalizationRegistry", FinalizationRegistry);
 
-  // escape and unescape (B.2.1.1, B.2.1.2)
+  // escape and unescape (B.2.1.1, B.2.1.2): code units read by index and through the captured charCodeAt, so a
+  // script that replaces a String.prototype method does not change their results
   var hexDigits = "0123456789ABCDEF", fromCharCode = String.fromCharCode;
-  var escapeOk = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./";
   var Str = String;
   function toStr(v) { if (typeof v === "symbol") throw new TypeErr("Cannot convert a Symbol to a string"); return Str(v); }
+  // the unescaped set of B.2.1.1 step 4: the ASCII word characters (A-Z, a-z, 0-9, _) and @*+-./
+  function unescapedUnit(c) {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95 || c === 64 ||
+      c === 42 || c === 43 || c === 45 || c === 46 || c === 47;
+  }
+  // the value of the hex digit code unit c (HexDigits[~Sep]: 0-9, A-F, a-f), or -1
+  function hexValue(c) {
+    if (c >= 48 && c <= 57) return c - 48;
+    if (c >= 65 && c <= 70) return c - 55;
+    if (c >= 97 && c <= 102) return c - 87;
+    return -1;
+  }
   var annexB = {
     escape(string) {
       var s = toStr(string), r = "";
       for (var i = 0; i < s.length; i++) {
-        var c = StringPrototypeCharCodeAt(s, i);
-        if (apply(strIndexOf, escapeOk, [apply(strCharAt, s, [i])]) >= 0) r += apply(strCharAt, s, [i]);
-        else if (c < 256) r += "%" + StringPrototypeCharAt(hexDigits, c >> 4) + StringPrototypeCharAt(hexDigits, c & 15);
-        else r += "%u" + StringPrototypeCharAt(hexDigits, c >> 12) + StringPrototypeCharAt(hexDigits, (c >> 8) & 15) + StringPrototypeCharAt(hexDigits, (c >> 4) & 15) + StringPrototypeCharAt(hexDigits, c & 15);
+        var c = apply(strCharCodeAt, s, [i]);
+        if (unescapedUnit(c)) r += s[i];
+        else if (c < 256) r += "%" + hexDigits[c >> 4] + hexDigits[c & 15];
+        else r += "%u" + hexDigits[c >> 12] + hexDigits[(c >> 8) & 15] + hexDigits[(c >> 4) & 15] + hexDigits[c & 15];
       }
       return r;
     },
     unescape(string) {
       var s = toStr(string), r = "", n = s.length;
+      // the value of the k hex digits at s[i], or -1
       function hex(i, k) {
         var v = 0;
         for (var j = 0; j < k; j++) {
-          var c = StringPrototypeCharCodeAt(s, i + j), d;
-          if (c >= 48 && c <= 57) d = c - 48; else if (c >= 65 && c <= 70) d = c - 55; else if (c >= 97 && c <= 102) d = c - 87; else return -1;
+          var d = hexValue(apply(strCharCodeAt, s, [i + j]));
+          if (d < 0) return -1;
           v = v * 16 + d;
         }
         return v;
       }
       for (var i = 0; i < n; i++) {
-        var ch = StringPrototypeCharAt(s, i);
+        var ch = s[i];
         if (ch === "%") {
-          if (i + 6 <= n && StringPrototypeCharAt(s, i + 1) === "u") { var u = hex(i + 2, 4); if (u >= 0) { r += fromCharCode(u); i += 5; continue; } }
-          if (i + 3 <= n) { var b = hex(i + 1, 2); if (b >= 0) { r += fromCharCode(b); i += 2; continue; } }
+          // B.2.1.2 step 5.b: %uXXXX when six code units remain and the next is u, else %XX when three remain;
+          // a % whose digits are not hex digits stays as it is
+          if (i + 6 <= n && s[i + 1] === "u") {
+            var u = hex(i + 2, 4);
+            if (u >= 0) { r += fromCharCode(u); i += 5; continue; }
+          } else if (i + 3 <= n) {
+            var b = hex(i + 1, 2);
+            if (b >= 0) { r += fromCharCode(b); i += 2; continue; }
+          }
         }
         r += ch;
       }

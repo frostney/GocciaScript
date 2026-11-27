@@ -23,6 +23,11 @@ test("Object, Map and Array statics", () => {
   expect(expectClean(wire.invoke("Math.sumPrecise", Math, [1e20, 0.1, -1e20]), ARRAY_ITERATION)).toBe(0.1);
 });
 
+test("escape and unescape (compat-annex-b)", () => {
+  expect(call("globalThis.escape", undefined, "a b\u0100+")).toBe("a%20b%u0100+");
+  expect(call("globalThis.unescape", undefined, "a%20b%u0100%zz")).toBe("a b\u0100%zz");
+});
+
 test("Array.fromAsync", async () => {
   const r = await wire.invokeAsync("Array.fromAsync", Array, [1, Promise.resolve(2)], (x) => x * 10);
   // the iterable's own iterator (ECMA-262 Array.fromAsync step 3.e), and each value awaited (Await reads a promise's

@@ -225,6 +225,7 @@ begin
   if Pr.ArgumentsObject then Include(Result.Compatibility, cfArgumentsObject);
   if Pr.Labels then Include(Result.Compatibility, cfLabel);
   if Pr.ForIn then Include(Result.Compatibility, cfForIn);
+  if Pr.AnnexB then Include(Result.Compatibility, cfAnnexB);
   Result.WarningUnsupportedFeatures := Pr.WarningUnsupported;
   Result.SourceType := SourceType;
 end;

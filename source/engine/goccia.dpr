@@ -151,6 +151,7 @@ begin
   Prof.ArgumentsObject := Flag('compat-arguments-object');
   Prof.Labels := Flag('compat-label');
   Prof.ForIn := Flag('compat-for-in-loop');
+  Prof.AnnexB := Flag('compat-annex-b');
   Prof.WarningUnsupported := Flag('warning-unsupported-features');
   Prof.FunctionCtor := Flag('unsafe-function-constructor');
   Prof.ShadowRealm := Flag('unsafe-shadowrealm');

@@ -25,7 +25,7 @@ type
 
   TGocciaCompatibility = (cfASI, cfVar, cfFunction, cfTraditionalFor,
     cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfArgumentsObject,
-    cfLabel, cfForIn, cfExperimentalJSModuleSource);
+    cfLabel, cfForIn, cfAnnexB, cfExperimentalJSModuleSource);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
   { The goal symbol an entry's source is parsed and run with (ES2026 §16.1

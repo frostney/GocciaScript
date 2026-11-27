@@ -31,7 +31,7 @@ FFI is not part of the default runtime. It needs the engine's `ffi` capability: 
 
 `ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is exposed only on demand. Every realm builds `ShadowRealm` (`Goccia.ShadowRealm`), and the CLI host removes `globalThis.ShadowRealm` unless `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation and `ShadowRealm.prototype.importValue` imports modules into the child realm; `importValue` counts as a computed import, so it needs a `read` grant even for files inside the project ([Permissions](permissions.md#the-module-graph-exemption)). See [ADR 0073](adr/0073-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
 
-The CLI host removes the global `eval` in every case (`prelude/host.js`, and `CLIRealmInit` in `Goccia.HostAPI` for later realms), together with `escape` and `unescape`; only the conformance runner's own host leaves them in place.
+The CLI host removes the global `eval` in every case (`prelude/host.js`, and `CLIRealmInit` in `Goccia.HostAPI` for later realms); only the conformance runner's own host leaves it in place. It removes the Annex B globals `escape` and `unescape` the same way unless `--compat-annex-b` is passed or `"compat-annex-b": true` is set in config ([Annex B](language.md#annex-b-web-browser-legacy-features)).
 
 ### Where the built-ins live
 
@@ -305,7 +305,7 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 
 **Goccia.shims**
 
-Goccia.shims lists the names of the legacy surfaces the engine treats as shims. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation. A new Annex B surface goes behind an off-by-default compatibility flag rather than into this default list, while the Annex B shims that already ship stay on. See [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
+Goccia.shims lists the names of the legacy surfaces the engine treats as shims. These shims are active by default and are part of the ECMAScript conformance track, not a recommendation for new userland code. When a legacy ECMAScript global or prototype surface has a newer JavaScript spelling, the older surface should live here as a shim over the newer implementation. A new Annex B surface, such as `escape` and `unescape`, goes behind the off-by-default `--compat-annex-b` flag rather than into this default list, while the Annex B shims that already ship stay on. See [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 
 Current default shims:
 

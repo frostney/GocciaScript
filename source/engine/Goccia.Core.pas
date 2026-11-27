@@ -486,6 +486,9 @@ type
   TLangProfile = record
     Restricted: Boolean;
     Asi, VarDecl, FuncDecl, ForLoop, WhileLoop, LooseEq, NonStrict, ArgumentsObject, Labels, ForIn,
+      { the Annex B surfaces the recommended profile leaves out: the globals escape and unescape (ADR 0177);
+        read when the host is installed }
+      AnnexB,
       WarningUnsupported, FunctionCtor, ShadowRealm, StrictTypes: Boolean;
   end;
 

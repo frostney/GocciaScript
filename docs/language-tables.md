@@ -32,6 +32,7 @@ profile exposes them, not whether the engine contains their semantics.
 | `eval` | Yes | Not installed | None: every host `TGocciaEngine` installs removes it, with no CLI flag, config key or engine setting ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
 | `ShadowRealm` | Yes | Not installed | `--unsafe-shadowrealm` | TC39 Stage 2.7 |
+| `escape` / `unescape` | Yes | Not installed | `--compat-annex-b` | ECMA-262 Annex B |
 
 ## Core ECMAScript Evidence
 
@@ -42,9 +43,8 @@ current results and [language.md](language.md) for detailed semantics and
 profile policy.
 
 Annex B's legacy browser features are part of the test262 conformance target.
-New Annex B surfaces will go behind a compatibility flag, added by the 0.18.0
-Annex B work, that the test262 runner turns on, and the ones that already ship
-stay as they are; see
+New Annex B surfaces go behind `--compat-annex-b`, which the test262 runner's
+profile has on, and the ones that already ship stay as they are; see
 [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 
 ## Web Platform APIs
