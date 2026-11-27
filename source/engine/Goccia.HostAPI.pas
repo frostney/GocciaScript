@@ -1930,17 +1930,32 @@ begin
   PopRoots(1);
 end;
 
-{ vitestSource(): the vitest compatibility shim's module source (Goccia.VitestShim.inc) }
-function VitestShimSource: UnicodeString;
+{ vitestSource(embedded): the vitest compatibility shim's module source (Goccia.VitestShim.inc). Only
+  GocciaTestRunner hoists vi.mock and vi.unmock out of a file before it is parsed; an embedder's shim (embedded true)
+  refuses them instead of ignoring them }
+function VitestShimSource(Embedded: Boolean): UnicodeString;
 const
   LB = #10;
+  Hoisted: array[0..1] of UnicodeString = ('  mock: hoistedDirective,' + LB, '  unmock: hoistedDirective,' + LB);
+  Refused: array[0..1] of UnicodeString = ('  mock: unsupported("mock", NOT_HOISTED),' + LB,
+    '  unmock: unsupported("unmock", NOT_HOISTED),' + LB);
+  NotHoisted = 'const NOT_HOISTED = "Module mocks apply only when GocciaTestRunner runs the file, " +' + LB +
+    '  "which hoists them before the module graph is loaded.";' + LB;
+var I: Integer;
 begin
   {$I Goccia.VitestShim.inc}
+  if not Embedded then Exit;
+  for I := 0 to High(Hoisted) do
+  begin
+    if Pos(Hoisted[I], Result) = 0 then raise Exception.Create('vitest shim lost its hoisted directive');
+    Result := StringReplace(Result, Hoisted[I], Refused[I], []);
+  end;
+  Result := NotHoisted + Result;
 end;
 
 function Host_VitestSource(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := StrFromUnicode(VitestShimSource);
+  Res := StrFromUnicode(VitestShimSource((Argc >= 1) and (Args[1] = VTrue)));
   Result := True;
 end;
 
@@ -2021,7 +2036,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'timeOrigin', Host_TimeOrigin, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
-  DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
+  DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 1);
   DefineNative(RootAt(TempTop - 1), 'testingModule', Host_TestingModule, 0);
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
   DefineNative(RootAt(TempTop - 1), 'dataParse', Host_DataParse, 2);
@@ -2115,6 +2130,8 @@ begin
     if not Result and (Err = '') then Err := 'Goccia binding failed';
     Exit;
   end;
+  { the timer globals and goccia:timers, or only the queue (ExposeTimers False): known to the host prelude too }
+  if not ExposeTimers then DefineOwn(RootAt(Base + 2), AtomOf('exposeTimers'), VFalse, pfDefault);
   Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:console>', ConsoleSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
@@ -2129,8 +2146,6 @@ begin
   if Result then
   begin
     PushRoot(Goccia);
-    { the timer globals and goccia:timers, or only the queue (ExposeTimers False) }
-    if not ExposeTimers then DefineOwn(RootAt(Base + 2), AtomOf('exposeTimers'), VFalse, pfDefault);
     Result := CallPrelude('<goccia:timers>', TimersSrc, Base, 3, R, Err) and
       CallPrelude('<node:async_hooks>', AsyncHooksSrc, Base, 3, R, Err) and
       { sandbox mode's fs, goccia and goccia:search over the thread's virtual file system }
