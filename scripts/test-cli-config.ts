@@ -1715,25 +1715,32 @@ console.log("A manifest's relative address is a module even with no file at that
   const tmp = makeTmp();
   try {
     const directory = join(tmp, "real");
-    const alias = join(tmp, "alias");
+    const aliasParent = join(tmp, "links");
+    const alias = join(aliasParent, "alias");
     mkdirSync(directory);
+    mkdirSync(aliasParent);
     symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
     const manifest = join(directory, "modules.mjs");
     const entry = join(directory, "entry.mjs");
     writeFileSync(
       manifest,
-      'export default {"./nested/virt.js": {content: "export default 42;"}, "./overlay.js": {content: "export default 17;"}};\n',
+      `export default {
+        "./nested/virt.js": {content: "export default 42;"},
+        "./overlay.js": {content: "export default 17;"},
+        "../neighbor.js": {content: "export default 23;"}
+      };\n`,
     );
     writeFileSync(join(directory, "overlay.js"), 'export default -1;\n');
     writeFileSync(entry, [
       'import * as relative from "./nested/virt.js";',
       `import * as absolute from ${JSON.stringify(join(alias, "nested", "virt.js"))};`,
       'import value from "./overlay.js";',
-      'console.log("virtual", relative === absolute, relative.default, value);',
+      'import neighbor from "../neighbor.js";',
+      'console.log("virtual", relative === absolute, relative.default, value, neighbor);',
     ].join("\n"));
     for (const root of [directory, alias]) {
       const out = runCwd(RUNNER, [join(root, "entry.mjs"), "--modules", join(root, "modules.mjs")], tmp);
-      if (!containsLine(out.stdout, "virtual true 42 17") || !out.stderr.includes("shadows module"))
+      if (!containsLine(out.stdout, "virtual true 42 17 23") || !out.stderr.includes("shadows module"))
         throw new Error(`Virtual module aliases should share a record and shadow files: ${out.combined}`);
     }
   } finally {

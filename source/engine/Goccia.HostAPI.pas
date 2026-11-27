@@ -795,7 +795,7 @@ end;
 
 { shared.defineVirtualModules(map, base) }
 function DefineVirtualModuleMap(Map: TValue; const Base: UnicodeString; var Err: UnicodeString): Boolean;
-var F, R: TValue; A: array[0..1] of TValue;
+var F, R: TValue; A: array[0..1] of TValue; Directory: UnicodeString;
 begin
   Result := False;
   PushRoot(Map);
@@ -806,7 +806,11 @@ begin
       Exit;
     end;
     PushRoot(F);
-    A[1] := StrFromUnicode(Base);
+    Directory := Base;
+    { Resolve the declaring directory before folding '..' in a relative address. }
+    if not SandboxActive and IsAbsoluteFilePath(Base) then
+      Directory := UTF8Decode(CanonicalCapabilityPath(UTF8Encode(Base)));
+    A[1] := StrFromUnicode(Directory);
     A[0] := RootAt(TempTop - 2);
     Result := CallValue(RootAt(TempTop - 1), VUndefined, @A[0], 2, R);
     PopRoots(1);
