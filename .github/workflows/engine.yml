@@ -207,6 +207,14 @@ jobs:
             -obuild/embedder-host-work-test scripts/engine/embedder-host-work-test.pas
           python3 scripts/engine/embedder-host-work-test.py build/embedder-host-work-test
 
+      - name: Source and artifacts report the failing declaration's location
+        run: |
+          fixture=$(mktemp -d build/link-diagnostics.XXXXXX)
+          trap 'rm -rf "$fixture"' EXIT
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            "-o$fixture/link-diagnostics-test" scripts/engine/artifact-link-diagnostics-test.pas
+          timeout 20 "$fixture/link-diagnostics-test" "$fixture"
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 

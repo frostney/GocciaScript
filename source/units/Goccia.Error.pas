@@ -158,7 +158,7 @@ function FormatErrorWithSourceContext(
   const AFirstLineNumber: Integer = 1): string;
 var
   Buffer: TStringBuffer;
-  GutterWidth, LineNum, I: Integer;
+  GutterWidth, LineNum, CaretPadding, I: Integer;
   FirstContextLine, LastContextLine, LastAbsLine: Integer;
   LineStr, Gutter, CaretStr: string;
 begin
@@ -226,8 +226,11 @@ begin
     for I := 1 to GutterWidth do
       CaretStr := CaretStr + ' ';
     CaretStr := CaretStr + ' | ';
-    for I := 1 to AColumn - 1 do
-      if (I <= Length(LineStr)) and (LineStr[I] = #9) then
+    CaretPadding := 0;
+    if AColumn > 1 then CaretPadding := AColumn - 1;
+    if CaretPadding > Length(LineStr) then CaretPadding := Length(LineStr);
+    for I := 1 to CaretPadding do
+      if LineStr[I] = #9 then
         CaretStr := CaretStr + #9
       else
         CaretStr := CaretStr + ' ';

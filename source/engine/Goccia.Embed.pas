@@ -69,8 +69,8 @@ type
     ErrorMessage: UnicodeString;
     { the error in parts, for a host's diagnostic: its name and message (ErrorIsError: the thrown value was an
       object with a string name or message, or a syntax error; otherwise ErrorMessage is the thrown value as a
-      string), where it was made (the first frame of its stack, or where the source was rejected; ErrorLine 0
-      when unknown) and the parser's suggestion }
+      string), where it was made (the link declaration, first engine-recorded stack frame, or where the source
+      was rejected; ErrorLine 0 when unknown) and the parser's suggestion }
     ErrorIsError: Boolean;
     ErrorName, ErrorText, ErrorFile, ErrorSuggestion: UnicodeString;
     ErrorLine, ErrorColumn: Integer;
@@ -531,9 +531,10 @@ begin
 end;
 
 { the uncaught value in parts (R.ErrorMessage already holds its text), from its string data properties only }
-procedure DescribeThrown(V: TValue; var R: TGocciaRunResult);
+function DescribeThrown(V: TValue; var R: TGocciaRunResult): Boolean;
 var Stack, Text: UnicodeString;
 begin
+  Result := False;
   if not IsObject(V) then Exit;
   PushRoot(V);
   try
@@ -549,7 +550,8 @@ begin
     end;
     { located only from the provenance the engine recorded when it made the error, never from a thrown value's
       own stack string, which can name any file }
-    if ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
+    Result := ErrorSourceLocation(RootAt(TempTop - 1), R.ErrorFile, R.ErrorLine, R.ErrorColumn);
+    if not Result and ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
     { the host's suggestion for the error it threw (a PermissionDenied's grant) }
     if ErrorHostSuggestion(RootAt(TempTop - 1), Text) then R.ErrorSuggestion := Text;
   finally
@@ -1022,7 +1024,7 @@ end;
 
 function TGocciaEngine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
   var R: TGocciaRunResult): Boolean;
-var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName: UnicodeString; A: TGocciaArtifact;
+var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName, ModuleSource: UnicodeString; A: TGocciaArtifact;
 begin
   Result := False;
   Bytes := nil;
@@ -1057,7 +1059,9 @@ begin
     begin
       ModuleReturnLast := True;
       try
-        if not ParseAndCompileModule(Source, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
+        ModuleSource := Source;
+        if (ModuleSource <> '') and (ModuleSource[1] = #$FEFF) then Delete(ModuleSource, 1, 1);
+        if not ParseAndCompileModule(ModuleSource, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
         begin
           R.ErrorName := ErrName;
           R.ErrorLine := ParseErrorLine;
@@ -1182,7 +1186,7 @@ function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString):
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean; EnvAbort: Integer;
+  Compiled, HasErrorLocation: Boolean; EnvAbort: Integer;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1393,15 +1397,12 @@ begin
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
-      if AbortKind = 0 then DescribeThrown(RootAt(TempTop - 1), Result);
+      HasErrorLocation := (AbortKind = 0) and DescribeThrown(RootAt(TempTop - 1), Result);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
-      if LoadFailure(FailPath, FailLine, FailColumn) then
+      if not HasErrorLocation and LoadFailure(FailPath, FailLine, FailColumn) then
       begin
-        { an explicit Script's import declaration: the entry's own }
-        if Pos(ScriptImportsSuffix, FailPath) > 1 then
-          SetLength(FailPath, Pos(ScriptImportsSuffix, FailPath) - 1);
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
         begin
