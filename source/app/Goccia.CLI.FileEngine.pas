@@ -129,6 +129,7 @@ uses
   Math,
 
   ConsoleStreams,
+  TextEncoding,
   TextSemantics,
 
   Goccia.Core,
@@ -422,7 +423,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.LoadFromFile(APath);
-    Result := Lines.Text;
+    Result := UTF8DecodeKeepingNoncharacters(Lines.Text);
   finally
     Lines.Free;
   end;

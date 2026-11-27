@@ -19,6 +19,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   FileUtils,
+  TextSemantics,
   TimingUtils,
 
   Goccia.Application,
@@ -357,7 +358,7 @@ begin
       if not InstallBenchmarkAPI(Err) then
         raise Exception.Create('benchmark host setup failed: ' + UTF8Encode(Err));
       ExecStart := GetNanoseconds;
-      RunResult := Engine.Run(FileName, ASource.Text);
+      RunResult := Engine.Run(FileName, StringListToEngineSourceText(ASource));
       Res.CompileTimeNanoseconds := RunResult.CompileNanoseconds;
       Res.DeterministicProfile := Deterministic;
       if not RunResult.Ok then

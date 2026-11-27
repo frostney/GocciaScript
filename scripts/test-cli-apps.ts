@@ -5292,18 +5292,26 @@ await section("Loader: --globals file...", async () => {
   }
 });
 
-await section("Loader: --globals file keeps raw U+FFFE and U+FFFF...", async () => {
+await section("Loader: raw U+FFFE, U+FFFF and accented text survive any process code page...", async () => {
   const tmp = makeTmp();
   try {
+    // raw UTF-8 bytes, not escapes: e-acute and u-umlaut, then U+FFFF (EF BF BF) and U+FFFE (EF BF BE)
+    const raw = Buffer.from([0xc3, 0xa9, 0xc3, 0xbc, 0xef, 0xbf, 0xbf, 0xef, 0xbf, 0xbe]);
     const globalsPath = join(tmp, "globals.json");
-    // the noncharacters as raw UTF-8 bytes (EF BF BF, EF BF BE), not as JSON escapes
-    writeFileSync(globalsPath, Buffer.concat([
-      Buffer.from('{"name": "'),
-      Buffer.from([0xef, 0xbf, 0xbf, 0xef, 0xbf, 0xbe]),
-      Buffer.from('"}'),
-    ]));
-    const { json } = runLoaderJson("[name.charCodeAt(0), name.charCodeAt(1)].join();\n", [`--globals=${globalsPath}`]);
-    if (json.files?.[0]?.result !== "65535,65534") throw new Error(`--globals should keep U+FFFF and U+FFFE, got ${json.files?.[0]?.result}`);
+    writeFileSync(globalsPath, Buffer.concat([Buffer.from('{"name": "'), raw, Buffer.from('"}')]));
+    const codes = "[s.length, s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)].join();\n";
+    const expected = "4,233,252,65535,65534";
+    // the source and data are UTF-8 whatever the locale says; a Latin-1 locale must not change them
+    for (const env of [undefined, { ...process.env, LC_ALL: "en_US.ISO-8859-1" }]) {
+      const label = env ? "under LC_ALL=en_US.ISO-8859-1" : "by default";
+      const fromGlobals = runLoaderJson("const s = name;\n" + codes, [`--globals=${globalsPath}`], { env });
+      if (fromGlobals.json.files?.[0]?.result !== expected)
+        throw new Error(`--globals ${label} should give ${expected}, got ${fromGlobals.json.files?.[0]?.result}`);
+      const source = Buffer.concat([Buffer.from('const s = "'), raw, Buffer.from('";\n' + codes)]).toString("utf8");
+      const fromStdin = runLoaderJson(source, [], { env });
+      if (fromStdin.json.files?.[0]?.result !== expected)
+        throw new Error(`stdin source ${label} should give ${expected}, got ${fromStdin.json.files?.[0]?.result}`);
+    }
   } finally {
     clean(tmp);
   }
