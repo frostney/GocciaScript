@@ -771,7 +771,7 @@ begin
   if AbortKind = 0 then
   begin
     Old := GCOldBytes;
-    Ext := HeapExternalBytes;
+    Ext := HeapChargedExternalBytes;
     Old := Old + Ext;
     { one refusal at a time: the pending one has not reached a back edge or call yet }
     if MemRefusePending then Exit;

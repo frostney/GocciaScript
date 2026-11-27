@@ -65,7 +65,11 @@ var
   // SyntaxError; an embedder that follows Annex B turns it on.
   RegExpIdentityK: Boolean = False;
 
-function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+type
+  TRegExpWorkspaceCheck = procedure(const ABytes: Int64);
+
+function CompileRegExp(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck = nil): TRegExpProgram;
 { An instruction word for AOp with operand AOperand. Raises EConvertError
   (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
   operand, instead of losing its high bits. }
@@ -115,6 +119,19 @@ type
     RangeCount: Integer;
     Strings: array of TRegExpStringSequence;
     StringCount: Integer;
+    CodePointBytes: Int64;
+  end;
+
+  TRegExpCompiler = class;
+
+  TRegExpNameIndex = class(TOrderedStringMap<Integer>)
+  private
+    FCompiler: TRegExpCompiler;
+  protected
+    procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
+      const APendingValue: Integer); override;
+  public
+    constructor Create(const ACompiler: TRegExpCompiler);
   end;
 
   TRegExpCompiler = class
@@ -123,6 +140,8 @@ type
     FPos: Integer;
     FCode: TRegExpCodeArray;
     FCodeLen: Integer;
+    FCheckWorkspace: TRegExpWorkspaceCheck;
+    FTableBytes: Int64;
     FCharClasses: TRegExpCharClassArray;
     FStringSets: TRegExpStringSetArray;
     FCaptureCount: Integer;
@@ -150,7 +169,7 @@ type
     FPathNodeCount: Integer;
     // Name -> index into FNameEntries, so a name is found, and a duplicate
     // name checked, without scanning every group.
-    FNameIndex: TOrderedStringMap<Integer>;
+    FNameIndex: TRegExpNameIndex;
     FNameEntries: array of TRegExpNameEntry;
     FNameEntryCount: Integer;
     FAltStack: array of Integer;
@@ -174,14 +193,18 @@ type
     function Advance: Char;
     function Match(C: Char): Boolean;
     procedure Emit(AInstr: UInt32);
+    procedure CheckWorkspace(const AAdditionalBytes: Int64);
+    procedure CheckTableResize(const AOldCapacity, ANewCapacity, AItemSize: Integer);
+    procedure GrowCode(const ACapacity: Integer);
     function EmitHole: Integer;
     procedure PatchHole(AIndex: Integer; ATarget: Integer);
     function CurrentPC: Integer;
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
     procedure AddCapture;
-    function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
-    function AddStringSet(const AContents: TRegExpClassContents): Integer;
+    function AddCharClass(const ARanges: array of TRegExpCharRange;
+      const ACount: Integer = -1): Integer;
+    function AddStringSet(var AContents: TRegExpClassContents): Integer;
     procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
       ANegated: Boolean);
     procedure CompilePattern;
@@ -199,6 +222,16 @@ type
     function ParseClassSetCharacter: Cardinal;
     procedure ParseStringDisjunction(var AContents: TRegExpClassContents;
       out AMayContainStrings: Boolean);
+    procedure InitClassContents(var AContents: TRegExpClassContents);
+    procedure ClearClassContents(var AContents: TRegExpClassContents);
+    procedure EnsureClassStringCapacity(var AContents: TRegExpClassContents);
+    procedure AddClassString(var AContents: TRegExpClassContents;
+      const ACodePoints: array of Cardinal; const ACount: Integer = -1);
+    procedure MergeClassContents(var ADest, ASrc: TRegExpClassContents);
+    procedure FilterClassStrings(var ADest: TRegExpClassContents;
+      const ARight: TRegExpClassContents; AKeepMatched: Boolean);
+    procedure ApplyClassSetOp(var ADest: TRegExpClassContents;
+      const ARight: TRegExpClassContents; AIsIntersect: Boolean);
     procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
@@ -212,7 +245,7 @@ type
     procedure EmitCharMatch(ACodePoint: Cardinal);
     procedure EmitCharClassRanges(const ARanges: array of TRegExpCharRange;
       ARangeCount: Integer; ANegated: Boolean);
-    procedure EmitClassContents(const AContents: TRegExpClassContents;
+    procedure EmitClassContents(var AContents: TRegExpClassContents;
       ANegated: Boolean);
     procedure AddBuiltinCharClass(AEscapeChar: Char; var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure AddWordCharacterRanges(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
@@ -239,7 +272,8 @@ type
     procedure EmitDuplicateNamedBackref(const AName: string;
       ABackrefFlags: Integer);
   public
-    constructor Create(const APattern, AFlags: string);
+    constructor Create(const APattern, AFlags: string;
+      const ACheckWorkspace: TRegExpWorkspaceCheck);
     destructor Destroy; override;
     function Compile: TRegExpProgram;
   end;
@@ -389,13 +423,28 @@ begin
   end;
 end;
 
-constructor TRegExpCompiler.Create(const APattern, AFlags: string);
+constructor TRegExpNameIndex.Create(const ACompiler: TRegExpCompiler);
 begin
   inherited Create;
+  FCompiler := ACompiler;
+end;
+
+procedure TRegExpNameIndex.RequireStorageBytes(const ABytes, ANewBytes: Int64;
+  const APendingValue: Integer);
+begin
+  // CheckWorkspace also counts both arrays currently held by this map.
+  FCompiler.CheckWorkspace(ANewBytes);
+end;
+
+constructor TRegExpCompiler.Create(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck);
+begin
+  inherited Create;
+  FCheckWorkspace := ACheckWorkspace;
   FPattern := APattern;
   FPos := 1;
   FCodeLen := 0;
-  SetLength(FCode, 256);
+  GrowCode(256);
   SetLength(FCharClasses, 0);
   SetLength(FStringSets, 0);
   FCaptureCount := 0;
@@ -406,7 +455,7 @@ begin
   SetLength(FPathParent, 0);
   SetLength(FPathIsGroup, 0);
   FPathNodeCount := 0;
-  FNameIndex := TOrderedStringMap<Integer>.Create;
+  FNameIndex := TRegExpNameIndex.Create(Self);
   SetLength(FNameEntries, 0);
   FNameEntryCount := 0;
   SetLength(FAltStack, 64);
@@ -518,9 +567,33 @@ begin
   if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
     RaiseRegExpTooLarge;
   if FCodeLen >= Length(FCode) then
-    SetLength(FCode, FCodeLen * 2 + 16);
+    GrowCode(FCodeLen * 2 + 16);
   FCode[FCodeLen] := AInstr;
   Inc(FCodeLen);
+end;
+
+procedure TRegExpCompiler.CheckWorkspace(const AAdditionalBytes: Int64);
+var
+  Bytes: Int64;
+begin
+  if Assigned(FCheckWorkspace) then
+  begin
+    Bytes := Int64(Length(FCode)) * SizeOf(UInt32) + FTableBytes + AAdditionalBytes;
+    if FNameIndex <> nil then Inc(Bytes, FNameIndex.StorageBytes);
+    FCheckWorkspace(Bytes);
+  end;
+end;
+
+procedure TRegExpCompiler.CheckTableResize(const AOldCapacity, ANewCapacity, AItemSize: Integer);
+begin
+  CheckWorkspace(Int64(ANewCapacity) * AItemSize);
+  Inc(FTableBytes, Int64(ANewCapacity - AOldCapacity) * AItemSize);
+end;
+
+procedure TRegExpCompiler.GrowCode(const ACapacity: Integer);
+begin
+  CheckWorkspace(Int64(ACapacity) * SizeOf(UInt32));
+  SetLength(FCode, ACapacity);
 end;
 
 function TRegExpCompiler.EmitHole: Integer;
@@ -574,7 +647,7 @@ begin
 end;
 
 function TRegExpCompiler.AddCharClass(
-  const ARanges: array of TRegExpCharRange): Integer;
+  const ARanges: array of TRegExpCharRange; const ACount: Integer): Integer;
 var
   I: Integer;
   Page: Integer;
@@ -582,14 +655,21 @@ var
   RangeCount: Integer;
   RangeIndex: Integer;
   Normalized: TRegExpCharRangeArray;
+  ClassBytes: Int64;
 begin
   Result := Length(FCharClasses);
-  SetLength(FCharClasses, Result + 1);
-  RangeCount := Length(ARanges);
+  if ACount < 0 then RangeCount := Length(ARanges) else RangeCount := ACount;
+  CheckWorkspace(Int64(RangeCount) * SizeOf(TRegExpCharRange));
   SetLength(Normalized, RangeCount);
-  for I := 0 to High(ARanges) do
+  for I := 0 to RangeCount - 1 do
     Normalized[I] := ARanges[I];
   NormalizeRanges(Normalized, RangeCount);
+  ClassBytes := SizeOf(TRegExpCharClass) + Int64(RangeCount) * SizeOf(TRegExpCharRange);
+  if RangeCount > 8 then Inc(ClassBytes, REGEXP_CHAR_CLASS_PAGE_COUNT * SizeOf(Integer));
+  CheckWorkspace(ClassBytes + Int64(Result) * SizeOf(TRegExpCharClass) +
+    Int64(Length(Normalized)) * SizeOf(TRegExpCharRange));
+  Inc(FTableBytes, ClassBytes);
+  SetLength(FCharClasses, Result + 1);
   SetLength(FCharClasses[Result].Ranges, RangeCount);
   for I := 0 to RangeCount - 1 do
     FCharClasses[Result].Ranges[I] := Normalized[I];
@@ -612,18 +692,18 @@ begin
 end;
 
 function TRegExpCompiler.AddStringSet(
-  const AContents: TRegExpClassContents): Integer;
+  var AContents: TRegExpClassContents): Integer;
 var
   I, StringIndex: Integer;
-  Ranges: TRegExpCharRangeArray;
+  SetBytes: Int64;
 begin
   Result := Length(FStringSets);
+  SetBytes := SizeOf(TRegExpStringSet) + Int64(AContents.StringCount) * SizeOf(TRegExpStringSequence);
+  CheckWorkspace(SetBytes + Int64(Result) * SizeOf(TRegExpStringSet));
+  Inc(FTableBytes, SetBytes);
   SetLength(FStringSets, Result + 1);
 
-  SetLength(Ranges, AContents.RangeCount);
-  for I := 0 to AContents.RangeCount - 1 do
-    Ranges[I] := AContents.Ranges[I];
-  FStringSets[Result].CharClassIndex := AddCharClass(Ranges);
+  FStringSets[Result].CharClassIndex := AddCharClass(AContents.Ranges, AContents.RangeCount);
 
   SetLength(FStringSets[Result].Strings, AContents.StringCount);
   StringIndex := 0;
@@ -631,8 +711,12 @@ begin
     if Length(AContents.Strings[I].CodePoints) > 1 then
     begin
       FStringSets[Result].Strings[StringIndex] := AContents.Strings[I];
+      // The program keeps this array when the parser's contents are cleared.
+      Dec(AContents.CodePointBytes, Int64(Length(AContents.Strings[I].CodePoints)) * SizeOf(Cardinal));
       Inc(StringIndex);
     end;
+  if StringIndex < AContents.StringCount then
+    CheckTableResize(AContents.StringCount, StringIndex, SizeOf(TRegExpStringSequence));
   SetLength(FStringSets[Result].Strings, StringIndex);
 end;
 
@@ -1298,12 +1382,22 @@ begin
       ComplementRanges[I].Hi);
 end;
 
-procedure InitClassContents(var AContents: TRegExpClassContents);
+procedure TRegExpCompiler.InitClassContents(var AContents: TRegExpClassContents);
 begin
+  ClearClassContents(AContents);
+  CheckTableResize(0, MAX_CHAR_RANGES, SizeOf(TRegExpCharRange));
   SetLength(AContents.Ranges, MAX_CHAR_RANGES);
   AContents.RangeCount := 0;
-  SetLength(AContents.Strings, 0);
   AContents.StringCount := 0;
+  AContents.CodePointBytes := 0;
+end;
+
+procedure TRegExpCompiler.ClearClassContents(var AContents: TRegExpClassContents);
+begin
+  if Length(AContents.Ranges) = 0 then Exit;
+  Dec(FTableBytes, Int64(Length(AContents.Ranges)) * SizeOf(TRegExpCharRange) +
+    Int64(Length(AContents.Strings)) * SizeOf(TRegExpStringSequence) + AContents.CodePointBytes);
+  AContents := Default(TRegExpClassContents);
 end;
 
 procedure AddClassRange(var AContents: TRegExpClassContents;
@@ -1317,46 +1411,68 @@ begin
   end;
 end;
 
-procedure AddClassString(var AContents: TRegExpClassContents;
-  const ACodePoints: array of Cardinal);
+procedure TRegExpCompiler.EnsureClassStringCapacity(var AContents: TRegExpClassContents);
 var
-  Seq: TRegExpStringSequence;
-  I: Integer;
+  Capacity: Integer;
 begin
-  SetLength(Seq.CodePoints, Length(ACodePoints));
-  for I := 0 to High(ACodePoints) do
-    Seq.CodePoints[I] := ACodePoints[I];
-  if AContents.StringCount >= Length(AContents.Strings) then
-    SetLength(AContents.Strings, AContents.StringCount + 16);
-  AContents.Strings[AContents.StringCount] := Seq;
-  Inc(AContents.StringCount);
+  if AContents.StringCount < Length(AContents.Strings) then Exit;
+  Capacity := AContents.StringCount + 16;
+  CheckTableResize(Length(AContents.Strings), Capacity, SizeOf(TRegExpStringSequence));
+  SetLength(AContents.Strings, Capacity);
 end;
 
-procedure MergeClassContents(var ADest: TRegExpClassContents;
-  const ASrc: TRegExpClassContents);
+procedure TRegExpCompiler.AddClassString(var AContents: TRegExpClassContents;
+  const ACodePoints: array of Cardinal; const ACount: Integer);
+var
+  Seq: TRegExpStringSequence;
+  I, Count: Integer;
+  Bytes: Int64;
+begin
+  if ACount < 0 then Count := Length(ACodePoints) else Count := ACount;
+  EnsureClassStringCapacity(AContents);
+  Bytes := Int64(Count) * SizeOf(Cardinal);
+  CheckWorkspace(Bytes);
+  SetLength(Seq.CodePoints, Count);
+  for I := 0 to Count - 1 do
+    Seq.CodePoints[I] := ACodePoints[I];
+  AContents.Strings[AContents.StringCount] := Seq;
+  Inc(AContents.StringCount);
+  Inc(AContents.CodePointBytes, Bytes);
+  Inc(FTableBytes, Bytes);
+end;
+
+// The caller discards the source after the merge. Only its sequence records
+// are copied. The code-point arrays move to the destination's accounting.
+procedure TRegExpCompiler.MergeClassContents(var ADest, ASrc: TRegExpClassContents);
 var
   I: Integer;
+  Bytes: Int64;
 begin
   for I := 0 to ASrc.RangeCount - 1 do
     AddClassRange(ADest, ASrc.Ranges[I].Lo, ASrc.Ranges[I].Hi);
   for I := 0 to ASrc.StringCount - 1 do
   begin
-    if ADest.StringCount >= Length(ADest.Strings) then
-      SetLength(ADest.Strings, ADest.StringCount + 16);
+    EnsureClassStringCapacity(ADest);
     ADest.Strings[ADest.StringCount] := ASrc.Strings[I];
     Inc(ADest.StringCount);
+    Bytes := Int64(Length(ASrc.Strings[I].CodePoints)) * SizeOf(Cardinal);
+    Inc(ADest.CodePointBytes, Bytes);
+    Dec(ASrc.CodePointBytes, Bytes);
   end;
 end;
 
-procedure FilterClassStrings(var ADest: TRegExpClassContents;
+procedure TRegExpCompiler.FilterClassStrings(var ADest: TRegExpClassContents;
   const ARight: TRegExpClassContents; AKeepMatched: Boolean);
 var
   I, J: Integer;
   Found: Boolean;
   ResultStrings: array of TRegExpStringSequence;
   ResultStringCount: Integer;
+  KeptBytes: Int64;
 begin
   ResultStringCount := 0;
+  KeptBytes := 0;
+  CheckWorkspace(Int64(ADest.StringCount) * 2 * SizeOf(TRegExpStringSequence));
   SetLength(ResultStrings, ADest.StringCount);
   for I := 0 to ADest.StringCount - 1 do
   begin
@@ -1378,15 +1494,19 @@ begin
     begin
       ResultStrings[ResultStringCount] := ADest.Strings[I];
       Inc(ResultStringCount);
+      Inc(KeptBytes, Int64(Length(ADest.Strings[I].CodePoints)) * SizeOf(Cardinal));
     end;
   end;
   ADest.StringCount := ResultStringCount;
+  Dec(FTableBytes, Int64(Length(ADest.Strings) - ResultStringCount) * SizeOf(TRegExpStringSequence) +
+    ADest.CodePointBytes - KeptBytes);
+  ADest.CodePointBytes := KeptBytes;
   SetLength(ADest.Strings, ResultStringCount);
   for I := 0 to ResultStringCount - 1 do
     ADest.Strings[I] := ResultStrings[I];
 end;
 
-procedure ApplyClassSetOp(var ADest: TRegExpClassContents;
+procedure TRegExpCompiler.ApplyClassSetOp(var ADest: TRegExpClassContents;
   const ARight: TRegExpClassContents; AIsIntersect: Boolean);
 var
   ResultRanges: array[0..MAX_CHAR_RANGES - 1] of TRegExpCharRange;
@@ -1412,18 +1532,6 @@ begin
   for I := 0 to ResultCount - 1 do
     ADest.Ranges[I] := ResultRanges[I];
   FilterClassStrings(ADest, ARight, AIsIntersect);
-end;
-
-procedure IntersectClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
-begin
-  ApplyClassSetOp(ADest, ARight, True);
-end;
-
-procedure SubtractClassContents(var ADest: TRegExpClassContents;
-  const ARight: TRegExpClassContents);
-begin
-  ApplyClassSetOp(ADest, ARight, False);
 end;
 
 procedure ComplementContents(var AContents: TRegExpClassContents);
@@ -1457,17 +1565,26 @@ procedure TRegExpCompiler.GetStringPropertySequences(
 var
   I: Integer;
   Sequences: TUnicodeStringSequenceArray;
+  Bytes: Int64;
 begin
   if TryGetUnicodeStringPropertySequences('strings/' + APropertyName,
-     Sequences) then
+     Sequences, CheckWorkspace) then
   begin
+    Bytes := Int64(Length(Sequences)) * SizeOf(TUnicodeStringSequence);
     for I := 0 to High(Sequences) do
-    begin
-      if Length(Sequences[I].CodePoints) = 1 then
-        AddClassRange(AContents, Sequences[I].CodePoints[0],
-          Sequences[I].CodePoints[0])
-      else if Length(Sequences[I].CodePoints) > 1 then
-        AddClassString(AContents, Sequences[I].CodePoints);
+      Inc(Bytes, Int64(Length(Sequences[I].CodePoints)) * SizeOf(Cardinal));
+    Inc(FTableBytes, Bytes);
+    try
+      for I := 0 to High(Sequences) do
+      begin
+        if Length(Sequences[I].CodePoints) = 1 then
+          AddClassRange(AContents, Sequences[I].CodePoints[0],
+            Sequences[I].CodePoints[0])
+        else if Length(Sequences[I].CodePoints) > 1 then
+          AddClassString(AContents, Sequences[I].CodePoints);
+      end;
+    finally
+      Dec(FTableBytes, Bytes);
     end;
     Exit;
   end;
@@ -1817,27 +1934,35 @@ var
   CodePoints: array of Cardinal;
   CodePointCount: Integer;
 begin
-  AMayContainStrings := False;
-  SetLength(CodePoints, 16);
-  repeat
-    // ClassString :: [empty] | NonEmptyClassString
-    CodePointCount := 0;
-    while not AtEnd and (Peek <> '|') and (Peek <> '}') do
-    begin
-      if CodePointCount >= Length(CodePoints) then
-        SetLength(CodePoints, CodePointCount * 2);
-      CodePoints[CodePointCount] := ParseClassSetCharacter;
-      Inc(CodePointCount);
-    end;
-    if CodePointCount <> 1 then
-      AMayContainStrings := True;
-    if CodePointCount = 1 then
-      AddClassRange(AContents, CodePoints[0], CodePoints[0])
-    else if CodePointCount > 0 then
-      AddClassString(AContents, Copy(CodePoints, 0, CodePointCount));
-  until not Match('|');
-  if not Match('}') then
-    raise EConvertError.Create('Unterminated string disjunction \\q{}');
+  try
+    AMayContainStrings := False;
+    CheckTableResize(0, 16, SizeOf(Cardinal));
+    SetLength(CodePoints, 16);
+    repeat
+      // ClassString :: [empty] | NonEmptyClassString
+      CodePointCount := 0;
+      while not AtEnd and (Peek <> '|') and (Peek <> '}') do
+      begin
+        if CodePointCount >= Length(CodePoints) then
+        begin
+          CheckTableResize(Length(CodePoints), CodePointCount * 2, SizeOf(Cardinal));
+          SetLength(CodePoints, CodePointCount * 2);
+        end;
+        CodePoints[CodePointCount] := ParseClassSetCharacter;
+        Inc(CodePointCount);
+      end;
+      if CodePointCount <> 1 then
+        AMayContainStrings := True;
+      if CodePointCount = 1 then
+        AddClassRange(AContents, CodePoints[0], CodePoints[0])
+      else if CodePointCount > 0 then
+        AddClassString(AContents, CodePoints, CodePointCount);
+    until not Match('|');
+    if not Match('}') then
+      raise EConvertError.Create('Unterminated string disjunction \\q{}');
+  finally
+    Dec(FTableBytes, Int64(Length(CodePoints)) * SizeOf(Cardinal));
+  end;
 end;
 
 // ES2026 §22.2.1 ClassSetOperand, or in a ClassUnion a ClassSetRange.
@@ -1858,25 +1983,29 @@ begin
   begin
     // NestedClass :: [ [lookahead ≠ ^] ClassContents ] | [^ ClassContents ]
     Inc(FPos);
-    if Match('^') then
-    begin
-      ParseClassSetExpression(Nested, NestedMayContainStrings);
-      if not Match(']') then
-        raise EConvertError.Create('Unterminated character class');
-      // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
-      if NestedMayContainStrings then
-        raise EConvertError.Create(SErrorNegatedClassStrings);
-      NormalizeRanges(Nested.Ranges, Nested.RangeCount);
-      ComplementContents(Nested);
-    end
-    else
-    begin
-      ParseClassSetExpression(Nested, NestedMayContainStrings);
-      if not Match(']') then
-        raise EConvertError.Create('Unterminated character class');
-      AMayContainStrings := NestedMayContainStrings;
+    try
+      if Match('^') then
+      begin
+        ParseClassSetExpression(Nested, NestedMayContainStrings);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
+        if NestedMayContainStrings then
+          raise EConvertError.Create(SErrorNegatedClassStrings);
+        NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+        ComplementContents(Nested);
+      end
+      else
+      begin
+        ParseClassSetExpression(Nested, NestedMayContainStrings);
+        if not Match(']') then
+          raise EConvertError.Create('Unterminated character class');
+        AMayContainStrings := NestedMayContainStrings;
+      end;
+      MergeClassContents(AContents, Nested);
+    finally
+      ClearClassContents(Nested);
     end;
-    MergeClassContents(AContents, Nested);
     Exit;
   end;
   if (Peek = '\') and CharInSet(PeekAt(1),
@@ -1914,12 +2043,16 @@ begin
           end
           else if C = 'P' then
           begin
-            InitClassContents(Nested);
-            GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
-              Nested.RangeCount);
-            NormalizeRanges(Nested.Ranges, Nested.RangeCount);
-            ComplementContents(Nested);
-            MergeClassContents(AContents, Nested);
+            try
+              InitClassContents(Nested);
+              GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
+                Nested.RangeCount);
+              NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+              ComplementContents(Nested);
+              MergeClassContents(AContents, Nested);
+            finally
+              ClearClassContents(Nested);
+            end;
           end
           else
             GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
@@ -1984,20 +2117,24 @@ begin
       Inc(FPos, 2);
       if (SetOperator = '&') and (Peek = '&') then
         raise EConvertError.Create(SErrorClassSetOperation);
-      InitClassContents(Operand);
-      if ParseClassSetOperand(Operand, OperandMayContainStrings) then
-        raise EConvertError.Create(SErrorClassSetOperation);
-      if SetOperator = '&' then
-      begin
-        IntersectClassContents(AContents, Operand);
-        // §22.2.1.8: an intersection may contain strings only when every
-        // operand may.
-        AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
-      end
-      else
-        // §22.2.1.8: a subtraction may contain strings when its first
-        // operand may.
-        SubtractClassContents(AContents, Operand);
+      try
+        InitClassContents(Operand);
+        if ParseClassSetOperand(Operand, OperandMayContainStrings) then
+          raise EConvertError.Create(SErrorClassSetOperation);
+        if SetOperator = '&' then
+        begin
+          ApplyClassSetOp(AContents, Operand, True);
+          // §22.2.1.8: an intersection may contain strings only when every
+          // operand may.
+          AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
+        end
+        else
+          // §22.2.1.8: a subtraction may contain strings when its first
+          // operand may.
+          ApplyClassSetOp(AContents, Operand, False);
+      finally
+        ClearClassContents(Operand);
+      end;
     end;
     if not AtEnd and (Peek <> ']') then
       raise EConvertError.Create(SErrorClassSetOperation);
@@ -2017,7 +2154,7 @@ begin
 end;
 
 procedure TRegExpCompiler.EmitClassContents(
-  const AContents: TRegExpClassContents; ANegated: Boolean);
+  var AContents: TRegExpClassContents; ANegated: Boolean);
 var
   I, J: Integer;
   SplitHoles: array of Integer;
@@ -2037,39 +2174,44 @@ begin
     EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, ANegated);
     Exit;
   end;
-  SplitCount := 0;
-  JumpCount := 0;
-  SetLength(SplitHoles, AContents.StringCount + 1);
-  SetLength(JumpHoles, AContents.StringCount + 1);
-  for I := AContents.StringCount - 1 downto 0 do
-  begin
-    if Length(AContents.Strings[I].CodePoints) > 1 then
+  CheckTableResize(0, AContents.StringCount + 1, 2 * SizeOf(Integer));
+  try
+    SplitCount := 0;
+    JumpCount := 0;
+    SetLength(SplitHoles, AContents.StringCount + 1);
+    SetLength(JumpHoles, AContents.StringCount + 1);
+    for I := AContents.StringCount - 1 downto 0 do
     begin
-      SplitHoles[SplitCount] := CurrentPC;
-      Inc(SplitCount);
-      Emit(EncodeOpBx(RX_SPLIT, 0));
-      if FBackward then
+      if Length(AContents.Strings[I].CodePoints) > 1 then
       begin
-        for J := High(AContents.Strings[I].CodePoints) downto 0 do
-          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
-      end
-      else
-      begin
-        for J := 0 to High(AContents.Strings[I].CodePoints) do
-          EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        SplitHoles[SplitCount] := CurrentPC;
+        Inc(SplitCount);
+        Emit(EncodeOpBx(RX_SPLIT, 0));
+        if FBackward then
+        begin
+          for J := High(AContents.Strings[I].CodePoints) downto 0 do
+            EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        end
+        else
+        begin
+          for J := 0 to High(AContents.Strings[I].CodePoints) do
+            EmitCharMatch(AContents.Strings[I].CodePoints[J]);
+        end;
+        JumpHoles[JumpCount] := CurrentPC;
+        Inc(JumpCount);
+        Emit(EncodeOpBx(RX_JUMP, 0));
+        PatchHole(SplitHoles[SplitCount - 1], CurrentPC);
       end;
-      JumpHoles[JumpCount] := CurrentPC;
-      Inc(JumpCount);
-      Emit(EncodeOpBx(RX_JUMP, 0));
-      PatchHole(SplitHoles[SplitCount - 1], CurrentPC);
     end;
+    if AContents.RangeCount > 0 then
+      EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, False)
+    else
+      Emit(EncodeOp(RX_FAIL));
+    for I := 0 to JumpCount - 1 do
+      FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  finally
+    Dec(FTableBytes, Int64(Length(SplitHoles) + Length(JumpHoles)) * SizeOf(Integer));
   end;
-  if AContents.RangeCount > 0 then
-    EmitCharClassRanges(AContents.Ranges, AContents.RangeCount, False)
-  else
-    Emit(EncodeOp(RX_FAIL));
-  for I := 0 to JumpCount - 1 do
-    FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
 end;
 
 // ES2026 §22.2.1 CharacterClass[+UnicodeMode, +UnicodeSetsMode], after `[`
@@ -2078,14 +2220,18 @@ var
   Contents: TRegExpClassContents;
   Negated, MayContainStrings: Boolean;
 begin
-  Negated := Match('^');
-  ParseClassSetExpression(Contents, MayContainStrings);
-  if not Match(']') then
-    raise EConvertError.Create('Unterminated character class');
-  // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
-  if Negated and MayContainStrings then
-    raise EConvertError.Create(SErrorNegatedClassStrings);
-  EmitClassContents(Contents, Negated);
+  try
+    Negated := Match('^');
+    ParseClassSetExpression(Contents, MayContainStrings);
+    if not Match(']') then
+      raise EConvertError.Create('Unterminated character class');
+    // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
+    if Negated and MayContainStrings then
+      raise EConvertError.Create(SErrorNegatedClassStrings);
+    EmitClassContents(Contents, Negated);
+  finally
+    ClearClassContents(Contents);
+  end;
 end;
 
 procedure TRegExpCompiler.EmitCharClassRanges(
@@ -2444,9 +2590,13 @@ begin
             if Negated then
               raise EConvertError.Create(
                 'Negated \\P{} cannot be used with properties of strings');
-            InitClassContents(Contents);
-            GetStringPropertySequences(PropertyName, Contents);
-            EmitClassContents(Contents, False);
+            try
+              InitClassContents(Contents);
+              GetStringPropertySequences(PropertyName, Contents);
+              EmitClassContents(Contents, False);
+            finally
+              ClearClassContents(Contents);
+            end;
           end
           else
             EmitUnicodePropertyClass(PropertyName, Negated);
@@ -3116,7 +3266,7 @@ begin
   if Int64(FCodeLen) + ANeeded > REGEXP_MAX_PROGRAM_LENGTH then
     RaiseRegExpTooLarge;
   if FCodeLen + ANeeded >= Length(FCode) then
-    SetLength(FCode, (FCodeLen + ANeeded) * 2 + 16);
+    GrowCode((FCodeLen + ANeeded) * 2 + 16);
 end;
 
 procedure TRegExpCompiler.EmitBody(const ABody: array of UInt32; ALen: Integer);
@@ -3210,6 +3360,7 @@ var
     end;
 
   begin
+    CheckWorkspace(Int64(BodyLen) * (SizeOf(Boolean) + SizeOf(Integer)));
     SetLength(Visited, BodyLen);
     SetLength(Pending, BodyLen);
     PendingCount := 0;
@@ -3381,50 +3532,55 @@ begin
      (MaxCount > REGEXP_MAX_QUANTIFIER_BOUND) then
     raise EConvertError.Create(
       'Invalid regular expression: quantifier bound too large');
-  SetLength(BodyCode, BodyLen);
-  Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
-  HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
-  NeedsRepeatGuard := not BodyRequiresProgress;
-  FCodeLen := AAtomStart;
-  for I := 1 to Integer(MinCount) do
-  begin
-    EmitCaptureClearIfNeeded;
-    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
-  end;
-  if MaxCount = -1 then
-  begin
-    SplitPC := CurrentPC;
-    if Lazy then
-      Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
-    else
-      Emit(EncodeOpBx(RX_SPLIT, 0));
-    EmitOptionalBody;
-    Emit(EncodeOpBx(RX_JUMP, SplitPC));
-    PatchHole(SplitPC, CurrentPC);
-  end
-  else
-  begin
-    // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
-    // skipped, matching continues after the last copy instead of trying
-    // each remaining copy in turn. Until the end is known, each split's
-    // operand links to the previous split (index + 1, 0 for none).
-    PrevSplit := -1;
-    for I := Integer(MinCount) + 1 to Integer(MaxCount) do
+  try
+    CheckTableResize(0, BodyLen, SizeOf(UInt32));
+    SetLength(BodyCode, BodyLen);
+    Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
+    HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
+    NeedsRepeatGuard := not BodyRequiresProgress;
+    FCodeLen := AAtomStart;
+    for I := 1 to Integer(MinCount) do
+    begin
+      EmitCaptureClearIfNeeded;
+      EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+    end;
+    if MaxCount = -1 then
     begin
       SplitPC := CurrentPC;
       if Lazy then
-        Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
+        Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
       else
-        Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
-      PrevSplit := SplitPC;
+        Emit(EncodeOpBx(RX_SPLIT, 0));
       EmitOptionalBody;
-    end;
-    while PrevSplit >= 0 do
-    begin
-      SplitPC := PrevSplit;
-      PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
+      Emit(EncodeOpBx(RX_JUMP, SplitPC));
       PatchHole(SplitPC, CurrentPC);
+    end
+    else
+    begin
+      // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
+      // skipped, matching continues after the last copy instead of trying
+      // each remaining copy in turn. Until the end is known, each split's
+      // operand links to the previous split (index + 1, 0 for none).
+      PrevSplit := -1;
+      for I := Integer(MinCount) + 1 to Integer(MaxCount) do
+      begin
+        SplitPC := CurrentPC;
+        if Lazy then
+          Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
+        else
+          Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
+        PrevSplit := SplitPC;
+        EmitOptionalBody;
+      end;
+      while PrevSplit >= 0 do
+      begin
+        SplitPC := PrevSplit;
+        PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
+        PatchHole(SplitPC, CurrentPC);
+      end;
     end;
+  finally
+    Dec(FTableBytes, Int64(Length(BodyCode)) * SizeOf(UInt32));
   end;
 end;
 
@@ -3500,27 +3656,38 @@ begin
     Exit;
   end;
 
-  TermCount := 0;
-  SetLength(Terms, 8);
-  while not AtEnd and (Peek <> '|') and (Peek <> ')') do
-  begin
-    TermStart := CurrentPC;
-    CompileTerm;
-    if TermCount >= Length(Terms) then
-      SetLength(Terms, TermCount * 2 + 8);
-    Terms[TermCount].Length := CurrentPC - TermStart;
-    Terms[TermCount].OriginalStart := TermStart;
-    SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
-    if Terms[TermCount].Length > 0 then
-      Move(FCode[TermStart], Terms[TermCount].Code[0],
-        Terms[TermCount].Length * SizeOf(UInt32));
-    FCodeLen := TermStart;
-    Inc(TermCount);
-  end;
+  try
+    TermCount := 0;
+    CheckTableResize(0, 8, SizeOf(TRegExpTermCode));
+    SetLength(Terms, 8);
+    while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+    begin
+      TermStart := CurrentPC;
+      CompileTerm;
+      if TermCount >= Length(Terms) then
+      begin
+        CheckTableResize(Length(Terms), TermCount * 2 + 8, SizeOf(TRegExpTermCode));
+        SetLength(Terms, TermCount * 2 + 8);
+      end;
+      Terms[TermCount].Length := CurrentPC - TermStart;
+      Terms[TermCount].OriginalStart := TermStart;
+      CheckTableResize(0, Terms[TermCount].Length, SizeOf(UInt32));
+      SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
+      if Terms[TermCount].Length > 0 then
+        Move(FCode[TermStart], Terms[TermCount].Code[0],
+          Terms[TermCount].Length * SizeOf(UInt32));
+      FCodeLen := TermStart;
+      Inc(TermCount);
+    end;
 
-  for TermIndex := TermCount - 1 downto 0 do
-    EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
-      Terms[TermIndex].OriginalStart);
+    for TermIndex := TermCount - 1 downto 0 do
+      EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
+        Terms[TermIndex].OriginalStart);
+  finally
+    for TermIndex := 0 to High(Terms) do
+      Dec(FTableBytes, Int64(Length(Terms[TermIndex].Code)) * SizeOf(UInt32));
+    Dec(FTableBytes, Int64(Length(Terms)) * SizeOf(TRegExpTermCode));
+  end;
 end;
 
 procedure TRegExpCompiler.InsertSplitAt(APos: Integer);
@@ -3567,32 +3734,40 @@ var
 begin
   // Every group and lookaround compiles its body from here.
   EnterNesting;
-  JumpCount := 0;
-  SetLength(JumpHoles, 8);
-  StartPC := CurrentPC;
-  CompileAlternative;
-  while (not AtEnd) and (Peek = '|') do
-  begin
-    Inc(FPos);
-    if FAltStackDepth < Length(FAltStack) then
-      Inc(FAltStack[FAltStackDepth]);
-    // The split goes in front of the alternative just compiled, so only that
-    // alternative's code moves. The jump holes of earlier alternatives all sit
-    // before StartPC and stay where they are; walking them here would cost
-    // time quadratic in the number of alternatives.
-    InsertSplitAt(StartPC);
-    if JumpCount >= Length(JumpHoles) then
-      SetLength(JumpHoles, JumpCount * 2 + 8);
-    JumpHoles[JumpCount] := CurrentPC;
-    Inc(JumpCount);
-    Emit(0);
-    PatchHole(StartPC, CurrentPC);
+  try
+    JumpCount := 0;
+    CheckTableResize(0, 8, SizeOf(Integer));
+    SetLength(JumpHoles, 8);
     StartPC := CurrentPC;
     CompileAlternative;
+    while (not AtEnd) and (Peek = '|') do
+    begin
+      Inc(FPos);
+      if FAltStackDepth < Length(FAltStack) then
+        Inc(FAltStack[FAltStackDepth]);
+      // The split goes in front of the alternative just compiled, so only that
+      // alternative's code moves. The jump holes of earlier alternatives all sit
+      // before StartPC and stay where they are; walking them here would cost
+      // time quadratic in the number of alternatives.
+      InsertSplitAt(StartPC);
+      if JumpCount >= Length(JumpHoles) then
+      begin
+        CheckTableResize(Length(JumpHoles), JumpCount * 2 + 8, SizeOf(Integer));
+        SetLength(JumpHoles, JumpCount * 2 + 8);
+      end;
+      JumpHoles[JumpCount] := CurrentPC;
+      Inc(JumpCount);
+      Emit(0);
+      PatchHole(StartPC, CurrentPC);
+      StartPC := CurrentPC;
+      CompileAlternative;
+    end;
+    for I := 0 to JumpCount - 1 do
+      FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  finally
+    Dec(FTableBytes, Int64(Length(JumpHoles)) * SizeOf(Integer));
+    LeaveNesting;
   end;
-  for I := 0 to JumpCount - 1 do
-    FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
-  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.CompilePattern;
@@ -3607,7 +3782,7 @@ end;
 
 procedure TRegExpCompiler.PreScanNamedGroups;
 var
-  I, GroupIndex, CloseAngle: Integer;
+  I, GroupIndex, CloseAngle, Capacity: Integer;
   InCharClass: Boolean;
   GroupName: string;
   // The tree node of each open level's group and of the alternative it is in,
@@ -3615,6 +3790,7 @@ var
   GroupNodes, AltNodes: array of Integer;
   AltStackDepth: Integer;
 begin
+  CheckTableResize(0, 64, 2 * SizeOf(Integer));
   SetLength(GroupNodes, 64);
   SetLength(AltNodes, 64);
   AltStackDepth := 0;
@@ -3675,7 +3851,9 @@ begin
         RaiseRegExpNestingLimit(AltStackDepth);
       if AltStackDepth >= Length(GroupNodes) then
       begin
-        SetLength(GroupNodes, AltStackDepth * 2 + 4);
+        Capacity := AltStackDepth * 2 + 4;
+        CheckTableResize(Length(GroupNodes), Capacity, 2 * SizeOf(Integer));
+        SetLength(GroupNodes, Capacity);
         SetLength(AltNodes, Length(GroupNodes));
       end;
       GroupNodes[AltStackDepth] := -1;
@@ -3697,6 +3875,8 @@ begin
           if CloseAngle <= Length(FPattern) then
           begin
             Inc(GroupIndex);
+            // The source slice and the decoded name can coexist during decoding.
+            CheckWorkspace(Int64(CloseAngle - I - 3) * 3 * SizeOf(Char));
             GroupName := DecodeRegExpGroupName(
               Copy(FPattern, I + 3, CloseAngle - I - 3));
             AddNamedGroup(GroupName, GroupIndex, GroupNodes, AltNodes,
@@ -3712,6 +3892,12 @@ begin
     end;
     Inc(I);
   end;
+  Dec(FTableBytes, Int64(Length(GroupNodes)) * 2 * SizeOf(Integer));
+  GroupNodes := nil;
+  AltNodes := nil;
+  if FNamedGroupCount < Length(FNamedGroups) then
+    CheckTableResize(Length(FNamedGroups), FNamedGroupCount,
+      SizeOf(TGocciaRegExpNamedGroup) + 2 * SizeOf(Integer));
   SetLength(FNamedGroups, FNamedGroupCount);
   SetLength(FNamedGroupNext, FNamedGroupCount);
   SetLength(FNamedGroupPathNode, FNamedGroupCount);
@@ -3720,10 +3906,14 @@ end;
 
 function TRegExpCompiler.NewPathNode(AParent: Integer;
   AIsGroup: Boolean): Integer;
+var
+  Capacity: Integer;
 begin
   if FPathNodeCount >= Length(FPathParent) then
   begin
-    SetLength(FPathParent, FPathNodeCount * 2 + 16);
+    Capacity := FPathNodeCount * 2 + 16;
+    CheckTableResize(Length(FPathParent), Capacity, SizeOf(Integer) + SizeOf(Boolean));
+    SetLength(FPathParent, Capacity);
     SetLength(FPathIsGroup, Length(FPathParent));
   end;
   FPathParent[FPathNodeCount] := AParent;
@@ -3742,8 +3932,9 @@ procedure TRegExpCompiler.AddNamedGroup(const AName: string;
   AGroupIndex: Integer; var AGroupNodes, AAltNodes: array of Integer;
   ADepth: Integer);
 var
-  EntryIndex, Position, Level, Node: Integer;
+  EntryIndex, Position, Level, Node, Capacity: Integer;
 begin
+  Inc(FTableBytes, Int64(Length(AName)) * SizeOf(Char));
   Level := ADepth - 1;
   while (Level >= 0) and (AAltNodes[Level] < 0) do
     Dec(Level);
@@ -3765,7 +3956,9 @@ begin
 
   if FNamedGroupCount >= Length(FNamedGroups) then
   begin
-    SetLength(FNamedGroups, FNamedGroupCount * 2 + 8);
+    Capacity := FNamedGroupCount * 2 + 8;
+    CheckTableResize(Length(FNamedGroups), Capacity, SizeOf(TGocciaRegExpNamedGroup) + 2 * SizeOf(Integer));
+    SetLength(FNamedGroups, Capacity);
     SetLength(FNamedGroupNext, Length(FNamedGroups));
     SetLength(FNamedGroupPathNode, Length(FNamedGroups));
   end;
@@ -3784,7 +3977,11 @@ begin
   else
   begin
     if FNameEntryCount >= Length(FNameEntries) then
-      SetLength(FNameEntries, FNameEntryCount * 2 + 8);
+    begin
+      Capacity := FNameEntryCount * 2 + 8;
+      CheckTableResize(Length(FNameEntries), Capacity, SizeOf(TRegExpNameEntry));
+      SetLength(FNameEntries, Capacity);
+    end;
     FNameEntries[FNameEntryCount].First := Position;
     FNameEntries[FNameEntryCount].Last := Position;
     FNameEntries[FNameEntryCount].Count := 1;
@@ -3826,6 +4023,7 @@ begin
       Continue;
     if Length(Reached) = 0 then
     begin
+      CheckWorkspace(Int64(FPathNodeCount) * 2 * SizeOf(Integer));
       SetLength(Reached, FPathNodeCount);
       SetLength(IsGroupOfName, FPathNodeCount);
       FillChar(Reached[0], FPathNodeCount * SizeOf(Integer), 0);
@@ -3881,11 +4079,12 @@ begin
     end;
 end;
 
-function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+function CompileRegExp(const APattern, AFlags: string;
+  const ACheckWorkspace: TRegExpWorkspaceCheck): TRegExpProgram;
 var
   Compiler: TRegExpCompiler;
 begin
-  Compiler := TRegExpCompiler.Create(APattern, AFlags);
+  Compiler := TRegExpCompiler.Create(APattern, AFlags, ACheckWorkspace);
   try
     Result := Compiler.Compile;
   finally
