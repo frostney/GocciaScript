@@ -99,8 +99,20 @@ test("toThrow, snapshots, mocks and expect.extend", () => {
 });
 
 test("expect.stringMatching with a string runs its own pattern", () => {
-  // the matcher's pattern is its own RegExp: matching it looks up nothing on RegExp.prototype
+  // the matcher's pattern is its own RegExp: matching and comparing it look up nothing on RegExp.prototype
   watched(() => expect("abc").toEqual(expect.stringMatching("b")));
+  watched(() => expect(expect.stringMatching("b")).toEqual(expect.stringMatching("b")));
+});
+
+test("expect.stringMatching reads a pattern's source before its flags and compares canonical flags", () => {
+  const reads = [];
+  const sample = /x/g;
+  Object.defineProperty(sample, "source", { get() { reads[reads.length] = "source"; return "x"; } });
+  Object.defineProperty(sample, "flags", { get() { reads[reads.length] = "flags"; return "ig"; } });
+  const m = expect.stringMatching(sample);
+  expect(reads).toEqual(["source", "flags"]);
+  expect("X").toEqual(m);
+  expect(m).toEqual(expect.stringMatching(/x/gi));
 });
 
 test.each([[1, 2, 3], [2, 3, 5]])("test.each %i + %i is %i", (a, b, sum) => {

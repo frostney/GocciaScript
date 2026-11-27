@@ -1217,13 +1217,14 @@
   // ---------------- decorators (TC39 proposal-decorators, as GocciaScript has them) ----------------
   // the compiler calls these through opIntrinsic (INTRINSIC_DEC_*): a decorated class definition's session holds its
   // class (a class decorator can replace it), its metadata object and the initializers its decorators added
-  var SymMetadata = Symbol("Symbol.metadata");
+  var SymMetadata = Symbol("Symbol.metadata"), symDescription = Object.getOwnPropertyDescriptor(Symbol.prototype, "description").get;
   defineProperty(Symbol, "metadata", { __proto__: null, value: SymMetadata, writable: false, enumerable: false, configurable: false });
   function decBegin(cls, parent, name) {
     var pm = null;
     if (isObject(parent)) { var m = parent[SymMetadata]; if (isObject(m)) pm = m; }
     // a name from a computed key (a symbol's description in brackets)
-    if (typeof name === "symbol") { var desc = name.description; name = desc === undefined ? "" : "[" + desc + "]"; }
+    // the symbol's [[Description]] through the captured getter (SetFunctionName, 10.2.9)
+    if (typeof name === "symbol") { var desc = apply(symDescription, name, []); name = desc === undefined ? "" : "[" + desc + "]"; }
     return { cls: cls, orig: cls, proto: cls.prototype, name: name, meta: create(pm), fieldInits: [], fieldExtra: [],
       instInits: [], staticInits: [], classInits: [] };
   }

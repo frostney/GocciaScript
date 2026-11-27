@@ -128,6 +128,15 @@ test("the enum, pattern matching and decorator helpers", () => {
   expect(expectClean(r, ARRAY_ITERATION)).toEqual(["g", [2, 3], true, 7, true, true]);
 });
 
+test("a decorated anonymous class named by a computed symbol key", () => {
+  const key = Symbol("key");
+  let name;
+  const decorate = (value, context) => { name = context.name; return value; };
+  // SetFunctionName reads the symbol's [[Description]], not Symbol.prototype.description
+  expectClean(wire.watch(() => ({ [key]: @decorate class {} })));
+  expect(name).toBe("[key]");
+});
+
 test("every builtins5 built-in has a case", () => {
   const paths = ["WeakMap.prototype", "WeakSet.prototype", "WeakRef.prototype", "FinalizationRegistry.prototype"];
   expect(paths.flatMap((p) => wire.uncovered(p))).toEqual([]);

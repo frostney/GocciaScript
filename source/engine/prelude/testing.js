@@ -408,13 +408,18 @@
   // RegExp.prototype, which a script may replace)
   const patternSource = uncurryThis(regExpSource), patternOf = new global.WeakMap();
   const WeakMapPrototypeGet = uncurryThis(global.WeakMap.prototype.get), WeakMapPrototypeSet = uncurryThis(global.WeakMap.prototype.set);
+  // a pattern's canonical flags from its internal slot, each flag's own getter (the flags getter looks each one up)
+  const FLAG_GETTERS = [];
+  for (const [f, k] of [['d', 'hasIndices'], ['g', 'global'], ['i', 'ignoreCase'], ['m', 'multiline'], ['s', 'dotAll'],
+    ['u', 'unicode'], ['v', 'unicodeSets'], ['y', 'sticky']]) append(FLAG_GETTERS, [f, uncurryThis(getOwnPropertyDescriptor(RegExp.prototype, k).get)]);
+  const patternFlags = (re) => { let s = ''; for (let i = 0; i < FLAG_GETTERS.length; i++) if (FLAG_GETTERS[i][1](re)) s += FLAG_GETTERS[i][0]; return s; };
   function stringMatching(sample, inverse) {
     const text = stringOf(sample);
-    let re, flags;
-    if (text !== undefined) { re = new RegExp(text, ''); flags = ''; }
-    else if (isRegExp(sample)) { flags = sample.flags; re = new RegExp(sample.source, flags); }
+    let re;
+    if (text !== undefined) re = new RegExp(text, '');
+    else if (isRegExp(sample)) re = new RegExp(sample.source, sample.flags);
     else throw new Error('Expected is not a String or a RegExp');
-    WeakMapPrototypeSet(patternOf, re, [patternSource(re), flags]);
+    WeakMapPrototypeSet(patternOf, re, [patternSource(re), patternFlags(re)]);
     return matcher('stringMatching', ['StringMatching', 'StringNotMatching'], re, inverse, function match(v) {
       const s = stringOf(v);
       if (s === undefined) return not(this, false);
