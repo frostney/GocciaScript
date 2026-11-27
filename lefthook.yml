@@ -11,18 +11,9 @@ pre-commit:
       run: ./format.pas {staged_files}
       stage_fixed: true
     lint-markdown:
-      glob: "**/*.md"
-      # Only the staged files, including one whose type changed, such as a
-      # symlink replaced by a regular file, which {staged_files} leaves out.
-      # --no-globs drops the config's "**/*.md", which would add every
-      # Markdown file in the worktree to them, ignored and symlinked ones
-      # included. Each file goes in as a literal path (":<path>"), which
-      # markdownlint-cli2 neither reads as a glob nor drops for matching
-      # .gitignore. A staged symlink is skipped.
-      files: git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMRT
-      file_types:
-        - not symlink
-      run: sh -c 'for file do set -- "$@" ":$file"; shift; done; exec npx markdownlint-cli2 --no-globs "$@"' lint-markdown {files}
+      # Only the staged Markdown files, each as a literal path; the script
+      # says how it picks them and why not from {staged_files}
+      run: sh scripts/lint-staged-markdown.sh
     check-doc-links:
       glob: "**/*.md"
       run: npx tsx scripts/check-doc-links.ts
