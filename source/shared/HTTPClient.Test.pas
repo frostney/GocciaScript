@@ -12,6 +12,7 @@ uses
   HTTPClient,
   HTTPTypes,
   NetworkAddress,
+  NetworkCancellation,
   TestingPascalLibrary,
   TimingUtils,
   TransportSecurity;
@@ -31,9 +32,18 @@ type
     procedure TestMalformedChunkedBodyIsAnError;
     procedure TestContentLengthCutShortIsAnError;
     procedure TestTricklingTLSHandshakeTimesOut;
+    procedure ExpectCancelEndsTheRequest(const AURL: string;
+      const ATimeoutMilliseconds: Integer; const AUnblock: TThreadMethod);
+    procedure TestCancelEndsASilentRead;
+    procedure TestCancelEndsASilentTLSHandshake;
+    {$ENDIF}
+    {$IFDEF LINUX}
+    procedure TestCancelEndsAConnectionAttempt;
+    procedure TestCancelEndsAConnectionAttemptOnItsOwnThread;
     {$ENDIF}
     {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
     procedure TestSilentTLSPeerTimesOut;
+    procedure TestCancelEndsASilentTLSRead;
     procedure ExpectResetFailsTheRequestOnly(const ABlockSigPipe: Boolean);
     procedure TestTLSPeerThatResetsDoesNotRaiseSigPipe;
     procedure TestResetWithSigPipeBlockedLeavesNoneToDeliver;
@@ -558,6 +568,7 @@ type
   private
     FURL: string;
     FTimeoutMilliseconds: Integer;
+    FCancellation: TNetworkCancellation;
     FDone: PRTLEvent;
   protected
     procedure Execute; override;
@@ -567,9 +578,12 @@ type
       block is lifted. }
     BlockSigPipe: Boolean;
     ErrorMessage: string;
+    { ACancellation (nil for none) is the request policy's; the caller keeps
+      it until the request has ended. }
     constructor Create(const AURL: string;
       const ATimeoutMilliseconds: Integer;
-      const ABlockSigPipe: Boolean = False);
+      const ABlockSigPipe: Boolean = False;
+      const ACancellation: TNetworkCancellation = nil);
     destructor Destroy; override;
     function WaitDone(const AMilliseconds: Cardinal): Boolean;
   end;
@@ -592,9 +606,11 @@ type
   end;
 
 constructor TClientRequest.Create(const AURL: string;
-  const ATimeoutMilliseconds: Integer; const ABlockSigPipe: Boolean);
+  const ATimeoutMilliseconds: Integer; const ABlockSigPipe: Boolean;
+  const ACancellation: TNetworkCancellation);
 begin
   BlockSigPipe := ABlockSigPipe;
+  FCancellation := ACancellation;
   FURL := AURL;
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FDone := RTLEventCreate;
@@ -611,15 +627,18 @@ procedure TClientRequest.Execute;
 var
   Headers: THTTPHeaders;
   PipeSet: TSigSet;
+  Policy: THTTPRequestPolicy;
 begin
   SetLength(Headers, 0);
+  Policy := DefaultHTTPPolicy;
+  Policy.Cancellation := FCancellation;
   fpSigEmptySet(PipeSet);
   fpSigAddSet(PipeSet, SIGPIPE);
   try
     if BlockSigPipe then
       fpSigProcMask(SIG_BLOCK, @PipeSet, nil);
     try
-      HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds);
+      HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds, Policy);
       ErrorMessage := '(no error)';
     except
       on E: Exception do
@@ -917,10 +936,22 @@ begin
     TestContentLengthCutShortIsAnError);
   Test('A TLS handshake trickled byte by byte ends at the deadline',
     TestTricklingTLSHandshakeTimesOut);
+  Test('A cancellation ends a read from a silent peer at once',
+    TestCancelEndsASilentRead);
+  Test('A cancellation ends a TLS handshake with a silent peer at once',
+    TestCancelEndsASilentTLSHandshake);
+  {$ENDIF}
+  {$IFDEF LINUX}
+  Test('A cancellation ends a connection attempt at once',
+    TestCancelEndsAConnectionAttempt);
+  Test('A cancellation ends a connection attempt on its own thread at once',
+    TestCancelEndsAConnectionAttemptOnItsOwnThread);
   {$ENDIF}
   {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
   Test('A TLS peer that goes silent after the handshake times out',
     TestSilentTLSPeerTimesOut);
+  Test('A cancellation ends a TLS read from a silent peer at once',
+    TestCancelEndsASilentTLSRead);
   Test('A TLS peer that resets the connection fails the request, not the process',
     TestTLSPeerThatResetsDoesNotRaiseSigPipe);
   Test('A reset leaves no SIGPIPE pending for a thread that blocks it',
@@ -1216,6 +1247,184 @@ begin
 end;
 {$ENDIF}
 
+{$IFDEF UNIX}
+const
+  { How long a request waits on its silent peer before it is cancelled: long
+    enough that it is blocked, which the test checks. }
+  CANCEL_AFTER_MILLISECONDS = 300;
+  { A cancelled request ends within one poll of
+    NETWORK_CANCELLATION_POLL_MILLISECONDS; a loaded runner gets room. }
+  CANCELLED_WITHIN_MILLISECONDS = 2000;
+  { No deadline: only the cancellation can end the request. }
+  NO_REQUEST_TIMEOUT = 0;
+  { A deadline far past the test: it ends nothing here, but sends the
+    connection attempt through a thread of its own (ConnectSocket). }
+  DISTANT_REQUEST_TIMEOUT_MILLISECONDS = 60000;
+
+type
+  { Owns a fixture socket, which Close closes (once) to end a request that a
+    cancellation failed to end, so a regression fails the test instead of
+    hanging it. }
+  TFixtureSocket = class
+  public
+    Socket: cint;
+    constructor Create(const ASocket: cint);
+    destructor Destroy; override;
+    procedure Close;
+  end;
+
+constructor TFixtureSocket.Create(const ASocket: cint);
+begin
+  inherited Create;
+  Socket := ASocket;
+end;
+
+destructor TFixtureSocket.Destroy;
+begin
+  Close;
+  inherited Destroy;
+end;
+
+procedure TFixtureSocket.Close;
+begin
+  if Socket >= 0 then
+    CloseSocket(Socket);
+  Socket := -1;
+end;
+
+{ A request to AURL, which blocks on a silent peer, is cancelled from another
+  thread: it ends within CANCELLED_WITHIN_MILLISECONDS with the cancellation's
+  error, and leaves no connection attempt running (#2216). A request still
+  running then is ended by AUnblock, which takes its peer away. }
+procedure THTTPClientTests.ExpectCancelEndsTheRequest(const AURL: string;
+  const ATimeoutMilliseconds: Integer; const AUnblock: TThreadMethod);
+var
+  Cancellation: TNetworkCancellation;
+  Client: TClientRequest;
+  BlockedBeforeCancel, Finished: Boolean;
+  CancelledAtNanoseconds, ElapsedMilliseconds: Int64;
+begin
+  Cancellation := TNetworkCancellation.Create;
+  try
+    Client := TClientRequest.Create(AURL, ATimeoutMilliseconds, False,
+      Cancellation);
+    try
+      BlockedBeforeCancel := not Client.WaitDone(CANCEL_AFTER_MILLISECONDS);
+      CancelledAtNanoseconds := GetNanoseconds;
+      Cancellation.Cancel;
+      Finished := Client.WaitDone(CANCELLED_WITHIN_MILLISECONDS);
+      ElapsedMilliseconds := (GetNanoseconds - CancelledAtNanoseconds) div
+        1000000;
+      if not Finished then
+        AUnblock;
+      Client.WaitFor;
+      Expect<Boolean>(BlockedBeforeCancel).ToBe(True);
+      Expect<Boolean>(Finished).ToBe(True);
+      Expect<Boolean>(
+        ElapsedMilliseconds < CANCELLED_WITHIN_MILLISECONDS).ToBe(True);
+      Expect<string>(Client.ErrorMessage).ToBe(HTTP_REQUEST_CANCELLED_MESSAGE);
+    finally
+      Client.Free;
+    end;
+  finally
+    Cancellation.Release;
+  end;
+  { The attempt's thread gave its slot back before the request ended, so a
+    request started next finds it free. }
+  Expect<Boolean>(WaitForHTTPConnectionWorkers(0)).ToBe(True);
+end;
+
+{ A listener that is never accepted: the kernel completes the connection and
+  takes the request, and nothing ever answers, so the read has no end but the
+  cancellation. }
+procedure THTTPClientTests.TestCancelEndsASilentRead;
+var
+  Listener: TFixtureSocket;
+  Port: Word;
+begin
+  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port));
+  try
+    ExpectCancelEndsTheRequest(Format('http://127.0.0.1:%d/', [Port]),
+      NO_REQUEST_TIMEOUT, Listener.Close);
+  finally
+    Listener.Free;
+  end;
+end;
+
+{ The same silent listener over https: the client's hello goes out and the
+  handshake waits for the server's, in the platform's TLS backend. }
+procedure THTTPClientTests.TestCancelEndsASilentTLSHandshake;
+var
+  Listener: TFixtureSocket;
+  Port: Word;
+begin
+  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port));
+  try
+    ExpectCancelEndsTheRequest(Format('https://127.0.0.1:%d/', [Port]),
+      NO_REQUEST_TIMEOUT, Listener.Close);
+  finally
+    Listener.Free;
+  end;
+end;
+{$ENDIF}
+
+{$IFDEF LINUX}
+const
+  { Connections that fill a listener's accept queue (backlog 0) before the
+    client's: Linux then drops the client's SYN, so its connection attempt
+    never completes. }
+  ACCEPT_QUEUE_FILLERS = 4;
+
+{ A request to a listener whose accept queue is full; closing the listener
+  resets the attempt when the cancellation did not end it. }
+procedure ExpectCancelEndsAConnectionAttempt(
+  const ATests: THTTPClientTests; const ATimeoutMilliseconds: Integer);
+var
+  Fillers: array[0..ACCEPT_QUEUE_FILLERS - 1] of cint;
+  Address: TInetSockAddr;
+  Listener: TFixtureSocket;
+  Port: Word;
+  I: Integer;
+begin
+  Listener := TFixtureSocket.Create(CreateLoopbackListener(Port, 0, False));
+  for I := 0 to High(Fillers) do
+    Fillers[I] := -1;
+  try
+    if fpListen(Listener.Socket, 0) <> 0 then
+      raise Exception.Create('listen failed');
+    FillChar(Address, SizeOf(Address), 0);
+    Address.sin_family := AF_INET;
+    Address.sin_port := htons(Port);
+    Address.sin_addr := StrToNetAddr('127.0.0.1');
+    for I := 0 to High(Fillers) do
+    begin
+      Fillers[I] := fpSocket(AF_INET, SOCK_STREAM, 0);
+      fpFcntl(Fillers[I], F_SETFL, fpFcntl(Fillers[I], F_GETFL) or O_NONBLOCK);
+      fpConnect(Fillers[I], @Address, SizeOf(Address));
+    end;
+    ATests.ExpectCancelEndsTheRequest(
+      Format('http://127.0.0.1:%d/', [Port]), ATimeoutMilliseconds,
+      Listener.Close);
+  finally
+    for I := 0 to High(Fillers) do
+      if Fillers[I] >= 0 then
+        CloseSocket(Fillers[I]);
+    Listener.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestCancelEndsAConnectionAttempt;
+begin
+  ExpectCancelEndsAConnectionAttempt(Self, NO_REQUEST_TIMEOUT);
+end;
+
+procedure THTTPClientTests.TestCancelEndsAConnectionAttemptOnItsOwnThread;
+begin
+  ExpectCancelEndsAConnectionAttempt(Self,
+    DISTANT_REQUEST_TIMEOUT_MILLISECONDS);
+end;
+{$ENDIF}
+
 {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
 { The peer completes the handshake and then sends nothing. The socket's
   receive timeout ended each read, OpenSSL asked to be called again, and the
@@ -1249,6 +1458,37 @@ begin
       finally
         Client.Free;
       end;
+    finally
+      Server.Free;
+    end;
+  finally
+    DeleteFile(CertificateFile);
+    DeleteFile(KeyFile);
+  end;
+end;
+
+{ The peer completes the handshake and then sends nothing: the read after it
+  waits in OpenSSL's wait for the socket, which the cancellation ends. }
+procedure THTTPClientTests.TestCancelEndsASilentTLSRead;
+var
+  CertificateFile, KeyFile: string;
+  Server: TSilentTLSServer;
+begin
+  TrustTestCertificate(CertificateFile, KeyFile);
+  try
+    Server := TSilentTLSServer.Create(CertificateFile, KeyFile);
+    try
+      try
+        ExpectCancelEndsTheRequest(
+          Format('https://localhost:%d/', [Server.Port]), NO_REQUEST_TIMEOUT,
+          Server.Release);
+      finally
+        { Joined before it is freed, whatever the request reported. }
+        Server.Release;
+        Server.WaitFor;
+      end;
+      Expect<string>(Server.Failure).ToBe('');
+      Expect<Boolean>(Server.HandshakeCompleted).ToBe(True);
     finally
       Server.Free;
     end;

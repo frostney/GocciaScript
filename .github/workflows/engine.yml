@@ -189,6 +189,24 @@ jobs:
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
+      - name: Embedders can opt in to Vitest with module-only tests
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/module-only-vitest-test scripts/engine/module-only-vitest-test.pas
+          timeout 20 build/module-only-vitest-test
+
+      - name: Native module factories preserve module and engine identity
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/native-module-test scripts/engine/native-module-test.pas
+          timeout 20 build/native-module-test
+
+      - name: Embedder host work interleaves with built-in events and is discarded on failure
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/embedder-host-work-test scripts/engine/embedder-host-work-test.pas
+          python3 scripts/engine/embedder-host-work-test.py build/embedder-host-work-test
+
       - name: A symlinked bytecode Script resolves import() from the real directory across runs
         run: bash scripts/engine/script-artifact-imports-test.sh
 

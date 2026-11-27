@@ -109,7 +109,7 @@ A nested run (`runScript`, or the shell's `goccia`) gets a `TGocciaSandboxContex
 
 `TGocciaEngine.Create` calls `EngineInit`, which builds the thread's engine: it masks the floating-point exceptions on the thread (so NaN and infinity arithmetic follows IEEE 754 instead of trapping), sets up the heap (`HeapInit`) and the VM (`VMInit`), and runs the intrinsics' Init procedures (`InitIntrinsics`), which make the first realm's built-ins and run the engine preludes. `TGocciaEngine.Destroy` releases the host's per-thread state (resolver, fetch requests, FFI) and calls `EngineDone`, which frees the heap, every function template and the preludes' lazy sources; values and closures from the engine are invalid afterwards.
 
-The host's own globals and modules are installed once, before the first run (`TGocciaEngine.PrepareHost`, which `Run` calls when the host has not): `InstallHostGlobals` in `Goccia.HostAPI` calls the host preludes with the global object, the host's natives and an object of shared internals. The engine's flags decide what the host adds: `Bare` keeps only GocciaScriptLoaderBare's surface, `ExposeTimers` the timer globals, `TestMode` the test host's additions (the `vitest` module unless the config turns it off), `Capabilities` the `FFI` global; GocciaTestRunner and GocciaBenchmarkRunner then install the testing API (`InstallTestingAPI`) or the benchmark API (`InstallBenchmarkAPI`) themselves. The conformance host (`goccia --test262`, `Goccia.Test262`) installs none of it.
+The host's own globals and modules are installed once, before the first run (`TGocciaEngine.PrepareHost`, which `Run` calls when the host has not): `InstallHostGlobals` in `Goccia.HostAPI` calls the host preludes with the global object, the host's natives and an object of shared internals. The engine's flags decide what the host adds: `Bare` keeps only GocciaScriptLoaderBare's surface, `ExposeTimers` the timer globals, `TestMode` the test host's additions (the `vitest` module unless the config turns it off; outside `TestMode`, `"vitest-compat": "true"` adds the module-only `vitest` shim instead), `Capabilities` the `FFI` global; GocciaTestRunner and GocciaBenchmarkRunner then install the testing API (`InstallTestingAPI`) or the benchmark API (`InstallBenchmarkAPI`) themselves. The conformance host (`goccia --test262`, `Goccia.Test262`) installs none of it.
 
 `TGocciaEngine.Run(FileName, Source)` then:
 
@@ -182,6 +182,15 @@ GocciaScript implements ECMAScript Promises with a synchronous job queue that dr
 3. one FinalizationRegistry cleanup job, then the microtasks it queued (ES2026 §9.9.4.1 HostEnqueueFinalizationRegistryCleanupJob);
 4. the `fetch` requests that finished, waiting for those still in flight before any timer fires (`Goccia.Fetch`);
 5. the next timer on the [virtual timer queue](adr/0113-deterministic-virtual-timer-queue.md) (`prelude/timers.js`, `shared.timers.fireNext`). Nothing there waits on wall time: the clock jumps to the next due timer when the engine has nothing else to do, or moves only when a test moves it under fake timers. Each timer is followed by the microtasks it queued, which is the macrotask-then-microtask order of an event loop without real elapsed time.
+
+When [an embedder has outstanding work](embedding.md#asynchronous-host-work), the loop also
+pumps its ready results and drains the reactions they queue. It polls ready Atomics and fetch
+results without blocking on either. Pending host work, like an in-flight fetch, prevents a virtual timer jump: while
+it waits, only timers already due at the current virtual time run.
+If only native work can make progress, the loop gives the embedder a bounded wait before it
+checks all sources again. Results delivered by a pump during which the deadline passed do not
+run their reactions. [ADR 0195](adr/0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)
+records why.
 
 When nothing is left but a FinalizationRegistry cell still waits on its target, the loop collects once, so a cleanup that came due still runs.
 
