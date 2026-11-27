@@ -12,7 +12,12 @@ pre-commit:
       stage_fixed: true
     lint-markdown:
       glob: "**/*.md"
-      run: npx markdownlint-cli2 {staged_files}
+      # Only the staged files: --no-globs drops the config's "**/*.md", which
+      # would add every Markdown file in the worktree to them, ignored and
+      # symlinked ones included. A staged symlink is skipped too.
+      file_types:
+        - not symlink
+      run: npx markdownlint-cli2 --no-globs {staged_files}
     check-doc-links:
       glob: "**/*.md"
       run: npx tsx scripts/check-doc-links.ts
