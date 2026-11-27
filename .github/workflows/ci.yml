@@ -1562,7 +1562,7 @@ jobs:
       - name: Check shared CLI test assertions
         run: bun run scripts/test-cli-assertions.ts
 
-      - name: Check that test-cli-apps.ts runs only what a selection names
+      - name: Check test-cli-apps.ts section selection
         run: bun run scripts/test-cli-apps-selection.ts
 
       - name: Check CLI flags across all apps

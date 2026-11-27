@@ -40,7 +40,6 @@ import {
 } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { parseArgs } from "util";
 import {
   RUNNER,
   BARE,
@@ -53,6 +52,7 @@ import {
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
+import { parseSectionArgs, SectionRunner } from "./test-cli/sections";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyModuleProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
@@ -95,70 +95,17 @@ function writeSandboxTree(
   return tree;
 }
 
-/**
- * Run one named section, recording a failure instead of aborting the run.
- *
- * This script is a straight sequence of assertions that throw, so the first
- * failure used to end the run and every later section went unexamined. On
- * platforms exercised only in CI that meant one defect per round: during the
- * 0.11.0 stack the Windows job reported a coverage assertion, then — after a
- * fix and another twenty-minute round — a second one 550 lines further down.
- * Collecting failures turns those rounds into one.
- *
- * Output on a green run is unchanged: the header prints, the body runs, and
- * nothing is recorded. A failing section prints its error where it happened
- * and the run continues; every failure is repeated at the end and the process
- * exits non-zero.
- */
-const sectionFailures: { name: string; error: unknown }[] = [];
-
 const USAGE = "Usage: bun run scripts/test-cli-apps.ts [--section=<text>]... [--list]";
-let cliOptions: { section?: string[]; list?: boolean };
-try {
-  ({ values: cliOptions } = parseArgs({
-    args: process.argv.slice(2),
-    options: { section: { type: "string", multiple: true }, list: { type: "boolean" } },
-  }));
-} catch (error) {
-  console.error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
+const sectionOptions = parseSectionArgs(process.argv.slice(2));
+if ("error" in sectionOptions) {
+  console.error(`${sectionOptions.error}\n${USAGE}`);
   process.exit(2);
 }
-const sectionFilters = (cliOptions.section ?? []).map((text) => text.toLowerCase());
-if (sectionFilters.some((text) => text === "")) {
-  console.error(`--section needs a non-empty text\n${USAGE}`);
-  process.exit(2);
-}
-const listOnly = cliOptions.list === true;
-const matchedFilters = new Set<string>();
-let sectionsRun = 0;
-let sectionsSkipped = 0;
+const sections = new SectionRunner(sectionOptions);
 
-async function section(
-  name: string,
-  body: () => Promise<void> | void,
-): Promise<void> {
-  if (listOnly) {
-    console.log(name);
-    return;
-  }
-  if (sectionFilters.length > 0) {
-    const matching = sectionFilters.filter((text) => name.toLowerCase().includes(text));
-    if (matching.length === 0) {
-      sectionsSkipped++;
-      return;
-    }
-    for (const text of matching) matchedFilters.add(text);
-  }
-  sectionsRun++;
-  console.log(name);
-  try {
-    await body();
-  } catch (error) {
-    sectionFailures.push({ name, error });
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(`  FAILED: ${message}`);
-  }
-}
+/** Runs one named section; see SectionRunner in scripts/test-cli/sections.ts. */
+const section = (name: string, body: () => Promise<void> | void): Promise<void> =>
+  sections.section(name, body);
 
 
 /**
@@ -14179,20 +14126,21 @@ await section("Loader: fetch re-checks the net capability on every redirect hop.
   // capability does not allow, so the request is refused mid-flight.
   const tmp = makeTmp();
   const audit = join(tmp, "redirect-audit.jsonl");
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const url = new URL(request.url);
-      if (url.pathname === "/redirect")
-        return new Response(null, {
-          status: 302,
-          headers: { location: `http://localhost:${server.port}/final` },
-        });
-      return new Response("final", { status: 200 });
-    },
-  });
+  let server: ReturnType<typeof Bun.serve> | undefined;
   try {
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/redirect")
+          return new Response(null, {
+            status: 302,
+            headers: { location: `http://localhost:${url.port}/final` },
+          });
+        return new Response("final", { status: 200 });
+      },
+    });
     const { exitCode, json, stderr } = await runLoaderJsonAsync(
       [
         "globalThis.outcome = \"pending\";",
@@ -14214,7 +14162,7 @@ await section("Loader: fetch re-checks the net capability on every redirect hop.
       event.kind === "net.fetch" && event.decision === "deny" && event.subject === "localhost"))
       throw new Error(`The refused redirect hop should be audited: ${JSON.stringify(events)}`);
   } finally {
-    server.stop(true);
+    server?.stop(true);
     clean(tmp);
   }
 });
@@ -17140,27 +17088,4 @@ await section("Runner and TestRunner: a cancelled fetch frees its worker slot on
   }
 });
 
-if (listOnly) process.exit(0);
-
-const unmatchedFilters = sectionFilters.filter((text) => !matchedFilters.has(text));
-if (unmatchedFilters.length > 0)
-  console.error(`\nNo section matched ${unmatchedFilters.map((text) => JSON.stringify(text)).join(", ")}; --list prints the names.`);
-
-if (sectionFailures.length > 0) {
-  console.error(`\n${sectionFailures.length} section(s) failed:`);
-  for (const failure of sectionFailures) {
-    const message =
-      failure.error instanceof Error ? failure.error.message : String(failure.error);
-    console.error(`  - ${failure.name}`);
-    console.error(`      ${message}`);
-  }
-  process.exit(1);
-}
-
-if (unmatchedFilters.length > 0) process.exit(1);
-
-console.log(
-  sectionsSkipped === 0
-    ? "\nAll test-cli-apps.ts tests passed."
-    : `\nAll ${sectionsRun} selected test-cli-apps.ts sections passed; --section skipped ${sectionsSkipped}.`,
-);
+process.exit(sections.finish("test-cli-apps.ts"));
