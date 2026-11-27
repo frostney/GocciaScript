@@ -181,8 +181,11 @@
       const key = isFile ? n.virtualFileKey(path) : path;
       if (n.moduleLoaded(key))
         throw new TypeError(`Virtual module "${key}" cannot be replaced after it has been loaded.`);
-      if (registry[key] !== undefined && virtualKeys[key] === undefined)
-        throw new TypeError(`Virtual module "${address}" conflicts with a registered ${StringPrototypeStartsWith(key, 'goccia:') ? 'runtime' : 'host'} module.`);
+      const isNative = n.nativeModuleRegistered(key);
+      if (isNative || (registry[key] !== undefined && virtualKeys[key] === undefined)) {
+        const owner = !isNative && StringPrototypeStartsWith(key, 'goccia:') ? 'runtime' : 'host';
+        throw new TypeError(`Virtual module "${address}" conflicts with a registered ${owner} module.`);
+      }
       let make;
       switch (type) {
         case 'javascript':
