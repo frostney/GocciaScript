@@ -25,6 +25,8 @@ check() {
 
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
+check atomics-wait --timeout=200 "$T" \
+  'const a = new Int32Array(new SharedArrayBuffer(4)); try { Atomics.wait(a, 0, 0, 1000); } catch { console.log("caught"); }'
 check do-while --timeout=200 "$T" 'let n = 0; do { n++; } while (true);'
 check catch-finally --timeout=200 "$T" \
   'while (true) { try { for (;;) {} } catch (e) { console.log("caught"); } finally { console.log("finally"); } }'
