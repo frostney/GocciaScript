@@ -253,6 +253,9 @@ procedure StopInstructionMeasurement;
 function LimitAbortKind: Integer;
 { the spent memory limit's message: the live bytes the collection left and the limit }
 function MemoryLimitMessage: UnicodeString;
+{ the error the spent limit or host abort throws (LimitAbortKind not 0): its name and its message }
+function AbortErrorName: UnicodeString;
+function AbortErrorMessage: UnicodeString;
 { a host ends the run as a spent limit does (AbortKind 4), past every handler, with an Error of message Msg;
   False, with that error pending, for the native that asked to return }
 function HostAbort(const Msg: UnicodeString): Boolean;
@@ -731,17 +734,27 @@ begin
   Aborting := True;
   Interrupt := 1;
   FrameLimit := 0;
-  case AbortKind of
-    2: ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax));
-    3: ThrowError('RangeError', MemoryLimitMessage);
-    4: ThrowError('Error', HostAbortText);
-  else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
-  end;
+  ThrowError(AbortErrorName, AbortErrorMessage);
 end;
 
 function LimitAbortKind: Integer;
 begin
   Result := AbortKind;
+end;
+
+function AbortErrorName: UnicodeString;
+begin
+  if AbortKind = 3 then Result := 'RangeError' else Result := 'Error';
+end;
+
+function AbortErrorMessage: UnicodeString;
+begin
+  case AbortKind of
+    2: Result := 'Execution exceeded instruction limit of ' + IntToStr(InstrMax);
+    3: Result := MemoryLimitMessage;
+    4: Result := HostAbortText;
+  else Result := 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms';
+  end;
 end;
 
 function AbortInterrupted: Boolean;
