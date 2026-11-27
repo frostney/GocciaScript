@@ -20,7 +20,10 @@
   const taBuffer = uncurryThis(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'buffer').get);
   const transferToImmutable = uncurryThis(ArrayBuffer.prototype.transferToImmutable);
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
+  // whether proto is on o's prototype chain (instanceof would call a Symbol.hasInstance a script defined)
+  const getPrototypeOf = Object.getPrototypeOf;
+  const inherits = (o, proto) => { if (o === null || typeof o !== 'object') return false; for (let p = getPrototypeOf(o); p !== null; p = getPrototypeOf(p)) if (p === proto) return true; return false; };
   const registry = Object.create(null);
   shared.hostModules = registry;
   // the data and text files a module may import, by extension: each a function from the file's text (and path) to
@@ -73,7 +76,7 @@
         value = format(text, key, specifier, filePath);
       } catch (e) {
         const kind = FORMAT_NAMES[extension];
-        if (kind !== undefined && e instanceof SyntaxError)
+        if (kind !== undefined && inherits(e, SyntaxError.prototype))
           throw new SyntaxError(`Failed to parse ${kind} module "${specifier}": ${e.message}`);
         throw e;
       }

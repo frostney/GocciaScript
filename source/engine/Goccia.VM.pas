@@ -7337,25 +7337,6 @@ begin
     (ObjOf(O^.Aux1)^.Native = FuncCallNative) and IsObject(B^.Data[0]) and (ObjOf(B^.Data[0])^.OKind = okNative);
 end;
 
-{ the baseline JIT's call stub's shift for uncurryThis(f) with a native f (R the call's R[A], ArgcFlags its Argc with
-  the undefined-this flag at bit 16): f moved to R[0], the first argument to R[1] as its this, the rest down a place;
-  the new Argc returned (no flag), or -1, nothing changed, for any other callee }
-function XJitUncurry(R: PValue; ArgcFlags: PtrInt): PtrInt;
-var O: PObj; Argc, J: Integer;
-begin
-  O := ObjOf(R[0]);
-  if (O^.OKind <> okBound) or not XUncurriedNative(O) then Exit(-1);
-  Argc := ArgcFlags and $FFFF;
-  R[0] := PValueArray(PtrOf(O^.Aux2))^.Data[0];
-  if Argc = 0 then
-  begin
-    R[1] := VUndefined;
-    Exit(0);
-  end;
-  for J := 0 to Argc - 1 do R[1 + J] := R[2 + J];
-  Result := Argc - 1;
-end;
-
 { FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }
 procedure XFastNewObj(R: PValue; A: NativeInt; N: Integer); noinline;
 begin

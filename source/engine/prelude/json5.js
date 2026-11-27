@@ -24,7 +24,7 @@
   const NumberValueOf = uncurryThis(Number.prototype.valueOf), StringValueOf = uncurryThis(String.prototype.valueOf);
   const BooleanValueOf = uncurryThis(Boolean.prototype.valueOf), BigIntValueOf = uncurryThis(BigInt.prototype.valueOf);
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const isArray = Array.isArray, fromCodePoint = String.fromCodePoint;
   const ID_START = /[\p{L}\p{Nl}$_]/u;
   const ID_CONTINUE = /[\p{L}\p{Nl}$_\p{Mn}\p{Mc}\p{Nd}\p{Pc}\u200C\u200D]/u;
@@ -200,7 +200,7 @@
           if (text[pos] !== ':') { if (text[pos] === undefined) fail('invalid end of input'); fail(); }
           pos++;
           const v = value();
-          defineProperty(o, key, { value: v, writable: true, enumerable: true, configurable: true });
+          defineProperty(o, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
           skipSpace();
           if (text[pos] === ',') {
             pos++;
@@ -267,7 +267,7 @@
           const keys = ObjectKeys(v);
           for (let i = 0; i < keys.length; i++) {
             const k = keys[i], nv = internalize(v, k);
-            if (nv === undefined) delete v[k]; else defineProperty(v, k, { value: nv, writable: true, enumerable: true, configurable: true });
+            if (nv === undefined) delete v[k]; else defineProperty(v, k, { __proto__: null, value: nv, writable: true, enumerable: true, configurable: true });
           }
         }
         return apply(reviver, holder, [key, v, {}]);

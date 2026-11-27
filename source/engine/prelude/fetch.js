@@ -7,7 +7,7 @@
   const defineProperty = Object.defineProperty;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
   const apply = Reflect.apply;
-  const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   const isObject = (v) => v !== null && (typeof v === 'object' || typeof v === 'function');
   // Web IDL: an interface's operations and attributes are enumerable
   function webIDL(C, names) {
@@ -54,7 +54,7 @@
   const copyBytes = (buffer, offset, length) => new Uint8Array(new Uint8Array(buffer, offset, length));
   const sliceBytes = (bytes, from, to) => copyBytes(taBuffer(bytes), taByteOffset(bytes) + from, to - from);
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   // whether a type string has a character outside U+0020 to U+007E
   const nonPrintable = (s) => { for (let i = 0; i < s.length; i++) if (s[i] < ' ' || s[i] > '~') return true; return false; };
   const isAB = brand(abByteLength), isSAB = brand(sabByteLength);
@@ -207,7 +207,7 @@
       blobType = (b) => b.#type;
     }
   }
-  defineProperty(Blob.prototype, SymToStringTag, { value: 'Blob', configurable: true });
+  defineProperty(Blob.prototype, SymToStringTag, { __proto__: null, value: 'Blob', configurable: true });
   webIDL(Blob, ['size', 'type', 'slice', 'text', 'arrayBuffer', 'bytes']);
 
   // ---------------- Headers ----------------
@@ -329,7 +329,7 @@
     }
   }
   hidden(Headers.prototype, SymIterator, Headers.prototype.entries);
-  defineProperty(Headers.prototype, SymToStringTag, { value: 'Headers', configurable: true });
+  defineProperty(Headers.prototype, SymToStringTag, { __proto__: null, value: 'Headers', configurable: true });
   webIDL(Headers, ['append', 'delete', 'get', 'getSetCookie', 'has', 'set', 'forEach', 'entries', 'keys', 'values']);
 
   // ---------------- Response ----------------
@@ -340,7 +340,7 @@
     if (bb !== undefined) return { bytes: sliceBytes(bb, 0, taLength(bb)), type: blobType(body) === '' ? null : blobType(body) };
     if (isAB(body)) return { bytes: copyBytes(body, 0, apply(abByteLength, body, [])), type: null };
     if (isView(body)) return { bytes: copyBytes(viewBuffer(body), viewOffset(body), viewLength(body)), type: null };
-    if (body instanceof URLSearchParamsCtor) return { bytes: utf8(searchParamsToString(body)), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
+    if (shared.isURLSearchParams(body)) return { bytes: utf8(searchParamsToString(body)), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
     return { bytes: utf8(String(body)), type: 'text/plain;charset=UTF-8' };
   }
   let makeResponse;
@@ -445,7 +445,7 @@
       };
     }
   }
-  defineProperty(Response.prototype, SymToStringTag, { value: 'Response', configurable: true });
+  defineProperty(Response.prototype, SymToStringTag, { __proto__: null, value: 'Response', configurable: true });
   webIDL(Response, ['status', 'statusText', 'ok', 'headers', 'type', 'url', 'redirected', 'bodyUsed', 'body', 'text',
     'json', 'arrayBuffer', 'bytes', 'blob', 'clone']);
 

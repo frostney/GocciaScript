@@ -28,6 +28,29 @@ test("escape and unescape (compat-annex-b)", () => {
   expect(call("globalThis.unescape", undefined, "a%20b%u0100%zz")).toBe("a b\u0100%zz");
 });
 
+test("Array.fromAsync of an array-like", async () => {
+  const r = await wire.invokeAsync("Array.fromAsync", Array, { 0: 7, length: 1 });
+  // each value is awaited (Await reads a promise's constructor, 27.2.4.7 PromiseResolve)
+  expect(expectClean(r, ["Promise.prototype.constructor"])).toEqual([7]);
+});
+
+test("the Set algebra methods", () => {
+  // the argument's size, has and keys (GetSetRecord, 24.2.1.2) are its own, so the receiver's traversal is all
+  // that could reach an intrinsic
+  const other = () => ({
+    size: 1,
+    has: (v) => v === 1,
+    keys: () => ({ i: 0, next() { this.i = this.i + 1; return this.i === 1 ? { value: 1, done: false } : { value: undefined, done: true }; } }),
+  });
+  wire.covers("Set.prototype", new Set([1, 2]), [
+    ["union", [other()]], ["intersection", [other()]], ["difference", [other()]], ["symmetricDifference", [other()]],
+    ["isSubsetOf", [other()], false], ["isSupersetOf", [other()], true], ["isDisjointFrom", [other()], false],
+    ["has", [1], true], ["add", [3]], ["delete", [3], true], ["forEach", [() => {}]], ["size", [], 2],
+    ["entries", []], ["keys", []], ["values", []], ["[Symbol.iterator]", []], ["clear", []],
+  ]);
+  expect(wire.uncovered("Set.prototype")).toEqual([]);
+});
+
 test("Array.fromAsync", async () => {
   const r = await wire.invokeAsync("Array.fromAsync", Array, [1, Promise.resolve(2)], (x) => x * 10);
   // the iterable's own iterator (ECMA-262 Array.fromAsync step 3.e), and each value awaited (Await reads a promise's

@@ -26,7 +26,7 @@
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   // an internal List: an array without a prototype, so filling it runs no Array.prototype index accessor
   function list() { return setProto([], null); }
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function toStr(v) { return `${v}`; }
   function toIntegerOrInfinity(v) {
     var n = +v;
@@ -191,7 +191,7 @@
         var result = regExpExec(rx, S);
         if (result === null) return n === 0 ? null : A;
         var matchStr = toStr(result[0]);
-        defineProperty(A, n, { value: matchStr, writable: true, enumerable: true, configurable: true });
+        defineProperty(A, n, { __proto__: null, value: matchStr, writable: true, enumerable: true, configurable: true });
         if (matchStr === "") rx.lastIndex = advance(S, toLength(rx.lastIndex), fullUnicode);
         n++;
       }
@@ -294,7 +294,7 @@
       if (lim === 0) return A;
       if (S === "") {
         if (regExpExec(splitter, S) !== null) return A;
-        defineProperty(A, 0, { value: S, writable: true, enumerable: true, configurable: true });
+        defineProperty(A, 0, { __proto__: null, value: S, writable: true, enumerable: true, configurable: true });
         return A;
       }
       var size = S.length, p = 0, q = 0;
@@ -304,17 +304,17 @@
         if (z === null) { q = advance(S, q, unicodeMatching); continue; }
         var e = MathMin(toLength(splitter.lastIndex), size);
         if (e === p) { q = advance(S, q, unicodeMatching); continue; }
-        defineProperty(A, lengthA, { value: sub(S, p, q), writable: true, enumerable: true, configurable: true });
+        defineProperty(A, lengthA, { __proto__: null, value: sub(S, p, q), writable: true, enumerable: true, configurable: true });
         if (++lengthA === lim) return A;
         p = e;
         var numberOfCaptures = MathMax(toLength(z.length) - 1, 0);
         for (var i = 1; i <= numberOfCaptures; i++) {
-          defineProperty(A, lengthA, { value: z[i], writable: true, enumerable: true, configurable: true });
+          defineProperty(A, lengthA, { __proto__: null, value: z[i], writable: true, enumerable: true, configurable: true });
           if (++lengthA === lim) return A;
         }
         q = p;
       }
-      defineProperty(A, lengthA, { value: sub(S, p, size), writable: true, enumerable: true, configurable: true });
+      defineProperty(A, lengthA, { __proto__: null, value: sub(S, p, size), writable: true, enumerable: true, configurable: true });
       return A;
     }
   };
@@ -384,7 +384,7 @@
   var RSIP = RegExpStringIterator.prototype;
   delete RSIP.constructor;
   setProto(RSIP, IteratorProto);
-  defineProperty(RSIP, SymToStringTag, { value: "RegExp String Iterator", writable: false, enumerable: false, configurable: true });
+  defineProperty(RSIP, SymToStringTag, { __proto__: null, value: "RegExp String Iterator", writable: false, enumerable: false, configurable: true });
 
   // 22.2.5.1 RegExp.escape ( string )
   var HEX = "0123456789abcdef";
@@ -492,7 +492,7 @@
   };
 
   def(RP, "compile", compile);
-  defineProperty(RP, "flags", { get: Object.getOwnPropertyDescriptor(flagsGetter, "flags").get, set: undefined, enumerable: false, configurable: true });
+  defineProperty(RP, "flags", { __proto__: null, get: Object.getOwnPropertyDescriptor(flagsGetter, "flags").get, set: undefined, enumerable: false, configurable: true });
   def(RP, "toString", methods.toString);
   var keys = [SymMatch, SymMatchAll, SymReplace, SymSearch, SymSplit];
   for (var k = 0; k < keys.length; k++) def(RP, keys[k], methods[keys[k]]);

@@ -10,9 +10,9 @@
   const { TypeError, String, Number } = G;
   const defineProperty = Object.defineProperty, ReflectApply = Reflect.apply, MathMax = Math.max;
   const NumberIsFinite = Number.isFinite, MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
-  const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const copyList = (list) => { const r = []; for (let i = 0; i < list.length; i++) append(r, list[i]); return r; };
   const isObject = (v) => v !== null && (typeof v === 'object' || typeof v === 'function');
 
@@ -54,7 +54,7 @@
     preventDefault() { const s = Event.#of(this, 'preventDefault'); if (s.cancelable && !s.inPassive) s.canceled = true; }
     static { eventState = (e) => (isObject(e) && #s in e ? e.#s : undefined); }
   }
-  Object.defineProperty(Event.prototype, Symbol.toStringTag, { value: 'Event', configurable: true });
+  Object.defineProperty(Event.prototype, Symbol.toStringTag, { __proto__: null, value: 'Event', configurable: true });
 
   // ---------------- EventTarget ----------------
   let listenersOf;   // the target's listener list, for AbortSignal
@@ -157,7 +157,7 @@
     }
     static { listenersOf = (t) => t.#listeners; }
   }
-  Object.defineProperty(EventTarget.prototype, Symbol.toStringTag, { value: 'EventTarget', configurable: true });
+  Object.defineProperty(EventTarget.prototype, Symbol.toStringTag, { __proto__: null, value: 'EventTarget', configurable: true });
   // EventTarget's own methods, for AbortSignal's internal steps (a script may replace the prototype's)
   const addListener = EventTarget.prototype.addEventListener, removeListener = EventTarget.prototype.removeEventListener;
   const dispatch = EventTarget.prototype.dispatchEvent;
@@ -256,7 +256,7 @@
       shared.signalRemaining = (s) => s.#deadline < 0 ? -1 : MathMax(0, s.#deadline - n.hrNow());
     }
   }
-  Object.defineProperty(AbortSignal.prototype, Symbol.toStringTag, { value: 'AbortSignal', configurable: true });
+  Object.defineProperty(AbortSignal.prototype, Symbol.toStringTag, { __proto__: null, value: 'AbortSignal', configurable: true });
 
   class AbortController {
     #signal;
@@ -270,7 +270,7 @@
     get signal() { AbortController.#check(this, 'signal'); return this.#signal; }
     abort(reason = undefined) { AbortController.#check(this, 'abort'); signalAbort(this.#signal, reason); }
   }
-  Object.defineProperty(AbortController.prototype, Symbol.toStringTag, { value: 'AbortController', configurable: true });
+  Object.defineProperty(AbortController.prototype, Symbol.toStringTag, { __proto__: null, value: 'AbortController', configurable: true });
 
   hidden(G, 'Event', Event);
   hidden(G, 'EventTarget', EventTarget);

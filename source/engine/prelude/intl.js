@@ -50,7 +50,7 @@
   // internal records have no prototype, so a setter on Object.prototype never sees their fields
   function rec() { return ObjectCreate(null); }
   // CreateDataPropertyOrThrow, for objects handed to user code
-  function cdp(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true }); }
+  function cdp(o, k, v) { ObjectDefineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); }
   // a list append that defines the index (a setter on Object.prototype must not see it)
   function append(list, v) { cdp(list, list.length, v); }
   // internal lists use the primordial Array methods: the user may replace Array.prototype's
@@ -64,12 +64,12 @@
     for (var i = a; i < b; i++) append(r, list[i]);
     return r;
   }
-  function def(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { ObjectDefineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function getter(o, k, f) {
-    ObjectDefineProperty(f, "name", { value: "get " + k, configurable: true });
-    ObjectDefineProperty(o, k, { get: f, set: undefined, enumerable: false, configurable: true });
+    ObjectDefineProperty(f, "name", { __proto__: null, value: "get " + k, configurable: true });
+    ObjectDefineProperty(o, k, { __proto__: null, get: f, set: undefined, enumerable: false, configurable: true });
   }
-  function tag(o, t) { ObjectDefineProperty(o, Sym.toStringTag, { value: t, writable: false, enumerable: false, configurable: true }); }
+  function tag(o, t) { ObjectDefineProperty(o, Sym.toStringTag, { __proto__: null, value: t, writable: false, enumerable: false, configurable: true }); }
   function lengthOf(o) {
     var n = +o.length;
     if (!(n > 0)) return 0;
@@ -350,9 +350,9 @@
 
   // a service constructor: a plain function that throws without new, its prototype not writable
   function makeService(C, name, length, proto) {
-    ObjectDefineProperty(C, "length", { value: length, configurable: true });
-    ObjectDefineProperty(C, "name", { value: name, configurable: true });
-    ObjectDefineProperty(C, "prototype", { value: proto, writable: false, enumerable: false, configurable: false });
+    ObjectDefineProperty(C, "length", { __proto__: null, value: length, configurable: true });
+    ObjectDefineProperty(C, "name", { __proto__: null, value: name, configurable: true });
+    ObjectDefineProperty(C, "prototype", { __proto__: null, value: proto, writable: false, enumerable: false, configurable: false });
     def(proto, "constructor", C);
     def(C, "supportedLocalesOf", { supportedLocalesOf(locales, options = undefined) { return supportedLocalesOf(locales, options); } }.supportedLocalesOf);
     tag(proto, "Intl." + name);
@@ -755,7 +755,7 @@
     var s = initNumberFormat(locales, options);
     new Slots(o, s);
     if (new.target === undefined && OrdinaryHasInstance(NumberFormat, this)) {
-      ObjectDefineProperty(this, FallbackSymbol, { value: o, writable: false, enumerable: false, configurable: false });
+      ObjectDefineProperty(this, FallbackSymbol, { __proto__: null, value: o, writable: false, enumerable: false, configurable: false });
       return this;
     }
     return o;
@@ -864,7 +864,7 @@
     var s = thisNumberFormat(this, "Intl.NumberFormat.prototype.format");
     if (s.boundFormat === undefined) {
       var F = (value) => FormatNumeric(s, ToIntlMathematicalValue(value));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundFormat = F;
     }
     return s.boundFormat;
@@ -1055,9 +1055,9 @@
     new Slots(o, s);
     return o;
   }
-  ObjectDefineProperty(Locale, "length", { value: 1, configurable: true });
-  ObjectDefineProperty(Locale, "name", { value: "Locale", configurable: true });
-  ObjectDefineProperty(Locale, "prototype", { value: LocaleProto, writable: false, enumerable: false, configurable: false });
+  ObjectDefineProperty(Locale, "length", { __proto__: null, value: 1, configurable: true });
+  ObjectDefineProperty(Locale, "name", { __proto__: null, value: "Locale", configurable: true });
+  ObjectDefineProperty(Locale, "prototype", { __proto__: null, value: LocaleProto, writable: false, enumerable: false, configurable: false });
   def(LocaleProto, "constructor", Locale);
   tag(LocaleProto, "Intl.Locale");
   def(Intl, "Locale", Locale);
@@ -1360,7 +1360,7 @@
     var o = createFrom(nt, DateTimeFormatProto);
     new Slots(o, CreateDateTimeFormat(locales, options, "any", "date"));
     if (new.target === undefined && OrdinaryHasInstance(DateTimeFormat, this)) {
-      ObjectDefineProperty(this, FallbackSymbol, { value: o, writable: false, enumerable: false, configurable: false });
+      ObjectDefineProperty(this, FallbackSymbol, { __proto__: null, value: o, writable: false, enumerable: false, configurable: false });
       return this;
     }
     return o;
@@ -1512,7 +1512,7 @@
     var s = thisDateTimeFormat(this, "Intl.DateTimeFormat.prototype.format");
     if (s.boundFormat === undefined) {
       var F = (date) => FormatDateTime(s, dateArg(date));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundFormat = F;
     }
     return s.boundFormat;
@@ -1659,7 +1659,7 @@
     var s = slotsOf(this, "Collator", "Intl.Collator.prototype.compare");
     if (s.boundCompare === undefined) {
       var F = (x, y) => CompareStrings(s, ToString(x), ToString(y));
-      ObjectDefineProperty(F, "name", { value: "", configurable: true });
+      ObjectDefineProperty(F, "name", { __proto__: null, value: "", configurable: true });
       s.boundCompare = F;
     }
     return s.boundCompare;

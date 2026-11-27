@@ -13,7 +13,7 @@
   const WeakSetPrototypeAdd = uncurryThis(WeakSet.prototype.add), WeakSetPrototypeHas = uncurryThis(WeakSet.prototype.has);
   const StringCtor = String;
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const isTagged = new WeakSetCtor();
   const addTagged = (v) => { WeakSetPrototypeAdd(isTagged, v); return v; };
   const SPECIAL_NUMBERS = { NaN: NaN, Infinity: Infinity, '-Infinity': -Infinity, '-0': -0 };
@@ -28,12 +28,12 @@
       }));
     }
     const box = value === null ? create(null) : toObject(value);
-    defineProperty(box, 'tagName', { value: tagName });
-    defineProperty(box, 'value', { value });
+    defineProperty(box, 'tagName', { __proto__: null, value: tagName });
+    defineProperty(box, 'value', { __proto__: null, value });
     return addTagged(box);
   }
 
-  const field = (value) => ({ value, writable: true, enumerable: true, configurable: true });
+  const field = (value) => ({ __proto__: null, value, writable: true, enumerable: true, configurable: true });
 
   // the value of entry 0 of Goccia.DataTree's JSON; a container is made empty when first named and filled in a
   // second pass, so a cycle finds it and the nesting needs no recursion

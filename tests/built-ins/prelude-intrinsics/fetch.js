@@ -29,6 +29,16 @@ test("Headers", () => {
     ["entries", []], ["keys", []], ["values", []], ["[Symbol.iterator]", []],
   ]);
   expect(seen).toEqual(["a", "set-cookie"]);
+  // the iterators' bodies run as they are advanced
+  const genNext = wire.original("%GeneratorPrototype%.next");
+  const drain = (it) => expectClean(wire.watch(() => {
+    const out = [];
+    const step = () => { const r = wire.call(genNext, it); if (r.done) return out; out[out.length] = r.value; return step(); };
+    return step();
+  }));
+  expect(drain(h.entries())).toEqual([["a", "1, 2"], ["set-cookie", "x"]]);
+  expect(drain(h.keys())).toEqual(["a", "set-cookie"]);
+  expect(drain(h.values())).toEqual(["1, 2", "x"]);
 });
 
 test("Response", async () => {

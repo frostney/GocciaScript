@@ -9,7 +9,7 @@
   const getPrototypeOf = Object.getPrototypeOf;
   const ownKeys = Reflect.ownKeys;
   const apply = Reflect.apply;
-  const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
   // global does not reach into these built-ins
   const { TypeError, RangeError, String, Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView, Map, Date, RegExp, Error } = G;
@@ -38,7 +38,7 @@
   const viewOffset = (v) => (taTagOf(v) !== undefined ? taOffsetOf(v) : dvOffsetOf(v));
   const viewLength = (v) => (taTagOf(v) !== undefined ? taByteLengthOf(v) : dvByteLengthOf(v));
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   // ASCII whitespace (the Infra standard's: tab, LF, FF, CR, space)
   const isASCIIWhitespace = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
   // s without ASCII whitespace at its ends, or anywhere (everywhere)
@@ -72,12 +72,12 @@
       // GocciaScript keeps name, message and code as the instance's own enumerable fields (so deep equality tells
       // DOMExceptions apart), besides the prototype's getters
       const code = CODES[this.#name];
-      defineProperty(this, 'name', { value: this.#name, writable: true, enumerable: true, configurable: true });
-      defineProperty(this, 'message', { value: String(message), writable: true, enumerable: true, configurable: true });
-      defineProperty(this, 'code', { value: code === undefined ? 0 : code, writable: true, enumerable: true, configurable: true });
+      defineProperty(this, 'name', { __proto__: null, value: this.#name, writable: true, enumerable: true, configurable: true });
+      defineProperty(this, 'message', { __proto__: null, value: String(message), writable: true, enumerable: true, configurable: true });
+      defineProperty(this, 'code', { __proto__: null, value: code === undefined ? 0 : code, writable: true, enumerable: true, configurable: true });
       const stack = new ErrorCtor(String(message)).stack;
       if (typeof stack === 'string')
-        defineProperty(this, 'stack', { value: stack, writable: true, enumerable: false, configurable: true });
+        defineProperty(this, 'stack', { __proto__: null, value: stack, writable: true, enumerable: false, configurable: true });
     }
     get name() {
       if (this === null || typeof this !== 'object' || !(#name in this)) throw new TypeError('DOMException.prototype.name: not a DOMException');
@@ -99,7 +99,7 @@
     d.enumerable = true;
     defineProperty(DOMException.prototype, k, d);
   }
-  defineProperty(DOMException.prototype, Symbol.toStringTag, { value: 'DOMException', configurable: true });
+  defineProperty(DOMException.prototype, Symbol.toStringTag, { __proto__: null, value: 'DOMException', configurable: true });
   for (const [name, code] of Object.entries(CODES)) {
     const constName = name.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase().replace(/_ERROR$/, '_ERR');
     const desc = { value: code, writable: false, enumerable: true, configurable: false };
@@ -125,7 +125,7 @@
     const length = taLengthOf(bytes), buffer = taBufferOf(bytes), offset = taOffsetOf(bytes);
     for (let i = 0; i < length; i += 8192) {
       const n = length < i + 8192 ? length - i : 8192, chunk = new Uint8Array(buffer, offset + i, n);
-      defineProperty(chunk, 'length', { value: n });
+      defineProperty(chunk, 'length', { __proto__: null, value: n });
       out += apply(fromCharCode, null, chunk);
     }
     return out;
@@ -299,7 +299,7 @@
       }
       if (isDOMException(v)) {
         out = new DOMException(v.message, v.name);
-        defineProperty(out, 'stack', { value: v.stack, writable: true, enumerable: false, configurable: true });
+        defineProperty(out, 'stack', { __proto__: null, value: v.stack, writable: true, enumerable: false, configurable: true });
         MapPrototypeSet(memory, v, out);
         return out;
       }
@@ -327,7 +327,7 @@
         const message = hasMessage ? String(v.message) : undefined;
         out = hasMessage ? new Ctor(message) : new Ctor();
         const stack = v.stack;
-        if (typeof stack === 'string') defineProperty(out, 'stack', { value: stack, writable: true, enumerable: false, configurable: true });
+        if (typeof stack === 'string') defineProperty(out, 'stack', { __proto__: null, value: stack, writable: true, enumerable: false, configurable: true });
         MapPrototypeSet(memory, v, out);
         return out;
       }
@@ -346,7 +346,8 @@
         const d = getOwnPropertyDescriptor(v, key);
         if (d === undefined || !d.enumerable) continue;
         if (isArray(v) && key === 'length') continue;
-        out[key] = clone(v[key]);
+        // defined (CreateDataProperty): a setter a script put on Array.prototype or Object.prototype must not see it
+        defineProperty(out, key, { __proto__: null, value: clone(v[key]), writable: true, enumerable: true, configurable: true });
       }
       return out;
     };
@@ -380,14 +381,14 @@
     }
     encodeInto(source, destination) {
       TextEncoder.#check(this, 'encodeInto');
-      if (!(destination instanceof Uint8Array)) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.");
+      if (!isView(destination) || taTagOf(destination) !== 'Uint8Array') throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.");
       const s = String(source);   // converted first, as Web IDL converts the arguments in order
       if (resizableBuffer(taBufferOf(destination))) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': The provided Uint8Array value must not be resizable.");
       const r = n.utf8Write(s, destination, 0);
       return { read: r[0], written: r[1] };
     }
   }
-  defineProperty(TextEncoder.prototype, Symbol.toStringTag, { value: 'TextEncoder', configurable: true });
+  defineProperty(TextEncoder.prototype, Symbol.toStringTag, { __proto__: null, value: 'TextEncoder', configurable: true });
 
   class TextDecoder {
     #fatal;
@@ -471,7 +472,7 @@
       return out;
     }
   }
-  defineProperty(TextDecoder.prototype, Symbol.toStringTag, { value: 'TextDecoder', configurable: true });
+  defineProperty(TextDecoder.prototype, Symbol.toStringTag, { __proto__: null, value: 'TextDecoder', configurable: true });
   for (const [C, names] of [[TextEncoder, ['encoding']], [TextDecoder, ['encoding', 'fatal', 'ignoreBOM']]]) {
     for (const k of names) { const d = getOwnPropertyDescriptor(C.prototype, k); d.enumerable = true; defineProperty(C.prototype, k, d); }
   }

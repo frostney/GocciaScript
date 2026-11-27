@@ -26,6 +26,7 @@ const mapGet = Map.prototype.get;
 const mapSet = Map.prototype.set;
 const mapHas = Map.prototype.has;
 const SetCtor = Set;
+const StringCtor = String;
 const PromiseCtor = Promise;
 const promiseThen = Promise.prototype.then;
 const promiseResolve = Promise.resolve;
@@ -99,10 +100,11 @@ export const installTripwire = () => {
       if (!d.writable) return;
       let value = d.value;
       defineProperty(owner, key, {
+        __proto__: null,
         get() { record(name); return value; },
         set(v) {
           if (this === owner) value = v;
-          else defineProperty(this, key, { value: v, writable: true, enumerable: true, configurable: true });
+          else defineProperty(this, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
         },
         enumerable: d.enumerable,
         configurable: true,
@@ -111,6 +113,7 @@ export const installTripwire = () => {
       apply(mapSet, originals, [name, d.get]);
       const get = d.get;
       defineProperty(owner, key, {
+        __proto__: null,
         get() { record(`${name} getter`); return apply(get, this, []); },
         set: d.set,
         enumerable: d.enumerable,
@@ -273,3 +276,49 @@ export const expectClean = (r, allowed = []) => {
 };
 
 export const ARRAY_ITERATION = ["Array.prototype[Symbol.iterator]", "%ArrayIteratorPrototype%.next"];
+
+// Runs fn with accessors on Object.prototype and Array.prototype for the names a script could add there: the
+// descriptor fields, the record fields the preludes write (Temporal's), and the first array indices. Each records
+// its read or write; a get gives undefined, as an absent property does. Returns { value, error, threw, hits }.
+// A built-in that builds its descriptors, records and lists without those prototypes records nothing.
+const DESCRIPTOR_FIELDS = ["value", "writable", "get", "set", "enumerable", "configurable"];
+const RECORD_FIELDS = ["years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds",
+  "nanoseconds", "year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond", "microsecond",
+  "nanosecond", "era", "eraYear", "offset", "timeZone", "calendar", "f", "type", "kind"];
+const INDICES = Array.from({ length: 64 }, (_, i) => StringCtor(i));
+export const withPrototypeAdditions = (fn) => {
+  const hits = [];
+  const traps = [];
+  // the traps' own appends define the index (a store would reach the index traps)
+  const note = (h) => { defineProperty(hits, hits.length, { __proto__: null, value: h, writable: true, enumerable: true, configurable: true }); };
+  const trap = (owner, ownerName, key) => {
+    if (getOwnDesc(owner, key) !== undefined) return;
+    const name = `${ownerName}.${key}`;
+    defineProperty(owner, key, {
+      __proto__: null,
+      get() { note(`get ${name}`); return undefined; },
+      set(v) { note(`set ${name}`); },
+      enumerable: false,
+      configurable: true,
+    });
+    defineProperty(traps, traps.length, { __proto__: null, value: [owner, key], writable: true, enumerable: true, configurable: true });
+  };
+  for (const k of DESCRIPTOR_FIELDS) trap(Object.prototype, "Object.prototype", k);
+  for (const k of RECORD_FIELDS) trap(Object.prototype, "Object.prototype", k);
+  for (const i of INDICES) {
+    trap(Array.prototype, "Array.prototype", i);
+    trap(Object.prototype, "Object.prototype", i);
+  }
+  let value;
+  let error;
+  let threw = false;
+  try {
+    value = fn();
+  } catch (e) {
+    threw = true;
+    error = e;
+  } finally {
+    for (const [owner, key] of traps) delete owner[key];
+  }
+  return { value, error, threw, hits };
+};

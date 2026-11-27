@@ -21,7 +21,7 @@
   const MapPrototypeClear = uncurryThis(Map.prototype.clear), MapPrototypeForEach = uncurryThis(Map.prototype.forEach);
   const MapPrototypeGetSize = uncurryThis(Object.getOwnPropertyDescriptor(Map.prototype, 'size').get);
   const ArrayPrototypeShift = uncurryThis(Array.prototype.shift);
-  const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   const LOOP_LIMIT = 10000;
   // one advance may fire a great many timers (a 10ms interval over an hour fires 360000); the bound only stops a
   // zero-period interval, which re-arms at the instant it ran so the clock cannot move past it
@@ -127,7 +127,7 @@
     parked = null;
     return p;
   }
-  function yieldTask() { return new Promise((resolve) => { defineProperty(hostTasks, hostTasks.length, { value: resolve, writable: true, enumerable: true, configurable: true }); }); }
+  function yieldTask() { return new Promise((resolve) => { defineProperty(hostTasks, hostTasks.length, { __proto__: null, value: resolve, writable: true, enumerable: true, configurable: true }); }); }
 
   // ---------------- fake timers ----------------
   function requireFake() { if (!fake) throw new Error(NOT_MOCKED); }

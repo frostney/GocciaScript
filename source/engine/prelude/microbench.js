@@ -28,7 +28,7 @@
 
   // an element added as CreateDataPropertyOrThrow adds it: an index setter on Array.prototype is never called
   const append = (list, value) => {
-    defineProperty(list, list.length, { value, writable: true, enumerable: true, configurable: true });
+    defineProperty(list, list.length, { __proto__: null, value, writable: true, enumerable: true, configurable: true });
   };
 
   const cases = [];

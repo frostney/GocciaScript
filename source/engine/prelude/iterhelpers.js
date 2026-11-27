@@ -21,7 +21,7 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function sameValueZero(a, b) { return a === b || (a !== a && b !== b); }
 
   // 7.3.11 GetMethod
@@ -84,7 +84,7 @@
     return direct(it);
   }
   function copyList(list, first) { var a = [], n = 0; if (first !== undefined) a[n++] = first; for (var i = 0; i < list.length; i++) a[n++] = list[i]; return a; }
-  function arrayOf(list) { var a = [], n = list.length; for (var i = 0; i < n; i++) defineProperty(a, i, { value: list[i], writable: true, enumerable: true, configurable: true }); return a; }
+  function arrayOf(list) { var a = [], n = list.length; for (var i = 0; i < n; i++) defineProperty(a, i, { __proto__: null, value: list[i], writable: true, enumerable: true, configurable: true }); return a; }
 
   // %IteratorHelperPrototype% objects and %WrapForValidIteratorPrototype% objects: internal slots as private fields
   class Stamp { constructor(o) { return o; } }
@@ -112,7 +112,7 @@
   var HelperProto = create(IterProto);
   def(HelperProto, "next", Helper.next);
   def(HelperProto, "return", Helper.return);
-  defineProperty(HelperProto, SymToStringTag, { value: "Iterator Helper", writable: false, enumerable: false, configurable: true });
+  defineProperty(HelperProto, SymToStringTag, { __proto__: null, value: "Iterator Helper", writable: false, enumerable: false, configurable: true });
   function helper(genFn, args, under) { var h = create(HelperProto); new Helper(h, apply(genFn, undefined, args), under); return h; }
 
   class Wrap extends Stamp {
@@ -406,7 +406,7 @@
   function ignoringSetter(thisV, key, v) {
     if (!isObject(thisV)) throw new TypeErr("setter called on a non-object");
     if (thisV === IterProto) throw new TypeErr("Cannot assign to read only property of Iterator.prototype");
-    if (getOwnDesc(thisV, key) === undefined) defineProperty(thisV, key, { value: v, writable: true, enumerable: true, configurable: true });
+    if (getOwnDesc(thisV, key) === undefined) defineProperty(thisV, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
     else thisV[key] = v;
   }
   var Iterator;
@@ -417,14 +417,14 @@
     set [SymToStringTag](v) { ignoringSetter(this, SymToStringTag, v); }
   };
   var dc = getOwnDesc(acc, "constructor"), dt = getOwnDesc(acc, SymToStringTag);
-  defineProperty(IterProto, "constructor", { get: dc.get, set: dc.set, enumerable: false, configurable: true });
-  defineProperty(IterProto, SymToStringTag, { get: dt.get, set: dt.set, enumerable: false, configurable: true });
+  defineProperty(IterProto, "constructor", { __proto__: null, get: dc.get, set: dc.set, enumerable: false, configurable: true });
+  defineProperty(IterProto, SymToStringTag, { __proto__: null, get: dt.get, set: dt.set, enumerable: false, configurable: true });
 
   // 27.1.3.1 the Iterator constructor
   Iterator = function Iterator() {
     if (new.target === undefined || new.target === Iterator) throw new TypeErr("Iterator is an abstract class and cannot be constructed directly");
   };
-  defineProperty(Iterator, "prototype", { value: IterProto, writable: false, enumerable: false, configurable: false });
+  defineProperty(Iterator, "prototype", { __proto__: null, value: IterProto, writable: false, enumerable: false, configurable: false });
   markIntrinsic(Iterator);
 
   function getOptions(options) {
@@ -525,7 +525,7 @@
       }
       var finish = function (results) {
         var o = create(null);
-        for (var m = 0; m < n; m++) defineProperty(o, keys[m], { value: results[m], writable: true, enumerable: true, configurable: true });
+        for (var m = 0; m < n; m++) defineProperty(o, keys[m], { __proto__: null, value: results[m], writable: true, enumerable: true, configurable: true });
         return o;
       };
       var open = copyList(iters);

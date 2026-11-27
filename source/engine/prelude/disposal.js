@@ -16,7 +16,7 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
 
   // SuppressedError ( error, suppressed, message )
   var SEP;
@@ -30,7 +30,7 @@
     return e;
   }
   SEP = Object.create(Err.prototype);
-  defineProperty(SuppressedError, "prototype", { value: SEP, writable: false, enumerable: false, configurable: false });
+  defineProperty(SuppressedError, "prototype", { __proto__: null, value: SEP, writable: false, enumerable: false, configurable: false });
   def(SEP, "constructor", SuppressedError);
   def(SEP, "name", "SuppressedError");
   def(SEP, "message", "");
@@ -253,9 +253,9 @@
 
   var DP = DisposableStack.prototype, AP = AsyncDisposableStack.prototype;
   def(DP, SymDispose, DP.dispose);
-  defineProperty(DP, SymToStringTag, { value: "DisposableStack", writable: false, enumerable: false, configurable: true });
+  defineProperty(DP, SymToStringTag, { __proto__: null, value: "DisposableStack", writable: false, enumerable: false, configurable: true });
   def(AP, SymAsyncDispose, AP.disposeAsync);
-  defineProperty(AP, SymToStringTag, { value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
+  defineProperty(AP, SymToStringTag, { __proto__: null, value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
   def(G, "DisposableStack", DisposableStack);
   markIntrinsic(DisposableStack);
   def(G, "AsyncDisposableStack", AsyncDisposableStack);

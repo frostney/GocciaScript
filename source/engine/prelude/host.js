@@ -20,7 +20,7 @@
   const ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
   const WeakSetPrototypeHas = uncurryThis(WeakSet.prototype.has);
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const info = JSON.parse(infoJson);
   // the host's configuration: the goccia.json keys and their values (strings, or arrays of strings)
   shared.config = JSON.parse(configJson);
@@ -43,11 +43,11 @@
   }
 
   // a read-only, enumerable, non-configurable data property (the Pascal engines' DefineProperty with [pfEnumerable])
-  function fixed(o, k, v) { defineProperty(o, k, { value: v, writable: false, enumerable: true, configurable: false }); }
+  function fixed(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: false, enumerable: true, configurable: false }); }
   // a getter only, neither enumerable nor configurable, named "get k"
   function getter(o, k, fn) {
     const get = { get [k]() { return fn(); } };
-    defineProperty(o, k, { get: Object.getOwnPropertyDescriptor(get, k).get, enumerable: false, configurable: false });
+    defineProperty(o, k, { __proto__: null, get: Object.getOwnPropertyDescriptor(get, k).get, enumerable: false, configurable: false });
   }
   function groups(list) {
     const o = {};
@@ -80,7 +80,7 @@
       if (v === null || typeof v !== 'object') return v;
       const o = plain ? {} : ObjectCreate(null);
       const keys = ObjectKeys(v);
-      for (let i = 0; i < keys.length; i++) defineProperty(o, keys[i], { value: rebuild(v[keys[i]], plain), writable: true, enumerable: true, configurable: true });
+      for (let i = 0; i < keys.length; i++) defineProperty(o, keys[i], { __proto__: null, value: rebuild(v[keys[i]], plain), writable: true, enumerable: true, configurable: true });
       return o;
     };
     const parse = {
@@ -130,7 +130,8 @@
       }
       return out;
     };
-    const tryCall = (fn, v) => { try { ReflectApply(fn, v, []); return true; } catch { return false; } };
+    // fn: an uncurried getter, called with its receiver
+    const tryCall = (fn, v) => { try { fn(v); return true; } catch { return false; } };
     const mapSize = uncurryThis(getOwnPropertyDescriptor(Map.prototype, 'size').get);
     const setSize = uncurryThis(getOwnPropertyDescriptor(Set.prototype, 'size').get);
     const regexpSource = uncurryThis(getOwnPropertyDescriptor(RegExp.prototype, 'source').get);
@@ -203,16 +204,16 @@
       get timeOrigin() { check(this); return n.timeOrigin(); },
       toJSON() { check(this); return { timeOrigin: n.timeOrigin() }; }
     };
-    defineProperty(proto, 'constructor', { value: Performance, writable: true, enumerable: false, configurable: true });
-    for (const k of ['now', 'toJSON']) defineProperty(proto, k, { value: members[k], writable: true, enumerable: true, configurable: true });
-    defineProperty(proto, 'timeOrigin', { get: Object.getOwnPropertyDescriptor(members, 'timeOrigin').get, set: undefined, enumerable: true, configurable: true });
-    defineProperty(proto, Symbol.toStringTag, { value: 'Performance', writable: false, enumerable: false, configurable: true });
-    defineProperty(Performance, 'prototype', { value: proto, writable: false, enumerable: false, configurable: false });
+    defineProperty(proto, 'constructor', { __proto__: null, value: Performance, writable: true, enumerable: false, configurable: true });
+    for (const k of ['now', 'toJSON']) defineProperty(proto, k, { __proto__: null, value: members[k], writable: true, enumerable: true, configurable: true });
+    defineProperty(proto, 'timeOrigin', { __proto__: null, get: Object.getOwnPropertyDescriptor(members, 'timeOrigin').get, set: undefined, enumerable: true, configurable: true });
+    defineProperty(proto, Symbol.toStringTag, { __proto__: null, value: 'Performance', writable: false, enumerable: false, configurable: true });
+    defineProperty(Performance, 'prototype', { __proto__: null, value: proto, writable: false, enumerable: false, configurable: false });
     const perf = Object.create(proto);
     brand.add(perf);
     const d = Object.getOwnPropertyDescriptor(G, 'performance');
-    defineProperty(G, 'performance', { value: perf, writable: d.writable, enumerable: d.enumerable, configurable: d.configurable });
-    defineProperty(G, 'Performance', { value: Performance, writable: true, enumerable: false, configurable: true });
+    defineProperty(G, 'performance', { __proto__: null, value: perf, writable: d.writable, enumerable: d.enumerable, configurable: d.configurable });
+    defineProperty(G, 'Performance', { __proto__: null, value: Performance, writable: true, enumerable: false, configurable: true });
   }
   // GocciaScript's Temporal.PlainMonthDay.compare (not in Temporal): by month, then day, each operand converted as
   // PlainMonthDay.from converts it
@@ -231,10 +232,10 @@
         return da === db ? 0 : da < db ? -1 : 1;
       }
     }.compare;
-    defineProperty(PMD, 'compare', { value: compare, writable: true, enumerable: false, configurable: true });
+    defineProperty(PMD, 'compare', { __proto__: null, value: compare, writable: true, enumerable: false, configurable: true });
   }
   // GocciaScript's globalThis cannot be reassigned
-  defineProperty(G, 'globalThis', { writable: false });
+  defineProperty(G, 'globalThis', { __proto__: null, writable: false });
 
   // PermissionDenied (docs/permissions.md): the error a permission check throws, an Error subclass callable without
   // new, like the native error constructors (its instances have [[ErrorData]], so Error.isError holds)
@@ -245,11 +246,11 @@
   };
   Object.setPrototypeOf(PermissionDenied, ErrorCtor);
   const permissionDeniedProto = Object.create(ErrorCtor.prototype);
-  defineProperty(permissionDeniedProto, 'constructor', { value: PermissionDenied, writable: true, enumerable: false, configurable: true });
-  defineProperty(permissionDeniedProto, 'name', { value: 'PermissionDenied', writable: true, enumerable: false, configurable: true });
-  defineProperty(permissionDeniedProto, 'message', { value: '', writable: true, enumerable: false, configurable: true });
-  defineProperty(PermissionDenied, 'prototype', { value: permissionDeniedProto, writable: false, enumerable: false, configurable: false });
-  defineProperty(G, 'PermissionDenied', { value: PermissionDenied, writable: true, enumerable: false, configurable: true });
+  defineProperty(permissionDeniedProto, 'constructor', { __proto__: null, value: PermissionDenied, writable: true, enumerable: false, configurable: true });
+  defineProperty(permissionDeniedProto, 'name', { __proto__: null, value: 'PermissionDenied', writable: true, enumerable: false, configurable: true });
+  defineProperty(permissionDeniedProto, 'message', { __proto__: null, value: '', writable: true, enumerable: false, configurable: true });
+  defineProperty(PermissionDenied, 'prototype', { __proto__: null, value: permissionDeniedProto, writable: false, enumerable: false, configurable: false });
+  defineProperty(G, 'PermissionDenied', { __proto__: null, value: PermissionDenied, writable: true, enumerable: false, configurable: true });
   shared.PermissionDenied = PermissionDenied;
 
   // the prototypes structuredClone refuses, now that every prelude class exists and before any script runs

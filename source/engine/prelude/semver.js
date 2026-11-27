@@ -12,7 +12,7 @@
   const JSONParse = JSON.parse, JSONStringify = JSON.stringify, ArrayIsArray = Array.isArray, ObjectCreate = Object.create;
   const ReflectApply = Reflect.apply, defineProperty = Object.defineProperty, semverOp = n.semver;
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   // the dispatcher's answer for op and the arguments after it (spreading them would look up the array iterator)
   const call = function (op) { return JSONParse(ReflectApply(semverOp, n, arguments)); };
 
@@ -109,9 +109,9 @@
     return rangeObject(call('range', str(arguments, 0, 'Range'), bits(optsAt(arguments, 1))));
   }
   const def = (proto, name, fn, length) => {
-    Object.defineProperty(fn, 'name', { value: name, configurable: true });
-    Object.defineProperty(fn, 'length', { value: length, configurable: true });
-    Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(fn, 'name', { __proto__: null, value: name, configurable: true });
+    Object.defineProperty(fn, 'length', { __proto__: null, value: length, configurable: true });
+    Object.defineProperty(proto, name, { __proto__: null, value: fn, writable: true, enumerable: false, configurable: true });
   };
   def(SemVer.prototype, 'toString', function () { return readSemver(this, optionsOf()).version; }, 0);
   def(SemVer.prototype, 'format', function () { return readSemver(this, optionsOf()).version; }, 0);
@@ -226,7 +226,7 @@
   const lengths = { inc: 2, intersects: 2, gt: 2, gte: 2, lt: 2, lte: 2, eq: 2, neq: 2, cmp: 3, compare: 2, rcompare: 2,
     compareBuild: 2, compareLoose: 2, diff: 2, satisfies: 2, maxSatisfying: 2, minSatisfying: 2, gtr: 2, ltr: 2, outside: 3,
     simplifyRange: 2, subset: 2 };
-  for (const k of Object.keys(fns)) Object.defineProperty(fns[k], 'length', { value: lengths[k] !== undefined ? lengths[k] : 1, configurable: true });
+  for (const k of Object.keys(fns)) Object.defineProperty(fns[k], 'length', { __proto__: null, value: lengths[k] !== undefined ? lengths[k] : 1, configurable: true });
 
   const pick = (names) => { const o = {}; for (const k of names) o[k] = fns[k]; return o; };
   const ns = {

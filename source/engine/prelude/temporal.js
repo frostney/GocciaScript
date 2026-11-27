@@ -58,7 +58,7 @@
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function typeError(m) { return new TypeErr(m); }
   function rangeError(m) { return new RangeErr(m); }
-  function def(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { ObjectDefineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function pad(n, w) { var s = Str(n); while (s.length < w) s = "0" + s; return s; }
   function sign(n) { return n < 0 ? -1 : n > 0 ? 1 : 0; }
   function bsign(n) { return n < 0n ? -1 : n > 0n ? 1 : 0; }
@@ -569,7 +569,7 @@
     var se = digitsAt(s, j, 2);
     if (se < 0 || se > 59) return ext ? -1 : j;
     j += 2;
-    var dummy = {};
+    var dummy = ObjectCreate(null);
     return pFraction(s, j, dummy, "f");
   }
   function isTZLeading(c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 46 || c === 95; }
@@ -640,7 +640,7 @@
     return i;
   }
   function newParse() {
-    return { year: undefined, month: undefined, day: undefined, hour: undefined, minute: undefined,
+    return { __proto__: null, year: undefined, month: undefined, day: undefined, hour: undefined, minute: undefined,
       second: undefined, fraction: undefined, z: false, offset: undefined, tzAnnotation: undefined,
       calendar: undefined, annotations: newList(), hasDay: false, hasYear: false, hasTime: false };
   }
@@ -814,7 +814,7 @@
     c = StringPrototypeCharCodeAt(s, i);
     if (c !== 80 && c !== 112) throw rangeError("invalid duration: " + s);
     i++;
-    var v = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var v = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, undefined];   // [10]: the seconds fraction
     var order = "YMWD", inTime = false, lastDate = -1, lastTime = -1, any = false, fractionSeen = false;
     var fracH, fracM;
     function digits() {
@@ -836,7 +836,7 @@
       var frac = undefined;
       c = StringPrototypeCharCodeAt(s, i);
       if (c === 46 || c === 44) {
-        var r0 = {};
+        var r0 = ObjectCreate(null);
         var e = pFraction(s, i, r0, "f");
         if (e < 0) throw rangeError("invalid duration: " + s);
         frac = r0.f; i = e;
@@ -1020,7 +1020,7 @@
       return sg * (parts[0] * 3600 + parts[1] * 60 + parts[2]);
     }
     function dateRule() {
-      var c = StringPrototypeCharCodeAt(s, i), r = {};
+      var c = StringPrototypeCharCodeAt(s, i), r = ObjectCreate(null);
       if (c === 77) {   // Mm.w.d
         i++;
         var m = 0; while (isDigit(StringPrototypeCharCodeAt(s, i))) m = m * 10 + StringPrototypeCharCodeAt(s, i++) - 48;
@@ -1322,7 +1322,7 @@
     // CalendarExtraFields: era and eraYear with year, for a calendar with eras
     if (ArrayPrototypeIndexOf(calNames, "year") >= 0 && CalendarSupportsEra(calendar)) { append(names, "era"); append(names, "eraYear"); }
     ArrayPrototypeSort(names);
-    var result = {}, any = false;
+    var result = ObjectCreate(null), any = false;
     for (var i = 0; i < names.length; i++) {
       var p = names[i], v = obj[p];
       if (v !== undefined) {
@@ -1361,7 +1361,7 @@
     var addKeys = newList();
     for (var i = 0; i < FIELD_ORDER.length; i++) if (additional[FIELD_ORDER[i]] !== undefined) append(addKeys, FIELD_ORDER[i]);
     var overridden = CalendarFieldKeysToIgnore(calendar, addKeys);
-    var merged = {};
+    var merged = ObjectCreate(null);
     for (i = 0; i < FIELD_ORDER.length; i++) {
       var k = FIELD_ORDER[i];
       if (fields[k] !== undefined && ArrayPrototypeIndexOf(overridden, k) < 0) merged[k] = fields[k];
@@ -1792,7 +1792,7 @@
   }
 
   function ISODateToFields(calendar, d, type) {
-    var f = {};
+    var f = ObjectCreate(null);
     var cd = CalendarISOToDate(calendar, d);
     f.monthCode = cd.monthCode;
     if (type === "month-day" || type === "date") f.day = cd.day;
@@ -2183,7 +2183,7 @@
 
   // ---------------- classes ----------------
   var TOKEN = {};   // internal creation: new C(TOKEN, slots) skips the constructor's argument conversion
-  function tagged(C, tag) { ObjectDefineProperty(C.prototype, SymToStringTag, { value: tag, writable: false, enumerable: false, configurable: true }); }
+  function tagged(C, tag) { ObjectDefineProperty(C.prototype, SymToStringTag, { __proto__: null, value: tag, writable: false, enumerable: false, configurable: true }); }
   function throwValueOf() { throw typeError("use compare() or equals() to compare Temporal values"); }
   var isDuration, getDur, isPlainTime, getPT, isPlainDate, getPD, isPlainDateTime, getPDT, isPlainYearMonth, getPYM,
     isPlainMonthDay, getPMD, isInstant, getInst, isZonedDateTime, getZDT;
@@ -2220,10 +2220,11 @@
     constructor(years = undefined, months = undefined, weeks = undefined, days = undefined, hours = undefined, minutes = undefined,
       seconds = undefined, milliseconds = undefined, microseconds = undefined, nanoseconds = undefined) {
       if (years === TOKEN) { this.#s = months; return; }
-      var a = arguments, v = newList();
+      // the parameters themselves: arguments[i] past the arguments given would read Object.prototype
+      var a = [years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds], v = newList();
       for (var i = 0; i < 10; i++) append(v, a[i] === undefined ? 0 : ToIntegerIfIntegral(a[i]));
       if (!IsValidDuration(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9])) throw rangeError("invalid duration");
-      var s = {};
+      var s = ObjectCreate(null);
       for (i = 0; i < 10; i++) s[DUR_KEYS[i]] = v[i];
       this.#s = s;
     }
@@ -2392,7 +2393,7 @@
   }
   function ToTemporalPartialDurationRecord(v) {
     if (!isObject(v)) throw typeError("duration-like must be an object");
-    var r = {}, any = false;
+    var r = ObjectCreate(null), any = false;
     var order = ["days", "hours", "microseconds", "milliseconds", "minutes", "months", "nanoseconds", "seconds", "weeks", "years"];
     for (var i = 0; i < order.length; i++) {
       var x = v[order[i]];
@@ -2499,7 +2500,8 @@
     constructor(hour = undefined, minute = undefined, second = undefined, millisecond = undefined, microsecond = undefined,
       nanosecond = undefined) {
       if (hour === TOKEN) { this.#s = minute; return; }
-      var a = arguments, v = newList();
+      // the parameters themselves: arguments[i] past the arguments given would read Object.prototype
+      var a = [hour, minute, second, millisecond, microsecond, nanosecond], v = newList();
       for (var i = 0; i < 6; i++) append(v, a[i] === undefined ? 0 : ToIntegerWithTruncation(a[i]));
       if (!IsValidTime(v[0], v[1], v[2], v[3], v[4], v[5])) throw rangeError("invalid time");
       this.#s = { time: Time(v[0], v[1], v[2], v[3], v[4], v[5]) };
@@ -2641,8 +2643,8 @@
   function installGetters(C, names, g) {
     for (var i = 0; i < names.length; i++) {
       var n = names[i], f = g[n];
-      ObjectDefineProperty(f, "name", { value: "get " + n, configurable: true });
-      ObjectDefineProperty(C.prototype, n, { get: f, set: undefined, enumerable: false, configurable: true });
+      ObjectDefineProperty(f, "name", { __proto__: null, value: "get " + n, configurable: true });
+      ObjectDefineProperty(C.prototype, n, { __proto__: null, get: f, set: undefined, enumerable: false, configurable: true });
     }
   }
   var DATE_GETTERS = ["calendarId", "era", "eraYear", "year", "month", "monthCode", "day", "dayOfWeek", "dayOfYear",
@@ -3475,10 +3477,10 @@
   function methodOf(f, name) {
     var len = f.length;
     var m = { [name](a) { return ReflectApply(f, undefined, arguments); } }[name];
-    ObjectDefineProperty(m, "length", { value: len, configurable: true });
+    ObjectDefineProperty(m, "length", { __proto__: null, value: len, configurable: true });
     return m;
   }
-  ObjectDefineProperty(NowObj, SymToStringTag, { value: "Temporal.Now", writable: false, enumerable: false, configurable: true });
+  ObjectDefineProperty(NowObj, SymToStringTag, { __proto__: null, value: "Temporal.Now", writable: false, enumerable: false, configurable: true });
 
   var CLASSES = [Instant, PlainDateTime, Duration, PlainDate, PlainTime, PlainYearMonth, PlainMonthDay, ZonedDateTime];
   for (var ci = 0; ci < CLASSES.length; ci++) markIntrinsic(CLASSES[ci]);
@@ -3492,7 +3494,7 @@
   def(Temporal, "PlainMonthDay", PlainMonthDay);
   def(Temporal, "ZonedDateTime", ZonedDateTime);
   def(Temporal, "Now", NowObj);
-  ObjectDefineProperty(Temporal, SymToStringTag, { value: "Temporal", writable: false, enumerable: false, configurable: true });
+  ObjectDefineProperty(Temporal, SymToStringTag, { __proto__: null, value: "Temporal", writable: false, enumerable: false, configurable: true });
   def(G, "Temporal", Temporal);
 
   // what Intl (prelude/intl.js) needs to format Temporal values: the brand, and the instant to format in

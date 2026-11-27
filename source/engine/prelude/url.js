@@ -21,13 +21,13 @@
   const WeakMapPrototypeGet = uncurryThis(WeakMap.prototype.get), WeakMapPrototypeSet = uncurryThis(WeakMap.prototype.set);
   const usv = v => toWellFormed(String(v));
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   // the pairs' index of name, or -1
   const findPair = (list, k) => { for (let i = 0; i < list.length; i++) if (list[i][0] === k) return i; return -1; };
   // the pairs that keep(pair, index) accepts
   const keepPairs = (list, keep) => { const r = []; for (let i = 0; i < list.length; i++) if (keep(list[i], i)) append(r, list[i]); return r; };
 
-  function hidden(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function hidden(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function accessorsEnumerable(proto, names) {
     for (const k of names) {
       const d = getOwnPropertyDescriptor(proto, k);
@@ -175,6 +175,7 @@
     static {
       paramsList = (p, s, url) => { p.#parse(s); if (url !== undefined) p.#url = url; };
       listOf = p => p.#list;
+      shared.isURLSearchParams = (v) => v !== null && typeof v === 'object' && #list in v;
     }
   }
   // the iterators see the list as it changes (an index into the owner's current pairs)
@@ -189,14 +190,14 @@
     const p = list[st.i++];
     return { value: st.kind === 0 ? p[0] : st.kind === 1 ? p[1] : [p[0], p[1]], done: false };
   });
-  defineProperty(ParamsIteratorProto, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
+  defineProperty(ParamsIteratorProto, Symbol.toStringTag, { __proto__: null, value: 'URLSearchParams Iterator', configurable: true });
   function makeIterator(owner, kind) {
     const it = ObjectCreate(ParamsIteratorProto);
     WeakMapPrototypeSet(iterState, it, { i: 0, kind, owner });
     return it;
   }
   hidden(URLSearchParams.prototype, Symbol.iterator, URLSearchParams.prototype.entries);
-  defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { value: 'URLSearchParams', configurable: true });
+  defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { __proto__: null, value: 'URLSearchParams', configurable: true });
   accessorsEnumerable(URLSearchParams.prototype, ['size']);
 
   // ---------------- URL ----------------
@@ -361,7 +362,7 @@
       };
     }
   }
-  defineProperty(URL.prototype, Symbol.toStringTag, { value: 'URL', configurable: true });
+  defineProperty(URL.prototype, Symbol.toStringTag, { __proto__: null, value: 'URL', configurable: true });
   accessorsEnumerable(URL.prototype, ['href', 'origin', 'protocol', 'username', 'password', 'host', 'hostname', 'port',
     'pathname', 'search', 'searchParams', 'hash']);
 

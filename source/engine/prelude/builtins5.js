@@ -9,13 +9,13 @@
   // method later does not reach into these built-ins (nor see their internal records)
   var strCharCodeAt = String.prototype.charCodeAt;
   var strSlice = String.prototype.slice;
-  function push(a) { var n = arguments.length; for (var i = 1; i < n; i++) defineProperty(a, a.length, { value: arguments[i], writable: true, enumerable: true, configurable: true }); return a.length; }
+  function push(a) { var n = arguments.length; for (var i = 1; i < n; i++) defineProperty(a, a.length, { __proto__: null, value: arguments[i], writable: true, enumerable: true, configurable: true }); return a.length; }
   var SymIterator = Symbol.iterator, SymAsyncIterator = Symbol.asyncIterator;
   var TypeErr = TypeError, RangeErr = RangeError, PromiseCtor = Promise;
   var StringCtor = String, NumberCtor = Number, BooleanCtor = Boolean, ArrayCtor = Array, FunctionCtor = Function;
-  var BigIntCtor = BigInt, SymbolCtor = Symbol, SymbolKeyFor = Symbol.keyFor;
+  var BigIntCtor = BigInt, SymbolCtor = Symbol, SymbolKeyFor = Symbol.keyFor, ToObjectCtor = Object;
   var MathMin = Math.min, MathFloor = Math.floor, MathCeil = Math.ceil;
-  var ObjectGetOwnPropertySymbols = Object.getOwnPropertySymbols, ObjectKeys = Object.keys;
+  var ObjectGetOwnPropertySymbols = Object.getOwnPropertySymbols, ObjectKeys = Object.keys, ObjectSetPrototypeOf = Object.setPrototypeOf;
   // a prototype method as a function of its receiver and arguments, as apply(strSlice, s, [a, b]) calls one, without
   // the arguments array
   var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
@@ -23,7 +23,7 @@
   var BigIntPrototypeToString = uncurryThis(BigInt.prototype.toString), ArrayPrototypeShift = uncurryThis(Array.prototype.shift);
   var MapCtor = Map, MP = Map.prototype, mapHas = MP.has, mapGet = MP.get, mapSet = MP.set;
 
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
   function isObject(v) {
     var t = typeof v;
@@ -44,7 +44,7 @@
     return f;
   }
   function createDataProperty(o, k, v) {
-    defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+    defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
   }
   function closeAsync(it) {
     var r;
@@ -93,7 +93,7 @@
           k++;
         }
       }
-      var arrayLike = Object(asyncItems), len = arrayLike.length;
+      var arrayLike = ToObjectCtor(asyncItems), len = arrayLike.length;
       len = +len; len = len !== len || len <= 0 ? 0 : (len === Infinity ? 9007199254740991 : MathMin(MathFloor(len), 9007199254740991));
       A = isConstructor(C) ? construct(C, [len]) : new ArrayCtor(len);
       for (; k < len; k++) {
@@ -290,8 +290,10 @@
   var DONE = {};
   function canon(v) { return v === 0 ? 0 : v; }
   function closeIt(k) { var f = k.it.return; if (f !== undefined && f !== null) { var r = apply(f, k.it, []); if (!isObject(r)) throw new TypeErr("return() result is not an object"); } }
-  function copySet(o) { var r = new SetCtor(), it = apply(setValues, o, []), n; while (!(n = it.next()).done) apply(setAdd, r, [n.value]); return r; }
-  function eachOf(o, f) { var it = apply(setValues, o, []), n; while (!(n = it.next()).done) if (f(n.value) === false) return false; return true; }
+  // the receiver's own elements, through the captured iterator step (the receiver's traversal is not observable)
+  var setIterNext = Object.getPrototypeOf(new SetCtor().values()).next;
+  function copySet(o) { var r = new SetCtor(), it = apply(setValues, o, []), n; while (!(n = apply(setIterNext, it, [])).done) apply(setAdd, r, [n.value]); return r; }
+  function eachOf(o, f) { var it = apply(setValues, o, []), n; while (!(n = apply(setIterNext, it, [])).done) if (f(n.value) === false) return false; return true; }
   var setMethods = {
     union(other) {
       var O = thisSet(this), rec = setRecord(other), k = keysIter(rec), r = copySet(O), v;
@@ -313,7 +315,7 @@
       if (apply(setSize, O, []) <= rec.size) {
         // step 6: the elements of the copy as it was (has may change the this-value, not the copy)
         var elems = [], n = 0;
-        eachOf(r, function (e) { defineProperty(elems, n++, { value: e, writable: true, enumerable: true, configurable: true }); });
+        eachOf(r, function (e) { defineProperty(elems, n++, { __proto__: null, value: e, writable: true, enumerable: true, configurable: true }); });
         for (var i = 0; i < n; i++) if (apply(rec.has, rec.set, [elems[i]])) apply(setDelete, r, [elems[i]]);
       } else {
         var k = keysIter(rec);
@@ -356,8 +358,8 @@
   var smk = Object.keys(setMethods);
   for (var si = 0; si < smk.length; si++) def(SP, smk[si], setMethods[smk[si]]);
 
-  defineProperty(WeakMap.prototype, Symbol.toStringTag, { value: "WeakMap", writable: false, enumerable: false, configurable: true });
-  defineProperty(WeakSet.prototype, Symbol.toStringTag, { value: "WeakSet", writable: false, enumerable: false, configurable: true });
+  defineProperty(WeakMap.prototype, Symbol.toStringTag, { __proto__: null, value: "WeakMap", writable: false, enumerable: false, configurable: true });
+  defineProperty(WeakSet.prototype, Symbol.toStringTag, { __proto__: null, value: "WeakSet", writable: false, enumerable: false, configurable: true });
   markIntrinsic(WeakMap);
   markIntrinsic(WeakSet);
   def(G, "WeakMap", WeakMap);
@@ -468,7 +470,9 @@
   var abDetached = getOwnPropertyDescriptor(ArrayBuffer.prototype, "detached").get;
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  var B64VAL = [];
+  // without a prototype: a code unit outside the alphabet finds nothing (an index a script put on Array.prototype or
+  // Object.prototype is not inherited)
+  var B64VAL = ObjectSetPrototypeOf([], null);
   for (var bi = 0; bi < 64; bi++) B64VAL[StringPrototypeCharCodeAt(B64, bi)] = bi;
   var SyntaxErr = SyntaxError;
   // 23.3.3.1 ValidateUint8Array, ValidateTypedArrayBounds (a detached buffer)
@@ -671,9 +675,9 @@
     }
   };
   // the optional options parameter is not counted in length
-  defineProperty(u8Statics.fromBase64, "length", { value: 1, writable: false, enumerable: false, configurable: true });
-  defineProperty(u8Methods.setFromBase64, "length", { value: 1, writable: false, enumerable: false, configurable: true });
-  defineProperty(u8Methods.toBase64, "length", { value: 0, writable: false, enumerable: false, configurable: true });
+  defineProperty(u8Statics.fromBase64, "length", { __proto__: null, value: 1, writable: false, enumerable: false, configurable: true });
+  defineProperty(u8Methods.setFromBase64, "length", { __proto__: null, value: 1, writable: false, enumerable: false, configurable: true });
+  defineProperty(u8Methods.toBase64, "length", { __proto__: null, value: 0, writable: false, enumerable: false, configurable: true });
   def(U8, "fromBase64", u8Statics.fromBase64);
   def(U8, "fromHex", u8Statics.fromHex);
   var u8k = ["setFromBase64", "setFromHex", "toBase64", "toHex"];
@@ -757,7 +761,7 @@
       return target;
     }
   }
-  defineProperty(WeakRef.prototype, SymToStringTag, { value: "WeakRef", writable: false, enumerable: false, configurable: true });
+  defineProperty(WeakRef.prototype, SymToStringTag, { __proto__: null, value: "WeakRef", writable: false, enumerable: false, configurable: true });
   markIntrinsic(WeakRef);
   def(G, "WeakRef", WeakRef);
   // every registry, held weakly (a registry nothing reaches never calls back); dropped as they die
@@ -850,7 +854,7 @@
       }, cleanupQueue);
     }
   }
-  defineProperty(FinalizationRegistry.prototype, SymToStringTag, { value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });
+  defineProperty(FinalizationRegistry.prototype, SymToStringTag, { __proto__: null, value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });
   markIntrinsic(FinalizationRegistry);
   def(G, "FinalizationRegistry", FinalizationRegistry);
 
@@ -934,7 +938,7 @@
         try {
           if (!isObject(e)) throw new TypeErr("Object.fromEntries: an entry is not an object");
           var k = e[0], v = e[1];
-          defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+          defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
         } catch (err) {
           // IteratorClose with a throw completion: the error of return() is not observed
           try { var ret = it["return"]; if (ret !== undefined && ret !== null) apply(ret, it, []); } catch (ignored) {}
@@ -954,13 +958,13 @@
       if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineGetter__ called on null or undefined");
       var o = ToObj(this);
       if (!isCallable(f)) throw new TypeErr("Object.prototype.__defineGetter__: the getter is not a function");
-      defineProperty(o, k, { get: f, enumerable: true, configurable: true });
+      defineProperty(o, k, { __proto__: null, get: f, enumerable: true, configurable: true });
     },
     __defineSetter__(k, f) {
       if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineSetter__ called on null or undefined");
       var o = ToObj(this);
       if (!isCallable(f)) throw new TypeErr("Object.prototype.__defineSetter__: the setter is not a function");
-      defineProperty(o, k, { set: f, enumerable: true, configurable: true });
+      defineProperty(o, k, { __proto__: null, set: f, enumerable: true, configurable: true });
     },
     __lookupGetter__(k) {
       if (this === undefined || this === null) throw new TypeErr("Object.prototype.__lookupGetter__ called on null or undefined");
@@ -1095,12 +1099,12 @@
       var v = scratch[k], t = typeof v;
       if (t !== "number" && t !== "string" && t !== "symbol")
         throw new TypeErr("Enum member '" + k + "' must be a number, string, or symbol");
-      defineProperty(e, k, { value: v, writable: false, enumerable: true, configurable: false });
+      defineProperty(e, k, { __proto__: null, value: v, writable: false, enumerable: true, configurable: false });
       push(entries, [k, v]);
     }
     var iterate = { "[Symbol.iterator]"() { return apply(ArrayValues, entries, []); } }["[Symbol.iterator]"];
-    defineProperty(e, SymIterator, { value: iterate, writable: false, enumerable: false, configurable: false });
-    defineProperty(e, SymToStringTag, { value: name, writable: false, enumerable: false, configurable: false });
+    defineProperty(e, SymIterator, { __proto__: null, value: iterate, writable: false, enumerable: false, configurable: false });
+    defineProperty(e, SymToStringTag, { __proto__: null, value: name, writable: false, enumerable: false, configurable: false });
     preventExtensions(e);
     return e;
   }
@@ -1108,7 +1112,7 @@
   // ---------------- pattern matching (TC39 proposal-pattern-matching, as GocciaScript has it) ----------------
   // the compiler lowers is / match patterns to control flow and these helpers (opIntrinsic, INTRINSIC_MATCH_*)
   var SymCustomMatcher = Symbol("Symbol.customMatcher");
-  defineProperty(Symbol, "customMatcher", { value: SymCustomMatcher, writable: false, enumerable: false, configurable: false });
+  defineProperty(Symbol, "customMatcher", { __proto__: null, value: SymCustomMatcher, writable: false, enumerable: false, configurable: false });
   var fnToString = Function.prototype.toString;
   var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor, ObjectCtor = Object;
   // a matcher's Symbol.customMatcher method, undefined when it has none
@@ -1193,7 +1197,7 @@
       if (skip) continue;
       var d = getOwnPropertyDescriptor(src, k);
       if (d !== undefined && d.enumerable)
-        defineProperty(out, k, { value: src[k], writable: true, enumerable: true, configurable: true });
+        defineProperty(out, k, { __proto__: null, value: src[k], writable: true, enumerable: true, configurable: true });
     }
     return out;
   }
@@ -1210,7 +1214,7 @@
   // the compiler calls these through opIntrinsic (INTRINSIC_DEC_*): a decorated class definition's session holds its
   // class (a class decorator can replace it), its metadata object and the initializers its decorators added
   var SymMetadata = Symbol("Symbol.metadata");
-  defineProperty(Symbol, "metadata", { value: SymMetadata, writable: false, enumerable: false, configurable: false });
+  defineProperty(Symbol, "metadata", { __proto__: null, value: SymMetadata, writable: false, enumerable: false, configurable: false });
   function decBegin(cls, parent, name) {
     var pm = null;
     if (isObject(parent)) { var m = parent[SymMetadata]; if (isObject(m)) pm = m; }
@@ -1275,18 +1279,18 @@
         push(listAt(sess.fieldInits, idx), init);
       }
       var nv = { get: g !== undefined ? g : value.get, set: st !== undefined ? st : value.set };
-      if (!isPrivate) defineProperty(target, key, { get: nv.get, set: nv.set, enumerable: true, configurable: true });
+      if (!isPrivate) defineProperty(target, key, { __proto__: null, get: nv.get, set: nv.set, enumerable: true, configurable: true });
       return nv;
     }
     if (r === undefined) return value;
     if (!isCallable(r)) throw new TypeErr(RETURN_MESSAGES[kind]);
     if (kind === "field") { push(listAt(sess.fieldInits, idx), r); return undefined; }
     if (!isPrivate) {
-      if (kind === "method") defineProperty(target, key, { value: r, writable: true, enumerable: false, configurable: true });
+      if (kind === "method") defineProperty(target, key, { __proto__: null, value: r, writable: true, enumerable: false, configurable: true });
       else {
         var od = getOwnPropertyDescriptor(target, key);
-        if (kind === "getter") defineProperty(target, key, { get: r, set: od !== undefined ? od.set : undefined, enumerable: false, configurable: true });
-        else defineProperty(target, key, { get: od !== undefined ? od.get : undefined, set: r, enumerable: false, configurable: true });
+        if (kind === "getter") defineProperty(target, key, { __proto__: null, get: r, set: od !== undefined ? od.set : undefined, enumerable: false, configurable: true });
+        else defineProperty(target, key, { __proto__: null, get: od !== undefined ? od.get : undefined, set: r, enumerable: false, configurable: true });
       }
     }
     return r;
@@ -1314,7 +1318,7 @@
   function decStatic(sess) { runAll(sess.staticInits, sess.orig); }
   // the decorated class, its Symbol.metadata defined
   function decFinish(sess) {
-    defineProperty(sess.cls, SymMetadata, { value: sess.meta, writable: false, enumerable: false, configurable: true });
+    defineProperty(sess.cls, SymMetadata, { __proto__: null, value: sess.meta, writable: false, enumerable: false, configurable: true });
     return sess.cls;
   }
   function decClassInits(sess) { runAll(sess.classInits, sess.cls); }

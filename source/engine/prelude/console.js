@@ -11,7 +11,7 @@
   const apply = Reflect.apply;
   const isArray = Array.isArray;
   const defineProperty = Object.defineProperty, ObjectKeys = Object.keys, ObjectIs = Object.is;
-  const hidden = (o, k, v) => defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true });
+  const hidden = (o, k, v) => defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true });
   // what the functions below call, captured before any script runs: a script that replaces a prototype method or a
   // global does not change how console renders
   const StringCtor = String, MathRound = Math.round, ErrorIsError = Error.isError, SymbolToStringTag = Symbol.toStringTag;
@@ -24,7 +24,7 @@
   const MapPrototypeGet = uncurryThis(Map.prototype.get), MapPrototypeSet = uncurryThis(Map.prototype.set);
   const MapPrototypeHas = uncurryThis(Map.prototype.has), MapPrototypeDelete = uncurryThis(Map.prototype.delete);
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   // a new list of f applied to each element (Array.prototype.map would look up the constructor and Symbol.species)
   const mapList = (list, f) => { const r = []; for (let i = 0; i < list.length; i++) append(r, f(list[i])); return r; };
   // the inspection depth, read from the host when a value's rendering starts

@@ -17,8 +17,9 @@
   const taBuffer = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'buffer').get);
   const taByteOffset = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'byteOffset').get);
   const taLength = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'length').get);
+  const taTag = uncurryThis(Object.getOwnPropertyDescriptor(TAP, Symbol.toStringTag).get), isView = ArrayBuffer.isView;
   // a list append that defines the index (a setter on Array.prototype must not see it)
-  const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
+  const append = (list, v) => { defineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true }); };
   const decoder = new G.TextDecoder(), decode = uncurryThis(G.TextDecoder.prototype.decode);
 
   // whether text could still become a JSON text by appending to it (it ends inside a value)
@@ -104,7 +105,7 @@
       return { length: input.length, at: (i) => StringPrototypeCharCodeAt(input, i), slice: (a, b) => StringPrototypeSlice(input, a, b),
         bom: StringPrototypeCharCodeAt(input, 0) === 0xFEFF ? 1 : 0 };
     }
-    if (input instanceof Uint8Array) {
+    if (isView(input) && taTag(input) === 'Uint8Array') {
       const length = taLength(input);
       const bom = length >= 3 && input[0] === 0xEF && input[1] === 0xBB && input[2] === 0xBF ? 3 : 0;
       return { length, at: (i) => input[i], slice: (a, b) => decode(decoder, new Uint8Array(taBuffer(input), taByteOffset(input) + a, b - a)), bom };

@@ -61,7 +61,8 @@
   const isError = typeof Error.isError === 'function' ? Error.isError : (v) => v instanceof Error;
   const setForEach = Set.prototype.forEach, setHas = Set.prototype.has, mapForEach = Map.prototype.forEach;
   const promiseThen = Promise.prototype.then;
-  const isPromise = (v) => v instanceof Promise;
+  // a promise: %Promise.prototype% on its chain (instanceof would call a Symbol.hasInstance a script defined)
+  const isPromise = (v) => { if (!isObject(v)) return false; for (let p = ObjectGetPrototypeOf(v); p !== null; p = ObjectGetPrototypeOf(p)) if (p === Promise.prototype) return true; return false; };
   const StringCtor = String, NumberCtor = Number, BooleanCtor = Boolean, BigIntCtor = BigInt, SymbolCtor = Symbol;
   const FunctionCtor = Function, ObjectCtor = Object;
   // the primitive inside a string or number, boxed or not, or undefined
@@ -78,7 +79,7 @@
   // appends without [[Set]], so an index setter or read-only index a test installs on Array.prototype or
   // Object.prototype never sees the library's own bookkeeping
   const append = (list, v) => {
-    ObjectDefineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true });
+    ObjectDefineProperty(list, list.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
   };
   // list operations by index: Array.prototype's map, filter and spreading would look up a constructor, Symbol.species
   // or the array iterator
@@ -1460,6 +1461,7 @@
   expect.toBeSlowerThan = (s, o) => toBeSlowerThan(s, o, false);
   // expect.not holds the inverse matchers; there is no inverse of any or anything
   ObjectDefineProperty(expect, 'not', {
+    __proto__: null,
     value: {
       arrayContaining: (s) => arrayContaining(s, true),
       objectContaining: (s) => objectContaining(s, true),
@@ -1504,7 +1506,7 @@
         throw e;
       }
     };
-    ObjectDefineProperty(f, 'mock', { get: () => state });
+    ObjectDefineProperty(f, 'mock', { __proto__: null, get: () => state });
     f[MOCK] = true;
     f.mockImplementation = (fn) => { implementation = fn; return f; };
     f.mockImplementationOnce = (fn) => { append(once, fn); return f; };
@@ -1539,15 +1541,15 @@
       const d = desc || getOwnPropertyDescriptor(ObjectGetPrototypeOf(obj), key);
       const orig = d && d[access];
       const m = orig === undefined ? mock() : mock(orig);
-      ObjectDefineProperty(obj, key, ObjectAssign({}, d, { [access]: m, configurable: true }));
-      m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, desc); else delete obj[key]; };
+      ObjectDefineProperty(obj, key, ObjectAssign({ __proto__: null }, d, { [access]: m, configurable: true }));
+      m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, ObjectAssign({ __proto__: null }, desc)); else delete obj[key]; };
       return m;
     }
     const orig = obj[key];
     if (typeof orig !== 'function') throw new TypeError(`spyOn: property "${key}" is not a function`);
     const m = mock(orig);
     obj[key] = m;
-    m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, desc); else delete obj[key]; };
+    m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, ObjectAssign({ __proto__: null }, desc)); else delete obj[key]; };
     return m;
   }
 
@@ -1810,10 +1812,10 @@
   const moduleOnly = !!(shared && shared.moduleOnly);
   if (!moduleOnly) {
     const names = keysOf(api);
-    for (let i = 0; i < names.length; i++) ObjectDefineProperty(global, names[i], { value: api[names[i]], writable: true, configurable: true });
+    for (let i = 0; i < names.length; i++) ObjectDefineProperty(global, names[i], { __proto__: null, value: api[names[i]], writable: true, configurable: true });
     // the generated test262 wrappers' private aliases: a conformance test may declare its own describe or test
     for (const [alias, fn] of [['__gocciaTest262Describe', describe], ['__gocciaTest262Test', test]])
-      ObjectDefineProperty(global, alias, { value: fn, writable: false, configurable: false });
+      ObjectDefineProperty(global, alias, { __proto__: null, value: fn, writable: false, configurable: false });
   }
   // runTests({ exitOnFirstFailure, showTestResults }) of the module-only API: the whole registry run again (the
   // counts start over), its result returned, and the results block printed unless showTestResults is false or the

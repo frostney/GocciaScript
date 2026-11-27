@@ -38,7 +38,7 @@
     const bound = {
       bound(...args) { return runIn(ctx, fn, thisArg === undefined ? this : thisArg, args); }
     }.bound;
-    defineProperty(bound, 'length', { value: fn.length, configurable: true });
+    defineProperty(bound, 'length', { __proto__: null, value: fn.length, configurable: true });
     return bound;
   }
 
@@ -68,7 +68,7 @@
           return runIn(ctx, fn, undefined, args);
         }
       }.snapshot;
-      defineProperty(runner, 'name', { value: 'bound', configurable: true });
+      defineProperty(runner, 'name', { __proto__: null, value: 'bound', configurable: true });
       return runner;
     }
     run(store, callback, ...args) {
@@ -99,7 +99,7 @@
       if (MapPrototypeHas(ctx, this)) enter(withEntry(ctx, this, undefined, true));
     }
   }
-  Object.defineProperty(AsyncLocalStorage.prototype, Symbol.toStringTag, { value: 'AsyncLocalStorage', configurable: true });
+  Object.defineProperty(AsyncLocalStorage.prototype, Symbol.toStringTag, { __proto__: null, value: 'AsyncLocalStorage', configurable: true });
 
   let nextAsyncId = 1;
   class AsyncResource {
@@ -139,7 +139,7 @@
     emitDestroy() { AsyncResource.#check(this, 'emitDestroy'); return this; }
     get type() { AsyncResource.#check(this, 'type'); return this.#type; }
   }
-  Object.defineProperty(AsyncResource.prototype, Symbol.toStringTag, { value: 'AsyncResource', configurable: true });
+  Object.defineProperty(AsyncResource.prototype, Symbol.toStringTag, { __proto__: null, value: 'AsyncResource', configurable: true });
 
   const asyncHooks = { AsyncLocalStorage, AsyncResource };
   shared.hostModules['node:async_hooks'] = () => ({ AsyncLocalStorage, AsyncResource, default: asyncHooks });

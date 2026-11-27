@@ -21,7 +21,7 @@
   const missing = (v) => v === undefined || v === null;
   const isObject = (v) => (typeof v === 'object' && v !== null) || typeof v === 'function';
   const lowerCase = (s) => apply(lower, s, []);
-  const push = (a, v) => defineProperty(a, a.length, { value: v, writable: true, enumerable: true, configurable: true });
+  const push = (a, v) => defineProperty(a, a.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
   // a function as the extension's natives are: the name, the length, no prototype, not a constructor
   const named = (name, length, impl) => {
     // the arguments as own properties of an object without a prototype: reading one the call did not pass
@@ -31,7 +31,7 @@
       for (let i = 0; i < args.length; i++) a[i] = args[i];
       return impl(a, this);
     } }[name];
-    defineProperty(f, 'length', { value: length, configurable: true });
+    defineProperty(f, 'length', { __proto__: null, value: length, configurable: true });
     return f;
   };
   // Pascal's Trim: the code units up to a space off both ends
@@ -130,14 +130,14 @@
   const statsProto = create(Object.prototype);
   const dateGetter = (name, index) => {
     const get = getOwnDescriptor({ get [name]() { return new DateC(roundMs(statsOf(this)[index])); } }, name).get;
-    defineProperty(statsProto, name, { get, enumerable: true, configurable: true });
+    defineProperty(statsProto, name, { __proto__: null, get, enumerable: true, configurable: true });
   };
   dateGetter('atime', 4);
   dateGetter('mtime', 5);
   dateGetter('ctime', 6);
   dateGetter('birthtime', 7);
   const statsMethod = (name, impl) => defineProperty(statsProto, name,
-    { value: named(name, 0, (args, self) => impl(statsOf(self))), writable: true, configurable: true });
+    { __proto__: null, value: named(name, 0, (args, self) => impl(statsOf(self))), writable: true, configurable: true });
   statsMethod('isFile', (s) => s[8]);
   statsMethod('isDirectory', (s) => s[9]);
   statsMethod('isSymbolicLink', () => false);
@@ -291,7 +291,7 @@
   const fs = {};
   const promises = {};
   const def = (target, name, length, impl) => {
-    defineProperty(target, name, { value: named(name, length, impl), writable: true, enumerable: true,
+    defineProperty(target, name, { __proto__: null, value: named(name, length, impl), writable: true, enumerable: true,
       configurable: true });
   };
   def(fs, 'readFileSync', 2, (a) => readValue(requireStringArg(a[0], 'fs.readFileSync'), wantsText(a[1])));
@@ -484,11 +484,11 @@
       index = 0;
       return iterResult(missing(r[0]) ? undefined : r[0], true);
     });
-    defineProperty(it, asyncIterator, { value: named('[Symbol.asyncIterator]', 0, (r, self) => self),
+    defineProperty(it, asyncIterator, { __proto__: null, value: named('[Symbol.asyncIterator]', 0, (r, self) => self),
       writable: true, configurable: true });
     return it;
   });
-  defineProperty(fs, 'promises', { value: promises, writable: true, enumerable: true, configurable: true });
+  defineProperty(fs, 'promises', { __proto__: null, value: promises, writable: true, enumerable: true, configurable: true });
 
   // ---- goccia: $ and runScript ----
   const quote = (v) => "'" + ArrayPrototypeJoin(StringPrototypeSplit(StringC(v), "'"), "'\\''") + "'";
@@ -632,8 +632,8 @@
   });
   const $ = named('$', 0, (a) => shellCommand(commandLine(a)));
   const goccia = {};
-  defineProperty(goccia, '$', { value: $, writable: true, enumerable: true, configurable: true });
-  defineProperty(goccia, 'runScript', { value: runScript, writable: true, enumerable: true, configurable: true });
+  defineProperty(goccia, '$', { __proto__: null, value: $, writable: true, enumerable: true, configurable: true });
+  defineProperty(goccia, 'runScript', { __proto__: null, value: runScript, writable: true, enumerable: true, configurable: true });
 
   // ---- goccia:search ----
   const GREP_OPTIONS = ['cwd', 'glob', 'exclude', 'regex', 'ignoreCase', 'maxResults', 'maxBytes', 'context'];
