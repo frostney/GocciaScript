@@ -292,7 +292,7 @@ Every piece of engine state — heap, atoms, shapes, value and frame stacks, bui
 
 `EngineInit` always makes the core language built-ins (ECMA-262, ECMA-402, Temporal, ShadowRealm). Everything else is the host's, decided by `TGocciaEngine`'s properties before `PrepareHost`:
 
-- **CLI host** — `InstallHostGlobals` (`Goccia.HostAPI`) runs the host preludes: console, URL, web APIs, events, fetch, JSON5, CSV/TSV, JSONL, YAML/TOML, SemVer, the `Goccia` object, timers and `node:async_hooks`, and in sandbox mode `fs`, `goccia` and `goccia:search`. It removes what the conformance host keeps and the CLIs leave out (`print`, `eval`, `escape`, `unescape`, and `ShadowRealm` unless the profile enables it).
+- **CLI host** — `InstallHostGlobals` (`Goccia.HostAPI`) runs the host preludes: console, URL, web APIs, events, fetch, JSON5, CSV/TSV, JSONL, YAML/TOML, SemVer, the `Goccia` object, timers and `node:async_hooks`, and in sandbox mode `fs`, `goccia` and `goccia:search`. It removes what the conformance host keeps and the CLIs leave out (`print`, `eval`, and, unless the profile enables them, `escape` and `unescape` (`AnnexB`) and `ShadowRealm`).
 - **Bare** — `TGocciaEngine.Bare` keeps GocciaScriptLoaderBare's surface: the core built-ins, `DOMException`, `atob`, `btoa`, `PermissionDenied`, `print` and `Goccia`, with no module content provider.
 - **Testing** — GocciaTestRunner sets `TestMode` and calls `InstallTestingAPI`, which runs `prelude/testing.js` (`describe`, `test`, `expect`, the hooks, `mock`, `spyOn`) and registers `goccia:test`.
 - **Benchmarking** — GocciaBenchmarkRunner sets `BenchMode` and calls `InstallBenchmarkAPI`, which provides the `goccia:microbench` module (`bench`, `group`, `run`, `summary`, `boxplot`).

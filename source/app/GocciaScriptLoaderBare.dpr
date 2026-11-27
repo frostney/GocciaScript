@@ -353,6 +353,7 @@ begin
   Result.ArgumentsObject := cfArgumentsObject in AOptions.Compatibility;
   Result.Labels := AOptions.LabelStatementsEnabled;
   Result.ForIn := AOptions.ForInLoopsEnabled;
+  Result.AnnexB := cfAnnexB in AOptions.Compatibility;
   Result.WarningUnsupported := AOptions.WarningUnsupportedFeatures;
   Result.StrictTypes := AOptions.StrictTypes;
   Result.FunctionCtor := AOptions.UnsafeFunctionConstructor;

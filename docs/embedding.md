@@ -179,6 +179,7 @@ Engine.Profile := Profile;
 | `ForLoop`, `WhileLoop`, `ForIn`, `Labels` | `for(;;)`, `while` and `do...while`, `for...in`, labeled statements | `--compat-traditional-for-loop`, `--compat-while-loops`, `--compat-for-in-loop`, `--compat-label` |
 | `LooseEq` | `==` and `!=` | `--compat-loose-equality` |
 | `NonStrict`, `ArgumentsObject` | Sloppy-mode code, the `arguments` object | `--compat-non-strict-mode`, `--compat-arguments-object` |
+| `AnnexB` | The Annex B globals `escape` and `unescape` (read when the host is installed) | `--compat-annex-b` |
 | `StrictTypes` | Runtime checks of type annotations | `--strict-types` |
 | `WarningUnsupported` | Warn about unsupported or disabled syntax and recover, instead of a `SyntaxError` | `--warning-unsupported-features` |
 | `FunctionCtor` | The `Function` constructor | `--unsafe-function-constructor` |

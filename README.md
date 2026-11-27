@@ -200,11 +200,12 @@ explicit compatibility paths:
 | `eval` | Not installed | none: the host removes it |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
 | `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
+| `escape` / `unescape` | Not installed | `--compat-annex-b` |
 
 Annex B's legacy browser features are part of the test262 conformance target.
-The ones that already ship stay as they are, and new ones will go behind a
-compatibility flag, added by the 0.18.0 Annex B work, that the test262 runner
-turns on; see
+The ones that already ship stay as they are, and new ones, such as `escape`
+and `unescape`, go behind `--compat-annex-b`, which the test262 runner's
+profile has on; see
 [ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 See [Language](docs/language.md) and [Language Tables](docs/language-tables.md)
 for the detailed semantics and feature matrix.

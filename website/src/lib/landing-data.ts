@@ -229,6 +229,14 @@ export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
     standardsSource: "TC39 Stage 2.7",
     why: "evaluates dynamic source and imports modules",
   },
+  {
+    name: "escape / unescape",
+    implemented: true,
+    defaultProfile: "Not installed",
+    enablement: "--compat-annex-b",
+    standardsSource: "ECMA-262 Annex B",
+    why: "legacy string encoding; prefer encodeURIComponent",
+  },
 ];
 
 export type FeatureIcon = "drop" | "shield" | "leaf" | "clock" | "test";
