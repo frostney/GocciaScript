@@ -206,4 +206,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0194 — JIT code mappings are sealed read-execute](0194-jit-code-mappings-are-sealed-read-execute.md)
 - [0195 — The event loop pumps embedder host work in bounded turns](0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)
 - [0196 — An aborted fetch stops at its next socket poll](0196-an-aborted-fetch-stops-at-its-next-socket-poll.md)
-- [0199 — YAML is parsed by a port of saphyr's scanner and event parser](0199-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
+- [0200 — YAML is parsed by a port of saphyr's scanner and event parser](0200-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
