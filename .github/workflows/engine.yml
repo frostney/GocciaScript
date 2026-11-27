@@ -184,9 +184,13 @@ jobs:
         env:
           GOCCIA_JIT: "1"
           GOCCIA_OPT: "1"
+          GOCCIA_JITMAP: "1"
         run: |
-          timeout 20 strace -o build/jit-permissions-opt.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
-          python3 scripts/engine/check-jit-publication.py build/jit-permissions-opt.strace
+          mkdir -p build/jit-permissions-opt
+          timeout 20 strace -ff -o build/jit-permissions-opt/trace -e trace=mmap,mprotect,munmap \
+            build/jit-permissions-test 2> build/jit-permissions-opt/jitmap
+          python3 scripts/engine/check-jit-publication.py build/jit-permissions-opt/trace.* \
+            --jitmap build/jit-permissions-opt/jitmap
 
       - name: Capped and measured uncapped entries report the same instruction units
         run: |
