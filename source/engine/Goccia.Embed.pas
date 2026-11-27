@@ -76,6 +76,9 @@ type
     ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
+    { Dispatch and native work charged while running this entry and its event loop. }
+    HasInstructionCount: Boolean;
+    InstructionCount: QWord;
     { ResultForm: the entry's completion value as String(value) or JSON (a module's too: the value of its last
       expression statement), converted after the event loop under the run's limits; a conversion that throws fails
       the run }
@@ -92,6 +95,7 @@ type
     FBenchMode: Boolean;
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
+    FMeasureInstructions: Boolean;
     FSetupAborted: TGocciaAbort;
     FMaxFrames: Integer;
     FHostReady: Boolean;
@@ -313,6 +317,8 @@ type
       run's }
     property SetupAborted: TGocciaAbort read FSetupAborted;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
+    { Count instructions when MaxInstructions is zero. Capped runs always report a count. }
+    property MeasureInstructions: Boolean read FMeasureInstructions write FMeasureInstructions;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
       own); 0 for the default (Goccia.HostAPI DefaultHeapCeiling) }
@@ -1283,7 +1289,7 @@ begin
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
-  LimitsArm(FTimeoutMs, FMaxInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions);
   Start := GetNanoseconds;
   { the completion value, rooted through the event loop }
   PushRoot(VUndefined);
@@ -1350,6 +1356,7 @@ begin
       Result.HasResult := Result.Ok;
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
+    Result.HasInstructionCount := ReadInstructionCount(Result.InstructionCount);
     case AbortKind of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;
