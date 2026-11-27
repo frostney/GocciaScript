@@ -518,18 +518,18 @@
   // 23.3.3.7 FromBase64: { read, bytes, error }
   function fromBase64(string, alphabet, lastChunkHandling, maxLength) {
     if (maxLength === undefined) maxLength = 9007199254740991;
-    var bytes = [];
+    var bytes = byteList();
     if (maxLength === 0) return { read: 0, bytes: bytes, error: null };
-    var read = 0, chunk = [], index = 0, length = string.length;
+    var read = 0, chunk = byteList(), index = 0, length = string.length;
     function fail() { return { read: read, bytes: bytes, error: new SyntaxErr("invalid base64 string") }; }
     function decodeChunk(c, throwOnExtraBits) {
       var n = c.length;
       var v = (c[0] << 18) | (c[1] << 12) | ((n > 2 ? c[2] : 0) << 6) | (n > 3 ? c[3] : 0);
       var b0 = (v >> 16) & 255, b1 = (v >> 8) & 255, b2 = v & 255;
-      if (n === 4) { push(bytes, b0, b1, b2); return true; }
-      if (n === 2) { if (throwOnExtraBits && b1 !== 0) return false; push(bytes, b0); return true; }
+      if (n === 4) { bytes[bytes.length] = b0; bytes[bytes.length] = b1; bytes[bytes.length] = b2; return true; }
+      if (n === 2) { if (throwOnExtraBits && b1 !== 0) return false; bytes[bytes.length] = b0; return true; }
       if (throwOnExtraBits && b2 !== 0) return false;
-      push(bytes, b0, b1);
+      bytes[bytes.length] = b0; bytes[bytes.length] = b1;
       return true;
     }
     for (;;) {
@@ -571,10 +571,10 @@
       var remaining = maxLength - bytes.length;
       if ((remaining === 1 && chunk.length === 2) || (remaining === 2 && chunk.length === 3))
         return { read: read, bytes: bytes, error: null };
-      push(chunk, v);
+      chunk[chunk.length] = v;
       if (chunk.length === 4) {
         decodeChunk(chunk, false);
-        chunk = [];
+        chunk = byteList();
         read = index;
         if (bytes.length === maxLength) return { read: read, bytes: bytes, error: null };
       }
@@ -589,16 +589,19 @@
   }
   function fromHex(string, maxLength) {
     if (maxLength === undefined) maxLength = 9007199254740991;
-    var length = string.length, bytes = [], read = 0;
+    var length = string.length, bytes = byteList(), read = 0;
     if (length % 2 !== 0) return { read: 0, bytes: bytes, error: new SyntaxErr("odd number of hex digits") };
     while (read < length && bytes.length < maxLength) {
       var h = hexVal(StringPrototypeCharCodeAt(string, read)), l = hexVal(StringPrototypeCharCodeAt(string, read + 1));
       if (h < 0 || l < 0) return { read: read, bytes: bytes, error: new SyntaxErr("invalid hex digit") };
       read += 2;
-      push(bytes, h * 16 + l);
+      bytes[bytes.length] = h * 16 + l;
     }
     return { read: read, bytes: bytes, error: null };
   }
+  // the decoders' byte and chunk lists: no prototype, so an index store reaches no setter a script put on
+  // Array.prototype or Object.prototype, and is as fast as push (they are copied into a Uint8Array)
+  function byteList() { return ObjectSetPrototypeOf([], null); }
   function newU8(bytes) {
     var ta = new U8(bytes.length);
     for (var i = 0; i < bytes.length; i++) ta[i] = bytes[i];

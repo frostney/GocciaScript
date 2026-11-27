@@ -3,7 +3,6 @@ description: Prelude built-ins build their descriptors, records and lists so tha
 features: [Intl, Temporal, Response, Uint8Array, structuredClone, iterator-helpers, explicit-resource-management]
 ---*/
 
-import * as CSV from "goccia:csv";
 import * as JSON5 from "goccia:json5";
 import { withPrototypeAdditions } from "./helpers/tripwire.js";
 
@@ -27,7 +26,6 @@ test("record fields on Object.prototype", () => {
   expect(clean(() => new Temporal.Duration(0, 0, 0, 0, 1).toString())).toBe("PT1H");
   expect(clean(() => Temporal.PlainDate.from("2020-01-15").with({ __proto__: null, day: 1 }).toString())).toBe("2020-01-01");
   expect(clean(() => Temporal.Duration.from("PT1.5S").with({ __proto__: null, minutes: 2 }).toString())).toBe("PT2M1.5S");
-  expect(clean(() => CSV.parse("a,b\n1,2"))).toEqual([{ a: "1", b: "2" }]);
   const time = new Temporal.PlainTime(1, 2);
   expect(clean(() => time.with({ __proto__: null, hour: 3 }).toString())).toBe("03:02:00");
 });

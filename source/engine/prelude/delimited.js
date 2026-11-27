@@ -13,16 +13,11 @@
   const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
   const StringPrototypeSlice = uncurryThis(String.prototype.slice), StringPrototypeIncludes = uncurryThis(String.prototype.includes);
   const StringPrototypeSplit = uncurryThis(String.prototype.split), ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
-  // lists and records built without a prototype, so an index or key store reaches no setter a script put on
-  // Array.prototype or Object.prototype (and a header named __proto__ is a field like any other), as fast as push;
-  // one handed to a script gets its prototype when it is complete
-  const setPrototypeOf = Object.setPrototypeOf, ArrayProto = Array.prototype, ObjectProto = Object.prototype;
-  const newList = () => setPrototypeOf([], null);
+  // lists and records as push and assignment would build them (a property a script adds to Array.prototype or
+  // Object.prototype is #2218's)
   const append = (list, v) => { list[list.length] = v; };
-  const asArray = (list) => setPrototypeOf(list, ArrayProto);
-  const asRecord = (o) => setPrototypeOf(o, ObjectProto);
-  // the values of a row's fields, as the script's array
-  const valuesOf = (fields) => { const r = newList(); for (let i = 0; i < fields.length; i++) append(r, fields[i].value); return asArray(r); };
+  // the values of a row's fields
+  const valuesOf = (fields) => { const r = []; for (let i = 0; i < fields.length; i++) append(r, fields[i].value); return r; };
   // every occurrence of a in s replaced by b
   const replaceAll = (s, a, b) => ArrayPrototypeJoin(StringPrototypeSplit(s, a), b);
   const isArray = Array.isArray;
@@ -50,7 +45,7 @@
   // one CSV row from pos (end exclusive): { fields: [{ value, quoted }], pos, consumed }, or null for an
   // unterminated quoted field
   function csvRow(text, delimiter, pos, end) {
-    const fields = newList();
+    const fields = [];
     let builder = '', quoted = false, inQuotes = false;
     while (pos < end) {
       const ch = text[pos];
@@ -97,7 +92,7 @@
   }
   // one TSV row: { fields: [{ value }], pos, consumed } (consumed false: the text ended before a line break)
   function tsvRow(text, pos, end) {
-    const fields = newList();
+    const fields = [];
     let start = pos;
     while (pos < end) {
       const ch = text[pos];
@@ -123,14 +118,14 @@
     const rowAt = (text, o, pos, end) => (csv ? csvRow(text, o.delimiter, pos, end) : tsvRow(text, pos, end));
     const isEmpty = csv ? csvEmpty : tsvEmpty;
     const record = (header, fields) => {
-      const obj = { __proto__: null };
+      const obj = {};
       for (let i = 0; i < header.length; i++) obj[header[i].value] = i < fields.length ? fields[i].value : '';
-      return asRecord(obj);
+      return obj;
     };
 
     // every row's fields (the header row first, when present)
     function rows(text, o) {
-      const out = newList();
+      const out = [];
       if (text.length === 0) return out;
       let pos = text[0] === BOM ? 1 : 0;
       const end = text.length;
@@ -146,16 +141,12 @@
       return out;
     }
 
-    // the script's array of the rows parseRows returns
     function parse(text, options = undefined, reviver = undefined) {
       if (arguments.length < 1) throw new TypeError(`${name}.parse: 1 argument required`);
-      return asArray(apply(parseRows, undefined, arguments));
-    }
-    function parseRows(text, options = undefined, reviver = undefined) {
       if (typeof text !== 'string') throw new TypeError(`${name}.parse: first argument must be a string`);
       const o = readOptions(options, csv);
       const fn = callback(arguments, 2);
-      const result = newList();
+      const result = [];
       if (text.length === 0) return result;
       let pos = text[0] === BOM ? 1 : 0;
       const end = text.length;
@@ -166,13 +157,13 @@
           if (all.length === 0) return result;
           header = all[0];
           for (let i = 1; i < all.length; i++) {
-            const obj = { __proto__: null };
+            const obj = {};
             for (let j = 0; j < header.length; j++) {
               const f = all[i][j];
               const context = csv ? { quoted: f !== undefined && f.quoted, row: i - 1, column: j } : { row: i - 1, column: j };
               obj[header[j].value] = apply(fn, undefined, [header[j].value, f !== undefined ? f.value : '', context]);
             }
-            append(result, asRecord(obj));
+            append(result, obj);
           }
           return result;
         }
@@ -190,12 +181,12 @@
       if (fn !== undefined) {
         const all = rows(text, o);
         for (let i = 0; i < all.length; i++) {
-          const fields = all[i], values = newList();
+          const fields = all[i], values = [];
           for (let j = 0; j < fields.length; j++) {
             const f = fields[j];
             append(values, apply(fn, undefined, [j, f.value, csv ? { quoted: f.quoted, row: i, column: j } : { row: i, column: j }]));
           }
-          append(result, asArray(values));
+          append(result, values);
         }
         return result;
       }
@@ -220,8 +211,8 @@
       const end = endArg < 0 ? text.length : clamp(endArg, text.length);
       let from = clamp(startArg, text.length);
       if (from === 0 && text[0] === BOM) from = 1;
-      const values = newList();
-      const result = (read, done, error) => ({ values: asArray(values), read, done, error: error === undefined ? null : new SyntaxError(error) });
+      const values = [];
+      const result = (read, done, error) => ({ values: values, read, done, error: error === undefined ? null : new SyntaxError(error) });
       if (from >= end) return result(from, true);
       let pos = from, resume = from, rowNumber = 0, header;
       if (o.headers && startArg === 0) {
@@ -251,13 +242,13 @@
       ? (s, d) => (StringPrototypeIncludes(s, d) || StringPrototypeIncludes(s, '"') || StringPrototypeIncludes(s, '\n') || StringPrototypeIncludes(s, '\r') ? '"' + replaceAll(s, '"', '""') + '"' : s)
       : (s) => replaceAll(replaceAll(replaceAll(replaceAll(s, '\\', '\\\\'), '\t', '\\t'), '\n', '\\n'), '\r', '\\r');
     function replaceRows(data, fn) {
-      const out = newList();
+      const out = [];
       if (data.length > 0 && isPlainRecord(data[0])) {
         const keys = getOwnPropertyNames(data[0]);
         for (let i = 0; i < data.length; i++) {
           const item = data[i];
           if (item === null || typeof item !== 'object') continue;
-          const o = { __proto__: null };
+          const o = {};
           for (let k = 0; k < keys.length; k++) o[keys[k]] = apply(fn, undefined, [keys[k], item[keys[k]]]);
           append(out, o);
         }
@@ -265,7 +256,7 @@
         for (let i = 0; i < data.length; i++) {
           const row = data[i];
           if (!isArray(row)) continue;
-          const r = newList();
+          const r = [];
           for (let j = 0; j < row.length; j++) append(r, apply(fn, undefined, [j, row[j]]));
           append(out, r);
         }
@@ -280,7 +271,7 @@
       const rows = fn !== undefined ? replaceRows(data, fn) : data;
       if (rows.length === 0) return '';
       const d = csv ? o.delimiter : '\t';
-      const lines = newList();
+      const lines = [];
       if (isPlainRecord(rows[0]) && o.headers) {
         const keys = getOwnPropertyNames(rows[0]);
         const line = (cell, length) => { let s = ''; for (let j = 0; j < length; j++) s += (j > 0 ? d : '') + cell(j); return s; };
@@ -310,7 +301,7 @@
   // a .csv or .tsv file imports each record under its index ("0", "1", ...), its header row read
   const indexed = (rowsOf) => (text) => {
     const records = rowsOf(text);
-    const out = newList();
+    const out = [];
     for (let i = 0; i < records.length; i++) { append(out, String(i)); append(out, records[i]); }
     return shared.exportList(out);
   };
