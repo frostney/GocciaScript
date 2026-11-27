@@ -60,7 +60,8 @@ type
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil);
 { 16.2.1.10 HostGetImportMetaProperties / HostFinalizeImportMeta: the host fills a module's import.meta (made
-  with a null prototype) once, given the module's path; nil leaves it empty }
+  with a null prototype) once, given the module's address (a host file's canonical path, the base its relative
+  imports resolve from); nil leaves it empty }
 var ImportMetaInitHook: function(Meta: TValue; const Path: UnicodeString): Boolean = nil;
 { the host's exports of a JSON module (type: 'json') from its value, names and values interleaved (GocciaScript
   exports the top-level object's properties besides default); nil: default only, as ECMA-262 has it }
@@ -147,6 +148,10 @@ function ResolvingSourcePhase: Boolean;
 { an entry module given as bytecode (a .gbc entry): Bytes load as the module keyed Path (its ArtifactModulePath)
   when RunModuleFile runs it; '' clears it }
 procedure SetProvidedArtifact(const Path, GbcPath: UnicodeString; const Bytes: RawByteString);
+{ a Script entry given as bytecode, keyed Path (its ArtifactModulePath): its imports and import() calls resolve
+  from the real address a bytecode module there would have, beside the real bytecode file at GbcPath when no
+  source is there; '' clears it }
+procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
 
 implementation
 
@@ -162,8 +167,8 @@ const
 type
   TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluatingAsync, msEvaluated);
   TModuleAddress = record
-    Path: UnicodeString;      { resolver spelling for diagnostics, coverage and import.meta }
-    RealPath: UnicodeString;  { canonical load address and relative import base of a host file }
+    Path: UnicodeString;      { resolver spelling for diagnostics }
+    RealPath: UnicodeString;  { canonical load address, relative import base and import.meta address of a host file }
     ModuleType: UnicodeString;
     VirtualKey: Boolean;
     function FilePath: UnicodeString;
@@ -841,6 +846,25 @@ begin
   ProvidedArtifactPath := Path;
   ProvidedArtifactRealPath := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
   ProvidedArtifactBytes := Bytes;
+end;
+
+threadvar
+  ScriptArtifactPath, ScriptArtifactRealPath: UnicodeString;
+
+procedure SetScriptArtifact(const Path, GbcPath: UnicodeString);
+begin
+  ScriptArtifactPath := Path;
+  if Path = '' then ScriptArtifactRealPath := ''
+  else ScriptArtifactRealPath := ArtifactRealModulePath(HostFileAddress(GbcPath), Path);
+end;
+
+{ the real path a Script entry keyed Path resolves its imports from: '' when it names no host file }
+function ScriptRealPath(const Path: UnicodeString): UnicodeString;
+var P: UnicodeString;
+begin
+  P := ScriptArtifactPath;
+  if (P <> '') and (P = Path) then Result := ScriptArtifactRealPath
+  else Result := HostRealFilePath(Path);
 end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
@@ -1839,6 +1863,10 @@ begin
   try
     Address := Default(TModuleAddress);
     Address.Path := Key;
+    { the entry's real path with the suffix: its requests resolve from the real directory, and the record never
+      matches the entry file's own }
+    Address.RealPath := ScriptRealPath(EntryPath);
+    if Address.RealPath <> '' then Address.RealPath := Address.RealPath + Copy(Key, Length(EntryPath) + 1, MaxInt);
     Ok := LoadAndLink(Address, M);
   finally
     SetProvidedSource(SavedPath, SavedSrc);
@@ -1961,6 +1989,21 @@ begin
   PopRoots(3);
 end;
 
+{ the path an import() made by code with no module record of its own (a Script, a ShadowRealm's importValue)
+  resolves from: the real path of the module or Script file its code is in, Ref itself when it names none }
+function ReferrerFilePath(const Ref: UnicodeString): UnicodeString;
+var M: TModRec; Real: UnicodeString;
+begin
+  Result := Ref;
+  if (Ref = '') or (Ref[1] = '<') then Exit;
+  M := FindModuleByPath(Ref);
+  if M <> nil then Exit(M.Address.FilePath);
+  { a host module's key (goccia:, a URL) is never a file name, and a relative one is the script's as given }
+  if not IsAbsoluteFilePath(Ref) and (Pos(':', Ref) > 0) then Exit;
+  Real := ScriptRealPath(UnicodeString(ExpandFileName(string(Ref))));
+  if Real <> '' then Result := Real;
+end;
+
 { the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -1978,7 +2021,7 @@ begin
   SavedHostLoading := HostLoading;
   if IsString(R) then
   begin
-    Ref := StrToUnicode(StrOf(R));
+    Ref := ReferrerFilePath(StrToUnicode(StrOf(R)));
     HostLoading := False;
   end
   else
@@ -2182,7 +2225,7 @@ begin
     SetRoot(M, rMeta, Res);
     if Assigned(ImportMetaInitHook) then
     begin
-      if not ImportMetaInitHook(Res, M.Address.Path) then Exit(False);
+      if not ImportMetaInitHook(Res, M.Address.FilePath) then Exit(False);
       Res := GetRoot(M, rMeta);
     end;
   end;

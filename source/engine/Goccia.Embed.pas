@@ -1141,6 +1141,7 @@ begin
   begin
     T := A.Top;
     ScriptImportSource := A.ScriptImports;
+    SetScriptArtifact(EntryKey, EntryKeyOf(FileName));
   end;
   Result := True;
 end;
@@ -1155,6 +1156,7 @@ begin
     FArtifactEntry := False;
     FArtifactBytes := '';
     SetProvidedArtifact('', '', '');
+    SetScriptArtifact('', '');
   end;
 end;
 
