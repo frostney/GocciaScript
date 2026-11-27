@@ -6467,7 +6467,8 @@ var O: PObj; CI: Integer; Idx: Int64;
 begin
   O := ObjOf(Obj);
   if (O^.OKind = okArray) and IndexFromString(Key, Idx) then Exit(SetElemV(Obj, MkPtr(Key), V));
-  if O^.OKind in [okProxy, okModuleNS, okTypedArray, okArguments, okStringObj] then Exit(CreateDataHook(Obj, Key, V));
+  if O^.OKind in [okProxy, okModuleNS, okTypedArray, okArguments, okArgumentsOrd, okStringObj] then
+    Exit(CreateDataHook(Obj, Key, V));
   CI := ShapeLookup(O^.Shape, Key);
   if CI >= 0 then
   begin

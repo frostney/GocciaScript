@@ -60,6 +60,27 @@ describe("strictly typed mapped parameters", () => {
     expect(run("original")).toEqual(["unmapped", "accepted"]);
   });
 
+  test("public class fields use the mapped index's definition semantics", () => {
+    function run(value: string) {
+      return [arguments, () => value];
+    }
+    class ReturnObject {
+      constructor(target) { return target; }
+    }
+    class Incompatible extends ReturnObject {
+      0 = 5;
+    }
+    class Compatible extends ReturnObject {
+      ["0"] = "accepted";
+    }
+
+    const [alias, read] = run("original");
+    expect(() => new Incompatible(alias)).toThrow(TypeError);
+    expect([read(), alias[0]]).toEqual(["original", "original"]);
+    new Compatible(alias);
+    expect([read(), alias[0]]).toEqual(["accepted", "accepted"]);
+  });
+
   test("deleting the mapped property lets a replacement hold any value", () => {
     function run(value: string) {
       delete arguments[0];
