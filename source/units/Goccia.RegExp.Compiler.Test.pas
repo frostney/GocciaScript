@@ -19,6 +19,7 @@ type
     procedure TestBackReferencePastIndexBitsRaises;
     procedure TestWorkspaceLimitCountsNamedGroupStorage;
     procedure TestWorkspaceLimitCountsNestedClassStorage;
+    procedure TestWorkspaceLimitCountsBackwardTerms;
   public
     procedure SetupTests; override;
   end;
@@ -62,6 +63,25 @@ begin
     TestWorkspaceLimitCountsNamedGroupStorage);
   Test('the workspace limit counts class contents that are live together',
     TestWorkspaceLimitCountsNestedClassStorage);
+  Test('the workspace limit includes copied lookbehind terms',
+    TestWorkspaceLimitCountsBackwardTerms);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsBackwardTerms;
+var
+  LiteralPattern: string;
+  Refused: Boolean;
+begin
+  LiteralPattern := StringOfChar('a', 120);
+  Expect<Boolean>(Length(CompileRegExp(LiteralPattern, '', @CheckTestWorkspace).Code) > 0).ToBe(True);
+  Refused := False;
+  try
+    CompileRegExp('(?<=' + LiteralPattern + ')a', '', @CheckTestWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
 end;
 
 procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNestedClassStorage;

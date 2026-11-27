@@ -3360,6 +3360,7 @@ var
     end;
 
   begin
+    CheckWorkspace(Int64(BodyLen) * (SizeOf(Boolean) + SizeOf(Integer)));
     SetLength(Visited, BodyLen);
     SetLength(Pending, BodyLen);
     PendingCount := 0;
@@ -3531,50 +3532,55 @@ begin
      (MaxCount > REGEXP_MAX_QUANTIFIER_BOUND) then
     raise EConvertError.Create(
       'Invalid regular expression: quantifier bound too large');
-  SetLength(BodyCode, BodyLen);
-  Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
-  HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
-  NeedsRepeatGuard := not BodyRequiresProgress;
-  FCodeLen := AAtomStart;
-  for I := 1 to Integer(MinCount) do
-  begin
-    EmitCaptureClearIfNeeded;
-    EmitBodyAt(BodyCode, BodyLen, AAtomStart);
-  end;
-  if MaxCount = -1 then
-  begin
-    SplitPC := CurrentPC;
-    if Lazy then
-      Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
-    else
-      Emit(EncodeOpBx(RX_SPLIT, 0));
-    EmitOptionalBody;
-    Emit(EncodeOpBx(RX_JUMP, SplitPC));
-    PatchHole(SplitPC, CurrentPC);
-  end
-  else
-  begin
-    // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
-    // skipped, matching continues after the last copy instead of trying
-    // each remaining copy in turn. Until the end is known, each split's
-    // operand links to the previous split (index + 1, 0 for none).
-    PrevSplit := -1;
-    for I := Integer(MinCount) + 1 to Integer(MaxCount) do
+  try
+    CheckTableResize(0, BodyLen, SizeOf(UInt32));
+    SetLength(BodyCode, BodyLen);
+    Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
+    HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
+    NeedsRepeatGuard := not BodyRequiresProgress;
+    FCodeLen := AAtomStart;
+    for I := 1 to Integer(MinCount) do
+    begin
+      EmitCaptureClearIfNeeded;
+      EmitBodyAt(BodyCode, BodyLen, AAtomStart);
+    end;
+    if MaxCount = -1 then
     begin
       SplitPC := CurrentPC;
       if Lazy then
-        Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
+        Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
       else
-        Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
-      PrevSplit := SplitPC;
+        Emit(EncodeOpBx(RX_SPLIT, 0));
       EmitOptionalBody;
-    end;
-    while PrevSplit >= 0 do
-    begin
-      SplitPC := PrevSplit;
-      PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
+      Emit(EncodeOpBx(RX_JUMP, SplitPC));
       PatchHole(SplitPC, CurrentPC);
+    end
+    else
+    begin
+      // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
+      // skipped, matching continues after the last copy instead of trying
+      // each remaining copy in turn. Until the end is known, each split's
+      // operand links to the previous split (index + 1, 0 for none).
+      PrevSplit := -1;
+      for I := Integer(MinCount) + 1 to Integer(MaxCount) do
+      begin
+        SplitPC := CurrentPC;
+        if Lazy then
+          Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
+        else
+          Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
+        PrevSplit := SplitPC;
+        EmitOptionalBody;
+      end;
+      while PrevSplit >= 0 do
+      begin
+        SplitPC := PrevSplit;
+        PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
+        PatchHole(SplitPC, CurrentPC);
+      end;
     end;
+  finally
+    Dec(FTableBytes, Int64(Length(BodyCode)) * SizeOf(UInt32));
   end;
 end;
 
@@ -3650,27 +3656,38 @@ begin
     Exit;
   end;
 
-  TermCount := 0;
-  SetLength(Terms, 8);
-  while not AtEnd and (Peek <> '|') and (Peek <> ')') do
-  begin
-    TermStart := CurrentPC;
-    CompileTerm;
-    if TermCount >= Length(Terms) then
-      SetLength(Terms, TermCount * 2 + 8);
-    Terms[TermCount].Length := CurrentPC - TermStart;
-    Terms[TermCount].OriginalStart := TermStart;
-    SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
-    if Terms[TermCount].Length > 0 then
-      Move(FCode[TermStart], Terms[TermCount].Code[0],
-        Terms[TermCount].Length * SizeOf(UInt32));
-    FCodeLen := TermStart;
-    Inc(TermCount);
-  end;
+  try
+    TermCount := 0;
+    CheckTableResize(0, 8, SizeOf(TRegExpTermCode));
+    SetLength(Terms, 8);
+    while not AtEnd and (Peek <> '|') and (Peek <> ')') do
+    begin
+      TermStart := CurrentPC;
+      CompileTerm;
+      if TermCount >= Length(Terms) then
+      begin
+        CheckTableResize(Length(Terms), TermCount * 2 + 8, SizeOf(TRegExpTermCode));
+        SetLength(Terms, TermCount * 2 + 8);
+      end;
+      Terms[TermCount].Length := CurrentPC - TermStart;
+      Terms[TermCount].OriginalStart := TermStart;
+      CheckTableResize(0, Terms[TermCount].Length, SizeOf(UInt32));
+      SetLength(Terms[TermCount].Code, Terms[TermCount].Length);
+      if Terms[TermCount].Length > 0 then
+        Move(FCode[TermStart], Terms[TermCount].Code[0],
+          Terms[TermCount].Length * SizeOf(UInt32));
+      FCodeLen := TermStart;
+      Inc(TermCount);
+    end;
 
-  for TermIndex := TermCount - 1 downto 0 do
-    EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
-      Terms[TermIndex].OriginalStart);
+    for TermIndex := TermCount - 1 downto 0 do
+      EmitBodyAt(Terms[TermIndex].Code, Terms[TermIndex].Length,
+        Terms[TermIndex].OriginalStart);
+  finally
+    for TermIndex := 0 to High(Terms) do
+      Dec(FTableBytes, Int64(Length(Terms[TermIndex].Code)) * SizeOf(UInt32));
+    Dec(FTableBytes, Int64(Length(Terms)) * SizeOf(TRegExpTermCode));
+  end;
 end;
 
 procedure TRegExpCompiler.InsertSplitAt(APos: Integer);
@@ -3717,32 +3734,40 @@ var
 begin
   // Every group and lookaround compiles its body from here.
   EnterNesting;
-  JumpCount := 0;
-  SetLength(JumpHoles, 8);
-  StartPC := CurrentPC;
-  CompileAlternative;
-  while (not AtEnd) and (Peek = '|') do
-  begin
-    Inc(FPos);
-    if FAltStackDepth < Length(FAltStack) then
-      Inc(FAltStack[FAltStackDepth]);
-    // The split goes in front of the alternative just compiled, so only that
-    // alternative's code moves. The jump holes of earlier alternatives all sit
-    // before StartPC and stay where they are; walking them here would cost
-    // time quadratic in the number of alternatives.
-    InsertSplitAt(StartPC);
-    if JumpCount >= Length(JumpHoles) then
-      SetLength(JumpHoles, JumpCount * 2 + 8);
-    JumpHoles[JumpCount] := CurrentPC;
-    Inc(JumpCount);
-    Emit(0);
-    PatchHole(StartPC, CurrentPC);
+  try
+    JumpCount := 0;
+    CheckTableResize(0, 8, SizeOf(Integer));
+    SetLength(JumpHoles, 8);
     StartPC := CurrentPC;
     CompileAlternative;
+    while (not AtEnd) and (Peek = '|') do
+    begin
+      Inc(FPos);
+      if FAltStackDepth < Length(FAltStack) then
+        Inc(FAltStack[FAltStackDepth]);
+      // The split goes in front of the alternative just compiled, so only that
+      // alternative's code moves. The jump holes of earlier alternatives all sit
+      // before StartPC and stay where they are; walking them here would cost
+      // time quadratic in the number of alternatives.
+      InsertSplitAt(StartPC);
+      if JumpCount >= Length(JumpHoles) then
+      begin
+        CheckTableResize(Length(JumpHoles), JumpCount * 2 + 8, SizeOf(Integer));
+        SetLength(JumpHoles, JumpCount * 2 + 8);
+      end;
+      JumpHoles[JumpCount] := CurrentPC;
+      Inc(JumpCount);
+      Emit(0);
+      PatchHole(StartPC, CurrentPC);
+      StartPC := CurrentPC;
+      CompileAlternative;
+    end;
+    for I := 0 to JumpCount - 1 do
+      FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  finally
+    Dec(FTableBytes, Int64(Length(JumpHoles)) * SizeOf(Integer));
+    LeaveNesting;
   end;
-  for I := 0 to JumpCount - 1 do
-    FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
-  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.CompilePattern;
