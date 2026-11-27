@@ -19,7 +19,8 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
 - A request before the run starts keeps it from starting. A request during it ends it past guest handlers with
   `gaHostAbort`, and the engine interrupts its fetches and Atomics waits.
 - A request that arrives after the run's own last check, while it finishes, still reports the run as cancelled, and
-  the work it left is discarded as after any abort, so the result and the cleanup agree.
+  the work it left is discarded as after any abort, so the result and the cleanup agree. A run that already ended at
+  one of its limits reports that limit instead.
 - A request after the run ended does nothing. Capturing again before the run replaces the earlier handle, which then
   never binds.
 - The handle keeps no engine state once its run ended, so any thread may release its reference at any time.
@@ -35,4 +36,6 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
 - A run with an armed handle runs in the interpreter, as a run with a limit does, so it does not use the JIT.
 - The handle covers the entry only: it has expired by the time `RunTests` or `RunBenchmarks` runs, and a request
   while the entry waits for a nested sandbox run on another thread takes effect only once that run returns.
-- A module evaluation an abort cut short, an entry's or its imports', loads again on a later run; a finished one stays.
+- A module evaluation that the run started and an abort cut short, an entry's or its imports', loads again on a later
+  run. A finished one stays, as does a module the run only loaded, such as a source phase import's, with its source
+  object.

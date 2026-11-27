@@ -1251,6 +1251,9 @@ begin
     the Nth call is pushed at FrameTop N (the entry's frame and N - 1 calls) }
   if (N <= 0) or (N > FRAME_MAX - 3) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 3;
   if Interrupt = 0 then FrameLimit := FrameLimitBase;
+  { a request another thread published between the test and the write: the signal publishes it again under its
+    lock, so the frame bound stays 0 while the interrupt is set }
+  RestoreRunAbort;
   if (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or RunAbortArmed then JitBlocked := True
   else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;
 end;
@@ -8453,6 +8456,13 @@ LSetPropSlow:
                 InjectThrow := True;
                 Exit(-1);
               end;
+              { as for a direct native call below }
+              if (Interrupt <> 0) and RunAbortRequested then
+              begin
+                XAbort(1);
+                InjectThrow := True;
+                Exit(-1);
+              end;
               Continue;
             end;
           end
@@ -10026,6 +10036,13 @@ LReload:
           end;
           if not CallValue(VA, R[A + 1], @R[A + 2], Argc, V) then goto LThrow;
           R[A] := V;
+          { a bound or other callee's native: the checkpoint of a direct native call above }
+          if (Interrupt <> 0) and RunAbortRequested then
+          begin
+            Fr^.PC := PC;
+            XAbort(1);
+            goto LThrow;
+          end;
         end;
 
       opSuperCall, opSuperCallV:

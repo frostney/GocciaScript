@@ -516,13 +516,14 @@ On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArt
 `IGocciaAbortHandle` in the thread that may call `Request`. A request made before the run prevents it from starting.
 A request during execution ends it past guest handlers with `Aborted = gaHostAbort`, even when a native function
 that made the request returns an error. The engine interrupts its fetch and Atomics waits, then discards pending guest
-work under the same rules as a timeout, and a module evaluation the request cut short loads again on a later run. A run
-cancelled before it started made nothing, so it leaves what earlier runs queued in place.
+work under the same rules as a timeout. A module evaluation that the run started and the request cut short loads
+again on a later run. A module the run only loaded, such as a source phase import's, stays, and so does its source
+object. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
 
 The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
 Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do
-nothing. A request that lands while the run finishes still reports `gaHostAbort`, and a cancelled run has no
-completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
+nothing. A request that lands while the run finishes still reports `gaHostAbort`, unless the run already ended at
+one of its limits, which it then reports. A cancelled run has no completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
 thread may each release their reference whenever they are done with it.
 A run with an armed handle runs in the interpreter, without the JIT. The handle has expired by the time `RunTests` or
 `RunBenchmarks` runs. A nested sandbox run another thread executes does not see the request; the caller observes it

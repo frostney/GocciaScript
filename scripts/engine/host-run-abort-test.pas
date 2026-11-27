@@ -173,23 +173,30 @@ begin
   Check(RunResult.Ok and (RunResult.ResultText = 'false'), 'a guest catch ran after the host cancelled the run');
 end;
 
-{ A native that requests the cancellation and returns normally: the run ends before the next native starts. }
+{ A native that requests the cancellation and returns normally: the run ends before the next native starts, whether
+  the native was called directly, through Function.prototype.call or as a bound function. }
 procedure CheckNativeRequestThenReturn(AEngine: TGocciaEngine);
-var RunResult: TGocciaRunResult;
+const
+  Calls: array[0..2] of UnicodeString = ('requestAbort()', 'requestAbort.call(undefined)',
+    'requestAbort.bind(undefined)()');
+var RunResult: TGocciaRunResult; I: Integer;
 begin
-  SecondNativeEntered := False;
-  CurrentAbort := AEngine.CaptureAbortHandle;
-  RunResult := AEngine.Run('request-then-return.js', 'requestAbort(); markEntered(); 1;');
-  CurrentAbort := nil;
-  Check((RunResult.Aborted = gaHostAbort) and not SecondNativeEntered,
-    'a native ran after the host cancelled the run: ' + RunResult.ErrorMessage);
+  for I := Low(Calls) to High(Calls) do
+  begin
+    SecondNativeEntered := False;
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run('request-then-return.js', Calls[I] + '; markEntered(); 1;');
+    CurrentAbort := nil;
+    Check((RunResult.Aborted = gaHostAbort) and not SecondNativeEntered,
+      'a native ran after the host cancelled the run in ' + Calls[I] + ': ' + RunResult.ErrorMessage);
+  end;
 end;
 
 { A module the cancellation interrupted evaluates again when the same path runs next, as do its imports. }
 procedure CheckCancelledModuleReloads;
 var
   AEngine: TGocciaEngine;
-  Directory, Dependency: string;
+  Directory, Dependency, SourceDependency: string;
   Lines: TStringList;
   RunResult: TGocciaRunResult;
 begin
@@ -214,11 +221,27 @@ begin
       'globalThis.cancelDependency = false; const { ready } = await import("./dependency.mjs"); ready;');
     Check(RunResult.Ok and (RunResult.ResultText = '7'),
       'a module the cancellation interrupted did not evaluate again: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    { a source phase import the cancelled run finished keeps its module source: the next import of the unchanged file
+      gives the same object }
+    AEngine.JSModuleSources := True;
+    SourceDependency := Directory + PathDelim + 'source-dependency.mjs';
+    Lines.Text := 'export const value = 1;';
+    Lines.SaveToFile(SourceDependency);
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'source-entry.mjs',
+      'globalThis.saved = await import.source("./source-dependency.mjs"); requestAbort(); markEntered(); 1;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the source phase run was not cancelled: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'source-check.mjs',
+      '(await import.source("./source-dependency.mjs")) === globalThis.saved;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true'),
+      'a cancelled run''s source phase import lost its identity: ' + RunResult.ResultText + RunResult.ErrorMessage);
   finally
     CurrentAbort := nil;
     AEngine.Free;
     Lines.Free;
     DeleteFile(Dependency);
+    if SourceDependency <> '' then DeleteFile(SourceDependency);
     RemoveDir(Directory);
   end;
 end;
