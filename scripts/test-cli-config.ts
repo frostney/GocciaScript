@@ -1731,16 +1731,19 @@ console.log("A manifest's relative address is a module even with no file at that
       };\n`,
     );
     writeFileSync(join(directory, "overlay.js"), 'export default -1;\n');
+    const virtualAlias = JSON.stringify(join(alias, "nested", "virt.js"));
+    const virtualKey = JSON.stringify(join(realpathSync.native(directory), "nested", "virt.js"));
     writeFileSync(entry, [
       'import * as relative from "./nested/virt.js";',
-      `import * as absolute from ${JSON.stringify(join(alias, "nested", "virt.js"))};`,
-      'import value from "./overlay.js";',
+      `import * as absolute from ${virtualAlias};`,
+      `import value from ${JSON.stringify(join(alias, "overlay.js"))};`,
       'import neighbor from "../neighbor.js";',
-      'console.log("virtual", relative === absolute, relative.default, value, neighbor);',
+      `const canonical = import.meta.resolve(${virtualAlias}) === ${virtualKey};`,
+      'console.log("virtual", relative === absolute, canonical, relative.default, value, neighbor);',
     ].join("\n"));
     for (const root of [directory, alias]) {
       const out = runCwd(RUNNER, [join(root, "entry.mjs"), "--modules", join(root, "modules.mjs")], tmp);
-      if (!containsLine(out.stdout, "virtual true 42 17 23") || !out.stderr.includes("shadows module"))
+      if (!containsLine(out.stdout, "virtual true true 42 17 23") || !out.stderr.includes("shadows module"))
         throw new Error(`Virtual module aliases should share a record and shadow files: ${out.combined}`);
     }
   } finally {

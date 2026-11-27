@@ -1419,7 +1419,11 @@ begin
   { the import() being resolved: its specifier computed or not (the first resolution takes it) }
   Literal := not ImportComputed;
   ImportComputed := False;
-  if FindHostModuleKey(Spec, Resolved) then Exit(1);
+  if FindHostModuleKey(Spec, Resolved) then
+  begin
+    WarnVirtualShadow(Resolved, Spec);
+    Exit(1);
+  end;
   { a relative specifier in a virtual module resolves against its address, hierarchically }
   if IsRelativeSpecifier(Spec) and (Referrer <> '') and IsVirtualKey(Referrer) then
   begin
@@ -1834,7 +1838,7 @@ end;
   GocciaScript resolves it: an absolute specifier as it is, any other against the module's directory, as a file:
   URL (the file need not exist) }
 function Host_MetaResolve(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var Spec, Path, RefPath: string; S: TValue; Ref: UnicodeString;
+var Spec, Path, RefPath: string; S: TValue; Ref, Registered: UnicodeString;
 begin
   if (Argc < 2) or (PrimitiveToNumber(Args[2]) < 1) then
     Exit(ThrowTypeError('import.meta.resolve requires a specifier argument'));
@@ -1843,9 +1847,9 @@ begin
   Ref := ArgStr(Args, Argc, 1);
   Result := True;
   { a host module (a virtual one too) by its key; a relative specifier in a virtual module against its address }
-  if IsHostModuleKey(UnicodeString(Spec)) then
+  if FindHostModuleKey(UnicodeString(Spec), Registered) then
   begin
-    Res := StrFromUnicode(UnicodeString(Spec));
+    Res := StrFromUnicode(Registered);
     Exit;
   end;
   if IsVirtualKey(Ref) and IsRelativeSpecifier(Spec) then
