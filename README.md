@@ -456,7 +456,9 @@ property shapes, asymmetric matchers, custom serializers, and `-u` updates.
 Importing `vi` from `"vitest"` resolves to a bundled compatibility shim, so
 suites written against `vi.fn`, `vi.spyOn`, and factory-form `vi.mock` (a
 synchronous arrow factory returning an object literal — no automock, no
-spread-based partial mock) run unmodified; see
+spread-based partial mock) run unmodified. An embedder can
+[opt in to the shim](docs/testing-api.md#the-vitest-compatibility-shim) without
+the testing globals; see
 [Test Framework API](docs/testing-api.md) for the full factory constraints and
 the members that are not implemented.
 See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
