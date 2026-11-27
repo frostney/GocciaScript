@@ -398,9 +398,17 @@ begin
     if Len > 0 then Move(TAData(S)^, TAData(ObjOf(T))^, Len * TAElemSize[Kind]);
   end
   else if Kind >= taBigInt64 then
-    for I := 0 to Len - 1 do PQWord(TAData(ObjOf(T)))[I] := PQWord(TAData(S))[I]
+    for I := 0 to Len - 1 do
+    begin
+      if not PollInterrupt then Exit(False);
+      PQWord(TAData(ObjOf(T)))[I] := PQWord(TAData(S))[I];
+    end
   else
-    for I := 0 to Len - 1 do TASet(ObjOf(T), I, NumOf(TAGet(S, I)));
+    for I := 0 to Len - 1 do
+    begin
+      if not PollInterrupt then Exit(False);
+      TASet(ObjOf(T), I, NumOf(TAGet(S, I)));
+    end;
   Result := True;
 end;
 
@@ -458,12 +466,13 @@ begin
   PushRoot(T);
   for K := 0 to Len - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit; end;
     if FromList then
     begin
       V := ObjOf(RootAt(Base))^.Elements^.Data[K];
       if V = VHole then V := VUndefined;
     end
-    else if not PollInterrupt or not GetElemV(RootAt(Base), IdxVal(K), V) then begin PopRoots(3); Exit; end;
+    else if not GetElemV(RootAt(Base), IdxVal(K), V) then begin PopRoots(3); Exit; end;
     if not TAStoreValue(RootAt(Base + 2), K, V) then begin PopRoots(3); Exit; end;
   end;
   T := RootAt(Base + 2);
@@ -489,7 +498,11 @@ begin
   PushRoot(NextM);
   while True do
   begin
-    if not IteratorStepRec(RootAt(Base + 1), RootAt(Base + 2), V, Done) then begin PopRoots(3); Exit(False); end;
+    if not PollInterrupt or not IteratorStepRec(RootAt(Base + 1), RootAt(Base + 2), V, Done) then
+    begin
+      PopRoots(3);
+      Exit(False);
+    end;
     if Done then Break;
     ArrayPush(ObjOf(RootAt(Base)), V);
   end;

@@ -16,6 +16,8 @@ uses
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
+  TGocciaNativeModuleFactory = TNativeModuleFactory;
+  TGocciaEmbedderWork = TEmbedderWork;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -226,6 +228,11 @@ type
     function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+    { Registers a native factory for an import, with the same lifetime as this engine. }
+    function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+      var Err: UnicodeString): Boolean;
+    { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
+    procedure SetHostWork(Work: TGocciaEmbedderWork);
     function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
@@ -675,6 +682,12 @@ begin
   Result := ThrowTypeError('Host environment export "' + Name + '" must return a Number or BigInt');
 end;
 
+function TGocciaEngine.DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := HostReady(Err) and Goccia.HostAPI.DefineNativeModule(Specifier, Factory, Err);
+end;
+
 { the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
   performance's time origin taken from them, then the time zone read; False with the error pending }
 function TGocciaEngine.LoadHostEnvironment: Boolean;
@@ -943,6 +956,11 @@ begin
   Result := InstallHost(Err);
 end;
 
+procedure TGocciaEngine.SetHostWork(Work: TGocciaEmbedderWork);
+begin
+  SetEmbedderWork(Work);
+end;
+
 function TGocciaEngine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
@@ -984,6 +1002,7 @@ begin
   ModuleMark := ModuleEvaluationMark;
   Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions);
+  Result := False;
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
@@ -1176,6 +1195,8 @@ begin
   if not PrepareHost(Err) then
   begin
     Result.ErrorMessage := Err;
+    { work the host source holds from before does not outlive the failed run }
+    DiscardEmbedderWork;
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
@@ -1283,6 +1304,8 @@ begin
     Result.CompileNanoseconds := GetNanoseconds - Start;
     if not Compiled then
     begin
+      { work a loaded host environment started does not outlive the failed run }
+      DiscardEmbedderWork;
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1304,6 +1327,7 @@ begin
     Result.ErrorLine := ParseErrorLine;
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
+    DiscardEmbedderWork;
     Exit;
   end;
   Result.Compiled := True;
