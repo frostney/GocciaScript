@@ -3,8 +3,8 @@ program NativeModuleTest;
 {$mode delphiunicode}{$H+}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils,
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
+  Classes, SysUtils,
   Goccia.Core,
   Goccia.Embed,
   Goccia.HostAPI,
@@ -16,6 +16,7 @@ type
     Calls: Integer;
     function CreateExports(var AExports: TValue): Boolean;
     function InvalidExports(var AExports: TValue): Boolean;
+    function MissingExports(var AExports: TValue): Boolean;
   end;
 
 function Answer(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
@@ -57,6 +58,11 @@ begin
   Result := True;
 end;
 
+function TFactory.MissingExports(var AExports: TValue): Boolean;
+begin
+  Result := True;
+end;
+
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
 begin
   if not ACondition then raise Exception.Create(AMessage);
@@ -74,9 +80,14 @@ begin
   try
     Engine.Bare := ABare;
     Engine.ResultForm := grfString;
+    Engine.JSModuleSources := True;
     Check(not Engine.DefineNativeModule('/file.mjs', Factory.CreateExports, ErrorText), 'file name accepted');
     Check(not Engine.DefineNativeModule('host:typed'#1'text', Factory.CreateExports, ErrorText),
       'specifier contains the internal type separator');
+    {$IFDEF WINDOWS}
+    Check(not Engine.DefineNativeModule('\\?\C:\modules\file.mjs', Factory.CreateExports, ErrorText),
+      'verbatim file path accepted as a virtual address');
+    {$ENDIF}
     Check(Engine.DefineNativeModule('host:sample', Factory.CreateExports, ErrorText), ErrorText);
     Check(not Engine.DefineNativeModule('host:sample', Factory.CreateExports, ErrorText), 'duplicate accepted');
     if not ABare then
@@ -89,6 +100,12 @@ begin
     Check(Pos('conflicts with a registered host module', ErrorText) > 0, ErrorText);
     RunResult := Engine.Run('typed-native.mjs', 'import value from "host:sample" with { type: "text" }; value;');
     Check(not RunResult.Ok and (Factory.Calls = 0), 'a typed import ran a native factory');
+    RunResult := Engine.Run('static-source.mjs', 'import source original from "host:sample"; original;');
+    Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError') and (Factory.Calls = 0) and
+      (Pos('no source phase representation', RunResult.ErrorText) > 0), 'a static source import ran a native factory');
+    RunResult := Engine.Run('dynamic-source.mjs',
+      'await import.source("host:sample").then(() => false, e => e instanceof SyntaxError);');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true') and (Factory.Calls = 0), 'a dynamic source import ran a native factory');
     if not ABare then
     begin
       RunResult := Engine.Run('typed-source.mjs', 'import source from "host:source" with { type: "text" }; source;');
@@ -103,6 +120,15 @@ begin
       'import * as second from "host:sample"; globalThis.firstNative === second;');
     Check(RunResult.Ok and (RunResult.ResultText = 'true') and (Factory.Calls = 1),
       'native module identity changed between entries');
+    Check(Engine.DefineNativeModule('host:mixed', Factory.CreateExports, ErrorText), ErrorText);
+    RunResult := Engine.Run('mixed-source.mjs',
+      'import source original from "host:mixed"; import { answer } from "host:mixed"; answer;');
+    Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError') and (Factory.Calls = 2),
+      'a mixed request lost its evaluation lookup');
+    Check(Engine.DefineNativeModule('host:no-output', Factory.MissingExports, ErrorText), ErrorText);
+    RunResult := Engine.Run('missing-exports.mjs',
+      'await import("host:no-output").then(() => false, e => e instanceof TypeError);');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true'), 'a missing factory result was not refused');
     Check(Engine.DefineNativeModule('host:invalid', Factory.InvalidExports, ErrorText), ErrorText);
     RunResult := Engine.Run('invalid.mjs',
       'const first = await import("host:invalid").then(() => false, e => e instanceof TypeError);' +
@@ -144,7 +170,48 @@ begin
   end;
 end;
 
+{$IFDEF UNIX}
+procedure CheckBareFileIdentity;
+var
+  Engine: TGocciaEngine;
+  Factory: TFactory;
+  Lines: TStringList;
+  Directory, SourcePath, AliasPath: string;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
 begin
+  Directory := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0))));
+  SourcePath := Directory + 'native-test-source.mjs';
+  AliasPath := Directory + 'native-test-alias.txt';
+  Lines := TStringList.Create;
+  Factory := TFactory.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'export const answer = 42;';
+    Lines.SaveToFile(SourcePath);
+    Check(fpSymlink(PAnsiChar(UTF8Encode(SourcePath)), PAnsiChar(UTF8Encode(AliasPath))) = 0, 'could not create test alias');
+    Engine.Bare := True;
+    Engine.SourceKind := gskModule;
+    Engine.ResultForm := grfString;
+    Check(Engine.DefineNativeModule('host:unrelated', Factory.CreateExports, ErrorText), ErrorText);
+    RunResult := Engine.Run(SourcePath, Lines.Text);
+    Check(RunResult.Ok, 'bare source failed: ' + RunResult.ErrorMessage);
+    RunResult := Engine.Run(Directory + 'native-test-entry.mjs',
+      'import { answer } from "./native-test-alias.txt"; answer;');
+    Check(RunResult.Ok and (RunResult.ResultText = '42') and (Factory.Calls = 0),
+      'native registration changed bare file identity: ' + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Factory.Free;
+    Lines.Free;
+    DeleteFile(AliasPath);
+    DeleteFile(SourcePath);
+  end;
+end;
+{$ENDIF}
+
+begin
+  {$IFDEF UNIX}CheckBareFileIdentity;{$ENDIF}
   CheckOptionalHostConflicts;
   CheckRegistration(False);
   CheckRegistration(True);

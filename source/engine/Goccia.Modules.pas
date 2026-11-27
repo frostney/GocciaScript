@@ -59,7 +59,8 @@ type
     out VirtualKey: Boolean): Integer;
 
 { this thread's host module hook (nil: none) }
-procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil;
+  NoSourceHook: THostModuleKeyHook = nil; SupportsFileFormats: Boolean = False);
 { 16.2.1.10 HostGetImportMetaProperties / HostFinalizeImportMeta: the host fills a module's import.meta (made
   with a null prototype) once, given the module's path; nil leaves it empty }
 var ImportMetaInitHook: function(Meta: TValue; const Path: UnicodeString): Boolean = nil;
@@ -288,7 +289,8 @@ end;
 
 threadvar
   HostModules: THostModuleHook;
-  HostModuleKey: THostModuleKeyHook;
+  HostModuleKey, HostModuleWithoutSource: THostModuleKeyHook;
+  HostFileFormats: Boolean;
   HostResolve: THostResolveHook;
   FileRead: TFileReadHook;
   FileTime: TFileTimeHook;
@@ -457,10 +459,13 @@ begin
   Result := True;
 end;
 
-procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook, NoSourceHook: THostModuleKeyHook;
+  SupportsFileFormats: Boolean);
 begin
   HostModules := Hook;
   HostModuleKey := KeyHook;
+  HostModuleWithoutSource := NoSourceHook;
+  HostFileFormats := SupportsFileFormats;
 end;
 
 procedure SetHostResolveHook(Hook: THostResolveHook);
@@ -664,7 +669,7 @@ begin
       (SameText(M.Address.RealPath, Address.RealPath) and
         SameHostFileIdentity(string(M.Address.RealPath), string(Address.RealPath))) then
     begin
-      if Assigned(HostModules) and (Address.ModuleType = '') and (M.Address.Path <> Address.Path) and
+      if HostFileFormats and (Address.ModuleType = '') and (M.Address.Path <> Address.Path) and
          (ImplicitDataFormat(M.Address.Path) <> ImplicitDataFormat(Address.Path)) then Continue;
       Exit(M);
     end;
@@ -882,9 +887,18 @@ end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
 
+function NativeModuleHasNoSource(const Address: TModuleAddress): Boolean;
+var Hook: THostModuleKeyHook;
+begin
+  Hook := HostModuleWithoutSource;
+  Result := Address.VirtualKey and Assigned(Hook) and Hook(Address.Path);
+end;
+
+const NoSourcePhaseRepresentation = 'A source text module has no source phase representation';
+
 { M's requests resolved against its path and loaded, each in M.Deps }
 function LinkRequests(M: TModRec): Boolean;
-var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec;
+var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec; SourceOnly: Boolean;
 begin
   Path := M.Address.Path;
   M.RequestsState := 1;
@@ -902,12 +916,18 @@ begin
       SiteLine := M.Info.RequestLines[I];
       SiteColumn := M.Info.RequestColumns[I];
     end;
-    SourcePhaseRequest := not EvaluatedRequest(M, M.Info.Requests[I]);
+    SourceOnly := not EvaluatedRequest(M, M.Info.Requests[I]);
+    SourcePhaseRequest := SourceOnly;
     try
       Resolved := ResolveRequest(M.Info.Requests[I], M.Address.FilePath);
     finally
       SitePath := '';
       SourcePhaseRequest := False;
+    end;
+    if SourceOnly and NativeModuleHasNoSource(Resolved) then
+    begin
+      M.RequestsState := 0;
+      Exit(ThrowError('SyntaxError', NoSourcePhaseRepresentation));
     end;
     if not LoadModule(Resolved, D) then
     begin
@@ -1340,7 +1360,7 @@ end;
 
 function NoSourceFail(L: TList<TModRec>): Boolean;
 begin
-  ThrowError('SyntaxError', 'A source text module has no source phase representation');
+  ThrowError('SyntaxError', NoSourcePhaseRepresentation);
   Result := LinkFail(L);
 end;
 
@@ -2033,7 +2053,11 @@ begin
     finally
       SourcePhaseRequest := False;
     end;
-    if (Data and $200000) <> 0 then Loaded := LoadModule(Address, M)
+    if (Data and $200000) <> 0 then
+    begin
+      if NativeModuleHasNoSource(Address) then Loaded := ThrowError('SyntaxError', 'Module source is not available for "' + Spec + '"')
+      else Loaded := LoadModule(Address, M);
+    end
     else Loaded := LoadAndLink(Address, M);
   finally
     HostLoading := SavedHostLoading;
@@ -2375,6 +2399,7 @@ begin
   if Mods <> nil then
     for I := 0 to Mods.Count - 1 do Mods[I].Free;
   FreeAndNil(Mods);
+  SetHostModuleHook(nil);
 end;
 
 procedure InitModules;

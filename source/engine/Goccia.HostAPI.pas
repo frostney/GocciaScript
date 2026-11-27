@@ -645,6 +645,11 @@ begin
   Result := (Factories <> nil) and Factories.ContainsKey(Key);
 end;
 
+function NativeModuleWithoutSource(const Key: UnicodeString): Boolean;
+begin
+  Result := NativeModuleRegistered(Key) and ((MockModules = nil) or (MockModules.IndexOfName(string(Key)) < 0));
+end;
+
 { Goccia.Modules's host hook: native factories and shared.loadHostModule(Key, FilePath) }
 function HostModule(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
 var A: array[0..1] of TValue; I: Integer; Factory: TNativeModuleFactory; Factories: TNativeModuleFactories;
@@ -662,6 +667,7 @@ begin
   if (FilePath = '') and (Factories <> nil) and Factories.TryGetValue(Key, Factory) then
   begin
     if SourceOnly then Exit(0);
+    Exp := VUndefined;
     if Factory(Exp) then Exit(1);
     Exit(-1);
   end;
@@ -1252,7 +1258,8 @@ function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModu
 var Registered: UnicodeString;
 begin
   Result := False;
-  if not IsVirtualModuleURI(UTF8Encode(Specifier)) or (Pos(#0, Specifier) > 0) or (Pos(#1, Specifier) > 0) then
+  if IsAbsoluteFilePath(UTF8Encode(Specifier)) or not IsVirtualModuleURI(UTF8Encode(Specifier)) or
+    (Pos(#0, Specifier) > 0) or (Pos(#1, Specifier) > 0) then
   begin
     Err := 'Native module specifier must be a virtual address';
     Exit;
@@ -1269,7 +1276,7 @@ begin
   end;
   if NativeModuleFactories = nil then NativeModuleFactories := TNativeModuleFactories.Create;
   NativeModuleFactories.Add(Specifier, Factory);
-  SetHostModuleHook(@HostModule, @IsHostModuleKey);
+  SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
   Err := '';
   Result := True;
 end;
@@ -2225,7 +2232,7 @@ begin
       GetV(SharedV, AtomOf('findHostModule'), FindHostModuleV);
     if Result then
     begin
-      SetHostModuleHook(@HostModule, @IsHostModuleKey);
+      SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
       ImportMetaInitHook := @HostInitImportMeta;
       JSONExportsHook := @HostJSONExports;
       SetHostResolveHook(@HostResolveSpec);

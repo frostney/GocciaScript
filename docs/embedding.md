@@ -372,10 +372,25 @@ address such as `host:sample`. Configure the engine first and register on its ow
 source or an artifact. Registration refuses an existing module key. It also works with `Bare`.
 
 The `TGocciaNativeModuleFactory` callback runs on the engine thread in the importing realm when its module first
-loads. Return a rooted array of alternating export names and values through `ExportList`, with a string for every
-name. Release temporary roots after setting `ExportList`. Return `False` with a pending error when initialization
-fails. The module loader retains the exports for that realm, and repeated imports use the same namespace object.
-Keep the callback's owner live until the engine is destroyed. Registrations end with that engine.
+loads. Return a dense array of alternating export names and values through `ExportList`. Each name is a unique
+string. Build the list with `NewArray` and `ArrayPush` and release temporary roots after setting `ExportList`.
+Return `False` with a pending error when initialization fails. The module loader retains the exports for that
+realm, and repeated imports use the same namespace object. Keep the callback's owner live until the engine is
+destroyed. Registrations end with that engine.
+
+```pascal
+Base := TempTop;
+PushRoot(MkPtr(NewArray(0, 2)));
+try
+  PushRoot(StrFromUnicode('answer'));
+  ArrayPush(ObjOf(RootAt(Base)), RootAt(Base + 1));
+  ArrayPush(ObjOf(RootAt(Base)), MkInt(42));
+  ExportList := RootAt(Base);
+finally
+  PopRoots(TempTop - Base);
+end;
+Result := True;
+```
 
 ### Virtual Modules
 
