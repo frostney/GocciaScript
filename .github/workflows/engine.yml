@@ -180,6 +180,12 @@ jobs:
           timeout 20 strace -o build/jit-permissions.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
           python3 scripts/engine/check-jit-publication.py build/jit-permissions.strace
 
+      - name: Capped and measured uncapped entries report the same instruction units
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/embedding-instruction-counts-test scripts/engine/embedding-instruction-counts-test.pas
+          GOCCIA_JIT=1 GOCCIA_JIT_HOT=8 timeout 20 build/embedding-instruction-counts-test
+
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 

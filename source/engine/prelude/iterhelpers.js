@@ -21,7 +21,7 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
-  function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
+  function def(o, k, v) { defineProperty(o, k, { __proto__: null, value: v, writable: true, enumerable: false, configurable: true }); }
   function sameValueZero(a, b) { return a === b || (a !== a && b !== b); }
 
   // 7.3.11 GetMethod
@@ -83,8 +83,12 @@
     if (!isObject(it)) throw new TypeErr("iterator is not an object");
     return direct(it);
   }
-  function copyList(list, first) { var a = [], n = 0; if (first !== undefined) a[n++] = first; for (var i = 0; i < list.length; i++) a[n++] = list[i]; return a; }
-  function arrayOf(list) { var a = [], n = list.length; for (var i = 0; i < n; i++) defineProperty(a, i, { value: list[i], writable: true, enumerable: true, configurable: true }); return a; }
+  // the helpers' own lists: no prototype, so an index store reaches no setter a script put on Array.prototype or
+  // Object.prototype (what a script receives is a new array, arrayOf)
+  var setProto = Object.setPrototypeOf;
+  function list() { return setProto([], null); }
+  function copyList(list_, first) { var a = list(), n = 0; if (first !== undefined) a[n++] = first; for (var i = 0; i < list_.length; i++) a[n++] = list_[i]; return a; }
+  function arrayOf(list) { var a = [], n = list.length; for (var i = 0; i < n; i++) defineProperty(a, i, { __proto__: null, value: list[i], writable: true, enumerable: true, configurable: true }); return a; }
 
   // %IteratorHelperPrototype% objects and %WrapForValidIteratorPrototype% objects: internal slots as private fields
   class Stamp { constructor(o) { return o; } }
@@ -112,7 +116,7 @@
   var HelperProto = create(IterProto);
   def(HelperProto, "next", Helper.next);
   def(HelperProto, "return", Helper.return);
-  defineProperty(HelperProto, SymToStringTag, { value: "Iterator Helper", writable: false, enumerable: false, configurable: true });
+  defineProperty(HelperProto, SymToStringTag, { __proto__: null, value: "Iterator Helper", writable: false, enumerable: false, configurable: true });
   function helper(genFn, args, under) { var h = create(HelperProto); new Helper(h, apply(genFn, undefined, args), under); return h; }
 
   class Wrap extends Stamp {
@@ -202,20 +206,20 @@
     }
   }
   function* chunksGen(rec, size) {
-    var buf = [];
+    var buf = list();
     for (;;) {
       var v = stepValue(rec);
       if (v === DONE) { if (buf.length > 0) yield arrayOf(buf); return; }
       buf[buf.length] = v;
       if (buf.length === size) {
         var ok = false, out = arrayOf(buf);
-        buf = [];
+        buf = list();
         try { yield out; ok = true; } finally { if (!ok) closeNormal(rec.it); }
       }
     }
   }
   function* windowsGen(rec, size, partial) {
-    var buf = [];
+    var buf = list();
     for (;;) {
       var v = stepValue(rec);
       if (v === DONE) { if (partial && buf.length > 0 && buf.length < size) yield arrayOf(buf); return; }
@@ -245,7 +249,7 @@
     var n = iters.length;
     if (n === 0) return;
     for (;;) {
-      var results = [];
+      var results = list();
       for (var i = 0; i < n; i++) {
         var rec = iters[i], r;
         if (rec === null) r = padding[i];
@@ -316,7 +320,7 @@
       }
     },
     toArray() {
-      var rec = direct(thisObj(this)), items = [];
+      var rec = direct(thisObj(this)), items = list();
       for (;;) { var v = stepValue(rec); if (v === DONE) return arrayOf(items); items[items.length] = v; }
     },
     forEach(fn) {
@@ -406,7 +410,7 @@
   function ignoringSetter(thisV, key, v) {
     if (!isObject(thisV)) throw new TypeErr("setter called on a non-object");
     if (thisV === IterProto) throw new TypeErr("Cannot assign to read only property of Iterator.prototype");
-    if (getOwnDesc(thisV, key) === undefined) defineProperty(thisV, key, { value: v, writable: true, enumerable: true, configurable: true });
+    if (getOwnDesc(thisV, key) === undefined) defineProperty(thisV, key, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
     else thisV[key] = v;
   }
   var Iterator;
@@ -417,14 +421,14 @@
     set [SymToStringTag](v) { ignoringSetter(this, SymToStringTag, v); }
   };
   var dc = getOwnDesc(acc, "constructor"), dt = getOwnDesc(acc, SymToStringTag);
-  defineProperty(IterProto, "constructor", { get: dc.get, set: dc.set, enumerable: false, configurable: true });
-  defineProperty(IterProto, SymToStringTag, { get: dt.get, set: dt.set, enumerable: false, configurable: true });
+  defineProperty(IterProto, "constructor", { __proto__: null, get: dc.get, set: dc.set, enumerable: false, configurable: true });
+  defineProperty(IterProto, SymToStringTag, { __proto__: null, get: dt.get, set: dt.set, enumerable: false, configurable: true });
 
   // 27.1.3.1 the Iterator constructor
   Iterator = function Iterator() {
     if (new.target === undefined || new.target === Iterator) throw new TypeErr("Iterator is an abstract class and cannot be constructed directly");
   };
-  defineProperty(Iterator, "prototype", { value: IterProto, writable: false, enumerable: false, configurable: false });
+  defineProperty(Iterator, "prototype", { __proto__: null, value: IterProto, writable: false, enumerable: false, configurable: false });
   markIntrinsic(Iterator);
 
   function getOptions(options) {
@@ -449,7 +453,7 @@
     },
     // 27.1.3.2.1
     concat(...items) {
-      var iterables = [];
+      var iterables = list();
       for (var i = 0; i < items.length; i++) {
         var item = items[i];
         if (!isObject(item)) throw new TypeErr("Iterator.concat: not an object");
@@ -467,7 +471,7 @@
         padOpt = options.padding;
         if (padOpt !== undefined && !isObject(padOpt)) throw new TypeErr("padding must be an object");
       }
-      var iters = [], padding = [], input = getIterator(iterables), next;
+      var iters = list(), padding = list(), input = getIterator(iterables), next;
       for (;;) {
         try { next = stepValue(input); } catch (e) { closeAll(iters, { e: e }); }
         if (next === DONE) break;
@@ -504,7 +508,7 @@
         padOpt = options.padding;
         if (padOpt !== undefined && !isObject(padOpt)) throw new TypeErr("padding must be an object");
       }
-      var iters = [], padding = [], keys = [], all = ownKeys(iterables);
+      var iters = list(), padding = list(), keys = list(), all = ownKeys(iterables);
       for (var i = 0; i < all.length; i++) {
         var key = all[i], d, v;
         try { d = getOwnDesc(iterables, key); } catch (e) { closeAll(iters, { e: e }); }
@@ -525,7 +529,7 @@
       }
       var finish = function (results) {
         var o = create(null);
-        for (var m = 0; m < n; m++) defineProperty(o, keys[m], { value: results[m], writable: true, enumerable: true, configurable: true });
+        for (var m = 0; m < n; m++) defineProperty(o, keys[m], { __proto__: null, value: results[m], writable: true, enumerable: true, configurable: true });
         return o;
       };
       var open = copyList(iters);

@@ -12,11 +12,16 @@
   const lower = String.prototype.toLowerCase;
   const statsMap = new WeakMap(), statsGet = WeakMap.prototype.get, statsSet = WeakMap.prototype.set;
   const asyncIterator = Symbol.asyncIterator;
+  const MathTrunc = Math.trunc, MathMin = Math.min, MathFloor = Math.floor;
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const StringPrototypeIndexOf = uncurryThis(String.prototype.indexOf), StringPrototypeSplit = uncurryThis(String.prototype.split);
+  const ArrayPrototypeJoin = uncurryThis(Array.prototype.join);
 
   const missing = (v) => v === undefined || v === null;
   const isObject = (v) => (typeof v === 'object' && v !== null) || typeof v === 'function';
   const lowerCase = (s) => apply(lower, s, []);
-  const push = (a, v) => defineProperty(a, a.length, { value: v, writable: true, enumerable: true, configurable: true });
+  const push = (a, v) => defineProperty(a, a.length, { __proto__: null, value: v, writable: true, enumerable: true, configurable: true });
   // a function as the extension's natives are: the name, the length, no prototype, not a constructor
   const named = (name, length, impl) => {
     // the arguments as own properties of an object without a prototype: reading one the call did not pass
@@ -26,15 +31,15 @@
       for (let i = 0; i < args.length; i++) a[i] = args[i];
       return impl(a, this);
     } }[name];
-    defineProperty(f, 'length', { value: length, configurable: true });
+    defineProperty(f, 'length', { __proto__: null, value: length, configurable: true });
     return f;
   };
   // Pascal's Trim: the code units up to a space off both ends
   const trim = (s) => {
     let a = 0, b = s.length;
-    while (a < b && s.charCodeAt(a) <= 32) a++;
-    while (b > a && s.charCodeAt(b - 1) <= 32) b--;
-    return s.slice(a, b);
+    while (a < b && StringPrototypeCharCodeAt(s, a) <= 32) a++;
+    while (b > a && StringPrototypeCharCodeAt(s, b - 1) <= 32) b--;
+    return StringPrototypeSlice(s, a, b);
   };
 
   // ---- argument checks ----
@@ -111,7 +116,7 @@
 
   // ---- Stats ----
   const roundMs = (ms) => {
-    const f = ms - Math.trunc(ms);
+    const f = ms - MathTrunc(ms);
     let r = ms - f;
     if (f >= 0.5) r += 1;
     else if (f < -0.5) r -= 1;
@@ -125,14 +130,14 @@
   const statsProto = create(Object.prototype);
   const dateGetter = (name, index) => {
     const get = getOwnDescriptor({ get [name]() { return new DateC(roundMs(statsOf(this)[index])); } }, name).get;
-    defineProperty(statsProto, name, { get, enumerable: true, configurable: true });
+    defineProperty(statsProto, name, { __proto__: null, get, enumerable: true, configurable: true });
   };
   dateGetter('atime', 4);
   dateGetter('mtime', 5);
   dateGetter('ctime', 6);
   dateGetter('birthtime', 7);
   const statsMethod = (name, impl) => defineProperty(statsProto, name,
-    { value: named(name, 0, (args, self) => impl(statsOf(self))), writable: true, configurable: true });
+    { __proto__: null, value: named(name, 0, (args, self) => impl(statsOf(self))), writable: true, configurable: true });
   statsMethod('isFile', (s) => s[8]);
   statsMethod('isDirectory', (s) => s[9]);
   statsMethod('isSymbolicLink', () => false);
@@ -249,7 +254,7 @@
     const v = o[name];
     if (missing(v)) return fallback;
     if (typeof v !== 'number') throw new TypeErrorC(method + ' option "' + name + '" must be an integer');
-    if (v !== v || v === Infinity || v === -Infinity || v !== Math.trunc(v) || v < minimum || v > MAX_SAFE_INTEGER)
+    if (v !== v || v === Infinity || v === -Infinity || v !== MathTrunc(v) || v < minimum || v > MAX_SAFE_INTEGER)
       throw new TypeErrorC(method + ' option "' + name + '" must be an integer of at least ' + minimum);
     return v;
   };
@@ -286,7 +291,7 @@
   const fs = {};
   const promises = {};
   const def = (target, name, length, impl) => {
-    defineProperty(target, name, { value: named(name, length, impl), writable: true, enumerable: true,
+    defineProperty(target, name, { __proto__: null, value: named(name, length, impl), writable: true, enumerable: true,
       configurable: true });
   };
   def(fs, 'readFileSync', 2, (a) => readValue(requireStringArg(a[0], 'fs.readFileSync'), wantsText(a[1])));
@@ -479,21 +484,21 @@
       index = 0;
       return iterResult(missing(r[0]) ? undefined : r[0], true);
     });
-    defineProperty(it, asyncIterator, { value: named('[Symbol.asyncIterator]', 0, (r, self) => self),
+    defineProperty(it, asyncIterator, { __proto__: null, value: named('[Symbol.asyncIterator]', 0, (r, self) => self),
       writable: true, configurable: true });
     return it;
   });
-  defineProperty(fs, 'promises', { value: promises, writable: true, enumerable: true, configurable: true });
+  defineProperty(fs, 'promises', { __proto__: null, value: promises, writable: true, enumerable: true, configurable: true });
 
   // ---- goccia: $ and runScript ----
-  const quote = (v) => "'" + StringC(v).split("'").join("'\\''") + "'";
+  const quote = (v) => "'" + ArrayPrototypeJoin(StringPrototypeSplit(StringC(v), "'"), "'\\''") + "'";
   const commandLine = (a) => {
     if (a.length === 0) return '';
     const t = a[0];
     if (typeof t === 'string') return t;
     if (!isObject(t)) throw new TypeErrorC('$ expects a tagged template or command string');
     const length = t.length;
-    const count = length > 0 ? Math.min(Math.floor(length), MAX_SAFE_INTEGER) : 0;
+    const count = length > 0 ? MathMin(MathFloor(length), MAX_SAFE_INTEGER) : 0;
     let line = '';
     for (let i = 0; i < count; i++) {
       line += StringC(t[i]);
@@ -553,10 +558,10 @@
   // each copy as [kind, a, b] (Goccia.Sandbox sbRunScript)
   const addCopy = (copies, v) => {
     if (typeof v === 'string') {
-      const eq = v.indexOf('=');
+      const eq = StringPrototypeIndexOf(v, '=');
       push(copies, '0');
-      push(copies, eq >= 0 ? v.slice(0, eq) : v);
-      push(copies, eq >= 0 ? v.slice(eq + 1) : '');
+      push(copies, eq >= 0 ? StringPrototypeSlice(v, 0, eq) : v);
+      push(copies, eq >= 0 ? StringPrototypeSlice(v, eq + 1) : '');
       return;
     }
     if (!isObject(v)) throw new TypeErrorC('runScript copy entries must be strings or objects');
@@ -627,8 +632,8 @@
   });
   const $ = named('$', 0, (a) => shellCommand(commandLine(a)));
   const goccia = {};
-  defineProperty(goccia, '$', { value: $, writable: true, enumerable: true, configurable: true });
-  defineProperty(goccia, 'runScript', { value: runScript, writable: true, enumerable: true, configurable: true });
+  defineProperty(goccia, '$', { __proto__: null, value: $, writable: true, enumerable: true, configurable: true });
+  defineProperty(goccia, 'runScript', { __proto__: null, value: runScript, writable: true, enumerable: true, configurable: true });
 
   // ---- goccia:search ----
   const GREP_OPTIONS = ['cwd', 'glob', 'exclude', 'regex', 'ignoreCase', 'maxResults', 'maxBytes', 'context'];
@@ -641,9 +646,9 @@
     const sel = searchSelection(o, 'grep');
     const regex = searchBoolean(o, 'regex', 'grep');
     const ignoreCase = searchBoolean(o, 'ignoreCase', 'grep');
-    const maxResults = Math.min(searchInteger(o, 'maxResults', 'grep', 1000, 1), MAX_INT);
+    const maxResults = MathMin(searchInteger(o, 'maxResults', 'grep', 1000, 1), MAX_INT);
     const maxBytes = searchInteger(o, 'maxBytes', 'grep', -1, 0);
-    const context = Math.min(searchInteger(o, 'context', 'grep', 0, 0), MAX_GREP_CONTEXT);
+    const context = MathMin(searchInteger(o, 'context', 'grep', 0, 0), MAX_GREP_CONTEXT);
     const r = n.sbGrep(pattern, regex, ignoreCase, maxResults, maxBytes, context, sel.cwd, sel.hasGlob, sel.globs,
       sel.excludes);
     const matches = [];
@@ -660,7 +665,7 @@
     const query = requireSearchText(a[0], 'fuzzyFind', 'query');
     const o = searchOptions(a[1], FUZZY_OPTIONS, 'fuzzyFind');
     const sel = searchSelection(o, 'fuzzyFind');
-    const limit = Math.min(searchInteger(o, 'limit', 'fuzzyFind', 100, 1), MAX_INT);
+    const limit = MathMin(searchInteger(o, 'limit', 'fuzzyFind', 100, 1), MAX_INT);
     const r = n.sbFuzzy(query, limit, sel.cwd, sel.hasGlob, sel.globs, sel.excludes);
     const matches = [];
     for (let i = 1; i < r.length; i++) push(matches, { path: r[i][0], score: r[i][1], positions: r[i][2] });
