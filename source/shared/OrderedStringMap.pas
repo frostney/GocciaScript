@@ -166,6 +166,8 @@ type
     // Non-virtual live-entry count for hot validation paths (the Count
     // property dispatches through TBaseMap's virtual GetCount).
     function CountFast: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    // Current entry and bucket array payload, excluding the strings they reference.
+    function StorageBytes: Int64; {$IFDEF FPC}inline;{$ENDIF}
     // True when Add of one more key would neither grow nor compact the
     // storage: it then allocates nothing, consults no growth gate and cannot
     // raise. A caller holding an unstored value it would otherwise have to
@@ -432,6 +434,11 @@ end;
 function TOrderedStringMap<TValue>.CountFast: Integer;
 begin
   Result := FCount;
+end;
+
+function TOrderedStringMap<TValue>.StorageBytes: Int64;
+begin
+  Result := Int64(Length(FEntries)) * SizeOf(TEntry) + Int64(Length(FBuckets)) * SizeOf(Int32);
 end;
 
 procedure TOrderedStringMap<TValue>.Add(const AKey: string; const AValue: TValue);

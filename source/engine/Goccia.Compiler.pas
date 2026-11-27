@@ -710,6 +710,7 @@ type
     procedure NoteCallPosition(Callee: TGocciaExpression; OptionalCall: Boolean);
     function BindingType(const N: UnicodeString): Integer;
     procedure SetBindingType(const N: UnicodeString; Code: Integer);
+    procedure FinishMappedArgTypes(PC: Integer);
     procedure RecordCallSite(Callee: TGocciaExpression);
     function ParamInTDZ(const N: UnicodeString; Reg: Integer): Boolean;
     procedure FinallyAtDepth(B: TGocciaASTNode; Depth: Integer);
@@ -2281,7 +2282,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames, BodyEnvParams: TStringList;
   ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
-  SavedTail, SavedLine, SavedCol: Integer;
+  SavedTail, SavedLine, SavedCol, MapTypesNop: Integer;
   CovFnIdx: Integer; CovLocBody, CovDecl: TGocciaCoverageLoc; CovHas: Boolean;
   VarTypes: TVarTypes; VarType: Byte;
 begin
@@ -2438,6 +2439,7 @@ begin
         else DeclareLocal(Params[I].Name, False);
       end;
     F.NParamRegs := J;
+    MapTypesNop := -1;
     if not IsArrow then
     begin
       F.HomeReg := DeclareInScope(FS.Scopes[0], '%home', True);
@@ -2507,6 +2509,8 @@ begin
         end;
         SetBindingType(UnicodeString(Params[I].Name), K);
       end;
+      if not IsArrow and not T^.IsStrict and T^.SimpleParams and (NP > 0) and ProfileArgumentsObject then
+        MapTypesNop := Emit(Ins(opNop, 0, 0, 0));
     end;
     { default values and destructuring of parameters }
     J := 0;
@@ -2868,6 +2872,7 @@ begin
     if F.ArgsUsed then T^.ArgsReg := F.ArgsReg;
     T^.MappedArgs := F.ArgsUsed and not T^.IsStrict and T^.SimpleParams and (F.NParamRegs > 0) and
       (F.ParamWritten or F.ArgsEscaped or SloppyEval);
+    if T^.MappedArgs and (MapTypesNop >= 0) then FinishMappedArgTypes(MapTypesNop);
     if F.CtorUsed then T^.Code[CtorNop] := Ins(opLoadCallee, F.CtorReg, 0, 0);
     if F.NewTargetUsed then
     begin
@@ -4125,6 +4130,24 @@ procedure TCompiler.SetBindingType(const N: UnicodeString; Code: Integer);
 var F: TFuncState; S: TScope; J: Integer;
 begin
   if FindBinding(N, F, S, J) then S.Bindings[J].LType := Code;
+end;
+
+procedure TCompiler.FinishMappedArgTypes(PC: Integer);
+var Scope: TScope; I, Reg, LastTyped: Integer; Codes: UnicodeString;
+begin
+  Scope := FS.Scopes[0];
+  LastTyped := 0;
+  for I := 0 to Scope.Count - 1 do
+  begin
+    Reg := Scope.Bindings[I].Reg;
+    if (Reg < 1) or (Reg > FS.NParamRegs) or (Scope.Bindings[I].LType = 0) then Continue;
+    if Codes = '' then SetLength(Codes, FS.NParamRegs);
+    Codes[Reg] := WideChar(Scope.Bindings[I].LType);
+    if Reg > LastTyped then LastTyped := Reg;
+  end;
+  if LastTyped = 0 then Exit;
+  SetLength(Codes, LastTyped);
+  FS.Tpl^.Code[PC] := Ins(opMapArgTypes, FS.ArgsReg, 0, AtomConst(Codes));
 end;
 
 { a private name's class-scope binding (its key) }

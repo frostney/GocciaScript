@@ -66,6 +66,32 @@ type
     HasBackreferences: Boolean;
   end;
 
+function RegExpProgramBytes(const AProgram: TRegExpProgram): Int64;
+
 implementation
+
+function RegExpProgramBytes(const AProgram: TRegExpProgram): Int64;
+var
+  CharacterClass: TRegExpCharClass;
+  Group: TGocciaRegExpNamedGroup;
+  StringSet: TRegExpStringSet;
+  Sequence: TRegExpStringSequence;
+begin
+  Result := Int64(Length(AProgram.Code)) * SizeOf(UInt32) +
+    Int64(Length(AProgram.CharClasses)) * SizeOf(TRegExpCharClass) +
+    Int64(Length(AProgram.NamedGroups)) * SizeOf(TGocciaRegExpNamedGroup) +
+    Int64(Length(AProgram.StringSets)) * SizeOf(TRegExpStringSet);
+  for CharacterClass in AProgram.CharClasses do
+    Inc(Result, Int64(Length(CharacterClass.Ranges)) * SizeOf(TRegExpCharRange) +
+      Int64(Length(CharacterClass.PageFirstRange)) * SizeOf(Integer));
+  for Group in AProgram.NamedGroups do
+    Inc(Result, Int64(Length(Group.Name)) * SizeOf(Char));
+  for StringSet in AProgram.StringSets do
+  begin
+    Inc(Result, Int64(Length(StringSet.Strings)) * SizeOf(TRegExpStringSequence));
+    for Sequence in StringSet.Strings do
+      Inc(Result, Int64(Length(Sequence.CodePoints)) * SizeOf(Cardinal));
+  end;
+end;
 
 end.

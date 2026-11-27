@@ -17,9 +17,26 @@ type
     procedure TestOperandPast24BitsRaises;
     procedure TestNegativeOperandRaises;
     procedure TestBackReferencePastIndexBitsRaises;
+    procedure TestWorkspaceLimitCountsNamedGroupStorage;
+    procedure TestWorkspaceLimitCountsNestedClassStorage;
+    procedure TestWorkspaceLimitCountsBackwardTerms;
   public
     procedure SetupTests; override;
   end;
+
+  ETestWorkspaceLimit = class(Exception);
+
+procedure CheckTestWorkspace(const ABytes: Int64);
+begin
+  if ABytes > 3 * 1024 then
+    raise ETestWorkspaceLimit.Create('test workspace limit');
+end;
+
+procedure CheckClassWorkspace(const ABytes: Int64);
+begin
+  if ABytes > 24 * 1024 then
+    raise ETestWorkspaceLimit.Create('test class workspace limit');
+end;
 
 function RaisesConvertError(const AOp: TRegExpOpCode;
   const AOperand: Integer): Boolean;
@@ -42,6 +59,68 @@ begin
   Test('a negative operand is an error', TestNegativeOperandRaises);
   Test('a back reference index past its operand bits is an error',
     TestBackReferencePastIndexBitsRaises);
+  Test('the workspace limit includes named-group bookkeeping',
+    TestWorkspaceLimitCountsNamedGroupStorage);
+  Test('the workspace limit counts class contents that are live together',
+    TestWorkspaceLimitCountsNestedClassStorage);
+  Test('the workspace limit includes copied lookbehind terms',
+    TestWorkspaceLimitCountsBackwardTerms);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsBackwardTerms;
+var
+  LiteralPattern: string;
+  Refused: Boolean;
+begin
+  LiteralPattern := StringOfChar('a', 120);
+  Expect<Boolean>(Length(CompileRegExp(LiteralPattern, '', @CheckTestWorkspace).Code) > 0).ToBe(True);
+  Refused := False;
+  try
+    CompileRegExp('(?<=' + LiteralPattern + ')a', '', @CheckTestWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNestedClassStorage;
+var
+  Refused: Boolean;
+begin
+  Expect<Boolean>(Length(CompileRegExp('[a][b]', 'v', @CheckClassWorkspace).Code) > 0).ToBe(True);
+  Refused := False;
+  try
+    CompileRegExp('[[\q{ab|cd}]]', 'v', @CheckClassWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
+end;
+
+procedure TRegExpCompilerTests.TestWorkspaceLimitCountsNamedGroupStorage;
+var
+  I: Integer;
+  NamedPattern, UnnamedPattern: string;
+  Refused: Boolean;
+begin
+  NamedPattern := '';
+  UnnamedPattern := '';
+  for I := 1 to 40 do
+  begin
+    NamedPattern := NamedPattern + '(?<group' + IntToStr(I) + '>a)';
+    UnnamedPattern := UnnamedPattern + '(a)';
+  end;
+  Expect<Integer>(CompileRegExp(UnnamedPattern, '', @CheckTestWorkspace).CaptureCount).ToBe(40);
+  Refused := False;
+  try
+    CompileRegExp(NamedPattern, '', @CheckTestWorkspace);
+  except
+    on ETestWorkspaceLimit do
+      Refused := True;
+  end;
+  Expect<Boolean>(Refused).ToBe(True);
 end;
 
 procedure TRegExpCompilerTests.TestLargestOperandRoundTrips;

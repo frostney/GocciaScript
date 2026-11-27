@@ -56,6 +56,8 @@ An instance of a native type is a `TObj` whose `OKind` names its kind. `Goccia.C
 
 Keep the instance's state in the fields the collector traces: `Aux1` and `Aux2` (a number, a string, a value array, another object). `Pad` holds 32 untraced bits. `Native` is an untraced pointer, for memory outside the heap; such memory is released from a collector hook (`GCFinalizeHook`, as `Goccia.Shared` releases SharedArrayBuffer blocks). Bit 8 of `OFlags` means "not extensible" for every object; check the other bits' uses before taking one for your kind.
 
+For native storage owned by one engine, give its owner a zero-initialized `THeapExternalCharge` from `Goccia.Core`. Call `TryGrow(bytes)` before allocating. A failed reservation should return a memory-limit `RangeError`. Release the charge when the storage is freed, including when initialization fails. When a resize may hold both allocations during the copy, reserve the new size and release the old size. Root heap values before a reservation that can collect. A native holding a raw pointer into the moving heap can pass `False` for `ACanCollect` and refuse without running the collector. See [Memory Ceiling](garbage-collector.md#memory-ceiling).
+
 ### Write the natives
 
 A native has the `TNativeFn` signature. `Args[0]` is `this`, `Args[1..Argc]` the arguments. It writes the result to `Res` and returns `True`, or returns `False` with the exception in `Pending` (`ThrowTypeError`, `ThrowError`). Under `new`, `CurNewTarget` holds new.target.
@@ -365,6 +367,7 @@ Use this checklist when adding a new built-in type:
 
 - [ ] Native: an object kind no other unit uses, declared in each unit that tests it
 - [ ] Native: state in `Aux1` / `Aux2` (traced) or `Pad`; nothing collectible in `Native`
+- [ ] Native: budgeted storage is charged before allocation and uncharged when freed, including on failure
 - [ ] Native: every method brand-checks `this`; values rooted across allocation and calls; write barrier on direct pointer stores
 - [ ] Native: Init procedure with `AddRoot` and `RealmVals` for each threadvar it fills
 - [ ] Native: Init procedure called from `InitIntrinsics` in `Goccia.Engine`, after what it reads

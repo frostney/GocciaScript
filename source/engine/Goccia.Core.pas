@@ -297,6 +297,20 @@ function HeapPeakBytes: Int64;
 { whether Bytes more fit under HeapCeiling, after a full collection when they do not yet: the charge of an
   allocation a RangeError refuses (an ArrayBuffer's bytes). Collects: the caller's values stay rooted }
 function HeapReserve(Bytes: Int64): Boolean;
+{ Native storage owned by one engine. Charge growth before allocating and release it when the owner frees it.
+  A match holding an unrooted heap pointer can ask for a check that never collects. }
+type
+  THeapExternalCharge = record
+  private
+    FBytes: Int64;
+  public
+    function TryGrow(const ABytes: Int64; const ACanCollect: Boolean = True): Boolean;
+    procedure Release(const ABytes: Int64);
+    procedure Clear;
+  end;
+  PHeapExternalCharge = ^THeapExternalCharge;
+  EHeapExternalMemoryLimit = class(Exception);
+function HeapChargedExternalBytes: Int64;
 var
   { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
   HeapExternalBytes: Int64 = 0;
@@ -304,7 +318,7 @@ var
   CountObjects: Boolean = False;
 procedure HeapExternalAdd(Delta: Int64);
 var
-  { a full collection that leaves the heap and HeapExternalBytes over HeapCeiling calls it (Goccia.VM: the run ends at
+  { a full collection that leaves the heap and charged external bytes over HeapCeiling calls it (Goccia.VM: the run ends at
     its next back edge or call, past every handler); it must not allocate }
   GCLimitHook: procedure = nil;
   { a full collection that leaves them within HeapCeiling calls it (Goccia.VM: the script freed what a refusal asked it
@@ -1116,7 +1130,7 @@ begin
     { a cell the full collection could not make room for: the limit is spent (the run ends at its next back edge
       or call), as when a collection leaves the heap over it }
     if (HeapCeiling > 0) and Assigned(GCLimitHook) and (AbortKind <> 3) and
-       (GCOldBytes + HeapExternalBytes > HeapCeiling) then
+       (GCOldBytes + HeapChargedExternalBytes > HeapCeiling) then
       GCLimitHook;
     Exit;
   end;
@@ -1412,7 +1426,7 @@ begin
   if HeapCeiling > 0 then
   begin
     Room := HeapCeiling - GCOldBytes;
-    Room := Room - HeapExternalBytes;
+    Room := Room - HeapChargedExternalBytes;
     if Room < NURSERY_MIN_ROOM then Room := NURSERY_MIN_ROOM;
     if Room > Size then Room := Size;
   end;
@@ -1541,13 +1555,49 @@ begin
   Result := Max(GCPeakBytes, HeapUsedBytes);
 end;
 
+threadvar
+  EngineExternalBytes: Int64;
+
+function HeapChargedExternalBytes: Int64; noinline;
+var EngineBytes: Int64;
+begin
+  EngineBytes := EngineExternalBytes;
+  Result := EngineBytes + HeapExternalBytes;
+end;
+
+function HeapHasRoom(Bytes: Int64): Boolean;
+var Ceiling: Int64;
+begin
+  Ceiling := HeapCeiling;
+  Result := (Ceiling <= 0) or (Bytes <= Ceiling - HeapUsedBytes - HeapChargedExternalBytes);
+end;
+
 function HeapReserve(Bytes: Int64): Boolean;
 begin
-  if (HeapCeiling <= 0) or (Bytes <= HeapCeiling - HeapUsedBytes - HeapExternalBytes) then Exit(True);
+  if HeapHasRoom(Bytes) then Exit(True);
   { a collection also releases the blocks of SharedArrayBuffers nothing reaches }
   CollectMinor;
   CollectMajor;
-  Result := Bytes <= HeapCeiling - HeapUsedBytes - HeapExternalBytes;
+  Result := HeapHasRoom(Bytes);
+end;
+
+function THeapExternalCharge.TryGrow(const ABytes: Int64; const ACanCollect: Boolean): Boolean;
+begin
+  if ACanCollect then Result := HeapReserve(ABytes) else Result := HeapHasRoom(ABytes);
+  if not Result then Exit;
+  Inc(EngineExternalBytes, ABytes);
+  Inc(FBytes, ABytes);
+end;
+
+procedure THeapExternalCharge.Release(const ABytes: Int64);
+begin
+  Dec(EngineExternalBytes, ABytes);
+  Dec(FBytes, ABytes);
+end;
+
+procedure THeapExternalCharge.Clear;
+begin
+  Release(FBytes);
 end;
 
 procedure HeapExternalAdd(Delta: Int64);
@@ -1564,7 +1614,7 @@ begin
   Kind := AbortKind;
   if Kind = 3 then Exit(False);
   Old := GCOldBytes;
-  Result := Old + Size + HeapExternalBytes > HeapCeiling;
+  Result := Old + Size + HeapChargedExternalBytes > HeapCeiling;
 end;
 
 procedure CollectMajor;
@@ -1591,7 +1641,7 @@ begin
   GCOldBytesAtMajor := GCOldBytes;
   if GCVerify then VerifyHeap('major');
   { what survived does not fit: the run ends (the nursery is empty, so the old space is the heap) }
-  if (HeapCeiling > 0) and Assigned(GCLimitHook) and (GCOldBytesAtMajor + HeapExternalBytes > HeapCeiling) then
+  if (HeapCeiling > 0) and Assigned(GCLimitHook) and (GCOldBytesAtMajor + HeapChargedExternalBytes > HeapCeiling) then
     GCLimitHook
   else if Assigned(GCLimitClearHook) then
     GCLimitClearHook;
