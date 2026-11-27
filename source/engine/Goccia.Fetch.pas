@@ -202,7 +202,7 @@ procedure TFetchWorker.Execute;
 var Policy: THTTPRequestPolicy; O: TFetchOwner;
 begin
   { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
-    end the thread silently in FatalException (ADR 0198) }
+    end the thread silently in FatalException (ADR 0199) }
   try
     Policy := DefaultHTTPPolicy;
     Policy.MaxResponseBytes := MaxBytes;

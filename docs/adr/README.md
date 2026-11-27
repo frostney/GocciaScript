@@ -206,4 +206,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0194 — JIT code mappings are sealed read-execute](0194-jit-code-mappings-are-sealed-read-execute.md)
 - [0195 — The event loop pumps embedder host work in bounded turns](0195-the-event-loop-pumps-embedder-host-work-in-bounded-turns.md)
 - [0196 — An aborted fetch stops at its next socket poll](0196-an-aborted-fetch-stops-at-its-next-socket-poll.md)
-- [0198 — Every application stops on an engine fault](0198-every-application-stops-on-an-engine-fault.md)
+- [0197 — Engines share an instruction budget through reserves](0197-engines-share-an-instruction-budget-through-reserves.md)
+- [0199 — Every application stops on an engine fault](0199-every-application-stops-on-an-engine-fault.md)

@@ -341,7 +341,7 @@ var
   Message_: string;
 begin
   { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
-    end the thread silently in FatalException (ADR 0198) }
+    end the thread silently in FatalException (ADR 0199) }
   try
     try
       Result := Default(TGocciaSandboxRunResult);

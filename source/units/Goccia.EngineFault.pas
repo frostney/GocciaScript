@@ -11,7 +11,7 @@ uses
   state is no longer trustworthy, not something the running script did. This
   unit is the authoritative list; the decisions are recorded in
   docs/adr/0109-engine-integrity-faults-are-uncatchable.md and
-  docs/adr/0198-every-application-stops-on-an-engine-fault.md.
+  docs/adr/0199-every-application-stops-on-an-engine-fault.md.
 
   These are the faults that mean a pointer was already freed, a mapping was
   never valid, the heap itself is broken, or an invariant the engine checks

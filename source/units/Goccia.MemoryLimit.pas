@@ -55,7 +55,7 @@ type
     `catch (e)` absorbs. The family, its deliberate exclusions and the
     reasoning live in Goccia.EngineFault.pas,
     docs/adr/0109-engine-integrity-faults-are-uncatchable.md and
-    docs/adr/0198-every-application-stops-on-an-engine-fault.md. }
+    docs/adr/0199-every-application-stops-on-an-engine-fault.md. }
   TGocciaMemoryLimitError = class(Exception)
   private
     FRequestedBytes: Int64;

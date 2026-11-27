@@ -225,7 +225,7 @@ var
   OwnsJit: Boolean;
   Start: Int64;
 begin
-  { a file that would start while another thread reports a fault does not (ADR 0198) }
+  { a file that would start while another thread reports a fault does not (ADR 0199) }
   StopIfEngineFaultReported;
   try
     if FLoadSource then
@@ -267,7 +267,7 @@ begin
       on E: Exception do
       begin
         { the file's run stops the process here, on its own thread: other files must not go on running on the
-          state the fault calls into question (ADR 0198) }
+          state the fault calls into question (ADR 0199) }
         if IsEngineFault(E) then
           AbortOnEngineFault(FFileName, E);
         FErrorClass := ExceptClass(E.ClassType);

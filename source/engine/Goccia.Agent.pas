@@ -180,7 +180,7 @@ procedure TAgentThread.Execute;
 var Err: UnicodeString; G, Sab, CbArgs: array[0..1] of TValue; R: TValue; B: PSharedBlock; Id: Double;
 begin
   { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
-    end the thread silently in FatalException (ADR 0198) }
+    end the thread silently in FatalException (ADR 0199) }
   try
     try
       CurrentAgent := Self;

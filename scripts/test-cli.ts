@@ -4734,7 +4734,11 @@ console.log("Entry module linking...");
           throw new Error(`Entry link (${label}, ${sourceType}) should exit 1, got ${run.exitCode}: ${out}`);
         if (!out.includes(`SyntaxError: ${message}`))
           throw new Error(`Entry link (${label}, ${sourceType}) should throw SyntaxError: ${message}, got: ${out}`);
-        if (out.includes("evaluated"))
+        const location = label === "cycle" ? "cycle-a.js:1:1" : "entry.js:2:1";
+        if (!out.includes(location))
+          throw new Error(`Entry link (${label}, ${sourceType}) should report ${location}, got: ${out}`);
+        // Diagnostic code frames can contain the source of the console calls.
+        if (out.split(/\r?\n/).some((line) => /^[a-z-]+ evaluated$/.test(line.trim())))
           throw new Error(`Entry link (${label}, ${sourceType}) must fail before any module evaluates, got: ${out}`);
       }
     }

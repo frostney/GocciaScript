@@ -363,15 +363,12 @@ the source line the error came from, with a caret. Where that line is comes from
 the engine's own record of where the error was created, never from the thrown
 value's `stack` string:
 
-- **Provenance, not `stack`.** When the engine creates an error it keeps the
-  stack it made the error with in an internal slot the script cannot see or
-  change (`ErrorStackProvenance` in `Goccia.VM`), and `TGocciaEngine.Run` reports that
-  stack's first frame as the error's file, line and column. A guest can
-  overwrite an error's `.stack` property, or `throw` a plain object with a
-  fabricated `stack` — that string is never parsed to pick a file or read one,
-  so a forged frame discloses nothing and no host opens a guest-named path. A
-  thrown value with no engine-recorded provenance gets no code frame (its
-  message still shows).
+- **Engine-recorded provenance.** `TGocciaEngine.Run` uses the declaration
+  coordinates on a link error when available, then the first frame of the
+  engine-recorded stack (`ErrorStackProvenance` in `Goccia.VM`). Both live in
+  an internal slot the script cannot change. A guest-written `stack` string
+  cannot select a file for the code frame. A thrown value without recorded
+  provenance still reports its message.
 
 - **A guest never reads host source.** The excerpt is read when the error is
   rendered, not carried on the error. `FailureText` (`Goccia.CLI.FileEngine`)

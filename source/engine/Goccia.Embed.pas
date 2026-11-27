@@ -11,7 +11,7 @@ interface
 
 uses
   SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, Goccia.Core, Goccia.HostAPI, Goccia.Modules, Goccia.VM,
-  Goccia.Instructions, Goccia.Artifact;
+  Goccia.Instructions, Goccia.InstructionBudget, Goccia.Artifact;
 
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
@@ -69,8 +69,8 @@ type
     ErrorMessage: UnicodeString;
     { the error in parts, for a host's diagnostic: its name and message (ErrorIsError: the thrown value was an
       object with a string name or message, or a syntax error; otherwise ErrorMessage is the thrown value as a
-      string), where it was made (the first frame of its stack, or where the source was rejected; ErrorLine 0
-      when unknown) and the parser's suggestion }
+      string), where it was made (the link declaration, first engine-recorded stack frame, or where the source
+      was rejected; ErrorLine 0 when unknown) and the parser's suggestion }
     ErrorIsError: Boolean;
     ErrorName, ErrorText, ErrorFile, ErrorSuggestion: UnicodeString;
     ErrorLine, ErrorColumn: Integer;
@@ -78,7 +78,8 @@ type
     ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
-    { Dispatch and native work charged while running this entry and its event loop. }
+    { Dispatch and native work charged while running this entry and its event loop; with a shared
+      InstructionBudget attached, the job's count so far instead (do not add those up across engines) }
     HasInstructionCount: Boolean;
     InstructionCount: QWord;
     { ResultForm: the entry's completion value as String(value) or JSON (a module's too: the value of its last
@@ -98,6 +99,7 @@ type
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMeasureInstructions: Boolean;
+    FInstructionBudget: IGocciaInstructionBudget;
     FSetupAborted: TGocciaAbort;
     FMaxFrames: Integer;
     FHostReady: Boolean;
@@ -161,6 +163,8 @@ type
     function ProviderRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
     function LoadHostEnvironment: Boolean;
+    { a run that ended before its entry ran: the shared budget's count, so the setup work it charged is reported }
+    procedure ReportSharedCount(var R: TGocciaRunResult);
     function InstallHost(var Err: UnicodeString): Boolean;
     procedure SetHeapSnapshots(V: Boolean);
     procedure SetOnModuleWarning(const Value: TGocciaModuleWarningEvent);
@@ -326,6 +330,10 @@ type
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     { Count instructions when MaxInstructions is zero. Capped runs always report a count. }
     property MeasureInstructions: Boolean read FMeasureInstructions write FMeasureInstructions;
+    { Engines sharing a job attach the same budget before Run. While one is attached it provides both the limit and
+      the count, and MaxInstructions and MeasureInstructions are ignored; setup work (a globals module, the host
+      environment) is charged to it too. }
+    property InstructionBudget: IGocciaInstructionBudget read FInstructionBudget write FInstructionBudget;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
     { the heap limit in bytes, set as the running thread's HeapCeiling when this engine runs (each thread has its
       own); 0 for the default (Goccia.HostAPI DefaultHeapCeiling) }
@@ -531,9 +539,10 @@ begin
 end;
 
 { the uncaught value in parts (R.ErrorMessage already holds its text), from its string data properties only }
-procedure DescribeThrown(V: TValue; var R: TGocciaRunResult);
+function DescribeThrown(V: TValue; var R: TGocciaRunResult): Boolean;
 var Stack, Text: UnicodeString;
 begin
+  Result := False;
   if not IsObject(V) then Exit;
   PushRoot(V);
   try
@@ -549,7 +558,8 @@ begin
     end;
     { located only from the provenance the engine recorded when it made the error, never from a thrown value's
       own stack string, which can name any file }
-    if ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
+    Result := ErrorSourceLocation(RootAt(TempTop - 1), R.ErrorFile, R.ErrorLine, R.ErrorColumn);
+    if not Result and ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
     { the host's suggestion for the error it threw (a PermissionDenied's grant) }
     if ErrorHostSuggestion(RootAt(TempTop - 1), Text) then R.ErrorSuggestion := Text;
   finally
@@ -731,6 +741,13 @@ begin
       'zone: ' + Z));
   TimeZoneOverride := Z;
   Result := True;
+end;
+
+procedure TGocciaEngine.ReportSharedCount(var R: TGocciaRunResult);
+begin
+  if FInstructionBudget = nil then Exit;
+  R.HasInstructionCount := True;
+  R.InstructionCount := FInstructionBudget.Count;
 end;
 
 procedure TGocciaEngine.SetCapabilities(const Value: TGocciaCapabilities);
@@ -1003,7 +1020,7 @@ begin
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
-  LimitsArm(FTimeoutMs, FMaxInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   Result := False;
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
@@ -1028,7 +1045,7 @@ end;
 
 function TGocciaEngine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
   var R: TGocciaRunResult): Boolean;
-var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName: UnicodeString; A: TGocciaArtifact;
+var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName, ModuleSource: UnicodeString; A: TGocciaArtifact;
 begin
   Result := False;
   Bytes := nil;
@@ -1066,7 +1083,9 @@ begin
     begin
       ModuleReturnLast := True;
       try
-        if not ParseAndCompileModule(Source, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
+        ModuleSource := Source;
+        if (ModuleSource <> '') and (ModuleSource[1] = #$FEFF) then Delete(ModuleSource, 1, 1);
+        if not ParseAndCompileModule(ModuleSource, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
         begin
           R.ErrorName := ErrName;
           R.ErrorLine := ParseErrorLine;
@@ -1192,7 +1211,7 @@ function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString):
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled: Boolean; EnvAbort: Integer;
+  Compiled, HasErrorLocation: Boolean; EnvAbort: Integer;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1202,6 +1221,7 @@ begin
     Result.ErrorMessage := Err;
     { work the host source holds from before does not outlive the failed run }
     DiscardEmbedderWork;
+    ReportSharedCount(Result);
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
@@ -1233,7 +1253,7 @@ begin
     if (FHostEnvironment <> '') and not FEnvLoaded then
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
-      LimitsArm(FTimeoutMs, FMaxInstructions);
+      LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
       Compiled := False;
       try
         Compiled := LoadHostEnvironment;
@@ -1262,6 +1282,7 @@ begin
       3: Result.Aborted := gaMemoryLimit;
       4: Result.Aborted := gaHostAbort;
     end;
+    ReportSharedCount(Result);
     DescribeThrown(RootAt(TempTop - 1), Result);
     PopRoots(1);
     Pending := VUndefined;
@@ -1294,6 +1315,7 @@ begin
     begin
       { work a loaded host environment started does not outlive the failed run }
       DiscardEmbedderWork;
+      ReportSharedCount(Result);
       SetHostResolver(nil);
       SetModuleContentCheck(nil);
       SetArtifactCheck(nil);
@@ -1316,6 +1338,7 @@ begin
     Result.ErrorColumn := ParseErrorColumn;
     Result.ErrorSuggestion := ParseErrorSuggestion;
     DiscardEmbedderWork;
+    ReportSharedCount(Result);
     Exit;
   end;
   Result.Compiled := True;
@@ -1327,7 +1350,7 @@ begin
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
-  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions);
+  LimitsArm(FTimeoutMs, FMaxInstructions, FMeasureInstructions, FInstructionBudget);
   Start := GetNanoseconds;
   { the completion value, rooted through the event loop }
   PushRoot(VUndefined);
@@ -1403,15 +1426,12 @@ begin
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
-      if AbortKind = 0 then DescribeThrown(RootAt(TempTop - 1), Result);
+      HasErrorLocation := (AbortKind = 0) and DescribeThrown(RootAt(TempTop - 1), Result);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
-      if LoadFailure(FailPath, FailLine, FailColumn) then
+      if not HasErrorLocation and LoadFailure(FailPath, FailLine, FailColumn) then
       begin
-        { an explicit Script's import declaration: the entry's own }
-        if Pos(ScriptImportsSuffix, FailPath) > 1 then
-          SetLength(FailPath, Pos(ScriptImportsSuffix, FailPath) - 1);
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
         begin
