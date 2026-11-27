@@ -99,6 +99,11 @@ function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: Unico
 function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+type
+  { A fresh list of alternating export names and values in the requesting realm. False with a pending error. }
+  TNativeModuleFactory = function(var ExportList: TValue): Boolean of object;
+function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
 { a JavaScript or TypeScript module's exports: each named export a global (a globals module), or its default
   export the module map (a module manifest); the module is evaluated in this engine }
 function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
@@ -106,6 +111,19 @@ function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: 
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
+type
+  TEmbedderWork = class
+  public
+    function HasPending: Boolean; virtual; abstract;
+    { A zero timeout pumps only ready work. A positive timeout bounds the wait for its next wake. }
+    function Pump(TimeoutMs: Cardinal): Boolean; virtual; abstract;
+    procedure Discard; virtual; abstract;
+    { A test can abandon requests it started without affecting work already pending. }
+    function Mark: QWord; virtual; abstract;
+    procedure DiscardFrom(AMark: QWord); virtual; abstract;
+  end;
+procedure SetEmbedderWork(Work: TEmbedderWork);
+procedure DiscardEmbedderWork;
 { drops work after a run aborts, while its limits are still in force }
 procedure DiscardAbortedRunWork(WeakMark: Int64);
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
@@ -173,7 +191,7 @@ function CurrentResolver: TModuleResolver;
 implementation
 
 uses
-  Math, MemoryDetection, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
+  Math, MemoryDetection, Generics.Collections, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, TextEncoding, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -627,9 +645,31 @@ begin
   Result := True;
 end;
 
-{ Goccia.Modules's host hook: shared.loadHostModule(Key, FilePath) }
-function HostModule(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
-var A: array[0..1] of TValue; I: Integer;
+type
+  TNativeModuleFactories = TDictionary<UnicodeString, TNativeModuleFactory>;
+
+threadvar
+  NativeModuleFactories: TNativeModuleFactories;
+  { realm and key of each native factory still running: a load that reaches the same module again before the
+    factory returned is refused, because its record is published only after the factory succeeds }
+  ActiveNativeFactories: TList<UnicodeString>;
+
+function NativeModuleRegistered(const Key: UnicodeString): Boolean;
+var Factories: TNativeModuleFactories;
+begin
+  Factories := NativeModuleFactories;
+  Result := (Factories <> nil) and Factories.ContainsKey(Key);
+end;
+
+function NativeModuleWithoutSource(const Key: UnicodeString): Boolean;
+begin
+  Result := NativeModuleRegistered(Key) and ((MockModules = nil) or (MockModules.IndexOfName(string(Key)) < 0));
+end;
+
+{ Goccia.Modules's host hook: native factories and shared.loadHostModule(Key, FilePath) }
+function HostModule(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
+var A: array[0..1] of TValue; I: Integer; Factory: TNativeModuleFactory; Factories: TNativeModuleFactories;
+  Marker: UnicodeString;
 begin
   if (FilePath = '') and Assigned(MockModules) then
   begin
@@ -639,6 +679,33 @@ begin
       Exp := StrFromUnicode(UnicodeString(MockModules.ValueFromIndex[I]));
       Exit(2);
     end;
+  end;
+  Factories := NativeModuleFactories;
+  if (FilePath = '') and (Factories <> nil) and Factories.TryGetValue(Key, Factory) then
+  begin
+    if SourceOnly then Exit(0);
+    Marker := IntToStr(CurRealm) + #0 + Key;
+    if ActiveNativeFactories = nil then ActiveNativeFactories := TList<UnicodeString>.Create;
+    if ActiveNativeFactories.IndexOf(Marker) >= 0 then
+    begin
+      ThrowTypeError('The native module ' + Key + ' is still being created');
+      Exit(-1);
+    end;
+    ActiveNativeFactories.Add(Marker);
+    try
+      Exp := VUndefined;
+      if Factory(Exp) then Result := 1
+      else
+      begin
+        if Pending = VUndefined then
+          ThrowTypeError('The native module factory for ' + Key + ' failed without an error');
+        Result := -1;
+      end;
+    finally
+      I := ActiveNativeFactories.IndexOf(Marker);
+      if I >= 0 then ActiveNativeFactories.Delete(I);
+    end;
+    Exit;
   end;
   if not IsObject(LoadHostModuleV) then Exit(0);
   PushRoot(StrFromUnicode(Key));
@@ -669,9 +736,36 @@ threadvar
   { the virtual modules whose shadowing of a file was warned about }
   ShadowWarned: TStringList;
 
+threadvar
+  EmbedderWork: TEmbedderWork;
+
+function EmbedderWorkPending: Boolean;
+var Work: TEmbedderWork;
+begin
+  Work := EmbedderWork;
+  Result := (Work <> nil) and Work.HasPending;
+end;
+
+procedure DiscardEmbedderWork;
+var Work: TEmbedderWork;
+begin
+  Work := EmbedderWork;
+  if (Work <> nil) and Work.HasPending then Work.Discard;
+end;
+
+procedure SetEmbedderWork(Work: TEmbedderWork);
+begin
+  if EmbedderWork = Work then Exit;
+  DiscardEmbedderWork;
+  EmbedderWork := Work;
+end;
+
 procedure HostModulesDone;
 begin
+  SetEmbedderWork(nil);
   RealmHostInit := nil;
+  FreeAndNil(NativeModuleFactories);
+  FreeAndNil(ActiveNativeFactories);
   FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
   FreeAndNil(ImportSpecifiers);
@@ -1182,29 +1276,77 @@ begin
 end;
 
 { the registered key of a host module (shared.findHostModule) }
-function FindHostModuleKey(const Key: UnicodeString; out Registered: UnicodeString): Boolean;
-var A: array[0..0] of TValue; R: TValue;
+function FindHostModuleKey(const Key: UnicodeString; out Registered: UnicodeString;
+  IncludeBareRegistry: Boolean = False): Boolean;
+var A: array[0..0] of TValue; R, Lookup: TValue;
 begin
   if Assigned(MockModules) and (MockModules.IndexOfName(string(Key)) >= 0) then
   begin
     Registered := Key;
     Exit(True);
   end;
-  Result := False;
-  if not IsObject(FindHostModuleV) then Exit;
-  A[0] := StrFromUnicode(Key);
-  if CallValue(FindHostModuleV, SharedV, @A[0], 1, R) and IsString(R) then
+  if NativeModuleRegistered(Key) then
   begin
-    Registered := StrToUnicode(StrOf(R));
-    Result := True;
+    Registered := Key;
+    Exit(True);
   end;
-  Pending := VUndefined;
+  Result := False;
+  Lookup := FindHostModuleV;
+  if IncludeBareRegistry and not IsObject(Lookup) then
+    if not GetV(SharedV, AtomOf('findHostModule'), Lookup) then Exit;
+  if not IsObject(Lookup) then Exit;
+  PushRoot(Lookup);
+  try
+    A[0] := StrFromUnicode(Key);
+    if CallValue(RootAt(TempTop - 1), SharedV, @A[0], 1, R) and IsString(R) then
+    begin
+      Registered := StrToUnicode(StrOf(R));
+      Result := True;
+    end;
+    Pending := VUndefined;
+  finally
+    PopRoots(1);
+  end;
 end;
 
 function IsHostModuleKey(const Key: UnicodeString): Boolean;
 var Registered: UnicodeString;
 begin
   Result := FindHostModuleKey(Key, Registered);
+end;
+
+function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+var Registered: UnicodeString;
+begin
+  Result := False;
+  if IsAbsoluteFilePath(UTF8Encode(Specifier)) or not IsVirtualModuleURI(UTF8Encode(Specifier)) or
+    (Pos(#0, Specifier) > 0) or (Pos(#1, Specifier) > 0) then
+  begin
+    Err := 'Native module specifier must be a virtual address';
+    Exit;
+  end;
+  if not Assigned(Factory) then
+  begin
+    Err := 'Native module factory is required';
+    Exit;
+  end;
+  { the goccia: namespace is the runtime's, including modules a test or bench host installs later }
+  if Copy(Specifier, 1, 7) = 'goccia:' then
+  begin
+    Err := 'Native module specifier must not use the runtime''s goccia: namespace';
+    Exit;
+  end;
+  if FindHostModuleKey(Specifier, Registered, True) then
+  begin
+    Err := 'Module is already registered: ' + Registered;
+    Exit;
+  end;
+  if NativeModuleFactories = nil then NativeModuleFactories := TNativeModuleFactories.Create;
+  NativeModuleFactories.Add(Specifier, Factory);
+  SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
+  Err := '';
+  Result := True;
 end;
 
 function CurrentResolver: TModuleResolver;
@@ -1572,6 +1714,12 @@ end;
 function Host_ModuleLoaded(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   Res := MkBool(ModuleRecordExists(ArgStr(Args, Argc, 1)));
+  Result := True;
+end;
+
+function Host_NativeModuleRegistered(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkBool(NativeModuleRegistered(ArgStr(Args, Argc, 1)));
   Result := True;
 end;
 
@@ -2052,6 +2200,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'expandPath', Host_ExpandPath, 2);
   DefineNative(RootAt(TempTop - 1), 'virtualFileKey', Host_VirtualFileKey, 1);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
+  DefineNative(RootAt(TempTop - 1), 'nativeModuleRegistered', Host_NativeModuleRegistered, 1);
   DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
   if SandboxActive then DefineSandboxNatives(RootAt(TempTop - 1));
@@ -2168,7 +2317,7 @@ begin
       GetV(SharedV, AtomOf('findHostModule'), FindHostModuleV);
     if Result then
     begin
-      SetHostModuleHook(@HostModule, @IsHostModuleKey);
+      SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
       ImportMetaInitHook := @HostInitImportMeta;
       JSONExportsHook := @HostJSONExports;
       SetHostResolveHook(@HostResolveSpec);
@@ -2308,7 +2457,7 @@ function RunEventLoopIn(Intervals: Boolean): Boolean; forward;
   ['timeout'] once the deadline ended it. A file deadline sooner than ms stays the one in force, and ends the run. }
 function Test_CallWithin(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Ms, Outer, Elapsed: Int64; NoOuter, Binding, Ok: Boolean; Start: QWord; R, E: TValue; Status: UnicodeString;
-  Mark: Integer;
+  Mark: Integer; HostMark: QWord; Work: TEmbedderWork;
 begin
   if (Argc < 1) or not IsCallable(Args[1]) then Exit(ThrowTypeError('callWithin needs a function'));
   Ms := 0;
@@ -2318,6 +2467,9 @@ begin
   Binding := (Ms > 0) and (NoOuter or (Ms < Outer));
   if Binding then LimitsSetDeadline(Ms);
   Mark := FetchMark;
+  Work := EmbedderWork;
+  HostMark := 0;
+  if Work <> nil then HostMark := Work.Mark;
   Start := GetTickCount64;
   R := VUndefined;
   Ok := CallValue(Args[1], VUndefined, nil, 0, R);
@@ -2327,10 +2479,13 @@ begin
   E := VUndefined;
   if not Ok and Binding and (AbortKind = 1) then
   begin
+    { the timer stops first: a deadline seen before its thread fired it must not fire into what runs next }
+    LimitsDropTimer;
     ClearTimeoutAbort;
     Pending := VUndefined;
     { the requests the body started are not waited for after it: their promises stay pending }
     FetchCancelFrom(Mark);
+    if (Work <> nil) and (Work = EmbedderWork) then Work.DiscardFrom(HostMark);
     Status := 'timeout';
   end
   else if not Ok then
@@ -2467,6 +2622,11 @@ end;
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 var Base: Integer;
 begin
+  if NativeModuleRegistered('goccia:test') then
+  begin
+    Err := 'Module is already registered: goccia:test';
+    Exit(False);
+  end;
   if FirstInEngine(TestApiRootedGen) then AddRoot(@TestApiV);
   Base := TempTop;
   { shared.snapshot: the snapshot natives the matchers call }
@@ -2550,25 +2710,80 @@ begin
   for I := 0 to High(Mocks) do MockModules.Add(Mocks[I].Address + #1 + Mocks[I].Source);
 end;
 
-function RunEventLoopIn(Intervals: Boolean): Boolean;
-var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord;
+function PumpEmbedderWork(TimeoutMs: Cardinal): Boolean;
+var Work: TEmbedderWork; Queued: Integer;
 begin
+  Work := EmbedderWork;
+  { the deadline is read here too, not only from the timer thread's flag, which it sets once it is scheduled }
+  if (Interrupt <> 0) or LimitDeadlinePassed then Exit(AbortInterrupted);
+  Queued := PendingJobCount;
+  Result := Work.Pump(TimeoutMs);
+  { a pump that failed, or during which the deadline passed, delivered nothing the run goes on with: the reactions
+    its results queued do not run, as a job taken after an abort does not (a timed-out test's continuation stays
+    stopped, and the next run on the engine does not see them) }
+  if not Result then DiscardJobsAfter(Queued);
+  if (Interrupt <> 0) or LimitDeadlinePassed then
+  begin
+    DiscardJobsAfter(Queued);
+    Result := AbortInterrupted;
+  end;
+end;
+
+function EmbedderWorkWait: Cardinal;
+const MaxWaitMs = 10;
+var Remaining: Int64; Due, Now_: QWord;
+begin
+  Result := MaxWaitMs;
+  Remaining := LimitRemainingMs;
+  if (Remaining > 0) and (Remaining < Result) then Result := Remaining;
+  if not AsyncWaitsPending then Exit;
+  Due := NextAsyncDeadline;
+  Now_ := GetTickCount64;
+  if Due <= Now_ then Exit(0);
+  if Due - Now_ < Result then Result := Due - Now_;
+end;
+
+function RunEventLoopIn(Intervals: Boolean): Boolean;
+var R: TValue; A: array[0..1] of TValue; Due, Cap: QWord; HostPending, TimersIdle: Boolean; IdleCounter: Int64;
+begin
+  { set once the timers had nothing runnable while host work waits, with the instruction counter then: under an
+    instruction limit, idle turns do not run the timers' bytecode again until some guest code (a job, a getter a pump
+    ran, a timer's own work) has run and moved the counter }
+  TimersIdle := False;
+  IdleCounter := 0;
   while True do
   begin
     if not RunMicrotasks then Exit(False);
+    HostPending := EmbedderWorkPending;
+    if HostPending then
+    begin
+      if not PumpEmbedderWork(0) or not RunMicrotasks then Exit(False);
+      if not EmbedderWorkPending then Continue;
+      { while an embedder can make progress, take only ready built-in work before returning to it }
+      PumpAsyncWaits;
+      if not RunMicrotasks then Exit(False);
+      if FetchPending and (not FetchPump(True, GetTickCount64) or not RunMicrotasks) then Exit(False);
+      if not EmbedderWorkPending then Continue;
+    end
     { async waits and fetches both pending: the waits that fell due settle, then the fetches are waited for until
       the next wait's timeout, so neither holds the other up }
-    if FetchPending and AsyncWaitsPending then
+    else if FetchPending and AsyncWaitsPending then
     begin
       PumpAsyncWaits;
       if not RunMicrotasks then Exit(False);
+      if EmbedderWorkPending then Continue;
+      if not FetchPending then Continue;
       Due := NextAsyncDeadline;
       Cap := GetTickCount64 + 50;
       if Due > Cap then Due := Cap;
       if not FetchPump(True, Due) then Exit(False);
       Continue;
+    end
+    else
+    begin
+      if not RunHostLoop(@EmbedderWorkPending) then Exit(False);
+      if EmbedderWorkPending then Continue;
     end;
-    if not RunHostLoop then Exit(False);
     { a FinalizationRegistry's cleanup: one job (one dead cell) at a time, the microtasks it queues before the
       next (9.13 HostEnqueueFinalizationRegistryCleanupJob) }
     if WeakCleanupPending then
@@ -2581,21 +2796,42 @@ begin
       do not keep real time }
     if FetchPending then
     begin
-      if not FetchPump(True) then Exit(False);
+      if EmbedderWorkPending then
+      begin
+        if not PumpEmbedderWork(EmbedderWorkWait) then Exit(False);
+      end
+      else if not FetchPump(True) then Exit(False);
+      Continue;
+    end;
+    if TimersIdle and not (InstrCounted and (InstrLeft = IdleCounter)) then TimersIdle := False;
+    if IsObject(FireNextV) and (not HostPending or JobErrorDropsTimers or
+      (IsObject(TimerHostTasks) and (ArrayLen(ObjOf(TimerHostTasks)) > 0)) or
+      (not TimersIdle and IsObject(TimerQueue) and (MapCount(TimerQueue) > 0))) then
+    begin
+      { a test file's job that threw took the pending timers with it }
+      if JobErrorDropsTimers then
+      begin
+        JobErrorDropsTimers := False;
+        if IsCallable(DiscardTimersV) and not CallValue(DiscardTimersV, VUndefined, nil, 0, R) then Exit(False);
+      end;
+      ClearKeptObjects;
+      { after the test report, the work the tests left still runs: its timers, not its intervals }
+      A[0] := MkBool(Intervals and not ReportDone);
+      { real outstanding host work comes before virtual time, as an in-flight fetch does (ADR 0113): while it waits,
+        only a timer already due runs }
+      A[1] := MkBool(HostPending);
+      if not CallValue(FireNextV, VUndefined, @A[0], 2, R) then Exit(False);
+      if R = VTrue then Continue;
+      { only intervals or fake timers wait: nothing changes for them until guest code runs }
+      TimersIdle := HostPending and InstrCounted;
+      IdleCounter := InstrLeft;
+    end;
+    if EmbedderWorkPending then
+    begin
+      if not PumpEmbedderWork(EmbedderWorkWait) then Exit(False);
       Continue;
     end;
     if not IsObject(FireNextV) then Exit(True);
-    { a test file's job that threw took the pending timers with it }
-    if JobErrorDropsTimers then
-    begin
-      JobErrorDropsTimers := False;
-      if IsCallable(DiscardTimersV) and not CallValue(DiscardTimersV, VUndefined, nil, 0, R) then Exit(False);
-    end;
-    ClearKeptObjects;
-    { after the test report, the work the tests left still runs: its timers, not its intervals }
-    A[0] := MkBool(Intervals and not ReportDone);
-    if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
-    if R = VTrue then Continue;
     { nothing left to run: while a FinalizationRegistry cell still waits on its target, the host collects once
       (it may at any time, 9.13), so a target that died while nothing allocated still has its cleanup run (a
       sandbox caller's, whose nested run, an engine of its own, collects nothing of the caller's) }
@@ -2613,6 +2849,7 @@ end;
 
 procedure DiscardAbortedRunWork(WeakMark: Int64);
 begin
+  DiscardEmbedderWork;
   DiscardJobs;
   DiscardRejections;
   TakeJobErrors;
@@ -2775,6 +3012,11 @@ end;
 function InstallBenchmarkAPI(var Err: UnicodeString): Boolean;
 var Base, Rounds: Integer;
 begin
+  if NativeModuleRegistered('goccia:microbench') then
+  begin
+    Err := 'Module is already registered: goccia:microbench';
+    Exit(False);
+  end;
   if FirstInEngine(BenchApiRootedGen) then AddRoot(@BenchApiV);
   BenchClockBase := GetNanoseconds;
   BenchEntries := nil;

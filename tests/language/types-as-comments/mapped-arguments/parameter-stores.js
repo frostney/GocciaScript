@@ -3,6 +3,26 @@ description: Stores through a mapped arguments index enforce the type of the par
 features: [arguments-object, compat-non-strict-mode, function-declarations, strict-type-enforcement]
 ---*/
 
+// Each typed function's parameter type codes are left behind in freed memory,
+// and the next function to need codes may get that block back. An untyped
+// parameter before a typed one must stay unchecked whatever the block held.
+// These run at the top level, in source order, as the compiler's allocations
+// do not repeat this way inside a test callback.
+function typedFirst(p0: boolean, p1: boolean, p2: boolean, p3: boolean, p4: boolean, p5: boolean, p6: boolean) { return arguments; }
+function untypedFirst(q0, q1, q2, q3, q4, q5, q6: number) { arguments[0] = "x"; return typeof q0; }
+function typedSecond(p0: boolean, p1: boolean, p2: boolean, p3: boolean, p4: boolean, p5: boolean, p6: boolean) { return arguments; }
+function untypedSecond(r0, r1, r2, r3, r4, r5, r6: number) { arguments[0] = "x"; return typeof r0; }
+const untypedResults = [];
+for (const [typed, untyped] of [[typedFirst, untypedFirst], [typedSecond, untypedSecond]]) {
+  typed(true, true, true, true, true, true, true);
+  try {
+    untypedResults.push(untyped(1, 2, 3, 4, 5, 6, 7));
+  } catch (error) {
+    untypedResults.push(`${error.name}: ${error.message}`);
+  }
+}
+
+
 describe("strictly typed mapped parameters", () => {
   test("indexed assignments check their value before updating the parameter", () => {
     function run(value: number) {
@@ -145,5 +165,9 @@ describe("strictly typed mapped parameters", () => {
       resume();
     }
     expect(await result).toBe("accepted");
+  });
+
+  test("an untyped parameter before a typed one stays unchecked", () => {
+    expect(untypedResults).toEqual(["string", "string"]);
   });
 });

@@ -24,4 +24,6 @@ if [[ ! -s "$fixture_dir/port" ]]; then
   exit 1
 fi
 
-timeout 20 "$fixture_dir/aborted-run-test" "http://127.0.0.1:$(cat "$fixture_dir/port")/text"
+# The second URL is a request the server holds for a minute: a server that does not answer.
+port=$(cat "$fixture_dir/port")
+timeout 20 "$fixture_dir/aborted-run-test" "http://127.0.0.1:$port/text" "http://127.0.0.1:$port/sleep/60000/hang"

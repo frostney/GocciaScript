@@ -47,8 +47,9 @@ type
   { a host's modules: for a request key, try only the host registry when FilePath is empty and only the
     file at FilePath otherwise. 1 with Exp an array of the module's export names and values, interleaved (a
     synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
-    has no such module (a file is then read as JavaScript), -1 with an error pending }
-  THostModuleHook = function(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
+    has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly lookup
+    asks for source text for a typed import and must not initialize a native factory. }
+  THostModuleHook = function(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
   THostModuleKeyHook = function(const Key: UnicodeString): Boolean;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
@@ -58,7 +59,8 @@ type
     out VirtualKey: Boolean): Integer;
 
 { this thread's host module hook (nil: none) }
-procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil;
+  NoSourceHook: THostModuleKeyHook = nil; SupportsFileFormats: Boolean = False);
 { 16.2.1.10 HostGetImportMetaProperties / HostFinalizeImportMeta: the host fills a module's import.meta (made
   with a null prototype) once, given the module's path; nil leaves it empty }
 var ImportMetaInitHook: function(Meta: TValue; const Path: UnicodeString): Boolean = nil;
@@ -287,18 +289,19 @@ end;
 
 threadvar
   HostModules: THostModuleHook;
-  HostModuleKey: THostModuleKeyHook;
+  HostModuleKey, HostModuleWithoutSource: THostModuleKeyHook;
+  HostFileFormats: Boolean;
   HostResolve: THostResolveHook;
   FileRead: TFileReadHook;
   FileTime: TFileTimeHook;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
-function CallHostModules(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
+function CallHostModules(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
 var H: THostModuleHook;
 begin
   H := HostModules;
-  Result := H(Key, FilePath, Exp);
+  Result := H(Key, FilePath, SourceOnly, Exp);
 end;
 
 function CallHostResolve(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
@@ -457,10 +460,13 @@ begin
   Result := True;
 end;
 
-procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook);
+procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook, NoSourceHook: THostModuleKeyHook;
+  SupportsFileFormats: Boolean);
 begin
   HostModules := Hook;
   HostModuleKey := KeyHook;
+  HostModuleWithoutSource := NoSourceHook;
+  HostFileFormats := SupportsFileFormats;
 end;
 
 procedure SetHostResolveHook(Hook: THostResolveHook);
@@ -664,7 +670,7 @@ begin
       (SameText(M.Address.RealPath, Address.RealPath) and
         SameHostFileIdentity(string(M.Address.RealPath), string(Address.RealPath))) then
     begin
-      if Assigned(HostModules) and (Address.ModuleType = '') and (M.Address.Path <> Address.Path) and
+      if HostFileFormats and (Address.ModuleType = '') and (M.Address.Path <> Address.Path) and
          (ImplicitDataFormat(M.Address.Path) <> ImplicitDataFormat(Address.Path)) then Continue;
       Exit(M);
     end;
@@ -695,7 +701,7 @@ begin
   if Address.VirtualKey then
   begin
     if not Assigned(HostModules) then Exit(ModuleReadFailed(Address.Path));
-    K := CallHostModules(Address.Path, '', V);
+    K := CallHostModules(Address.Path, '', True, V);
     if K = -1 then Exit(False);
     if K <> 2 then Exit(ModuleReadFailed(Address.Path));
     Src := StrToUnicode(StrOf(V));
@@ -739,34 +745,70 @@ end;
 
 { a synthetic module (16.2.1.8) of the host's: Exp its names and values, interleaved }
 function MakeHostModule(const Address: TModuleAddress; Exp: TValue; var M: TModRec): Boolean;
-var I, N: Integer; V, Tbl: TValue; E: PValueArray;
+var
+  I, N, Base: Integer;
+  V: TValue;
+  E: PValueArray;
+  Entries: array of TModEntry;
+  Names: TDictionary<UnicodeString, Byte>;
+  NewModule: TModRec;
 begin
   if not IsObject(Exp) or (ObjOf(Exp)^.OKind <> okArray) then
-    Exit(ThrowTypeError('host module ''' + Address.Path + ''': exports are not a list'));
-  PushRoot(Exp);
-  N := ObjOf(Exp)^.Elements^.Len div 2;
-  M := TModRec.Create;
-  M.Address := Address;
-  M.Id := Mods.Count;
-  M.HostOwned := HostLoading;
-  Mods.Add(M);
-  SetRoot(M, rError, VUndefined);
-  M.Info := TModuleInfo.Create;
-  SetLength(M.Info.LocalExports, N);
-  M.Info.SlotCount := N;
-  Tbl := MkPtr(NewArray(0, N));
-  SetRoot(M, rTable, Tbl);
-  for I := 0 to N - 1 do
-  begin
-    E := ObjOf(RootAt(TempTop - 1))^.Elements;
-    if not IsString(E^.Data[2 * I]) then begin PopRoots(1); Exit(ThrowTypeError('host module ''' + Address.Path + ''': an export name is not a string')); end;
-    M.Info.LocalExports[I].ExportName := StrToUnicode(StrOf(E^.Data[2 * I]));
-    M.Info.LocalExports[I].Slot := I;
-    V := ClosedCell(E^.Data[2 * I + 1]);
-    ArrayPush(ObjOf(GetRoot(M, rTable)), V);
+    Exit(ThrowTypeError('host module ' + QuotedStr(Address.Path) + ': exports are not a list'));
+  E := ObjOf(Exp)^.Elements;
+  if (ArrayLength(ObjOf(Exp)) <> E^.Len) or Odd(E^.Len) then
+    Exit(ThrowTypeError('host module ' + QuotedStr(Address.Path) + ': exports must be name-value pairs'));
+
+  { Validate before allocating cells or publishing the module record. }
+  N := E^.Len div 2;
+  SetLength(Entries, N);
+  Names := TDictionary<UnicodeString, Byte>.Create;
+  try
+    for I := 0 to N - 1 do
+    begin
+      if not IsString(E^.Data[2 * I]) then
+        Exit(ThrowTypeError('host module ' + QuotedStr(Address.Path) + ': an export name is not a string'));
+      if E^.Data[2 * I + 1] = VHole then
+        Exit(ThrowTypeError('host module ' + QuotedStr(Address.Path) + ': an export value is missing'));
+      Entries[I].ExportName := StrToUnicode(StrOf(E^.Data[2 * I]));
+      Entries[I].Slot := I;
+      if not Names.TryAdd(Entries[I].ExportName, 0) then
+        Exit(ThrowTypeError('host module ' + QuotedStr(Address.Path) + ': duplicate export ' + QuotedStr(Entries[I].ExportName)));
+    end;
+  finally
+    Names.Free;
   end;
-  PopRoots(1);
-  M.Status := msEvaluated;
+
+  Base := TempTop;
+  PushRoot(Exp);
+  try
+    PushRoot(MkPtr(NewArray(0, N)));
+    for I := 0 to N - 1 do
+    begin
+      E := ObjOf(RootAt(Base))^.Elements;
+      V := ClosedCell(E^.Data[2 * I + 1]);
+      ArrayPush(ObjOf(RootAt(Base + 1)), V);
+    end;
+    NewModule := TModRec.Create;
+    try
+      NewModule.Address := Address;
+      NewModule.Id := Mods.Count;
+      NewModule.HostOwned := HostLoading;
+      NewModule.Info := TModuleInfo.Create;
+      NewModule.Info.LocalExports := Entries;
+      NewModule.Info.SlotCount := N;
+      NewModule.Status := msEvaluated;
+      SetRoot(NewModule, rError, VUndefined);
+      SetRoot(NewModule, rTable, RootAt(Base + 1));
+      Mods.Add(NewModule);
+      M := NewModule;
+    except
+      NewModule.Free;
+      raise;
+    end;
+  finally
+    PopRoots(TempTop - Base);
+  end;
   Result := True;
 end;
 
@@ -846,9 +888,18 @@ end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec): Boolean; forward;
 
+function NativeModuleHasNoSource(const Address: TModuleAddress): Boolean;
+var Hook: THostModuleKeyHook;
+begin
+  Hook := HostModuleWithoutSource;
+  Result := Address.VirtualKey and Assigned(Hook) and Hook(Address.Path);
+end;
+
+const NoSourcePhaseRepresentation = 'A source text module has no source phase representation';
+
 { M's requests resolved against its path and loaded, each in M.Deps }
 function LinkRequests(M: TModRec): Boolean;
-var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec;
+var Resolved: TModuleAddress; Path: UnicodeString; I: Integer; D: TModRec; SourceOnly: Boolean;
 begin
   Path := M.Address.Path;
   M.RequestsState := 1;
@@ -866,12 +917,18 @@ begin
       SiteLine := M.Info.RequestLines[I];
       SiteColumn := M.Info.RequestColumns[I];
     end;
-    SourcePhaseRequest := not EvaluatedRequest(M, M.Info.Requests[I]);
+    SourceOnly := not EvaluatedRequest(M, M.Info.Requests[I]);
+    SourcePhaseRequest := SourceOnly;
     try
       Resolved := ResolveRequest(M.Info.Requests[I], M.Address.FilePath);
     finally
       SitePath := '';
       SourcePhaseRequest := False;
+    end;
+    if SourceOnly and NativeModuleHasNoSource(Resolved) then
+    begin
+      M.RequestsState := 0;
+      Exit(ThrowError('SyntaxError', 'Module source is not available for "' + M.Info.Requests[I] + '"'));
     end;
     if not LoadModule(Resolved, D) then
     begin
@@ -1038,8 +1095,8 @@ begin
   Src := '';
   I := 0;
   if Assigned(HostModules) then
-    if Address.VirtualKey then I := CallHostModules(Path, '', V)
-    else I := CallHostModules(Path, Address.FilePath, V);
+    if Address.VirtualKey then I := CallHostModules(Path, '', False, V)
+    else I := CallHostModules(Path, Address.FilePath, False, V);
   case I of
     1: Exit(MakeHostModule(Address, V, M));
     2: Src := StrToUnicode(StrOf(V));
@@ -1304,7 +1361,7 @@ end;
 
 function NoSourceFail(L: TList<TModRec>): Boolean;
 begin
-  ThrowError('SyntaxError', 'A source text module has no source phase representation');
+  ThrowError('SyntaxError', NoSourcePhaseRepresentation);
   Result := LinkFail(L);
 end;
 
@@ -1997,7 +2054,11 @@ begin
     finally
       SourcePhaseRequest := False;
     end;
-    if (Data and $200000) <> 0 then Loaded := LoadModule(Address, M)
+    if (Data and $200000) <> 0 then
+    begin
+      if NativeModuleHasNoSource(Address) then Loaded := ThrowError('SyntaxError', 'Module source is not available for "' + Spec + '"')
+      else Loaded := LoadModule(Address, M);
+    end
     else Loaded := LoadAndLink(Address, M);
   finally
     HostLoading := SavedHostLoading;
@@ -2339,6 +2400,7 @@ begin
   if Mods <> nil then
     for I := 0 to Mods.Count - 1 do Mods[I].Free;
   FreeAndNil(Mods);
+  SetHostModuleHook(nil);
 end;
 
 procedure InitModules;
