@@ -54,6 +54,6 @@ test("fetch argument handling", () => {
   const signal = new AbortController().signal;
   const r = wire.invoke("globalThis.fetch", undefined, "https://example.com/", { method: "get", headers: new Headers({ a: "1" }), redirect: "manual", signal });
   // without a network grant fetch throws PermissionDenied once its arguments are read; the native that makes the
-  // error reads the global binding (Goccia.VM NewPermissionDenied), which is not the prelude's
+  // error reads the global binding (Goccia.VM NewPermissionDenied, #2215), which is not the prelude's
   expect(r.hits.filter((h) => h !== "globalThis.PermissionDenied")).toEqual([]);
 });
