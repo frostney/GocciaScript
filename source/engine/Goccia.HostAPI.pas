@@ -99,6 +99,11 @@ function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: Unico
 function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+type
+  { A fresh list of alternating export names and values in the requesting realm. False with a pending error. }
+  TNativeModuleFactory = function(var ExportList: TValue): Boolean of object;
+function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
 { a JavaScript or TypeScript module's exports: each named export a global (a globals module), or its default
   export the module map (a module manifest); the module is evaluated in this engine }
 function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
@@ -173,7 +178,7 @@ function CurrentResolver: TModuleResolver;
 implementation
 
 uses
-  Math, MemoryDetection, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
+  Math, MemoryDetection, Generics.Collections, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, TextEncoding, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -627,9 +632,31 @@ begin
   Result := True;
 end;
 
-{ Goccia.Modules's host hook: shared.loadHostModule(Key, FilePath) }
-function HostModule(const Key, FilePath: UnicodeString; var Exp: TValue): Integer;
-var A: array[0..1] of TValue; I: Integer;
+type
+  TNativeModuleFactories = TDictionary<UnicodeString, TNativeModuleFactory>;
+
+threadvar
+  NativeModuleFactories: TNativeModuleFactories;
+  { realm and key of each native factory still running: a load that reaches the same module again before the
+    factory returned is refused, because its record is published only after the factory succeeds }
+  ActiveNativeFactories: TList<UnicodeString>;
+
+function NativeModuleRegistered(const Key: UnicodeString): Boolean;
+var Factories: TNativeModuleFactories;
+begin
+  Factories := NativeModuleFactories;
+  Result := (Factories <> nil) and Factories.ContainsKey(Key);
+end;
+
+function NativeModuleWithoutSource(const Key: UnicodeString): Boolean;
+begin
+  Result := NativeModuleRegistered(Key) and ((MockModules = nil) or (MockModules.IndexOfName(string(Key)) < 0));
+end;
+
+{ Goccia.Modules's host hook: native factories and shared.loadHostModule(Key, FilePath) }
+function HostModule(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
+var A: array[0..1] of TValue; I: Integer; Factory: TNativeModuleFactory; Factories: TNativeModuleFactories;
+  Marker: UnicodeString;
 begin
   if (FilePath = '') and Assigned(MockModules) then
   begin
@@ -639,6 +666,33 @@ begin
       Exp := StrFromUnicode(UnicodeString(MockModules.ValueFromIndex[I]));
       Exit(2);
     end;
+  end;
+  Factories := NativeModuleFactories;
+  if (FilePath = '') and (Factories <> nil) and Factories.TryGetValue(Key, Factory) then
+  begin
+    if SourceOnly then Exit(0);
+    Marker := IntToStr(CurRealm) + #0 + Key;
+    if ActiveNativeFactories = nil then ActiveNativeFactories := TList<UnicodeString>.Create;
+    if ActiveNativeFactories.IndexOf(Marker) >= 0 then
+    begin
+      ThrowTypeError('The native module ' + Key + ' is still being created');
+      Exit(-1);
+    end;
+    ActiveNativeFactories.Add(Marker);
+    try
+      Exp := VUndefined;
+      if Factory(Exp) then Result := 1
+      else
+      begin
+        if Pending = VUndefined then
+          ThrowTypeError('The native module factory for ' + Key + ' failed without an error');
+        Result := -1;
+      end;
+    finally
+      I := ActiveNativeFactories.IndexOf(Marker);
+      if I >= 0 then ActiveNativeFactories.Delete(I);
+    end;
+    Exit;
   end;
   if not IsObject(LoadHostModuleV) then Exit(0);
   PushRoot(StrFromUnicode(Key));
@@ -672,6 +726,8 @@ threadvar
 procedure HostModulesDone;
 begin
   RealmHostInit := nil;
+  FreeAndNil(NativeModuleFactories);
+  FreeAndNil(ActiveNativeFactories);
   FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
   FreeAndNil(ImportSpecifiers);
@@ -1182,29 +1238,77 @@ begin
 end;
 
 { the registered key of a host module (shared.findHostModule) }
-function FindHostModuleKey(const Key: UnicodeString; out Registered: UnicodeString): Boolean;
-var A: array[0..0] of TValue; R: TValue;
+function FindHostModuleKey(const Key: UnicodeString; out Registered: UnicodeString;
+  IncludeBareRegistry: Boolean = False): Boolean;
+var A: array[0..0] of TValue; R, Lookup: TValue;
 begin
   if Assigned(MockModules) and (MockModules.IndexOfName(string(Key)) >= 0) then
   begin
     Registered := Key;
     Exit(True);
   end;
-  Result := False;
-  if not IsObject(FindHostModuleV) then Exit;
-  A[0] := StrFromUnicode(Key);
-  if CallValue(FindHostModuleV, SharedV, @A[0], 1, R) and IsString(R) then
+  if NativeModuleRegistered(Key) then
   begin
-    Registered := StrToUnicode(StrOf(R));
-    Result := True;
+    Registered := Key;
+    Exit(True);
   end;
-  Pending := VUndefined;
+  Result := False;
+  Lookup := FindHostModuleV;
+  if IncludeBareRegistry and not IsObject(Lookup) then
+    if not GetV(SharedV, AtomOf('findHostModule'), Lookup) then Exit;
+  if not IsObject(Lookup) then Exit;
+  PushRoot(Lookup);
+  try
+    A[0] := StrFromUnicode(Key);
+    if CallValue(RootAt(TempTop - 1), SharedV, @A[0], 1, R) and IsString(R) then
+    begin
+      Registered := StrToUnicode(StrOf(R));
+      Result := True;
+    end;
+    Pending := VUndefined;
+  finally
+    PopRoots(1);
+  end;
 end;
 
 function IsHostModuleKey(const Key: UnicodeString): Boolean;
 var Registered: UnicodeString;
 begin
   Result := FindHostModuleKey(Key, Registered);
+end;
+
+function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+var Registered: UnicodeString;
+begin
+  Result := False;
+  if IsAbsoluteFilePath(UTF8Encode(Specifier)) or not IsVirtualModuleURI(UTF8Encode(Specifier)) or
+    (Pos(#0, Specifier) > 0) or (Pos(#1, Specifier) > 0) then
+  begin
+    Err := 'Native module specifier must be a virtual address';
+    Exit;
+  end;
+  if not Assigned(Factory) then
+  begin
+    Err := 'Native module factory is required';
+    Exit;
+  end;
+  { the goccia: namespace is the runtime's, including modules a test or bench host installs later }
+  if Copy(Specifier, 1, 7) = 'goccia:' then
+  begin
+    Err := 'Native module specifier must not use the runtime''s goccia: namespace';
+    Exit;
+  end;
+  if FindHostModuleKey(Specifier, Registered, True) then
+  begin
+    Err := 'Module is already registered: ' + Registered;
+    Exit;
+  end;
+  if NativeModuleFactories = nil then NativeModuleFactories := TNativeModuleFactories.Create;
+  NativeModuleFactories.Add(Specifier, Factory);
+  SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
+  Err := '';
+  Result := True;
 end;
 
 function CurrentResolver: TModuleResolver;
@@ -1571,6 +1675,12 @@ end;
 function Host_ModuleLoaded(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   Res := MkBool(ModuleRecordExists(ArgStr(Args, Argc, 1)));
+  Result := True;
+end;
+
+function Host_NativeModuleRegistered(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkBool(NativeModuleRegistered(ArgStr(Args, Argc, 1)));
   Result := True;
 end;
 
@@ -2044,6 +2154,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'expandPath', Host_ExpandPath, 2);
   DefineNative(RootAt(TempTop - 1), 'virtualFileKey', Host_VirtualFileKey, 1);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
+  DefineNative(RootAt(TempTop - 1), 'nativeModuleRegistered', Host_NativeModuleRegistered, 1);
   DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
   if SandboxActive then DefineSandboxNatives(RootAt(TempTop - 1));
@@ -2160,7 +2271,7 @@ begin
       GetV(SharedV, AtomOf('findHostModule'), FindHostModuleV);
     if Result then
     begin
-      SetHostModuleHook(@HostModule, @IsHostModuleKey);
+      SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
       ImportMetaInitHook := @HostInitImportMeta;
       JSONExportsHook := @HostJSONExports;
       SetHostResolveHook(@HostResolveSpec);
@@ -2447,6 +2558,11 @@ end;
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 var Base: Integer;
 begin
+  if NativeModuleRegistered('goccia:test') then
+  begin
+    Err := 'Module is already registered: goccia:test';
+    Exit(False);
+  end;
   if FirstInEngine(TestApiRootedGen) then AddRoot(@TestApiV);
   Base := TempTop;
   { shared.snapshot: the snapshot natives the matchers call }
@@ -2755,6 +2871,11 @@ end;
 function InstallBenchmarkAPI(var Err: UnicodeString): Boolean;
 var Base, Rounds: Integer;
 begin
+  if NativeModuleRegistered('goccia:microbench') then
+  begin
+    Err := 'Module is already registered: goccia:microbench';
+    Exit(False);
+  end;
   if FirstInEngine(BenchApiRootedGen) then AddRoot(@BenchApiV);
   BenchClockBase := GetNanoseconds;
   BenchEntries := nil;
