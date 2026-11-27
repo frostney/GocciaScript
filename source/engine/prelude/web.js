@@ -24,7 +24,7 @@
   const MapPrototypeHas = uncurryThis(Map.prototype.has), MapPrototypeGet = uncurryThis(Map.prototype.get);
   const MapPrototypeSet = uncurryThis(Map.prototype.set), SetPrototypeHas = uncurryThis(Set.prototype.has);
   const TAP = getPrototypeOf(Uint8Array.prototype);
-  const TypedArrayPrototypeSet = uncurryThis(TAP.set), TypedArrayPrototypeSubarray = uncurryThis(TAP.subarray);
+  const TypedArrayPrototypeSet = uncurryThis(TAP.set);
   const taTagOf = uncurryThis(getOwnPropertyDescriptor(TAP, Symbol.toStringTag).get);
   const taLengthOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'length').get);
   const taBufferOf = uncurryThis(getOwnPropertyDescriptor(TAP, 'buffer').get);
@@ -118,8 +118,13 @@
       throw new DOMException("Failed to execute 'atob': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
     const bytes = fromBase64(s, { lastChunkHandling: 'loose' });
     let out = '';
+    // by chunks of plain arrays: subarray would look up the species, and apply would read a typed array's length
     const length = taLengthOf(bytes);
-    for (let i = 0; i < length; i += 8192) out += apply(fromCharCode, null, TypedArrayPrototypeSubarray(bytes, i, i + 8192));
+    for (let i = 0; i < length; i += 8192) {
+      const chunk = [], end = length < i + 8192 ? length : i + 8192;
+      for (let j = i; j < end; j++) append(chunk, bytes[j]);
+      out += apply(fromCharCode, null, chunk);
+    }
     return out;
   }
   function btoa(data) {
@@ -141,7 +146,12 @@
   const getter = (proto, k) => getOwnPropertyDescriptor(proto, k).get;
   const dateValue = Date.prototype.getTime;
   const isDate = brand(dateValue);
-  const regexpSource = getter(RegExp.prototype, 'source'), regexpFlags = getter(RegExp.prototype, 'flags');
+  const regexpSource = getter(RegExp.prototype, 'source');
+  // a RegExp's flags from its internal slot, each flag's own getter (the flags getter would look each one up)
+  const FLAG_GETTERS = [['d', 'hasIndices'], ['g', 'global'], ['i', 'ignoreCase'], ['m', 'multiline'], ['s', 'dotAll'],
+    ['u', 'unicode'], ['v', 'unicodeSets'], ['y', 'sticky']];
+  for (let i = 0; i < FLAG_GETTERS.length; i++) FLAG_GETTERS[i][1] = getter(RegExp.prototype, FLAG_GETTERS[i][1]);
+  const regexpFlags = (re) => { let f = ''; for (let i = 0; i < FLAG_GETTERS.length; i++) if (apply(FLAG_GETTERS[i][1], re, [])) f += FLAG_GETTERS[i][0]; return f; };
   const isRegExp = (v) => { try { apply(regexpSource, v, []); return getPrototypeOf(v) !== null && v !== RegExp.prototype; } catch { return false; } };
   const boolValue = Boolean.prototype.valueOf, numValue = Number.prototype.valueOf, strValue = String.prototype.valueOf;
   const bigValue = BigInt.prototype.valueOf, symValue = Symbol.prototype.valueOf;
@@ -149,7 +159,6 @@
   const isSym = brand(symValue);
   const abByteLength = getter(ArrayBuffer.prototype, 'byteLength');
   const abDetached = getter(ArrayBuffer.prototype, 'detached');
-  const abSlice = ArrayBuffer.prototype.slice;
   const abResizable = getter(ArrayBuffer.prototype, 'resizable'), abMax = getter(ArrayBuffer.prototype, 'maxByteLength');
   const isAB = brand(abByteLength);
   const sabByteLength = getter(SharedArrayBuffer.prototype, 'byteLength');
@@ -245,7 +254,7 @@
       if (isStr(v)) { out = ToObject(apply(strValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
       if (isSym(v)) throw cloneError('Symbol object');
       if (isDate(v)) { out = new Date(apply(dateValue, v, [])); MapPrototypeSet(memory, v, out); return out; }
-      if (isRegExp(v)) { out = new RegExp(apply(regexpSource, v, []), apply(regexpFlags, v, [])); MapPrototypeSet(memory, v, out); return out; }
+      if (isRegExp(v)) { out = new RegExp(apply(regexpSource, v, []), regexpFlags(v)); MapPrototypeSet(memory, v, out); return out; }
       if (isSAB(v)) {
         const len = apply(sabByteLength, v, []);
         out = new SharedArrayBuffer(len);
@@ -258,7 +267,11 @@
         if (apply(abResizable, v, [])) {
           out = new ArrayBuffer(apply(abByteLength, v, []), { maxByteLength: apply(abMax, v, []) });
           TypedArrayPrototypeSet(new Uint8Array(out), new Uint8Array(v));
-        } else out = apply(abSlice, v, []);
+        } else {
+          // a copy (slice would look up the species constructor)
+          out = new ArrayBuffer(apply(abByteLength, v, []));
+          TypedArrayPrototypeSet(new Uint8Array(out), new Uint8Array(v));
+        }
         MapPrototypeSet(memory, v, out);
         return out;
       }
@@ -464,6 +477,7 @@
   hidden(G, 'TextDecoder', TextDecoder);
   hidden(G, 'DOMException', DOMException);
   hidden(G, 'atob', atob);
+  shared.atob = atob;
   hidden(G, 'btoa', btoa);
   hidden(G, 'structuredClone', structuredClone);
   shared.collectCloneProtos = () => { intrinsicProtos = collectIntrinsicProtos(); };

@@ -10,7 +10,38 @@
   // the intrinsics as the realm made them: a script's top-level declarations can replace these globals later
   // (function Object() {} in compat-function code) while the library keeps working
   const { Object, Array, Error, TypeError, RangeError, SyntaxError, String, Number, Boolean, Symbol, BigInt, RegExp,
-    Promise, Math, Set, Map, JSON, Reflect, Function, Proxy, Uint8Array } = global;
+    Promise, Set, Map, Function, Proxy, Uint8Array } = global;
+  // the namespaces' members as the realm made them (a script may replace Math.trunc or JSON.stringify later), and
+  // each prototype method the library calls as a function of its receiver
+  const snapshotOf = (ns) => {
+    const o = Object.create(null), keys = global.Reflect.ownKeys(ns);
+    for (let i = 0; i < keys.length; i++) {
+      const d = Object.getOwnPropertyDescriptor(ns, keys[i]);
+      if ('value' in d) o[keys[i]] = d.value;
+    }
+    return Object.freeze(o);
+  };
+  const Math = snapshotOf(global.Math), JSON = snapshotOf(global.JSON), Reflect = snapshotOf(global.Reflect);
+  const ObjectDefineProperty = Object.defineProperty, ObjectIs = Object.is, ObjectGetPrototypeOf = Object.getPrototypeOf;
+  const ObjectGetOwnPropertyNames = Object.getOwnPropertyNames, ObjectAssign = Object.assign;
+  const NumberIsNaN = Number.isNaN, NumberIsFinite = Number.isFinite, NumberIsInteger = Number.isInteger;
+  const promiseResolve = Promise.resolve, promiseReject = Promise.reject;
+  const PromiseResolve = (v) => Reflect.apply(promiseResolve, Promise, [v]);
+  const PromiseReject = (e) => Reflect.apply(promiseReject, Promise, [e]);
+  const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  const StringPrototypeSplit = uncurryThis(String.prototype.split), StringPrototypeTrim = uncurryThis(String.prototype.trim);
+  const StringPrototypeStartsWith = uncurryThis(String.prototype.startsWith);
+  const StringPrototypeIncludes = uncurryThis(String.prototype.includes), StringPrototypeSlice = uncurryThis(String.prototype.slice);
+  const ArrayPrototypeJoin = uncurryThis(Array.prototype.join), ArrayPrototypeIncludes = uncurryThis(Array.prototype.includes);
+  const ArrayPrototypeSort = uncurryThis(Array.prototype.sort), ArrayPrototypeShift = uncurryThis(Array.prototype.shift);
+  const ArrayPrototypeReverse = uncurryThis(Array.prototype.reverse);
+  const RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
+  const FunctionPrototypeToString = uncurryThis(Function.prototype.toString);
+  const ObjectPrototypeHasOwnProperty = uncurryThis(Object.prototype.hasOwnProperty);
+  const mapSize = uncurryThis(Object.getOwnPropertyDescriptor(Map.prototype, 'size').get);
+  const setSize = uncurryThis(Object.getOwnPropertyDescriptor(Set.prototype, 'size').get);
+  // a Set's or Map's size through its internal slot
+  const sizeOf = (v) => (isSet(v) ? setSize(v) : mapSize(v));
   const hasOwn = Object.prototype.hasOwnProperty;
   const propertyIsEnumerable = Object.prototype.propertyIsEnumerable;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -25,7 +56,7 @@
   const regExpSource = getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
   const isRegExp = (v) => isObject(v) && v !== RegExp.prototype && brand(regExpSource)(v);
   // the typed array's kind ('Uint8Array', ...), or undefined for anything else
-  const typedArrayTag = getOwnPropertyDescriptor(Object.getPrototypeOf(Int8Array.prototype), Symbol.toStringTag).get;
+  const typedArrayTag = getOwnPropertyDescriptor(ObjectGetPrototypeOf(Int8Array.prototype), Symbol.toStringTag).get;
   const typedKind = (v) => apply(typedArrayTag, v, []);
   const isError = typeof Error.isError === 'function' ? Error.isError : (v) => v instanceof Error;
   const setForEach = Set.prototype.forEach, setHas = Set.prototype.has, mapForEach = Map.prototype.forEach;
@@ -34,17 +65,47 @@
   const StringCtor = String, NumberCtor = Number, BooleanCtor = Boolean, BigIntCtor = BigInt, SymbolCtor = Symbol;
   const FunctionCtor = Function, ObjectCtor = Object;
   // the primitive inside a string or number, boxed or not, or undefined
-  const unbox = (proto, type) => (v) => {
+  const unbox = (proto, type) => {
+    const valueOf = proto.valueOf;
+    return (v) => {
     if (typeof v === type) return v;
-    if (isObject(v)) { try { return apply(proto.valueOf, v, []); } catch {} }
+    if (isObject(v)) { try { return apply(valueOf, v, []); } catch {} }
     return undefined;
+    };
   };
   const stringOf = unbox(String.prototype, 'string');
   const numberOf = unbox(Number.prototype, 'number');
   // appends without [[Set]], so an index setter or read-only index a test installs on Array.prototype or
   // Object.prototype never sees the library's own bookkeeping
   const append = (list, v) => {
-    Object.defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true });
+    ObjectDefineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true });
+  };
+  // list operations by index: Array.prototype's map, filter and spreading would look up a constructor, Symbol.species
+  // or the array iterator
+  const copyList = (list) => { const r = []; for (let i = 0; i < list.length; i++) append(r, list[i]); return r; };
+  const concatLists = (a, b) => { const r = copyList(a); for (let i = 0; i < b.length; i++) append(r, b[i]); return r; };
+  const mapList = (list, f) => { const r = []; for (let i = 0; i < list.length; i++) append(r, f(list[i], i)); return r; };
+  const filterList = (list, f) => { const r = []; for (let i = 0; i < list.length; i++) if (f(list[i], i)) append(r, list[i]); return r; };
+  const someList = (list, f) => { for (let i = 0; i < list.length; i++) if (f(list[i], i)) return true; return false; };
+  const everyList = (list, f) => { for (let i = 0; i < list.length; i++) if (!f(list[i], i)) return false; return true; };
+  // s with each match of the global pattern re replaced by f(match), by RegExpBuiltinExec (replace would look up the
+  // pattern's Symbol.replace, flags and exec)
+  const replaceMatches = (s, re, f) => {
+    let out = '', last = 0, m;
+    re.lastIndex = 0;
+    while ((m = RegExpPrototypeExec(re, s)) !== null) {
+      out += StringPrototypeSlice(s, last, m.index) + f(m);
+      last = m.index + m[0].length;
+      if (m[0].length === 0) re.lastIndex++;
+    }
+    return out + StringPrototypeSlice(s, last);
+  };
+  // line breaks as LF (a CRLF or a lone CR)
+  const toLF = (s) => {
+    if (!StringPrototypeIncludes(s, '\r')) return s;
+    let out = '';
+    for (let i = 0; i < s.length; i++) { if (s[i] !== '\r') out += s[i]; else { out += '\n'; if (s[i + 1] === '\n') i++; } }
+    return out;
   };
 
   // ---------------- suites and tests ----------------
@@ -61,8 +122,9 @@
 
   function fullName(suite) {
     const parts = [];
-    for (let s = suite; s && s !== root; s = s.parent) parts.unshift(s.name);
-    return parts.join(' > ');
+    for (let s = suite; s && s !== root; s = s.parent) append(parts, s.name);
+    ArrayPrototypeReverse(parts);
+    return ArrayPrototypeJoin(parts, ' > ');
   }
   // the argument checks of Goccia.Arguments.Validator, whose failures are plain Errors
   function requireExactly(args, n, name) {
@@ -79,7 +141,7 @@
   function addSuite(args, name, mode) {
     requireRegistration(args, name);
     const s = newSuite(args[0], current, mode);
-    current.children.push({ kind: 'suite', suite: s });
+    append(current.children, { kind: 'suite', suite: s });
     if (mode === 'only') hasOnly = true;
     const saved = current;
     current = s;
@@ -108,14 +170,15 @@
   }
   function addTest(args, name, mode) {
     requireRegistration(args, name);
-    current.children.push({ kind: 'test', name: args[0], fn: args[1], mode, suite: current });
+    append(current.children, { kind: 'test', name: args[0], fn: args[1], mode, suite: current });
     if (mode === 'only') hasOnly = true;
   }
 
   // %s %d %i %f %j %o %O %% and $name / $a.b interpolation (Vitest's test.each titles)
   function formatTitle(title, args) {
     let i = 0;
-    let out = String(title).replace(/%[sdifjoO%#]/g, (m) => {
+    let out = replaceMatches(String(title), /%[sdifjoO%#]/g, (match) => {
+      const m = match[0];
       if (m === '%%') return '%';
       if (m === '%#') return String(formatTitle.index);
       if (i >= args.length) return m;
@@ -129,38 +192,41 @@
       }
     });
     if (args.length === 1 && args[0] !== null && typeof args[0] === 'object' && !isArray(args[0]))
-      out = out.replace(/\$([A-Za-z_$][\w$]*(?:\.[\w$]+)*)/g, (m, path) => {
+      out = replaceMatches(out, /\$([A-Za-z_$][\w$]*(?:\.[\w$]+)*)/g, (match) => {
+        const m = match[0], path = StringPrototypeSplit(match[1], '.');
         let v = args[0];
-        for (const k of path.split('.')) { if (v == null) return m; v = v[k]; }
+        for (let i = 0; i < path.length; i++) { if (v == null) return m; v = v[path[i]]; }
         return typeof v === 'string' ? v : show(v);
       });
     return out;
   }
   function makeEach(name, register) {
     return (...eachArgs) => {
-      const [table, ...interp] = eachArgs;
+      const table = eachArgs[0], interp = [];
+      for (let i = 1; i < eachArgs.length; i++) append(interp, eachArgs[i]);
       const tagged = isArray(table) && isArray(table.raw);
       if (!tagged) requireExactly(eachArgs, 1, name);
       if (!isArray(table)) throw new TypeError(`${name} expects a table array`);
       let rows = table;
       if (tagged) {
         // tagged template: a header row of names, then the values
-        const header = table.join('').split('|').map((s) => s.trim()).filter(Boolean);
+        const header = filterList(mapList(StringPrototypeSplit(ArrayPrototypeJoin(table, ''), '|'), (s) => StringPrototypeTrim(s)), (s) => s !== '');
         rows = [];
         for (let k = 0; k < interp.length; k += header.length) {
           const row = {};
-          header.forEach((h, j) => { row[h] = interp[k + j]; });
-          rows.push(row);
+          for (let j = 0; j < header.length; j++) row[header[j]] = interp[k + j];
+          append(rows, row);
         }
       }
       return (...regArgs) => {
         requireRegistration(regArgs, name);
-        const [title, fn] = regArgs;
-        Array.from(rows).forEach((row, index) => {
+        const title = regArgs[0], fn = regArgs[1];
+        for (let index = 0; index < rows.length; index++) {
+          const row = rows[index];
           const args = isArray(row) ? row : [row];
           formatTitle.index = index;
-          register(formatTitle(title, args), () => fn(...args));
-        });
+          register(formatTitle(title, args), () => apply(fn, undefined, args));
+        }
       };
     };
   }
@@ -169,7 +235,7 @@
   describe.skip = (...args) => addSuite(args, 'describe.skip', 'skip');
   describe.only = (...args) => addSuite(args, 'describe.only', 'only');
   describe.todo = (name) => {
-    current.children.push({ kind: 'suite', suite: newSuite(String(name), current, 'todo') });
+    append(current.children, { kind: 'suite', suite: newSuite(String(name), current, 'todo') });
   };
   describe.skipIf = (...args) => {
     requireExactly(args, 1, 'describe.skipIf');
@@ -187,7 +253,7 @@
   test.todo = (...args) => {
     requireExactly(args, 1, 'test.todo');
     if (typeof args[0] !== 'string') throw new TypeError('test.todo expects first argument to be a string');
-    current.children.push({ kind: 'test', name: args[0], fn: null, mode: 'todo', suite: current });
+    append(current.children, { kind: 'test', name: args[0], fn: null, mode: 'todo', suite: current });
   };
   test.skipIf = (...args) => { requireExactly(args, 1, 'test.skipIf'); return args[0] ? test.skip : test; };
   test.runIf = (...args) => { requireExactly(args, 1, 'test.runIf'); return args[0] ? test : test.skip; };
@@ -200,7 +266,7 @@
     return (...args) => {
       requireExactly(args, 1, kind);
       if (typeof args[0] !== 'function') throw new TypeError(`${kind} expects a function argument`);
-      current[kind].push(args[0]);
+      append(current[kind], args[0]);
     };
   }
   const beforeAll = hook('beforeAll'), afterAll = hook('afterAll');
@@ -265,7 +331,7 @@
         return eq(spec.sample, other.sample);
       },
     };
-    if (extra) Object.assign(spec, extra(spec));
+    if (extra) ObjectAssign(spec, extra(spec));
     return new AsymmetricMatcher(spec);
   }
   const not = (spec, v) => v !== spec.inverse;
@@ -312,7 +378,7 @@
     });
   }
   function enumerableSymbols(o) {
-    return getOwnPropertySymbols(o).filter((s) => apply(propertyIsEnumerable, o, [s]));
+    return filterList(getOwnPropertySymbols(o), (s) => apply(propertyIsEnumerable, o, [s]));
   }
   function objectContaining(sample, inverse) {
     const names = ['ObjectContaining', 'ObjectNotContaining'];
@@ -320,12 +386,12 @@
       const spec = this;
       if (sample === null || typeof sample !== 'object')
         throw new TypeError(`You must provide an object to ${spec.name}, not '${typeof sample}'.`);
-      const keys = [...keysOf(sample), ...enumerableSymbols(sample)];
+      const keys = concatLists(keysOf(sample), enumerableSymbols(sample));
       if (keys.length === 0) return not(spec, true);
       if (!v) return not(spec, false);
       // the actual value is boxed, so a string matches { length: 3 }; inherited members count
       const o = ObjectCtor(v);
-      for (const k of keys) if (!(k in o) || !eq(o[k], sample[k])) return not(spec, false);
+      for (let i = 0; i < keys.length; i++) if (!(keys[i] in o) || !eq(o[keys[i]], sample[keys[i]])) return not(spec, false);
       return not(spec, true);
     });
   }
@@ -334,7 +400,7 @@
     if (text === undefined) throw new Error('Expected is not a string');
     return matcher('stringContaining', ['StringContaining', 'StringNotContaining'], sample, inverse, function match(v) {
       const s = stringOf(v);
-      return not(this, s !== undefined && s.includes(text));
+      return not(this, s !== undefined && StringPrototypeIncludes(s, text));
     });
   }
   function stringMatching(sample, inverse) {
@@ -366,13 +432,13 @@
       const actual = numberOf(v);
       // a non-number never matches, not even the inverse
       if (actual === undefined) return false;
-      if (Number.isNaN(actual) || Number.isNaN(expected) || Number.isNaN(precision)) return not(this, false);
-      if (!Number.isFinite(actual) && !Number.isFinite(expected)) {
+      if (NumberIsNaN(actual) || NumberIsNaN(expected) || NumberIsNaN(precision)) return not(this, false);
+      if (!NumberIsFinite(actual) && !NumberIsFinite(expected)) {
         if (Math.sign(actual) === Math.sign(expected)) return not(this, true);
       }
       let tolerance;
-      if (!Number.isFinite(precision)) tolerance = precision > 0 ? 0 : Infinity;
-      else if (Math.abs(precision) <= 308 && Number.isInteger(precision)) {
+      if (!NumberIsFinite(precision)) tolerance = precision > 0 ? 0 : Infinity;
+      else if (Math.abs(precision) <= 308 && NumberIsInteger(precision)) {
         // stepwise, as Goccia computes it, so the boundary cases round alike
         tolerance = 1;
         if (precision >= 0) for (let i = 1; i <= precision; i++) tolerance /= 10;
@@ -385,7 +451,7 @@
       display: () => `${spec.name} ${String(sample)} (${precision} ${precision === 1 ? 'digit' : 'digits'})`,
       equivalent(other, eq) {
         return other.kind === spec.kind && other.inverse === spec.inverse && eq(spec.sample, other.sample) &&
-          Object.is(precision, other.precision);
+          ObjectIs(precision, other.precision);
       },
     }));
   }
@@ -410,8 +476,8 @@
         return not(this, false);
       }
       if (!isSet(sample)) throw new TypeError('You must provide an array or set to toBeOneOf');
-      if (sample.size === 0 || apply(setHas, sample, [v])) return not(this, true);
-      return not(this, setMembers(sample).some((x) => eq(x, v)));
+      if (setSize(sample) === 0 || apply(setHas, sample, [v])) return not(this, true);
+      return not(this, someList(setMembers(sample), (x) => eq(x, v)));
     });
   }
   function toSatisfy(predicate, inverse) {
@@ -471,7 +537,7 @@
     if (am) return asymMatch(a, b, eq);
     if (bm) return asymMatch(b, a, eq);
     // Object.is for leaves: NaN equals NaN, +0 and -0 differ
-    if (Object.is(a, b)) return true;
+    if (ObjectIs(a, b)) return true;
     // distinct functions are never equal, or every schema validator would match every other
     if (typeof a === 'function' || typeof b === 'function') return false;
     if (!isObject(a) || !isObject(b)) return false;
@@ -494,20 +560,20 @@
     }
     // Sets and Maps ignore order; every actual member must equal some expected member, which may match several
     if (aSet) {
-      if (a.size !== b.size) return false;
+      if (setSize(a) !== setSize(b)) return false;
       if (seen(pairs, a, b)) return true;
       const xs = setMembers(a), ys = setMembers(b);
       if (xs.length !== ys.length) return false;
-      for (const x of xs) if (!ys.some((y) => tryPairs(pairs, (p) => deepEqual(x, y, strict, p)))) return false;
+      for (let i = 0; i < xs.length; i++) { const x = xs[i]; if (!someList(ys, (y) => tryPairs(pairs, (p) => deepEqual(x, y, strict, p)))) return false; }
       return true;
     }
     if (aMap) {
-      if (a.size !== b.size) return false;
+      if (mapSize(a) !== mapSize(b)) return false;
       if (seen(pairs, a, b)) return true;
       const xs = mapEntries(a), ys = mapEntries(b);
       if (xs.length !== ys.length) return false;
       const entryEqual = (x, y, p) => deepEqual(x[0], y[0], strict, p) && deepEqual(x[1], y[1], strict, p);
-      for (const x of xs) if (!ys.some((y) => tryPairs(pairs, (p) => entryEqual(x, y, p)))) return false;
+      for (let i = 0; i < xs.length; i++) { const x = xs[i]; if (!someList(ys, (y) => tryPairs(pairs, (p) => entryEqual(x, y, p)))) return false; }
       return true;
     }
     // an error is never equal to a plain object, whose visible keys would otherwise match any error's
@@ -516,27 +582,28 @@
     if (strict && a.constructor !== b.constructor) return false;
     const both = aError && bError;
     // an error's stack is incidental
-    const comparable = (keys) => (both ? keys.filter((k) => k !== 'stack') : keys);
+    const comparable = (keys) => (both ? filterList(keys, (k) => k !== 'stack') : keys);
     const aKeys = comparable(keysOf(a)), bKeys = comparable(keysOf(b));
     if (strict && aKeys.length !== bKeys.length) return false;
     if (seen(pairs, a, b)) return true;
     if (both) {
       // name and message compare as values, never stringified; cause and errors only when the expected side has them
       if (!deepEqual(a.name, b.name, strict, pairs) || !deepEqual(a.message, b.message, strict, pairs)) return false;
-      if (hasOwn.call(b, 'cause') && b.cause !== undefined &&
-          (!hasOwn.call(a, 'cause') || !deepEqual(a.cause, b.cause, strict, pairs))) return false;
-      if (hasOwn.call(b, 'errors') && (!hasOwn.call(a, 'errors') || !deepEqual(a.errors, b.errors, strict, pairs)))
+      if (ObjectPrototypeHasOwnProperty(b, 'cause') && b.cause !== undefined &&
+          (!ObjectPrototypeHasOwnProperty(a, 'cause') || !deepEqual(a.cause, b.cause, strict, pairs))) return false;
+      if (ObjectPrototypeHasOwnProperty(b, 'errors') && (!ObjectPrototypeHasOwnProperty(a, 'errors') || !deepEqual(a.errors, b.errors, strict, pairs)))
         return false;
     }
     // loosely, a key holding undefined matches a missing one, in either direction
-    for (const k of aKeys) {
-      if (!hasOwn.call(b, k)) {
+    for (let i = 0; i < aKeys.length; i++) {
+      const k = aKeys[i];
+      if (!ObjectPrototypeHasOwnProperty(b, k)) {
         if (strict || a[k] !== undefined) return false;
         continue;
       }
       if (!deepEqual(a[k], b[k], strict, pairs)) return false;
     }
-    for (const k of bKeys) if (!hasOwn.call(a, k) && (strict || b[k] !== undefined)) return false;
+    for (let i = 0; i < bKeys.length; i++) { const k = bKeys[i]; if (!ObjectPrototypeHasOwnProperty(a, k) && (strict || b[k] !== undefined)) return false; }
     return true;
   }
 
@@ -563,8 +630,10 @@
     if (isObject(a) && isObject(b)) {
       const keys = keysOf(b);
       if (seen(pairs, a, b)) return true;
-      for (const k of keys)
-        if (!(inherited ? k in a : hasOwn.call(a, k)) || !partialEqual(a[k], b[k], pairs, inherited)) return false;
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (!(inherited ? k in a : ObjectPrototypeHasOwnProperty(a, k)) || !partialEqual(a[k], b[k], pairs, inherited)) return false;
+      }
       return true;
     }
     return deepEqual(a, b, false, newPairs(pairs));
@@ -588,7 +657,7 @@
       if (subject === NO_SUBJECT) return false;
       if (regExp) return firstMatch(expected, subject);
       // an empty string asserts an empty message, as Vitest compiles it to /^$/
-      return expected === '' ? subject === '' : subject.includes(expected);
+      return expected === '' ? subject === '' : StringPrototypeIncludes(subject, expected);
     }
     // a class matches its subclasses, as instanceof does; an error instance compares as a value
     if (typeof expected === 'function') return thrown instanceof expected;
@@ -601,7 +670,10 @@
   }
   // one match from the start of the text, leaving the RegExp's lastIndex alone
   function firstMatch(re, text) {
-    return new RegExp(re.source, re.flags.replace(/[gy]/g, '')).test(text);
+    const flags = re.flags;
+    let kept = '';
+    for (let i = 0; i < flags.length; i++) if (flags[i] !== 'g' && flags[i] !== 'y') kept += flags[i];
+    return RegExpPrototypeExec(new RegExp(re.source, kept), text) !== null;
   }
 
   // ---------------- expect ----------------
@@ -619,7 +691,7 @@
 
   // toHaveProperty's path: dotted and bracketed segments, empty ones dropped, or an array of segments
   function pathSegments(path) {
-    if (isArray(path)) return path.map((p) => String(p));
+    if (isArray(path)) return mapList(path, (p) => String(p));
     const out = [];
     let cur = '';
     const s = String(path);
@@ -641,7 +713,8 @@
   }
   function resolvePath(obj, segments) {
     let v = obj;
-    for (const seg of segments) {
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
       if (v === null || v === undefined) return { found: false };
       // a primitive exposes its wrapper's members ("a.length" on a string)
       if (!(seg in ObjectCtor(v))) return { found: false };
@@ -654,9 +727,9 @@
   const isMock = (f) => typeof f === 'function' && f[MOCK] === true;
   function positiveInt(n, min) {
     const v = Number(n);
-    return Number.isFinite(v) && v >= min && v <= 2147483647 && Number.isInteger(v);
+    return NumberIsFinite(v) && v >= min && v <= 2147483647 && NumberIsInteger(v);
   }
-  const argsEqual = (call, args) => call.length === args.length && args.every((x, i) => looseEquals(call[i], x));
+  const argsEqual = (call, args) => call.length === args.length && everyList(args, (x, i) => looseEquals(call[i], x));
   const returned = (r) => isObject(r) && r.type === 'return';
 
   // ---------------- snapshots ----------------
@@ -688,8 +761,8 @@
     maxWidth: Infinity, min: false, printBasicPrototype: false, printFunctionName: false, spacingInner: '\n',
     spacingOuter: '\n',
   };
-  const quoteString = (s, escape) => '"' + (escape ? s.replace(/["\\]/g, '\\$&') : s) + '"';
-  const escapeRegExpText = (s) => s.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&');
+  const quoteString = (s, escape) => '"' + (escape ? replaceMatches(s, /["\\]/g, (m) => '\\' + m[0]) : s) + '"';
+  const escapeRegExpText = (s) => replaceMatches(s, /[$()*+.?[\\\]^{|}]/g, (m) => '\\' + m[0]);
   function stringTag(v) {
     try { const t = v[Symbol.toStringTag]; return typeof t === 'string' ? t : ''; } catch { return ''; }
   }
@@ -698,54 +771,56 @@
     const tag = stringTag(v);
     return tag !== '' ? tag === 'Date' : isDateValue(v);
   }
+  const BOXES = [[brand(BooleanCtor.prototype.valueOf), 'Boolean'], [brand(NumberCtor.prototype.valueOf), 'Number'],
+    [brand(StringCtor.prototype.valueOf), 'String'], [brand(BigIntCtor.prototype.valueOf), 'BigInt']];
   // the name a value prints with: a boxed primitive's type, an Intl object's, a class instance's class, its tag
   function objectDisplayName(v) {
-    for (const [ctor, name] of [[BooleanCtor, 'Boolean'], [NumberCtor, 'Number'], [StringCtor, 'String'],
-      [BigIntCtor, 'BigInt']])
-      if (brand(ctor.prototype.valueOf)(v)) return name;
+    for (let i = 0; i < BOXES.length; i++) if (BOXES[i][0](v)) return BOXES[i][1];
     let tag = stringTag(v);
-    if (tag.startsWith('Intl.')) return tag.slice(5);
+    if (StringPrototypeStartsWith(tag, 'Intl.')) return StringPrototypeSlice(tag, 5);
     if (tag === 'Generator' || tag === 'AsyncGenerator') return 'Object';
-    if (tag.includes('Iterator')) return 'Iterator';
+    if (StringPrototypeIncludes(tag, 'Iterator')) return 'Iterator';
     let proto;
-    try { proto = Object.getPrototypeOf(v); } catch { proto = null; }
+    try { proto = ObjectGetPrototypeOf(v); } catch { proto = null; }
     if (proto !== null && proto !== Object.prototype && proto !== Array.prototype) {
       const d = getOwnPropertyDescriptor(proto, 'constructor');
       const ctor = d && d.value;
       if (typeof ctor === 'function' && typeof ctor.name === 'string' && ctor.name !== '' &&
-          Function.prototype.toString.call(ctor).startsWith('class')) return ctor.name;
+          StringPrototypeStartsWith(FunctionPrototypeToString(ctor), 'class')) return ctor.name;
     }
     if (tag === '' && isArray(v)) return 'Array';
     return tag === '' ? 'Object' : tag;
   }
-  function formatNumber(n) { return Object.is(n, -0) ? '-0' : String(n); }
+  function formatNumber(n) { return ObjectIs(n, -0) ? '-0' : String(n); }
 
   // the formatter's own serializers after the user's, as GocciaScript lists them (seven that never match, so a
   // serializer counting config.plugins sees the same list)
   const builtinSerializers = [];
   for (let i = 0; i < 7; i++) append(builtinSerializers, { test: () => false, serialize: () => '' });
   function formatSnapshot(value) {
-    const settings = { ...SNAPSHOT_SETTINGS, plugins: [...snapshotSerializers, ...builtinSerializers] };
-    return format(value, settings, '', 0, [], false).replace(/\r\n?/g, '\n');
+    const settings = { ...SNAPSHOT_SETTINGS, plugins: concatLists(snapshotSerializers, builtinSerializers) };
+    return toLF(format(value, settings, '', 0, [], false));
   }
   function readSettings(base, config) {
     const s = { ...base };
     if (!isObject(config)) return s;
-    for (const k of ['callToJSON', 'escapeRegex', 'escapeString', 'min', 'printBasicPrototype', 'printFunctionName'])
-      if (config[k] !== undefined) s[k] = !!config[k];
-    for (const k of ['indent', 'spacingInner', 'spacingOuter'])
-      if (config[k] !== undefined) s[k] = String(config[k]);
-    for (const k of ['maxDepth', 'maxWidth']) if (typeof config[k] === 'number') s[k] = config[k];
-    if (isArray(config.plugins)) s.plugins = [...config.plugins];
+    const flags = ['callToJSON', 'escapeRegex', 'escapeString', 'min', 'printBasicPrototype', 'printFunctionName'];
+    for (let i = 0; i < flags.length; i++) if (config[flags[i]] !== undefined) s[flags[i]] = !!config[flags[i]];
+    const texts = ['indent', 'spacingInner', 'spacingOuter'];
+    for (let i = 0; i < texts.length; i++) if (config[texts[i]] !== undefined) s[texts[i]] = String(config[texts[i]]);
+    if (typeof config.maxDepth === 'number') s.maxDepth = config.maxDepth;
+    if (typeof config.maxWidth === 'number') s.maxWidth = config.maxWidth;
+    if (isArray(config.plugins)) s.plugins = copyList(config.plugins);
     return s;
   }
   function configObject(s) {
     const colors = {};
-    for (const name of ['comment', 'content', 'prop', 'tag', 'value']) colors[name] = { open: '', close: '' };
+    const names = ['comment', 'content', 'prop', 'tag', 'value'];
+    for (let i = 0; i < names.length; i++) colors[names[i]] = { open: '', close: '' };
     return {
       callToJSON: s.callToJSON, colors, compareKeys: undefined, escapeRegex: s.escapeRegex,
       escapeString: s.escapeString, indent: s.indent, maxDepth: s.maxDepth, maxWidth: s.maxWidth, min: s.min,
-      plugins: [...s.plugins], printBasicPrototype: s.printBasicPrototype, printFunctionName: s.printFunctionName,
+      plugins: copyList(s.plugins), printBasicPrototype: s.printBasicPrototype, printFunctionName: s.printFunctionName,
       printShadowRoot: true, spacingInner: s.spacingInner, spacingOuter: s.spacingOuter, singleQuote: false,
       quoteKeys: true, maxOutputLength: 1 << 27, _outputLengthPerDepth: [],
     };
@@ -753,7 +828,8 @@
   // a serializer whose test accepts the value prints it: serialize(value, config, indentation, depth, refs, printer)
   // or the older print(value, print, indent, options, colors)
   function formatWithSerializer(v, s, indentation, depth, refs) {
-    for (const plugin of s.plugins) {
+    for (let pi = 0; pi < s.plugins.length; pi++) {
+      const plugin = s.plugins[pi];
       if (!isObject(plugin)) throw new Error('Snapshot serializer must be an object');
       if (typeof plugin.test !== 'function') throw new Error('Snapshot serializer test must be callable');
       if (!plugin.test(v)) continue;
@@ -761,13 +837,13 @@
       if (typeof plugin.serialize === 'function') {
         const printer = (val, config, ind, dep, rf, called) => format(val,
           config === undefined ? s : readSettings(s, config), ind === undefined ? indentation : String(ind),
-          typeof dep === 'number' ? Math.trunc(dep) : depth, isArray(rf) ? [...rf] : refs, !!called);
-        printed = apply(plugin.serialize, plugin, [v, configObject(s), indentation, depth, [...refs], printer]);
+          typeof dep === 'number' ? Math.trunc(dep) : depth, isArray(rf) ? copyList(rf) : refs, !!called);
+        printed = apply(plugin.serialize, plugin, [v, configObject(s), indentation, depth, copyList(refs), printer]);
       } else {
         const print = (val) => format(val, s, indentation, depth, refs, false);
         const indent = (text) => {
           const ind = indentation + s.indent;
-          return ind + String(text).split('\n').join('\n' + ind);
+          return ind + ArrayPrototypeJoin(StringPrototypeSplit(String(text), '\n'), '\n' + ind);
         };
         const options = { edgeSpacing: s.spacingOuter, min: s.min, spacing: s.spacingInner };
         printed = apply(plugin.print, plugin, [v, print, indent, options, configObject(s).colors]);
@@ -779,7 +855,7 @@
   }
   function formatAsymmetric(m, s, indentation, depth, refs) {
     const spec = AsymmetricMatcher.spec(m);
-    if (['arrayContaining', 'objectContaining', 'stringContaining', 'stringMatching'].includes(spec.kind))
+    if (ArrayPrototypeIncludes(['arrayContaining', 'objectContaining', 'stringContaining', 'stringMatching'], spec.kind))
       return spec.name + ' ' + format(spec.sample, s, indentation, depth, refs, false);
     if (spec.kind === 'schemaMatching') {
       const r = spec.validationResult;
@@ -837,12 +913,13 @@
       return s.escapeRegex ? escapeRegExpText(text) : text;
     }
     if (isSnapshotDate(v)) {
-      // a user valueOf takes part in the invalid-date check, as pretty-format's Number.isNaN(+value)
-      if (Number.isNaN(+v)) return 'Date { NaN }';
+      // a user valueOf takes part in the invalid-date check, as pretty-format's NumberIsNaN(+value)
+      if (NumberIsNaN(+v)) return 'Date { NaN }';
       return String(apply(isDateValue(v) ? dateToISOString : v.toISOString, v, []));
     }
-    if (refs.includes(v)) return '[Circular]';
-    const nextRefs = [...refs, v];
+    if (ArrayPrototypeIncludes(refs, v)) return '[Circular]';
+    const nextRefs = copyList(refs);
+    append(nextRefs, v);
     if (depth + 1 > s.maxDepth) return '[' + objectDisplayName(v) + ']';
     if (s.callToJSON && !calledToJSON && typeof v.toJSON === 'function')
       return format(v.toJSON(), s, indentation, depth + 1, nextRefs, true);
@@ -866,7 +943,7 @@
         false) + ' => ' + format(entries[i][1], s, next, depth + 1, nextRefs, false), s, indentation, false) + '}';
     }
     if (isSet(v)) {
-      const items = [...apply(setValues, v, [])];
+      const items = setMembers(v);
       if (items.length === 0) return 'Set {}';
       return 'Set {' + listBody(items.length, (i, next) => format(items[i], s, next, depth + 1, nextRefs, false), s,
         indentation, false) + '}';
@@ -874,7 +951,7 @@
     const kind = typedKind(v);
     if (kind !== undefined) {
       const len = v.length;
-      if (kind.startsWith('Big') || kind === 'Float16Array') {
+      if (StringPrototypeStartsWith(kind, 'Big') || kind === 'Float16Array') {
         if (len === 0) return kind + ' {}';
         return kind + ' {' + listBody(len, (i, next) => quoteString(String(i), s.escapeString) + ': ' +
           format(v[i], s, next, depth + 1, nextRefs, false), s, indentation, false) + '}';
@@ -893,12 +970,12 @@
     return formatObjectValue(v, s, indentation, depth, nextRefs);
   }
   function formatObjectValue(o, s, indentation, depth, refs) {
-    const keys = keysOf(o).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    const symbols = getOwnPropertySymbols(o).filter((k) => apply(propertyIsEnumerable, o, [k]));
+    const keys = ArrayPrototypeSort(keysOf(o), (a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const symbols = filterList(getOwnPropertySymbols(o), (k) => apply(propertyIsEnumerable, o, [k]));
     const name = objectDisplayName(o);
     const prefix = s.min || (!s.printBasicPrototype && name === 'Object') ? '' : name + ' ';
     if (keys.length === 0 && symbols.length === 0) return prefix + '{}';
-    const all = [...keys, ...symbols];
+    const all = concatLists(keys, symbols);
     return prefix + '{' + listBody(all.length, (i, next) => {
       const k = all[i];
       const label = typeof k === 'symbol' ? String(k) : quoteString(k, s.escapeString);
@@ -917,41 +994,42 @@
   }
 
   // a snapshot's text: one line break before and after a multi-line value (AddSnapshotLineBreaks)
-  const addSnapshotLineBreaks = (t) => (t.includes('\n') ? '\n' + t + '\n' : t);
+  const addSnapshotLineBreaks = (t) => (StringPrototypeIncludes(t, '\n') ? '\n' + t + '\n' : t);
   const isPropertyShape = (v) => v !== null && typeof v === 'object';
   // the received value with the matcher's property shape put over it, for printing
   function mergePropertyShape(actual, shape) {
     if (isAsym(shape)) return shape;
     if (isArray(actual) && isArray(shape)) {
-      const merged = [...actual];
+      const merged = copyList(actual);
       for (let i = 0; i < shape.length; i++) if (i in shape) merged[i] = mergePropertyShape(actual[i], shape[i]);
       return merged;
     }
     if (isPropertyShape(actual) && isPropertyShape(shape)) {
       const merged = {};
-      for (const k of keysOf(actual)) merged[k] = actual[k];
-      for (const k of getOwnPropertySymbols(actual)) if (apply(propertyIsEnumerable, actual, [k])) merged[k] = actual[k];
-      for (const k of keysOf(shape)) merged[k] = mergePropertyShape(actual[k], shape[k]);
+      const ak = keysOf(actual), as = getOwnPropertySymbols(actual), sk = keysOf(shape);
+      for (let i = 0; i < ak.length; i++) merged[ak[i]] = actual[ak[i]];
+      for (let i = 0; i < as.length; i++) if (apply(propertyIsEnumerable, actual, [as[i]])) merged[as[i]] = actual[as[i]];
+      for (let i = 0; i < sk.length; i++) merged[sk[i]] = mergePropertyShape(actual[sk[i]], shape[sk[i]]);
       return merged;
     }
     return shape;
   }
   // an inline snapshot's common indentation removed, as Vitest's dedent does
   function stripInlineIndentation(value) {
-    const text = value.replace(/\r\n?/g, '\n');
-    const lines = text.split('\n');
-    if (lines.length <= 2 || lines[0].trim() !== '' || lines[lines.length - 1].trim() !== '') return text;
+    const text = toLF(value);
+    const lines = StringPrototypeSplit(text, '\n');
+    if (lines.length <= 2 || StringPrototypeTrim(lines[0]) !== '' || StringPrototypeTrim(lines[lines.length - 1]) !== '') return text;
     let indentation = '';
     for (let i = 1; i < lines.length - 1; i++)
-      if (lines[i].trim() !== '') { indentation = /^[ \t]*/.exec(lines[i])[0]; break; }
+      if (StringPrototypeTrim(lines[i]) !== '') { indentation = RegExpPrototypeExec(/^[ \t]*/, lines[i])[0]; break; }
     if (indentation === '') return text;
     for (let i = 1; i < lines.length - 1; i++)
       if (lines[i] !== '') {
-        if (!lines[i].startsWith(indentation)) return text;
-        lines[i] = lines[i].slice(indentation.length);
+        if (!StringPrototypeStartsWith(lines[i], indentation)) return text;
+        lines[i] = StringPrototypeSlice(lines[i], indentation.length);
       }
     lines[lines.length - 1] = '';
-    return lines.join('\n');
+    return ArrayPrototypeJoin(lines, '\n');
   }
   let snapshotTestName = '';
   function requireSnapshots(name) {
@@ -975,7 +1053,7 @@
     toBe(...args) {
       requireExactly(args, 1, 'toBe');
       const a = this.#actual, e = args[0];
-      this.#check(Object.is(a, e), (n) => `Expected ${show(a)}${n} to be ${show(e)}`);
+      this.#check(ObjectIs(a, e), (n) => `Expected ${show(a)}${n} to be ${show(e)}`);
     }
     toEqual(...args) {
       requireExactly(args, 1, 'toEqual');
@@ -1059,7 +1137,7 @@
       if (typeof e !== 'string' && !regExp)
         return this.#not ? passed() : failed('Expected a string pattern or RegExp but received ' + show(e));
       const description = regExp ? String(e) : e;
-      this.#check(regExp ? firstMatch(e, a) : a.includes(e), (n) => `Expected ${show(a)}${n} to match ${description}`);
+      this.#check(regExp ? firstMatch(e, a) : StringPrototypeIncludes(a, e), (n) => `Expected ${show(a)}${n} to match ${description}`);
     }
     toBeNull() { const a = this.#actual; this.#check(a === null, (n) => `Expected ${show(a)}${n} to be null`); }
     toBeUndefined() {
@@ -1076,7 +1154,7 @@
     toBeNaN() {
       const a = this.#actual;
       let nan = false;
-      try { nan = Number.isNaN(Number(a)); } catch {}
+      try { nan = NumberIsNaN(Number(a)); } catch {}
       this.#check(nan, (n) => `Expected ${show(a)}${n} to be NaN`);
     }
     toBeGreaterThan(...args) { this.#compare(args, 'toBeGreaterThan', 'greater than', (a, e) => a > e); }
@@ -1096,8 +1174,8 @@
       requireExactly(args, 1, 'toContain');
       const a = this.#actual, e = args[0];
       let found = false;
-      if (typeof a === 'string') found = a.includes(typeof e === 'string' ? e : show(e));
-      else if (isArray(a)) found = Array.prototype.includes.call(a, e);
+      if (typeof a === 'string') found = StringPrototypeIncludes(a, typeof e === 'string' ? e : show(e));
+      else if (isArray(a)) found = ArrayPrototypeIncludes(a, e);
       else if (isSet(a)) found = apply(setHas, a, [e]);
       this.#check(found, (n) => `Expected ${show(a)}${n} to contain ${show(e)}`);
     }
@@ -1122,8 +1200,8 @@
       let ok;
       // a Set and a Map report their entry count as size rather than length
       if (isArray(a)) ok = a.length === n;
-      else if (isSet(a) || isMap(a)) ok = a.size === n;
-      else if (isObject(a)) ok = Object.getOwnPropertyNames(a).length === n;
+      else if (isSet(a) || isMap(a)) ok = sizeOf(a) === n;
+      else if (isObject(a)) ok = ObjectGetOwnPropertyNames(a).length === n;
       else if (typeof a === 'string') ok = a.length === n;
       else ok = Number(a) === n;
       this.#check(ok, (m) => `Expected ${show(a)}${m} to have length ${show(e)}`);
@@ -1136,10 +1214,10 @@
       if (typeof path !== 'string' && typeof path !== 'number' && !isArray(path))
         throw new TypeError('toHaveProperty expects a string or number path, or an array of path segments');
       const segments = pathSegments(path);
-      let description = segments.join('.');
+      let description = ArrayPrototypeJoin(segments, '.');
       let r;
       // a string or number path is first tried as one own key, so { 'a.b': 5 } has property 'a.b'
-      if (!isArray(path) && hasOwn.call(a, String(path))) {
+      if (!isArray(path) && ObjectPrototypeHasOwnProperty(a, String(path))) {
         r = { found: true, value: a[String(path)] };
         description = String(path);
       } else r = segments.length === 0 ? { found: false } : resolvePath(a, segments);
@@ -1174,14 +1252,14 @@
       if (args.length < 1) throw new Error('toBeCloseTo expects at least 1 argument but got 0');
       const a = this.#actual, e = args[0];
       let precision = args.length >= 2 ? Number(args[1]) : 2;
-      if (Number.isNaN(precision)) precision = 0;
+      if (NumberIsNaN(precision)) precision = 0;
       const x = Number(a), y = Number(e);
       let ok;
-      if (Number.isNaN(x) || Number.isNaN(y)) ok = Number.isNaN(x) && Number.isNaN(y);
-      else if (!Number.isFinite(x) || !Number.isFinite(y)) ok = x === y;
+      if (NumberIsNaN(x) || NumberIsNaN(y)) ok = NumberIsNaN(x) && NumberIsNaN(y);
+      else if (!NumberIsFinite(x) || !NumberIsFinite(y)) ok = x === y;
       else {
         let tolerance;
-        if (!Number.isFinite(precision)) tolerance = precision > 0 ? 0 : Infinity;
+        if (!NumberIsFinite(precision)) tolerance = precision > 0 ? 0 : Infinity;
         else if (precision > 308) tolerance = 0;
         else if (precision < -308) tolerance = Infinity;
         else tolerance = 0.5 * Math.pow(10, -precision);
@@ -1216,7 +1294,7 @@
     }
     toHaveBeenCalledWith(...args) {
       const calls = this.#mock().calls;
-      const found = calls.some((c) => isArray(c) && argsEqual(c, args));
+      const found = someList(calls, (c) => isArray(c) && argsEqual(c, args));
       if (found !== this.#not) return passed();
       failed(this.#not ? 'Expected mock not to have been called with the specified arguments'
         : `Expected mock to have been called with the specified arguments (${calls.length} call(s) recorded)`);
@@ -1238,13 +1316,13 @@
         if (this.#not) return passed();
         failed(`Call index ${n} is out of range (mock was called ${calls.length} time(s))`);
       }
-      if (argsEqual(calls[n - 1], args.slice(1)) !== this.#not) return passed();
+      if (argsEqual(calls[n - 1], filterList(args, (x, i) => i > 0)) !== this.#not) return passed();
       failed(this.#not ? `Expected call ${n} not to have the specified arguments`
         : `Expected call ${n} to have the specified arguments`);
     }
     toHaveReturned(...args) {
       requireExactly(args, 0, 'toHaveReturned');
-      const ok = this.#mock().results.some(returned);
+      const ok = someList(this.#mock().results, returned);
       if (ok !== this.#not) return passed();
       failed(this.#not ? 'Expected mock not to have returned' : 'Expected mock to have returned at least once');
     }
@@ -1252,7 +1330,7 @@
       const state = this.#mock();
       requireExactly(args, 1, 'toHaveReturnedTimes');
       if (!positiveInt(args[0], 0)) throw new TypeError('toHaveReturnedTimes expects a non-negative integer');
-      const n = Number(args[0]), count = state.results.filter(returned).length;
+      const n = Number(args[0]), count = filterList(state.results, returned).length;
       if ((count === n) !== this.#not) return passed();
       failed(this.#not ? `Expected mock not to have returned ${n} time(s)`
         : `Expected mock to have returned ${n} time(s) but returned ${count} time(s)`);
@@ -1261,7 +1339,7 @@
       const state = this.#mock();
       requireExactly(args, 1, 'toHaveReturnedWith');
       const e = args[0];
-      const ok = state.results.some((r) => returned(r) && looseEquals(r.value, e));
+      const ok = someList(state.results, (r) => returned(r) && looseEquals(r.value, e));
       if (ok !== this.#not) return passed();
       failed(`Expected mock${this.#not ? ' not' : ''} to have returned with ${show(e)}`);
     }
@@ -1306,7 +1384,9 @@
     // custom matchers (expect.extend) run with the actual value and the polarity
     static custom(name, fn) {
       Expectation.prototype[name] = function (...args) {
-        const r = apply(fn, { isNot: this.#not, equals: looseEquals }, [this.#actual, ...args]);
+        const callArgs = [this.#actual];
+        for (let i = 0; i < args.length; i++) append(callArgs, args[i]);
+        const r = apply(fn, { isNot: this.#not, equals: looseEquals }, callArgs);
         this.#check(!!r.pass, () => (typeof r.message === 'function' ? r.message() : String(r.message || name)));
       };
       PromiseExpectation.forward(name);
@@ -1325,7 +1405,7 @@
       const actual = pe.#actual, negated = pe.#not, mode = pe.#mode;
       if (!isPromise(actual)) {
         assertionCount++;
-        return Promise.reject(new AssertionError('Expected a Promise but received ' + show(actual)));
+        return PromiseReject(new AssertionError('Expected a Promise but received ' + show(actual)));
       }
       return apply(promiseThen, actual, [
         (v) => {
@@ -1341,7 +1421,7 @@
       PromiseExpectation.prototype[name] = function (...args) { return PromiseExpectation.run(this, name, args); };
     }
   }
-  for (const name of Object.getOwnPropertyNames(Expectation.prototype))
+  for (const name of ObjectGetOwnPropertyNames(Expectation.prototype))
     if (name !== 'constructor' && name !== 'not' && name !== 'resolves' && name !== 'rejects')
       PromiseExpectation.forward(name);
 
@@ -1353,7 +1433,10 @@
   expect.anything = () => anything();
   expect.addSnapshotSerializer = (...args) => {
     requireExactly(args, 1, 'expect.addSnapshotSerializer');
-    snapshotSerializers.unshift(args[0]);
+    const before = copyList(snapshotSerializers);
+    snapshotSerializers.length = 0;
+    append(snapshotSerializers, args[0]);
+    for (let i = 0; i < before.length; i++) append(snapshotSerializers, before[i]);
   };
   expect.any = any;
   expect.arrayContaining = (s) => arrayContaining(s, false);
@@ -1367,7 +1450,7 @@
   expect.toBeFasterThan = (s, o) => toBeFasterThan(s, o, false);
   expect.toBeSlowerThan = (s, o) => toBeSlowerThan(s, o, false);
   // expect.not holds the inverse matchers; there is no inverse of any or anything
-  Object.defineProperty(expect, 'not', {
+  ObjectDefineProperty(expect, 'not', {
     value: {
       arrayContaining: (s) => arrayContaining(s, true),
       objectContaining: (s) => objectContaining(s, true),
@@ -1384,7 +1467,7 @@
   });
   expect.assertions = (n) => { expectedAssertions = n; };
   expect.hasAssertions = () => { needAssertions = true; };
-  expect.extend = (obj) => { for (const k of keysOf(obj)) Expectation.custom(k, obj[k]); };
+  expect.extend = (obj) => { const keys = keysOf(obj); for (let i = 0; i < keys.length; i++) Expectation.custom(keys[i], obj[keys[i]]); };
 
   // ---------------- mocks ----------------
   function mock(...args) {
@@ -1402,9 +1485,9 @@
       if (new.target) append(state.instances, this);
       const result = { type: 'incomplete', value: undefined };
       append(state.results, result);
-      const fn = once.length ? once.shift() : implementation;
+      const fn = once.length ? ArrayPrototypeShift(once) : implementation;
       try {
-        const v = fn ? (new.target ? Reflect.construct(fn, args, new.target) : fn.apply(this, args)) : undefined;
+        const v = fn ? (new.target ? Reflect.construct(fn, args, new.target) : apply(fn, this, args)) : undefined;
         result.type = 'return'; result.value = v;
         return v;
       } catch (e) {
@@ -1412,16 +1495,16 @@
         throw e;
       }
     };
-    Object.defineProperty(f, 'mock', { get: () => state });
+    ObjectDefineProperty(f, 'mock', { get: () => state });
     f[MOCK] = true;
     f.mockImplementation = (fn) => { implementation = fn; return f; };
-    f.mockImplementationOnce = (fn) => { once.push(fn); return f; };
+    f.mockImplementationOnce = (fn) => { append(once, fn); return f; };
     f.mockReturnValue = (v) => f.mockImplementation(() => v);
     f.mockReturnValueOnce = (v) => f.mockImplementationOnce(() => v);
-    f.mockResolvedValue = (v) => f.mockImplementation(() => Promise.resolve(v));
-    f.mockResolvedValueOnce = (v) => f.mockImplementationOnce(() => Promise.resolve(v));
-    f.mockRejectedValue = (v) => f.mockImplementation(() => Promise.reject(v));
-    f.mockRejectedValueOnce = (v) => f.mockImplementationOnce(() => Promise.reject(v));
+    f.mockResolvedValue = (v) => f.mockImplementation(() => PromiseResolve(v));
+    f.mockResolvedValueOnce = (v) => f.mockImplementationOnce(() => PromiseResolve(v));
+    f.mockRejectedValue = (v) => f.mockImplementation(() => PromiseReject(v));
+    f.mockRejectedValueOnce = (v) => f.mockImplementationOnce(() => PromiseReject(v));
     f.mockReturnThis = () => f.mockImplementation(function () { return this; });
     f.mockClear = () => {
       state.calls.length = 0; state.results.length = 0; state.instances.length = 0; state.contexts.length = 0;
@@ -1444,18 +1527,18 @@
     if (!(key in obj)) throw new TypeError(`spyOn: cannot spy on non-existent property "${key}"`);
     const desc = getOwnPropertyDescriptor(obj, key);
     if (access === 'get' || access === 'set') {
-      const d = desc || getOwnPropertyDescriptor(Object.getPrototypeOf(obj), key);
+      const d = desc || getOwnPropertyDescriptor(ObjectGetPrototypeOf(obj), key);
       const orig = d && d[access];
       const m = orig === undefined ? mock() : mock(orig);
-      Object.defineProperty(obj, key, Object.assign({}, d, { [access]: m, configurable: true }));
-      m.__restore = () => { if (desc) Object.defineProperty(obj, key, desc); else delete obj[key]; };
+      ObjectDefineProperty(obj, key, ObjectAssign({}, d, { [access]: m, configurable: true }));
+      m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, desc); else delete obj[key]; };
       return m;
     }
     const orig = obj[key];
     if (typeof orig !== 'function') throw new TypeError(`spyOn: property "${key}" is not a function`);
     const m = mock(orig);
     obj[key] = m;
-    m.__restore = () => { if (desc) Object.defineProperty(obj, key, desc); else delete obj[key]; };
+    m.__restore = () => { if (desc) ObjectDefineProperty(obj, key, desc); else delete obj[key]; };
     return m;
   }
 
@@ -1466,7 +1549,8 @@
     return false;
   }
   async function runHooks(list) {
-    for (const fn of list) {
+    for (let i = 0; i < list.length; i++) {
+      const fn = list[i];
       let r;
       // a hook that throws: what it queued goes with it, before any of it runs
       try { r = fn(); } catch (e) { discardPendingWork(); throw e; }
@@ -1497,17 +1581,18 @@
     try { name = v.name; message = v.message; ctor = v.constructor; } catch { return text; }
     if (typeof name !== 'string' || typeof message !== 'string' || name !== 'Error') return text;
     let owner = v;
-    while (owner !== null && !hasOwn.call(owner, 'name')) owner = Object.getPrototypeOf(owner);
+    while (owner !== null && !ObjectPrototypeHasOwnProperty(owner, 'name')) owner = ObjectGetPrototypeOf(owner);
     if (owner !== Error.prototype) return text;
     if (typeof ctor === 'function' && typeof ctor.name === 'string' && ctor.name !== '' &&
-        Function.prototype.toString.call(ctor).startsWith('class')) return ctor.name + ': ' + message;
+        StringPrototypeStartsWith(FunctionPrototypeToString(ctor), 'class')) return ctor.name + ': ' + message;
     return text;
   }
   // a test's beforeEach or afterEach hooks: every one runs, a failing one gives up what was pending (its timers and
   // jobs), and the first failure is the result (NONE when all passed)
   async function runEachHooks(list) {
     let first = NONE;
-    for (const fn of list) {
+    for (let i = 0; i < list.length; i++) {
+      const fn = list[i];
       try { await fn(); } catch (e) {
         discardPendingWork();
         if (first === NONE) first = e;
@@ -1532,8 +1617,11 @@
   }
   function chainHooks(suite, kind) {
     const out = [];
-    for (let s = suite; s; s = s.parent) out.unshift(...s[kind]);
-    return kind === 'afterEach' ? out.reverse() : out;
+    // the outermost suite's hooks first
+    const chain = [];
+    for (let s = suite; s; s = s.parent) append(chain, s);
+    for (let c = chain.length - 1; c >= 0; c--) { const l = chain[c][kind]; for (let i = 0; i < l.length; i++) append(out, l[i]); }
+    return kind === 'afterEach' ? ArrayPrototypeReverse(out) : out;
   }
   async function runTests() {
     const result = {
@@ -1542,7 +1630,7 @@
     };
     if (collectionError !== null) {
       result.suiteErrors = 1;
-      result.failedTests.push({ name: collectionError, error: '' });
+      append(result.failedTests, { name: collectionError, error: '' });
       return result;
     }
     // a failed beforeAll or afterAll is a suite error, not a failed test: it fails the file
@@ -1552,7 +1640,7 @@
       else if (u.rejection !== NONE) message = 'Unhandled promise rejection: ' + describeThrown(u.rejection);
       else message = 'Callback threw an exception: ' + describeThrown(u.jobError);
       result.suiteErrors++;
-      result.failedTests.push({ name: `Hook "${kind}" in suite "${fullName(suite)}" failed: ${message}`, error: '' });
+      append(result.failedTests, { name: `Hook "${kind}" in suite "${fullName(suite)}" failed: ${message}`, error: '' });
       discardPendingWork();
     };
     const unitFailed = (u) => u.error !== NONE || u.rejection !== NONE || u.jobError !== NONE;
@@ -1562,12 +1650,12 @@
       const outside = work.jobErrors();
       for (let i = 0; i < outside.length; i++) {
         result.suiteErrors++;
-        result.failedTests.push({ name: 'Uncaught exception outside a test: ' + describeThrown(outside[i]), error: '' });
+        append(result.failedTests, { name: 'Uncaught exception outside a test: ' + describeThrown(outside[i]), error: '' });
       }
       const left = work.unhandled(describeRejections);
       if (left[0]) {
         result.suiteErrors++;
-        result.failedTests.push({ name: 'Unhandled promise rejection outside a test: ' + describeThrown(left[1]),
+        append(result.failedTests, { name: 'Unhandled promise rejection outside a test: ' + describeThrown(left[1]),
           error: '' });
       }
     }
@@ -1580,7 +1668,8 @@
         const u = await runUnit(() => runHooks(suite.beforeAll));
         if (unitFailed(u)) { hookFailure('beforeAll', suite, u); skipAll = true; }
       }
-      for (const item of items) {
+      for (let ii = 0; ii < items.length; ii++) {
+        const item = items[ii];
         if (item.kind === 'suite') { await runSuite(item.suite, skipAll); continue; }
         result.totalTests++;
         result.totalRunTests++;
@@ -1660,7 +1749,8 @@
         const afterError = await runEachHooks(chainHooks(suite, 'afterEach'));
         if (afterError !== NONE) fail('Callback threw an exception: ' + describeThrown(afterError));
         const fins = finishedHooks; finishedHooks = null;
-        for (const fn of fins) {
+        for (let fi = 0; fi < fins.length; fi++) {
+          const fn = fins[fi];
           try { await fn(); } catch (e) { fail('Callback threw an exception: ' + describeThrown(e)); }
         }
         // what the test left: a rejection with no handler, or a queued job that threw, fails it
@@ -1680,7 +1770,7 @@
         result.assertions += assertionCount;
         if (detail !== null) {
           result.failed++;
-          result.failedTests.push({ name: detail, error: '' });
+          append(result.failedTests, { name: detail, error: '' });
         } else result.passed++;
       }
       if (!skipAll) {
@@ -1696,7 +1786,7 @@
       if (errors.length > 0) {
         result.totalTests++;
         result.failed++;
-        for (const e of errors) result.failedTests.push({ name: e, error: '' });
+        for (let ei = 0; ei < errors.length; ei++) append(result.failedTests, { name: errors[ei], error: '' });
       }
     }
     return result;
@@ -1710,10 +1800,11 @@
   // suite outside the runner")
   const moduleOnly = !!(shared && shared.moduleOnly);
   if (!moduleOnly) {
-    for (const k of keysOf(api)) Object.defineProperty(global, k, { value: api[k], writable: true, configurable: true });
+    const names = keysOf(api);
+    for (let i = 0; i < names.length; i++) ObjectDefineProperty(global, names[i], { value: api[names[i]], writable: true, configurable: true });
     // the generated test262 wrappers' private aliases: a conformance test may declare its own describe or test
     for (const [alias, fn] of [['__gocciaTest262Describe', describe], ['__gocciaTest262Test', test]])
-      Object.defineProperty(global, alias, { value: fn, writable: false, configurable: false });
+      ObjectDefineProperty(global, alias, { value: fn, writable: false, configurable: false });
   }
   // runTests({ exitOnFirstFailure, showTestResults }) of the module-only API: the whole registry run again (the
   // counts start over), its result returned, and the results block printed unless showTestResults is false or the
@@ -1722,10 +1813,10 @@
     const show = !(options && options.showTestResults === false);
     const started = shared.deadline.clock();
     const r = shared.deadline.settle(runTests());
-    const failedTests = r.failedTests.map(f => (f.error ? f.name + ': ' + f.error : f.name));
-    const suites = root.children.filter(c => c.kind === 'suite').map(c => c.suite.name);
+    const failedTests = mapList(r.failedTests, f => (f.error ? f.name + ': ' + f.error : f.name));
+    const suites = mapList(filterList(root.children, c => c.kind === 'suite'), c => c.suite.name);
     let summary = `Tests: ${r.totalRunTests} total, ${r.passed} passed, ${r.failed} failed, ${r.skipped} skipped`;
-    if (suites.length > 0) summary += ' (Suites: ' + suites.join(', ') + ')';
+    if (suites.length > 0) summary += ' (Suites: ' + ArrayPrototypeJoin(suites, ', ') + ')';
     const result = {
       passed: r.passed, failed: r.failed, skipped: r.skipped, totalTests: r.totalTests, totalRunTests: r.totalRunTests,
       assertions: r.assertions, duration: shared.deadline.clock() - started, suiteErrors: r.suiteErrors, failedTests,
@@ -1733,12 +1824,16 @@
     };
     if (show && shared.deadline.reporter) {
       const out = ['', '=== Test Results ===', summary, 'Total Assertions: ' + r.assertions];
-      if (failedTests.length > 0) out.push('', 'Failed Tests:', ...failedTests.map(t => '  \u2022 ' + t));
+      if (failedTests.length > 0) {
+        append(out, '');
+        append(out, 'Failed Tests:');
+        for (let i = 0; i < failedTests.length; i++) append(out, '  \u2022 ' + failedTests[i]);
+      }
       if (r.failed === 0 && r.suiteErrors === 0)
-        out.push(r.skipped > 0 ? `\u2705 All tests passed! (${r.skipped} skipped)` : '\u2705 All tests passed!');
-      else out.push('\u274c Some tests failed!');
-      out.push('==================');
-      for (const line of out) shared.deadline.print(line);
+        append(out, r.skipped > 0 ? `\u2705 All tests passed! (${r.skipped} skipped)` : '\u2705 All tests passed!');
+      else append(out, '\u274c Some tests failed!');
+      append(out, '==================');
+      for (let i = 0; i < out.length; i++) shared.deadline.print(out[i]);
     }
     return result;
   }
@@ -1747,11 +1842,14 @@
   return {
     api: exported,
     report(done) {
-      return runTests().then(
-        r => done(JSON.stringify({ totalTests: r.totalTests, passed: r.passed, failed: r.failed, skipped: r.skipped,
+      const running = runTests();
+      return (async () => {
+        let r;
+        try { r = await running; } catch (e) { return done(undefined, String(e)); }
+        return done(JSON.stringify({ totalTests: r.totalTests, passed: r.passed, failed: r.failed, skipped: r.skipped,
           totalRunTests: r.totalRunTests, assertions: r.assertions, suiteErrors: r.suiteErrors,
-          failedTests: r.failedTests })),
-        e => done(undefined, String(e)));
+          failedTests: r.failedTests }));
+      })();
     }
   };
 })

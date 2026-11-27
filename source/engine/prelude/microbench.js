@@ -12,7 +12,10 @@
   // the intrinsics as the realm made them: a benchmark file can replace or pollute the globals it measures
   const { Object, TypeError, Float64Array, Promise, String } = global;
   const defineProperty = Object.defineProperty;
-  const trunc = global.Math.trunc, sqrt = global.Math.sqrt;
+  const trunc = global.Math.trunc, sqrt = global.Math.sqrt, ReflectApply = global.Reflect.apply;
+  const uncurryThis = global.Function.prototype.bind.bind(global.Function.prototype.call);
+  const TypedArrayPrototypeSort = uncurryThis(global.Object.getPrototypeOf(Float64Array.prototype).sort);
+  const WeakMapPrototypeGet = uncurryThis(global.WeakMap.prototype.get), WeakMapPrototypeSet = uncurryThis(global.WeakMap.prototype.set);
   const isObject = (v) => v !== null && (typeof v === 'object' || typeof v === 'function');
   const now = n.now, collect = n.collect, forget = n.forget, discardJobs = n.discardJobs, entry = n.entry;
 
@@ -114,7 +117,8 @@
       leave(previous);
       return undefined;
     }
-    return Promise.resolve(result).then(() => { leave(previous); }, (e) => { leave(previous); throw e; });
+    // await, not then: a script's Promise.prototype.then is not looked up
+    return (async () => { try { await result; } finally { leave(previous); } })();
   }
   function summary(...args) {
     return scoped(args, 'summary',
@@ -146,7 +150,7 @@
   // the teardown: the generator returns, and what its finally throws is the benchmark's error
   function close(it) {
     const ret = it.return;
-    if (ret !== undefined && ret !== null) ret.call(it);
+    if (ret !== undefined && ret !== null) ReflectApply(ret, it, []);
   }
   // the teardown after the body failed: the body's error is the one reported
   function closeKeepingError(it) {
@@ -252,7 +256,7 @@
         samples[k] = now() - start;
       }
       forget();
-      samples.sort();
+      TypedArrayPrototypeSort(samples);
       const percentile = (q) => count === 0 ? 0 : samples[trunc(q * (count - 1))] / 1000000;
       r.sampleCount = count;
       r.minSampleMs = percentile(0);
@@ -324,7 +328,7 @@
         // the next benchmark does not inherit this one's queued work
         discardJobs();
         r = { name: c.name, suite: c.suite, summaryScope: c.summaryScope, boxplotScope: c.boxplotScope, error: describe(e) };
-        thrown.set(r, e);
+        WeakMapPrototypeSet(thrown, r, e);
       }
       append(results, r);
     }
@@ -344,17 +348,20 @@
   if (shared && shared.hostModules) shared.hostModules['goccia:microbench'] = () => ({ ...api, default: namespace });
   return {
     report(deterministic, done) {
-      return runAll(deterministic, n.progressOn).then((r) => {
+      const running = runAll(deterministic, n.progressOn);
+      return (async () => {
+        let r;
+        try { r = await running; } catch (e) { return done(undefined, undefined, describe(e)); }
         const results = r.results;
         for (let i = 0; i < results.length; i++) {
           const x = results[i];
-          if (x.error !== undefined) entry(x.suite, x.name, x.summaryScope, x.boxplotScope, true, thrown.get(x));
+          if (x.error !== undefined) entry(x.suite, x.name, x.summaryScope, x.boxplotScope, true, WeakMapPrototypeGet(thrown, x));
           else entry(x.suite, x.name, x.summaryScope, x.boxplotScope, false, undefined, x.iterations, x.opsPerSec, x.meanMs,
             x.variancePercentage, x.setupMs, x.teardownMs, x.minOpsPerSec, x.maxOpsPerSec, x.sampleCount, x.minSampleMs,
             x.p25Ms, x.medianMs, x.p75Ms, x.p99Ms, x.p999Ms, x.maxSampleMs);
         }
         done(r.totalBenchmarks, r.durationNanoseconds);
-      }, (e) => done(undefined, undefined, describe(e)));
+      })();
     }
   };
 })

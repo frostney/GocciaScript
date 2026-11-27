@@ -14,7 +14,8 @@
   const StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeTrim = uncurryThis(String.prototype.trim);
   const RegExpPrototypeExec = uncurryThis(RegExp.prototype.exec);
   const TAP = Object.getPrototypeOf(Uint8Array.prototype);
-  const TypedArrayPrototypeSubarray = uncurryThis(TAP.subarray);
+  const taBuffer = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'buffer').get);
+  const taByteOffset = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'byteOffset').get);
   const taLength = uncurryThis(Object.getOwnPropertyDescriptor(TAP, 'length').get);
   // a list append that defines the index (a setter on Array.prototype must not see it)
   const append = (list, v) => { defineProperty(list, list.length, { value: v, writable: true, enumerable: true, configurable: true }); };
@@ -106,7 +107,7 @@
     if (input instanceof Uint8Array) {
       const length = taLength(input);
       const bom = length >= 3 && input[0] === 0xEF && input[1] === 0xBB && input[2] === 0xBF ? 3 : 0;
-      return { length, at: (i) => input[i], slice: (a, b) => decode(decoder, TypedArrayPrototypeSubarray(input, a, b)), bom };
+      return { length, at: (i) => input[i], slice: (a, b) => decode(decoder, new Uint8Array(taBuffer(input), taByteOffset(input) + a, b - a)), bom };
     }
     throw new TypeError(`JSONL.${what}: first argument must be a string or a Uint8Array`);
   }

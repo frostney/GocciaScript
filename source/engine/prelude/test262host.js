@@ -33,13 +33,16 @@ var $262 = (function () {
 // tick also lets the host settle the Atomics.waitAsync waits that are due, as an event loop turn would.
 if (typeof globalThis.setTimeout !== "function") {
   (function (pump) {
+    // captured now: a test that replaces a prototype method or a global still gets its polling ticks
+    var apply = Reflect.apply, slice = Array.prototype.slice, min = Math.min;
+    var promiseThen = Promise.prototype.then, resolved = Promise.resolve();
     globalThis.setTimeout = function (callback, ms) {
-      var args = Array.prototype.slice.call(arguments, 2);
-      Promise.resolve().then(function () {
-        if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(Math.min(ms, 20));
+      var args = apply(slice, arguments, [2]);
+      apply(promiseThen, resolved, [function () {
+        if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(min(ms, 20));
         if (typeof pump === "function") pump();
-        callback.apply(undefined, args);
-      });
+        apply(callback, undefined, args);
+      }]);
       return 0;
     };
   })(GocciaHost.pumpAsyncWaits);
