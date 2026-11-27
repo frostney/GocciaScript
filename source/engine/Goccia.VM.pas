@@ -329,7 +329,8 @@ function AbortInterrupted: Boolean;
   memory limit ends the run. Each poll is one step of an instruction limit, as GocciaScript charges a native loop's
   element (the chokepoint rule of Goccia.Timeout): a budget ends the loop as a deadline does }
 function PollInterrupt: Boolean; inline;
-{ Charges a bounded amount of native work and checks the run's interrupt. Zero only checks the limits. }
+{ Charges a bounded amount of native work and checks the run's interrupt. Zero only checks the limits. False leaves the
+  limit's abort pending: the caller returns False at once and does not start the chunk. }
 function PollInstructionUnits(Units: QWord): Boolean;
 { the poll's charge of a spent instruction limit: the abort pending, False }
 function AbortInstructions: Boolean;

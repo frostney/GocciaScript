@@ -507,9 +507,10 @@ rather than adding up the engines' counts.
 [ADR 0197](adr/0197-engines-share-an-instruction-budget-through-reserves.md) records the design.
 
 Native code on an engine's thread can call `PollInstructionUnits(N)` in `Goccia.VM` before a
-bounded chunk of work. An accepted charge counts the whole chunk. A refused charge ends the run
-at its limit. A zero charge checks the limits, a shared one included, without spending an
-instruction.
+bounded chunk of work. An accepted charge counts the whole chunk. A refused charge returns
+`False` with the limit's abort pending: the caller must return `False` at once without starting
+the chunk, and the run ends at its limit when control returns to the VM. A zero charge checks the
+limits, a shared one included, without spending an instruction.
 
 ### Call Stack Depth Limit
 

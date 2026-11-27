@@ -19,8 +19,9 @@ type
     { A nonzero charge succeeds in full or is refused. A zero charge checks whether a cap has been exceeded. }
     function TryCharge(Units: QWord): Boolean;
     { At least MinUnits and at most MaxUnits; under a cap also at most an eighth of what is left, but MinUnits when that
-      is more, so engines that share a nearly spent cap are refused late, not early. 0 and the cap spent when fewer than
-      MinUnits are left. MinUnits is at least 1. }
+      is more, so reserves shrink as the cap nears. Units other engines hold unspent count as taken, so an engine can be
+      refused while they hold them (ADR 0197). 0 and the cap spent when fewer than MinUnits are left. MinUnits is at
+      least 1. }
     function Reserve(MinUnits, MaxUnits: QWord): QWord;
     { returns reserved units an engine did not spend; nothing once a cap was refused, or once an uncapped total
       overflowed High(QWord), after which it stays saturated }
