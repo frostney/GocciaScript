@@ -48,7 +48,10 @@ unit Goccia.FaultInjection;
                        runs), so this kind raises it the way the RTL's check
                        does where it has one
     engine-check       one of the engine's own integrity checks failing
-                       (StopOnEngineCheck), which stops without raising }
+                       (StopOnEngineCheck), which stops without raising
+
+  and one that is no fault: "mark" writes `injected mark` to the calling
+  thread's stdout at once, so a test can tell that the code calling it ran }
 
 {$I Goccia.inc}
 {$C+}
@@ -90,8 +93,14 @@ begin
     RaiseRuntimeError(204)
   else if AKind = 'stack-overflow' then
     RaiseRuntimeError(202)
+  else if AKind = 'mark' then
+  begin
+    WriteLn(Output, 'injected mark');
+    Flush(Output);
+  end
   else if AKind = 'engine-check' then
   begin
+    PrepareEngineFaultReport;
     WriteLn(ErrOutput, 'injected engine check: the state it found');
     StopOnEngineCheck('injected');
   end

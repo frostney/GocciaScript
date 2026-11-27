@@ -13,6 +13,9 @@ uses
   Goccia.DataTree,
   Goccia.DataTree.JSON,
   Goccia.EngineFault,
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  Goccia.FaultInjection,
+  {$ENDIF}
   Goccia.JSON.Utils,
   Goccia.TextFiles,
   Goccia.TOML,
@@ -539,6 +542,9 @@ begin
   else
   begin
     try
+      {$IFDEF GOCCIA_FAULT_INJECTION}
+      InjectFaultAt('startup');
+      {$ENDIF}
       ExitCode := RunCoordinator;
     except
       on E: Exception do

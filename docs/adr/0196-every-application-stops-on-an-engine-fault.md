@@ -33,7 +33,8 @@ test, because reaching it needed a fault on request in the runner.
 `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`,
 `GocciaScriptLoaderBare`, and the coordinators of `GocciaTest262Runner` and
 `GocciaTOMLComplianceRunner`, from the application's construction to its
-destruction and in each worker thread up to its last cleanup. The handler that
+destruction (the build's prelude snapshot stage included) and in each worker
+thread up to its last cleanup. The handler that
 catches the fault calls `Goccia.EngineFault.AbortOnEngineFault`, from whichever
 thread it runs on. It writes two lines to stderr, flushed:
 
@@ -53,14 +54,18 @@ end the process in the middle of that write. Three things are new. Before
 writing, the faulting thread flushes its own buffered stdout, so what the
 script printed before the fault comes out ahead of the diagnostic; output other
 threads still buffer dies with the process. A write to a closed stderr pipe
-fails instead of raising `SIGPIPE`, and a watchdog thread ends the process with
-`70` if the write blocks on a full pipe, so a broken stderr changes neither the
-exit status nor whether the process ends. And the engine's own integrity checks
-(a heap cell, a shape, a closure or a root count found broken, often in the
-middle of a collection) write what they found and then call
-`StopOnEngineCheck`, which ends the process the same way without raising,
-instead of `Halt(9)`, which ran unit finalization from the thread that found
-it.
+fails instead of raising `SIGPIPE`, and a watchdog ends the process with `70`
+if the write blocks on a full pipe: `alarm(2)` on POSIX, which needs no thread
+and no allocation, and a thread on Windows, where the process ends at once if
+none can start. A broken stderr changes neither the exit status nor whether the
+process ends. While the report is being written, no file starts: every
+scheduler checks `StopIfEngineFaultReported` after each wait and every worker
+before its file, and ends the process with the reporter instead. And the
+engine's own integrity checks (a heap cell, a shape, a closure or a root count
+found broken, often in the middle of a collection) arm the same protections,
+write what they found and then call `StopOnEngineCheck`, which ends the process
+the same way without raising, instead of `Halt(9)`, which ran unit finalization
+from the thread that found it.
 
 The prefix is `Engine fault:` rather than ADR 0109's `Integrity fault:`,
 because the family below now includes assertions and stack overflows, and every
@@ -121,13 +126,12 @@ variable that faults at application startup, as it ends, as a worker thread
 releases its engine state, when the bundler compiles an entry, or inside the
 engine's handler that makes a failure to compile an entry its `SyntaxError`
 (`Goccia.FaultInjection`). `scripts/test-engine-faults.ts` runs every
-engine-running application against it on every CI platform and checks the exit
+application against it on every CI platform and checks the exit
 code, both diagnostic lines and the absence of any summary or report, and, on
 POSIX, that a closed or full stderr pipe still ends the process with `70`. It
-also checks that the shipped binaries carry neither name.
-`GocciaTOMLComplianceRunner` runs no engine and is not a build.pas engine
-program, which the variant mechanism builds, so its coordinator's handler is
-the shared one without a fault test of its own. ADR 0109 decided against a fault hook
+also checks that the shipped binaries carry neither name. build.pas builds a
+`GOCCIA_VARIANT` of `GocciaTOMLComplianceRunner` as it does of the engine
+programs, so its coordinator is tested the same way. ADR 0109 decided against a fault hook
 in the runner because it would ship in the production binary. A hook that only
 a build no shipped target makes can contain does not ship.
 

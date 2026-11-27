@@ -225,6 +225,8 @@ var
   OwnsJit: Boolean;
   Start: Int64;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0196) }
+  StopIfEngineFaultReported;
   try
     if FLoadSource then
     begin
@@ -1294,6 +1296,7 @@ begin
     Worker.FReportIndex := -1;
     Worker.Start;
     Worker.WaitFor;
+    StopIfEngineFaultReported;
     ErrorClass := Worker.FErrorClass;
     ErrorMessage := Worker.FErrorMessage;
   finally
@@ -1353,6 +1356,7 @@ begin
       if Running = FWorkers then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         Dec(Running);
         Inc(Oldest);
       end;
@@ -1371,6 +1375,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
       begin
         ErrorClass := Workers[I].FErrorClass;

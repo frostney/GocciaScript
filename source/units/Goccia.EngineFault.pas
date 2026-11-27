@@ -142,7 +142,7 @@ const
   Output can fail, and the exit status must not: a write to a closed pipe
   returns an error rather than raising SIGPIPE, and a write that blocks (a full
   pipe nobody reads) cannot hold the process past the bound, because a
-  watchdog thread ends it then. }
+  watchdog ends it then (PrepareEngineFaultReport). }
 procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
 
 { The same stop for one of the engine's own integrity checks, which has
@@ -152,6 +152,23 @@ procedure AbortOnEngineFault(const ASite: string; const AException: Exception);
   broken in the middle of a collection, where raising would unwind through
   the collector. Never returns. }
 procedure StopOnEngineCheck(const ACheck: string);
+
+{ Arms what keeps the exit status 70 whatever stderr does: a write to a closed
+  pipe fails instead of raising SIGPIPE, and a watchdog (alarm(2) on POSIX, a
+  thread on Windows) ends the process with EXIT_CODE_ENGINE_FAULT if a write
+  blocks on a full one. AbortOnEngineFault and StopOnEngineCheck call it; an
+  integrity check calls it before it writes what it found. Once per process;
+  later calls return at once. }
+procedure PrepareEngineFaultReport;
+
+{ True once a thread has begun reporting a fault. The process is ending. }
+function EngineFaultReported: Boolean;
+
+{ For a scheduler before it starts another file, and after it waits for one:
+  once a fault is being reported, waits for its diagnostic, up to a bound, and
+  ends the process with EXIT_CODE_ENGINE_FAULT, so no file starts while the
+  reporting thread writes. Otherwise returns at once. }
+procedure StopIfEngineFaultReported;
 
 { Ends the process at once with AStatus, running no unit finalization and
   flushing nothing: _exit, or TerminateProcess on Windows, which unlike
@@ -217,11 +234,13 @@ end;
 {$IFEND}
 
 const
-  { How long, in milliseconds, the process may spend on the diagnostic: the
-    bound a thread that lost the report waits for the winner, and the time
-    after which the watchdog ends a winner whose write blocks. Generous next to
-    one flushed write. }
+  { How long, in milliseconds, a thread that lost the report waits for the
+    winner's diagnostic before it ends the process itself. Generous next to one
+    flushed write. }
   DIAGNOSTIC_WAIT_MS = 2000;
+  { The watchdog's bound, in whole seconds (alarm(2)'s unit): past the losers'
+    wait, so it ends only a process whose writes have blocked. }
+  WATCHDOG_SECONDS = 3;
 
 var
   { Claimed, with an interlocked exchange, by the first thread to report a
@@ -229,33 +248,76 @@ var
   GFaultReported: LongInt = 0;
   { Set by the reporting thread once its diagnostic is written and flushed. }
   GDiagnosticWritten: LongInt = 0;
+  { Claimed by the first thread to arm the exit's protections. }
+  GReportArmed: LongInt = 0;
 
-{ The watchdog's whole body: a write that blocks past the bound does not keep
-  the process from ending with the fault's status. }
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+{ SIGALRM's handler: async-signal-safe, it only ends the process }
+procedure WatchdogAlarm(ASignal: cint); cdecl;
+begin
+  TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
 function WatchdogThread(AParameter: Pointer): PtrInt;
 begin
-  Sleep(DIAGNOSTIC_WAIT_MS);
+  Sleep(WATCHDOG_SECONDS * 1000);
   TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
   Result := 0;
 end;
+{$IFEND}
 
-procedure ReportAndTerminate(const AFirstLine: string);
+procedure PrepareEngineFaultReport;
+begin
+  if InterlockedExchange(GReportArmed, 1) <> 0 then
+    Exit;
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  { a closed pipe fails a write with EPIPE instead of killing the process, and
+    the alarm, which needs no allocation and no thread, ends a process whose
+    write blocks }
+  fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
+  fpSignal(SIGALRM, @WatchdogAlarm);
+  fpAlarm(WATCHDOG_SECONDS);
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  { no thread for the watchdog: end at once rather than risk a write that
+    never returns }
+  try
+    if BeginThread(@WatchdogThread) = 0 then
+      TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
+  except
+    { fault-guard: the process ends here either way }
+    TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
+  end;
+  {$IFEND}
+end;
+
+function EngineFaultReported: Boolean;
+begin
+  Result := GFaultReported <> 0;
+end;
+
+procedure WaitAndTerminate;
 var
   Deadline: QWord;
 begin
+  Deadline := GetTickCount64 + DIAGNOSTIC_WAIT_MS;
+  while (GDiagnosticWritten = 0) and (GetTickCount64 < Deadline) do
+    Sleep(1);
+  TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
+end;
+
+procedure StopIfEngineFaultReported;
+begin
+  if GFaultReported <> 0 then
+    WaitAndTerminate;
+end;
+
+procedure ReportAndTerminate(const AFirstLine: string);
+begin
   if InterlockedExchange(GFaultReported, 1) = 0 then
   begin
+    PrepareEngineFaultReport;
     { fault-guard throughout: the process is already ending on a fault, and a
       failed write must not stop that }
-    {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-    { a closed pipe fails the write with EPIPE instead of killing the process }
-    fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
-    {$IFEND}
-    try
-      BeginThread(@WatchdogThread);
-    except
-      { fault-guard: without a watchdog the write is merely unbounded }
-    end;
     try
       Flush(Output);
     except
@@ -271,10 +333,7 @@ begin
     end;
     InterlockedExchange(GDiagnosticWritten, 1);
   end;
-  Deadline := GetTickCount64 + DIAGNOSTIC_WAIT_MS;
-  while (GDiagnosticWritten = 0) and (GetTickCount64 < Deadline) do
-    Sleep(1);
-  TerminateProcessNow(EXIT_CODE_ENGINE_FAULT);
+  WaitAndTerminate;
 end;
 
 procedure AbortOnEngineFault(const ASite: string; const AException: Exception);

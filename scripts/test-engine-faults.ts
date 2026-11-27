@@ -11,7 +11,8 @@
  * (Goccia.FaultInjection):
  *
  *   GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS=-dGOCCIA_FAULT_INJECTION \
- *     ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness
+ *     ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness \
+ *       tomlcompliancerunner
  *
  * writes build/GocciaRunnerFaultInjection and the others. The shipped binaries
  * in build/ are read too, to show that they carry no trace of the hook.
@@ -36,6 +37,7 @@ const F = {
   bare: faultBuild("GocciaScriptLoaderBare"),
   test262Runner: faultBuild("GocciaTest262Runner"),
   fuzzHarness: faultBuild("GocciaFuzzHarness"),
+  tomlRunner: faultBuild("GocciaTOMLComplianceRunner"),
 };
 const SHIPPED = [RUNNER, TESTRUNNER, BENCHRUNNER, BUNDLER, REPL, BARE, TEST262RUNNER];
 
@@ -331,6 +333,49 @@ await section("Every application: a broken stderr cannot change the exit status 
   } finally {
     clean(tmp);
   }
+});
+
+await section("GocciaTestRunner: no file starts while a fault's report is still being written", () => {
+  if (process.platform === "win32") return;
+  const tmp = makeTmp();
+  try {
+    // with stderr full, the faulting file's report blocks until the watchdog; the passing file ends meanwhile, and
+    // the scheduler must not start the third file, which would print its mark at once
+    const files = writeTestFiles(tmp, {
+      "a.test.js": "test('busy', () => { const end = Date.now() + 800; while (Date.now() < end) {} });\n",
+      "b.test.js": "test('faults', () => { __gocciaInjectFault('access-violation'); });\n",
+      "c.test.js": "test('marks', () => { __gocciaInjectFault('mark'); });\n",
+    });
+    const r = run(["python3", "-I", "-c", [
+      "import fcntl, os, subprocess, sys",
+      "r, w = os.pipe()",
+      "fl = fcntl.fcntl(w, fcntl.F_GETFL)",
+      "fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)",
+      "try:",
+      "    while True: os.write(w, b'x' * 4096)",
+      "except BlockingIOError: pass",
+      "fcntl.fcntl(w, fcntl.F_SETFL, fl)",
+      "p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=w)",
+      "try:",
+      "    out, _ = p.communicate(timeout=30)",
+      "    sys.stdout.write(out.decode('utf-8', 'replace'))",
+      "    print('status=%d' % p.returncode)",
+      "except subprocess.TimeoutExpired:",
+      "    p.kill(); p.wait(); print('status=hung')",
+    ].join("\n"), F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", ...files]);
+    if (!r.stdout.includes("status=70") || r.stdout.includes("injected mark"))
+      throw new Error(`expected exit 70 with the third file never started, got ${describe(r)}`);
+    // the control: a file that runs prints its mark
+    const control = run([F.testRunner, "-P", "--jobs=2", "--compat-while-loops", "--no-progress", files[0], files[2]]);
+    if (control.code !== 0 || !control.stdout.includes("injected mark"))
+      throw new Error(`the mark should show when the file runs, got ${describe(control)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("GocciaTOMLComplianceRunner: a fault in the coordinator stops it", () => {
+  expectFault(run([F.tomlRunner, "--suite-dir", "."], { env: STARTUP }), "EAccessViolation", "GocciaTOMLComplianceRunner");
 });
 
 await section("GocciaFuzzHarness: a fault is a finding, exit 1 with its class (the fuzzer's contract)", () => {

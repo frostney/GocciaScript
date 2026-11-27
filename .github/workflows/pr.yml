@@ -128,7 +128,7 @@ jobs:
         env:
           GOCCIA_VARIANT: FaultInjection
           GOCCIA_FPC_FLAGS: -dGOCCIA_FAULT_INJECTION
-        run: ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness
+        run: ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness tomlcompliancerunner
 
       - name: Upload the fault-injection applications
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

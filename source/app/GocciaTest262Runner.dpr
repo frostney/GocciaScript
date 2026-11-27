@@ -1967,52 +1967,63 @@ var
   SnapshotEngine: TGocciaEngine;
   SnapshotErr: UnicodeString;
 begin
-  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
-    take them }
-  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
-  begin
-    SnapshotEngine := TGocciaEngine.Create;
-    SnapshotErr := '';
-    if not SnapshotEngine.PrepareHost(SnapshotErr) then
-    begin
-      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
-      Halt(1);
-    end;
-    Halt(0);
-  end;
-  App := TTest262App.Create;
+  { a fault anywhere in the coordinator's own lifetime, its construction and
+    destruction and the build's snapshot stage included, stops it (ADR 0196) }
   try
-    try
-      {$IFDEF GOCCIA_FAULT_INJECTION}
-      InjectFaultAt('startup');
-      {$ENDIF}
-      ExitCode := App.Run;
-    except
-      { ParseArguments raises TCLIUsageError for an unusable invocation (a
-        missing or unknown argument, a rejected combination), which exits 2,
-        and TParseError for an invalid value, which exits 1. Anything else is
-        a failure of the run itself, such as a report it could not write,
-        and exits 1. }
-      on E: TCLIUsageError do
+    { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
+      take them }
+    if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
+    begin
+      SnapshotEngine := TGocciaEngine.Create;
+      SnapshotErr := '';
+      if not SnapshotEngine.PrepareHost(SnapshotErr) then
       begin
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := EXIT_CODE_USAGE;
+        WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
+        Halt(1);
       end;
-      on E: TParseError do
-      begin
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := 1;
-      end;
-      on E: Exception do
-      begin
-        { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0196 }
-        if IsEngineFault(E) then
-          AbortOnEngineFault('GocciaTest262Runner', E);
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := 1;
-      end;
+      Halt(0);
     end;
-  finally
-    App.Free;
+    App := TTest262App.Create;
+    try
+      try
+        {$IFDEF GOCCIA_FAULT_INJECTION}
+        InjectFaultAt('startup');
+        {$ENDIF}
+        ExitCode := App.Run;
+      except
+        { ParseArguments raises TCLIUsageError for an unusable invocation (a
+          missing or unknown argument, a rejected combination), which exits 2,
+          and TParseError for an invalid value, which exits 1. Anything else is
+          a failure of the run itself, such as a report it could not write,
+          and exits 1. }
+        on E: TCLIUsageError do
+        begin
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := EXIT_CODE_USAGE;
+        end;
+        on E: TParseError do
+        begin
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := 1;
+        end;
+        on E: Exception do
+        begin
+          { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0196 }
+          if IsEngineFault(E) then
+            AbortOnEngineFault('GocciaTest262Runner', E);
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := 1;
+        end;
+      end;
+    finally
+      App.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault('GocciaTest262Runner', E);
+      raise;
+    end;
   end;
 end.

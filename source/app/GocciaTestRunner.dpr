@@ -165,6 +165,8 @@ procedure TGocciaTestThread.Execute;
 var
   OwnsJit: Boolean;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0196) }
+  StopIfEngineFaultReported;
   try
     OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
@@ -923,6 +925,7 @@ begin
       if Running = FJobCount then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         if FExitOnFirst.Present and Failing(Oldest) then
           Stop := True;
         Dec(Running);
@@ -952,6 +955,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
       begin
         ErrorClass := Workers[I].FErrorClass;

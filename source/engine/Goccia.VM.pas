@@ -2447,6 +2447,7 @@ end;
   exception frame) }
 procedure XBadClosure(T: PFuncTemplate; C: PObj); noinline;
 begin
+  PrepareEngineFaultReport;
   WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', TEMP_ROOTS_MAX);
   StopOnEngineCheck('closure upvalue');
 end;
@@ -6808,6 +6809,7 @@ end;
 
 procedure XReportRootImbalance(O: PObj; Delta: Integer; Ok: Boolean; Tpl: PFuncTemplate); noinline;
 begin
+  PrepareEngineFaultReport;
   if IsString(O^.Aux1) then WriteLn(ErrOutput, 'root imbalance ', Delta, ' after native ',
     UTF8Encode(StrToUnicode(StrOf(O^.Aux1))), ' ok=', Ok, ' in ', DescribeTemplate(Tpl))
   else WriteLn(ErrOutput, 'root imbalance ', Delta, ' after an unnamed native ok=', Ok, ' in ', DescribeTemplate(Tpl));
@@ -6815,6 +6817,7 @@ end;
 
 procedure XReportBadUps(J, GcBefore, Reg, Base: Integer; Tpl: PFuncTemplate); noinline;
 begin
+  PrepareEngineFaultReport;
   WriteLn(ErrOutput, 'opClosure: ups went bad at J=', J, ' gc before ', GcBefore, ' after ', GCMinorCount,
     ' StackTop ', StackTop, ' reg ', Reg, ' base ', Base, ' maxregs ', Tpl^.MaxRegs, ' frames ', FrameTop,
     ' fn ', DescribeTemplate(Tpl));

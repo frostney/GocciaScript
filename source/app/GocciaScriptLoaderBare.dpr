@@ -500,13 +500,22 @@ begin
     bare host's preludes compiled once and written for the embedding build }
   if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
-    SetupError := '';
-    SnapshotEngine := TGocciaEngine.Create;
-    SnapshotEngine.Bare := True;
-    if not SnapshotEngine.PrepareHost(SetupError) then
-    begin
-      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SetupError));
-      Halt(1);
+    try
+      SetupError := '';
+      SnapshotEngine := TGocciaEngine.Create;
+      SnapshotEngine.Bare := True;
+      if not SnapshotEngine.PrepareHost(SetupError) then
+      begin
+        WriteLn(ErrOutput, 'Error: ', UTF8Encode(SetupError));
+        Halt(1);
+      end;
+    except
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          AbortOnEngineFault(BARE_PROGRAM_NAME, E);
+        raise;
+      end;
     end;
     Halt(0);
   end;

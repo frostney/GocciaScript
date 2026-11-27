@@ -1308,6 +1308,7 @@ end;
 { cold (its strings would give ScanCell an exception frame): an object whose Aux points nowhere valid }
 procedure ReportBadScan(O: PObj); noinline;
 begin
+  PrepareEngineFaultReport;
   Write(ErrOutput, 'scan: object ', IntToHex(PtrUInt(O), 16), ' okind ', O^.OKind, ' oflags ', O^.OFlags,
     ' aux1 ', IntToHex(O^.Aux1, 16), ' aux2 ', IntToHex(O^.Aux2, 16), ' not a nursery cell');
   if (O^.OKind = 2) and Assigned(GCDescribeNative) then Write(ErrOutput, ' fn ', GCDescribeNative(O^.Native));
@@ -2161,6 +2162,7 @@ procedure VerifyHeap(const Phase: string);
 var I: Integer; P: PPage; Q: PByte; C: PCell; L: PLarge;
   procedure Bad(C: PCell; const Field: string; V: QWord);
   begin
+    PrepareEngineFaultReport;
     Write(ErrOutput, 'heap verify (', Phase, ' minor ', GCMinorCount, ' major ', GCMajorCount, '): cell ',
       IntToHex(PtrUInt(C), 16), ' kind ', C^.Kind, ' flags ', C^.Flags);
     if C^.Kind = ckObject then Write(ErrOutput, ' okind ', PObj(C)^.OKind, ' oflags ', PObj(C)^.OFlags);
@@ -2231,6 +2233,7 @@ begin
   for I := 0 to ShapeCount - 1 do
     if ((AllShapes[I]^.Proto shr 48) = TAG_PTR_HI) and IsYoung(PtrOf(AllShapes[I]^.Proto)) then
     begin
+      PrepareEngineFaultReport;
       WriteLn(ErrOutput, 'after minor ', GCMinorCount, ': shape ', I, ' still points into the nursery: ', IntToHex(AllShapes[I]^.Proto, 16));
       StopOnEngineCheck('shape verification');
     end;
@@ -2250,6 +2253,7 @@ procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 begin
   if ((V shr 48) = TAG_PTR_HI) and not ValidPtr(Pointer(PtrUInt(V and PTR_MASK))) then
   begin
+    PrepareEngineFaultReport;
     WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', Where, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
       ' nursery ', IntToHex(PtrUInt(NurseryStart), 16));
     StopOnEngineCheck('root pointer');
@@ -2263,6 +2267,7 @@ begin
   begin
     if AllShapes[I]^.Proto = TAG_PTR then
     begin
+      PrepareEngineFaultReport;
       WriteLn(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' has a nil prototype; count ', AllShapes[I]^.Count,
         ' minor ', GCMinorCount, ' inminor ', InMinor);
       StopOnEngineCheck('shape prototype');
@@ -2274,6 +2279,7 @@ begin
       if ((V shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(V))^.Kind > 40) or (PCell(PtrOf(V))^.Size = 0) or
          (PCell(PtrOf(V))^.Size > 1 shl 30)) then
       begin
+        PrepareEngineFaultReport;
         Write(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' (dict ', AllShapes[I]^.IsDict, ', count ', AllShapes[I]^.Count,
           ') has a bad prototype ', IntToHex(V, 16), ' kind ', PCell(PtrOf(V))^.Kind, ' minor ', GCMinorCount, '; keys:');
         for J := 0 to AllShapes[I]^.Count - 1 do Write(ErrOutput, ' ', StrToUnicode(AllShapes[I]^.Keys[J]));

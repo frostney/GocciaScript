@@ -530,7 +530,9 @@ JavaScript suite under two tools that answer different questions:
 `GOCCIA_VARIANT` gives the build a unit-output directory of its own
 (`build/compiled/targets/testrunner-dev-heaptrc`, or `testrunner-heaptrc` with `--prod`), since FPC does not
 recompile a unit for new options, and `GOCCIA_FPC_FLAGS` comes after
-`build.pas`'s own options, so its flags win. `HEAPTRC=log=FILE` matters: FPC
+`build.pas`'s own options, so its flags win. It applies to the engine programs (every application under
+`source/app`) and to `tomlcompliancerunner`; CI's fault build uses it with `-dGOCCIA_FAULT_INJECTION`
+([Testing](../testing.md#cli-behavior-tests-ci-integration)). `HEAPTRC=log=FILE` matters: FPC
 3.3.1's heaptrc leaves its report unflushed when stderr is a regular file, so
 `2> FILE` can capture nothing.
 

@@ -507,7 +507,7 @@ jobs:
           esac
           FPC_TARGET_CPU="${{ matrix.cpu }}" FPC_TARGET_OS="${{ matrix.os }}" \
             GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS="${EXTRA_FLAGS} -dGOCCIA_FAULT_INJECTION" \
-            ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness
+            ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness tomlcompliancerunner
 
       - name: Upload the fault-injection applications
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

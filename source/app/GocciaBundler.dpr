@@ -92,6 +92,8 @@ type
 
 procedure TBundleThread.Execute;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0196) }
+  StopIfEngineFaultReported;
   try
     try
       FApp.EmitPlannedFile(FIndex, FQuiet);
@@ -425,6 +427,7 @@ begin
       if Running = AJobCount then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         Dec(Running);
         Inc(Oldest);
         if not Parallel and (Workers[Oldest - 1].FErrorClass <> nil) then
@@ -445,6 +448,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if Workers[I].FErrorClass <> nil then
       begin
         if Parallel then
