@@ -8,9 +8,12 @@ unit TransportSecurity;
 interface
 
 uses
-  SysUtils
+  SysUtils,
+
+  NetworkCancellation
 {$IFNDEF LAKON}
   {$IFDEF UNIX}
+  , BaseUnix
   , Sockets
   {$ENDIF}
   {$IFDEF MSWINDOWS}
@@ -38,6 +41,7 @@ type
     Socket: TSocket;
     BackendData: Pointer;
     DeadlineNanoseconds: Int64;
+    Cancellation: TNetworkCancellation;
   end;
 
 { ADeadlineNanoseconds is the request's deadline on the GetNanoseconds clock,
@@ -47,10 +51,16 @@ type
   a plain receive that timed out leaves it, and SecureTransport's and
   SChannel's raise their read or write error. Otherwise both return the byte
   count, or 0 when the peer closed the connection. The OpenSSL backend puts
-  the socket in non-blocking mode for the rest of the connection. }
+  the socket in non-blocking mode for the rest of the connection.
+
+  ACancellation (nil for none) ends the handshake and every later read once
+  it is cancelled, within NETWORK_CANCELLATION_POLL_MILLISECONDS, as the
+  deadline ends them: each wait for the socket observes it. The connection
+  does not own it, and it must outlive the connection. }
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
-  const ADeadlineNanoseconds: Int64 = 0);
+  const ADeadlineNanoseconds: Int64 = 0;
+  const ACancellation: TNetworkCancellation = nil);
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
@@ -58,6 +68,54 @@ function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 
 {$IFNDEF LAKON}
+type
+  { One socket of a poll: poll(2)'s pollfd, or WSAPoll's on Windows. }
+  {$IFDEF UNIX}
+  TSocketPollDescriptor = TPollFd;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  {$IFDEF FPC}
+  {$PUSH}
+  {$PACKRECORDS C}
+  {$ENDIF}
+  TSocketPollDescriptor = record
+    fd: TSocket;
+    events: SmallInt;
+    revents: SmallInt;
+  end;
+  {$IFDEF FPC}
+  {$POP}
+  {$ENDIF}
+  {$ENDIF}
+
+const
+  { The events a poll waits for: data to read, or room to write. }
+  {$IFDEF UNIX}
+  SOCKET_POLL_READABLE = POLLIN;
+  SOCKET_POLL_WRITABLE = POLLOUT;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  SOCKET_POLL_READABLE = $0100; // POLLRDNORM
+  SOCKET_POLL_WRITABLE = $0010; // POLLWRNORM
+  {$ENDIF}
+
+{ Polls the first ACount of ADescriptors for up to ATimeoutMilliseconds (-1:
+  no limit) and returns how many are ready. 0 means none is, or a signal
+  interrupted the poll: the caller works out the time left and polls again.
+  -1 means the poll failed; the socket error says why. }
+function PollSockets(var ADescriptors: array of TSocketPollDescriptor;
+  const ACount, ATimeoutMilliseconds: Integer): Integer;
+
+{ Waits until ASock is ready to read (AForWrite: to write), or its peer has
+  closed it or it failed, and returns True; the call made next reports which.
+  Returns False once ADeadlineNanoseconds (0 for none) has passed or
+  ACancellation (nil for none) is cancelled. With a cancellation no single
+  poll lasts longer than NETWORK_CANCELLATION_POLL_MILLISECONDS, so a
+  cancellation ends the wait within one. Raises when the wait itself fails. }
+function WaitForSocketBefore(const ASock: TSocket; const AForWrite: Boolean;
+  const ADeadlineNanoseconds: Int64;
+  const ACancellation: TNetworkCancellation): Boolean;
+
 { A send on the blocking socket that ends by ADeadlineNanoseconds (0 for none,
   which leaves the socket's own send timeout), so a peer that stops reading, or
   reads slowly, cannot hold a send past the deadline. Returns the bytes sent,
@@ -138,7 +196,8 @@ const
 
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
-  const ADeadlineNanoseconds: Int64);
+  const ADeadlineNanoseconds: Int64;
+  const ACancellation: TNetworkCancellation);
 begin
   AConnection.Active := False;
   AConnection.Backend := 0;
@@ -168,7 +227,6 @@ end;
 
 uses
   {$IFDEF UNIX}
-  BaseUnix,
   {$IFNDEF DARWIN}
   ctypes,
   CriticalSections,
@@ -319,6 +377,65 @@ begin
 end;
 {$IFEND}
 
+{$IFDEF MSWINDOWS}
+function WSAPoll(ADescriptors: Pointer; ACount: LongWord;
+  ATimeoutMilliseconds: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'WSAPoll';
+{$ENDIF}
+
+function PollSockets(var ADescriptors: array of TSocketPollDescriptor;
+  const ACount, ATimeoutMilliseconds: Integer): Integer;
+begin
+  {$IFDEF UNIX}
+  Result := FpPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
+  if (Result < 0) and (FpGetErrNo = ESysEINTR) then
+    Result := 0;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Result := WSAPoll(@ADescriptors[0], ACount, ATimeoutMilliseconds);
+  if (Result < 0) and (WSAGetLastError = WSAEINTR) then
+    Result := 0;
+  {$ENDIF}
+end;
+
+function WaitForSocketBefore(const ASock: TSocket; const AForWrite: Boolean;
+  const ADeadlineNanoseconds: Int64;
+  const ACancellation: TNetworkCancellation): Boolean;
+const
+  MAX_POLL_MILLISECONDS = 1 shl 30;
+var
+  Descriptors: array[0..0] of TSocketPollDescriptor;
+  Milliseconds: Int64;
+  Outcome: Integer;
+begin
+  repeat
+    if NetworkCancelled(ACancellation) then
+      Exit(False);
+    if ADeadlineNanoseconds = 0 then
+      Milliseconds := -1
+    else
+    begin
+      Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+      if Milliseconds = 0 then
+        Exit(False);
+      if Milliseconds > MAX_POLL_MILLISECONDS then
+        Milliseconds := MAX_POLL_MILLISECONDS;
+    end;
+    Milliseconds := CancellableWaitMilliseconds(ACancellation, Milliseconds);
+    Descriptors[0].fd := ASock;
+    if AForWrite then
+      Descriptors[0].events := SOCKET_POLL_WRITABLE
+    else
+      Descriptors[0].events := SOCKET_POLL_READABLE;
+    Descriptors[0].revents := 0;
+    Outcome := PollSockets(Descriptors, 1, Integer(Milliseconds));
+    if Outcome > 0 then
+      Exit(True);
+    if Outcome < 0 then
+      raise ETransportSecurityError.Create('Socket wait failed');
+  until False;
+end;
+
 {$IFDEF UNIX}
 { One send that never blocks: it takes what fits and returns, or returns -1
   with EAGAIN. Linux takes that per send. Darwin and the BSDs ignore
@@ -431,12 +548,20 @@ end;
 { A receive on the blocking socket that ends by ADeadlineNanoseconds (0 for
   none): the socket's receive timeout is set to the time left before every
   call, so a peer that trickles bytes cannot stretch a TLS read made of many
-  receives past the deadline. Returns -1 once the deadline has passed. }
+  receives past the deadline. With a cancellation, the receive first waits
+  for the socket to be readable in polls that observe it, so a cancelled
+  read does not wait on a silent peer. Returns -1 once the deadline has
+  passed or the cancellation is cancelled. }
 function SocketReceiveBefore(const ASock: TSocket; const ABuffer: Pointer;
-  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64;
+  const ACancellation: TNetworkCancellation): Integer;
 var
   Milliseconds: Int64;
 begin
+  if Assigned(ACancellation) and
+     not WaitForSocketBefore(ASock, False, ADeadlineNanoseconds,
+       ACancellation) then
+    Exit(-1);
   if ADeadlineNanoseconds <> 0 then
   begin
     Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
@@ -486,6 +611,7 @@ type
     Socket: TSocket;
     Context: SSLContextRef;
     DeadlineNanoseconds: Int64;
+    Cancellation: TNetworkCancellation;
   end;
 
   TSecureTransportReadFunc = function(AConnection: SSLConnectionRef;
@@ -535,7 +661,7 @@ begin
   Data := TSecureTransportData(AConnection);
   RequestedLength := ADataLength;
   ReadCount := SocketReceiveBefore(Data.Socket, AData, ADataLength,
-    Data.DeadlineNanoseconds);
+    Data.DeadlineNanoseconds, Data.Cancellation);
   if ReadCount > 0 then
   begin
     ADataLength := ReadCount;
@@ -596,6 +722,7 @@ begin
   Data := TSecureTransportData.Create;
   Data.Socket := AConnection.Socket;
   Data.DeadlineNanoseconds := AConnection.DeadlineNanoseconds;
+  Data.Cancellation := AConnection.Cancellation;
   Data.Context := SSLCreateContext(nil, K_SSL_CLIENT_SIDE, K_SSL_STREAM_TYPE);
   if Data.Context = nil then
   begin
@@ -878,38 +1005,6 @@ begin
       'Failed to configure the TLS socket');
 end;
 
-{ Waits until ASocket is ready for AEvents (POLLIN or POLLOUT), or reports
-  False once ADeadlineNanoseconds (0 for none) has passed. An error or hang-up
-  on the socket counts as ready: the OpenSSL call made next reports it. }
-function WaitForSocket(const ASocket: TSocket; const AEvents: cshort;
-  const ADeadlineNanoseconds: Int64): Boolean;
-var
-  Descriptor: TPollFd;
-  Milliseconds: Int64;
-  Outcome: cint;
-begin
-  repeat
-    if ADeadlineNanoseconds = 0 then
-      Milliseconds := -1
-    else
-    begin
-      Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
-      if Milliseconds = 0 then
-        Exit(False);
-      if Milliseconds > High(cint) then
-        Milliseconds := High(cint);
-    end;
-    Descriptor.fd := ASocket;
-    Descriptor.events := AEvents;
-    Descriptor.revents := 0;
-    Outcome := FpPoll(@Descriptor, 1, Milliseconds);
-    if Outcome > 0 then
-      Exit(True);
-    if (Outcome < 0) and (FpGetErrNo <> ESysEINTR) then
-      raise ETransportSecurityError.Create('TLS socket wait failed');
-  until False;
-end;
-
 { OpenSSL's socket BIO writes with plain write(2), so MSG_NOSIGNAL cannot reach
   it, and a write to a peer that reset the connection raises SIGPIPE: the
   handshake, a read (a key update), a write and SSL_shutdown's close_notify
@@ -1071,7 +1166,7 @@ begin
     { Without auto-retry, SSL_read returns after each record that carries no
       application data (a TLS 1.3 session ticket, say) instead of reading
       on, so a peer that streams such records cannot keep one call running
-      past the deadline: every return comes back through WaitForSocket. }
+      past the deadline: every return comes back through WaitForSocketBefore. }
     SslCtrl(Data.SSL, SSL_CTRL_CLEAR_MODE, SSL_MODE_AUTO_RETRY, nil);
     SetSocketNonBlocking(AConnection.Socket);
     repeat
@@ -1080,11 +1175,11 @@ begin
         Break;
       case SslGetError(Data.SSL, Outcome) of
         SSL_ERROR_WANT_READ:
-          Ready := WaitForSocket(AConnection.Socket, POLLIN,
-            AConnection.DeadlineNanoseconds);
+          Ready := WaitForSocketBefore(AConnection.Socket, False,
+            AConnection.DeadlineNanoseconds, AConnection.Cancellation);
         SSL_ERROR_WANT_WRITE:
-          Ready := WaitForSocket(AConnection.Socket, POLLOUT,
-            AConnection.DeadlineNanoseconds);
+          Ready := WaitForSocketBefore(AConnection.Socket, True,
+            AConnection.DeadlineNanoseconds, AConnection.Cancellation);
       else
         raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
       end;
@@ -1128,8 +1223,8 @@ end;
 function AwaitOpenSSLSocket(const AConnection: TTransportSecurityConnection;
   const AEvents: cshort): Boolean;
 begin
-  Result := WaitForSocket(AConnection.Socket, AEvents,
-    AConnection.DeadlineNanoseconds);
+  Result := WaitForSocketBefore(AConnection.Socket, AEvents = POLLOUT,
+    AConnection.DeadlineNanoseconds, AConnection.Cancellation);
   if not Result then
     FpSetErrNo(ESysEAGAIN);
 end;
@@ -1277,6 +1372,7 @@ type
   public
     Socket: TSocket;
     DeadlineNanoseconds: Int64;
+    Cancellation: TNetworkCancellation;
     Credential: TSecHandle;
     Context: TSecHandle;
     HasContext: Boolean;
@@ -1363,7 +1459,7 @@ var
   Temporary: array[0..8191] of Byte;
 begin
   Result := SocketReceiveBefore(AData.Socket, @Temporary[0],
-    Length(Temporary), AData.DeadlineNanoseconds);
+    Length(Temporary), AData.DeadlineNanoseconds, AData.Cancellation);
   if Result > 0 then
     AppendBytes(ABuffer, @Temporary[0], Result);
 end;
@@ -1413,6 +1509,7 @@ begin
   FillChar(Data.StreamSizes, SizeOf(Data.StreamSizes), 0);
   Data.Socket := AConnection.Socket;
   Data.DeadlineNanoseconds := AConnection.DeadlineNanoseconds;
+  Data.Cancellation := AConnection.Cancellation;
   Data.HasContext := False;
 
   FillChar(Credential, SizeOf(Credential), 0);
@@ -1760,11 +1857,13 @@ end;
 
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
-  const ADeadlineNanoseconds: Int64);
+  const ADeadlineNanoseconds: Int64;
+  const ACancellation: TNetworkCancellation);
 begin
   FillChar(AConnection, SizeOf(AConnection), 0);
   AConnection.Socket := ASocket;
   AConnection.DeadlineNanoseconds := ADeadlineNanoseconds;
+  AConnection.Cancellation := ACancellation;
   AConnection.Backend := TSB_NONE;
 
   {$IFDEF DARWIN}
