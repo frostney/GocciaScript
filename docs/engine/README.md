@@ -126,7 +126,8 @@ Whatever the frame bound, a call that native code makes (a getter, a `toString`,
 An explicit `--source-type=script` entry keeps GocciaScript's acceptance of import and export declarations
 ([language.md](../language.md#modules)). The engine takes the entry's import declarations and re-exports out of the
 Script and runs them, each at its own line and column, as a module of their own keyed by the entry's path plus
-`#script-imports`, so its requests resolve as the entry's would. That module's graph links as one, so a missing
+`#script-imports`, so its requests resolve as the entry's would, from the entry file's real directory when a symlink
+names it. That module's graph links as one, so a missing
 export fails before any module evaluates. It then evaluates, through the event loop when a top-level await
 waits on more. Each imported name then becomes a const global lexical binding that shares the cell of the binding
 it imports: it reads live, throws in that binding's temporal dead zone, and refuses assignment. An export
