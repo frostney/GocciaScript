@@ -9783,9 +9783,11 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
 await section("Runner: an aborted fetch keeps its slot until its worker ends, so at most 16 requests run...", async () => {
   // docs/built-ins-fetch.md: each host thread runs at most 16 requests, and a
   // worker frees its slot when it finishes. Aborting a request rejects it at
-  // once, but its worker still waits on the socket, so the slot stays taken;
-  // the run itself does not wait for it.
-  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  // once, but its worker still waits on the socket, so the slot stays taken
+  // and the 17th request waits its turn: here until its own signal's deadline.
+  // The run itself does not wait for the aborted requests' workers.
+  let connections = 0;
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { connections++; }, data() {} } });
   const tmp = makeNativeTmp();
   try {
     const url = `http://127.0.0.1:${silent.port}/`;
@@ -9796,21 +9798,115 @@ await section("Runner: an aborted fetch keeps its slot until its worker ends, so
         `const first = controllers.map((c) => fetch(${JSON.stringify(url)}, { signal: c.signal }).then(() => "ok", (e) => e.name));`,
         "for (const c of controllers) c.abort();",
         "console.log((await Promise.all(first)).every((r) => r === 'AbortError'));",
-        `try { await fetch(${JSON.stringify(url)}); console.log("17th started"); } catch (e) { console.log(e.message); }`,
+        `try { await fetch(${JSON.stringify(url)}, { signal: AbortSignal.timeout(300) }); console.log("17th answered"); } catch (e) { console.log(e.name); }`,
         "",
       ].join("\n"),
     );
     const started = Date.now();
-    const proc = Bun.spawnSync([RUNNER, `--allow-net=127.0.0.1`, join(tmp, "cap.js")], {
+    const run = Bun.spawn([RUNNER, `--allow-net=127.0.0.1`, join(tmp, "cap.js")], {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 60_000,
     });
-    const lines = proc.stdout.toString().split(/\r?\n/).slice(0, 2);
-    if (JSON.stringify(lines) !== JSON.stringify(["true", "fetch worker limit exceeded"]))
-      throw new Error(`The aborted requests should keep their slots: got ${JSON.stringify(lines)} ${proc.stderr.toString()}`);
+    const out = await new Response(run.stdout).text();
+    const err = await new Response(run.stderr).text();
+    await run.exited;
+    const lines = out.split(/\r?\n/).slice(0, 2);
+    if (JSON.stringify(lines) !== JSON.stringify(["true", "TimeoutError"]))
+      throw new Error(`The aborted requests should keep their slots: got ${JSON.stringify(lines)} ${err}`);
+    if (connections !== 16)
+      throw new Error(`The 17th request should wait for a slot, not connect: ${connections} connections`);
     if (Date.now() - started > 30_000)
       throw new Error("The run should not wait for the aborted requests' workers");
+  } finally {
+    silent.stop(true);
+    clean(tmp);
+  }
+});
+
+async function runFetchScript(tmp: string, name: string, lines: string[], extra: string[] = []) {
+  const script = join(tmp, name);
+  writeFileSync(script, [...lines, ""].join("\n"));
+  // spawned asynchronously: the server answers from this process's event loop
+  const run = Bun.spawn([resolve(RUNNER), script, "--allow-net=127.0.0.1", ...extra], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 60_000,
+  });
+  const out = (await new Response(run.stdout).text()) + (await new Response(run.stderr).text());
+  await run.exited;
+  return { out, exitCode: run.exitCode };
+}
+
+await section("Runner: the run's deadline ends a run whose requests are waiting for a worker...", async () => {
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const tmp = makeNativeTmp();
+  try {
+    const url = `http://127.0.0.1:${silent.port}/`;
+    const started = Date.now();
+    const { out, exitCode } = await runFetchScript(
+      tmp,
+      "deadline.js",
+      [`await Promise.all(Array.from({ length: 40 }, () => fetch(${JSON.stringify(url)})));`, 'console.log("answered");'],
+      ["--timeout=500"],
+    );
+    if (exitCode === 0 || !out.includes("timed out after 500ms") || out.includes("answered"))
+      throw new Error(`--timeout should end the run with waiting requests (exit ${exitCode}):\n${out}`);
+    if (Date.now() - started > 20_000) throw new Error("the run should end at its deadline");
+  } finally {
+    silent.stop(true);
+    clean(tmp);
+  }
+});
+
+await section("Runner: a waiting request's storage counts against --max-memory...", async () => {
+  // 2000 requests with a 64 KiB header each wait behind 16 that never get an
+  // answer. Their host-side copies (~256 MiB) are charged against the limit, so
+  // the run fails with the memory RangeError instead of growing without bound.
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const tmp = makeNativeTmp();
+  try {
+    const url = `http://127.0.0.1:${silent.port}/`;
+    const script = join(tmp, "memory.js");
+    writeFileSync(script, [
+      'const big = "v".repeat(64 * 1024);',
+      `const requests = Array.from({ length: 2000 }, () => fetch(${JSON.stringify(url)}, { headers: { "x-big": big } }));`,
+      "await Promise.all(requests);",
+      'console.log("answered");',
+      "",
+    ].join("\n"));
+    const run = await runWithPeakRss([resolve(RUNNER), script, "--allow-net=127.0.0.1", "--max-memory=16MiB", "--timeout=20s"]);
+    if (run.exitCode === 0 || !run.output.includes("RangeError") || !run.output.includes("memory limit"))
+      throw new Error(`the waiting requests should exhaust --max-memory (exit ${run.exitCode}):\n${run.output}`);
+    assertPeakRssBelow(run, "waiting fetch requests under --max-memory=16MiB", 160 * 1024 * 1024);
+  } finally {
+    silent.stop(true);
+    clean(tmp);
+  }
+});
+
+await section("Runner: a waiting request is charged for its URL as percent-encoded, not as written...", async () => {
+  // Each "€" in the path is one UTF-16 unit as written and nine ("%E2%82%AC")
+  // once the request URL is normalized, which is the copy a waiting request
+  // keeps: 200 of them hold about 72 MiB, past a 32 MiB limit, while their
+  // URLs as written would fit.
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const tmp = makeNativeTmp();
+  try {
+    const url = `http://127.0.0.1:${silent.port}/`;
+    const { out, exitCode } = await runFetchScript(
+      tmp,
+      "encoded.js",
+      [
+        `const url = ${JSON.stringify(url)} + "\u20ac".repeat(20000);`,
+        "const requests = Array.from({ length: 200 }, () => fetch(url));",
+        "await Promise.all(requests);",
+        'console.log("answered");',
+      ],
+      ["--max-memory=32MiB", "--timeout=20s"],
+    );
+    if (exitCode === 0 || !out.includes("RangeError") || !out.includes("memory limit"))
+      throw new Error(`the waiting requests' encoded URLs should exhaust --max-memory (exit ${exitCode}):\n${out}`);
   } finally {
     silent.stop(true);
     clean(tmp);
@@ -16916,7 +17012,7 @@ await section("TestRunner: --test-timeout stops every test that runs past it, no
 
 await section("Runner and TestRunner: a cancelled fetch frees its worker slot once its worker finishes...", async () => {
   // A request whose signal aborted, or that a timed-out test left, used to keep one of the 16 worker slots for the
-  // rest of the run, so later requests failed with "fetch worker limit exceeded".
+  // rest of the run, so later requests could never start.
   const tmp = makeNativeTmp();
   const server = Bun.serve({
     hostname: "127.0.0.1",

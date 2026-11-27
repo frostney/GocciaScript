@@ -202,3 +202,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0190 — fetch connects across address families](0190-fetch-connects-across-address-families.md)
 - [0191 — FPC i386 builds compute doubles in SSE2](0191-fpc-i386-builds-compute-doubles-in-sse2.md)
 - [0192 — History reads ask for the strong ETag and project raw pointers](0192-history-reads-ask-for-the-strong-etag-and-project-raw-pointers.md)
+- [0193 — fetch requests past the worker cap wait their turn](0193-fetch-requests-past-the-worker-cap-wait-their-turn.md)

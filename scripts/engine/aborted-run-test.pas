@@ -235,6 +235,59 @@ begin
   end;
 end;
 
+{ an aborted run drops the requests still waiting for a worker as well as the running ones, and the engine's next
+  run gets its slots: its own request is answered }
+procedure CheckFetchQueueAbort(const AURL: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  StartFetches, Argument, Status, Waiting, Element, Ignored: TValue;
+  ErrorText: UnicodeString;
+  I: Integer;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1');
+    if not Engine.PrepareHost(ErrorText) then Check(False, 'fetch host setup: ' + ErrorText);
+    DefineNative(GlobalObj, 'stopRun', @StopRun, 0);
+    RunResult := Engine.Run('setup.js',
+      'globalThis.startFetches = (url) => { globalThis.waiting = Array.from({ length: 40 }, () => fetch(url)); };');
+    Check(RunResult.Ok, 'fetch queue fixture setup: ' + RunResult.ErrorMessage);
+    Check(GetV(GlobalObj, AtomOf('startFetches'), StartFetches), 'could not read fetch queue fixture');
+    PushRoot(StartFetches);
+    Argument := StrFromUnicode(AURL);
+    Check(CallValue(RootAt(TempTop - 1), VUndefined, @Argument, 1, Status), 'could not start the fetches');
+    PopRoots(1);
+    Check(FetchPending, 'setup should have fetches pending');
+    RunResult := Engine.Run('stop.js', 'stopRun();');
+    Check(RunResult.Aborted = gaHostAbort, 'fetch queue fixture should abort');
+    Check(not FetchPending, 'abort should drop the running and the waiting fetches');
+    { none was refused for want of a worker: the dropped requests' promises stay pending }
+    Check(GetV(GlobalObj, AtomOf('waiting'), Waiting), 'could not read the waiting fetches');
+    PushRoot(Waiting);
+    try
+      for I := 0 to 39 do
+      begin
+        Check(GetElemV(RootAt(TempTop - 1), MkInt(I), Element), 'could not read a waiting fetch');
+        Check(PromiseStatus(Element, Ignored) = 0, 'every dropped fetch promise should stay pending');
+      end;
+    finally
+      PopRoots(1);
+    end;
+    Argument := StrFromUnicode(AURL);
+    PushRoot(Argument);
+    Check(SetV(GlobalObj, AtomOf('nextURL'), RootAt(TempTop - 1)), 'could not set the next URL');
+    PopRoots(1);
+    RunResult := Engine.Run('next.js',
+      'globalThis.status = 0; fetch(nextURL).then((r) => { globalThis.status = r.status; });');
+    Check(RunResult.Ok, 'the next run should fetch: ' + RunResult.ErrorMessage);
+    Check(GetV(GlobalObj, AtomOf('status'), Status) and IsNumber(Status) and (NumOf(Status) = 200),
+      'the next run''s request should be answered after the aborted run''s queue was dropped');
+  finally
+    Engine.Free;
+  end;
+end;
+
 begin
   try
     CheckAbort(gaHostAbort);
@@ -243,7 +296,11 @@ begin
     CheckAbort(gaMemoryLimit);
     CheckAsyncWaitTimeout;
     CheckFinalizationAbort;
-    if ParamCount = 1 then CheckFetchAbort(ParamStr(1));
+    if ParamCount = 1 then
+    begin
+      CheckFetchAbort(ParamStr(1));
+      CheckFetchQueueAbort(ParamStr(1));
+    end;
     WriteLn('Aborted run tests passed');
   except
     on Error: Exception do

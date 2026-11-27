@@ -900,6 +900,11 @@ Limits are settings, not capabilities. Each takes a unit:
 | `--max-fetch-bytes` | a size (default `8MiB`) | the default |
 | `--max-fs-bytes`, `--max-fs-nodes` (sandbox) | a size (default `16MiB`) / a count (default 4096) | rejected |
 
+fetch also runs at most 16 requests at once on each host thread. The cap is
+not a setting: later requests wait their turn, in call order, and their
+storage counts against `--max-memory` (see
+[fetch's runtime limits](built-ins-fetch.md#runtime-behavior-and-limits)).
+
 Limits and flags in config files must have the right shape: a boolean flag
 such as `"compat-var"` takes exactly `true` or `false` (not `"true"` or
 `null`), and a limit takes a single value, not an array. Errors use the
