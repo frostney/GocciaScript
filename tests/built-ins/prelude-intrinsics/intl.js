@@ -3,7 +3,7 @@ description: Intl built-ins (the intl prelude) look up nothing a script can repl
 features: [Intl, Temporal]
 ---*/
 
-import { ARRAY_ITERATION, expectClean, installTripwire } from "../helpers/intrinsic-tripwire.js";
+import { ARRAY_ITERATION, expectClean, installTripwire } from "./helpers/tripwire.js";
 
 const wire = installTripwire();
 afterAll(() => wire.uninstall());

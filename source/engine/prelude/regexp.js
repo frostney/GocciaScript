@@ -15,7 +15,7 @@
   var RP = N.proto, RegExpCtor = N.ctor;
   var strIndexOf = Str.prototype.indexOf, strSlice = Str.prototype.slice, charCodeAt = Str.prototype.charCodeAt;
   var strReplacePlain = N.strReplace, strReplaceAllPlain = N.strReplaceAll, strSplitPlain = N.strSplit;
-  var objectIs = Object.is;
+  var objectIs = Object.is, ToObject = Object;
 
   // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
   function isObject(v) {
@@ -254,7 +254,7 @@
         } else {
           if (namedCaptures !== undefined) {
             if (namedCaptures === null) throw new TypeErr("the groups of a RegExp result cannot be converted to an object");
-            namedCaptures = Object(namedCaptures);
+            namedCaptures = ToObject(namedCaptures);
           }
           replacement = getSubstitution(matched, S, position, captures, namedCaptures, replaceValue);
         }

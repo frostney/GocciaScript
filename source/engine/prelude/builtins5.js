@@ -11,7 +11,16 @@
   var strSlice = String.prototype.slice;
   function push(a) { var n = arguments.length; for (var i = 1; i < n; i++) defineProperty(a, a.length, { value: arguments[i], writable: true, enumerable: true, configurable: true }); return a.length; }
   var SymIterator = Symbol.iterator, SymAsyncIterator = Symbol.asyncIterator;
-  var TypeErr = TypeError, PromiseCtor = Promise;
+  var TypeErr = TypeError, RangeErr = RangeError, PromiseCtor = Promise;
+  var StringCtor = String, NumberCtor = Number, BooleanCtor = Boolean, ArrayCtor = Array, FunctionCtor = Function;
+  var BigIntCtor = BigInt, SymbolCtor = Symbol, SymbolKeyFor = Symbol.keyFor;
+  var MathMin = Math.min, MathFloor = Math.floor, MathCeil = Math.ceil;
+  var ObjectGetOwnPropertySymbols = Object.getOwnPropertySymbols, ObjectKeys = Object.keys;
+  // a prototype method as a function of its receiver and arguments, as apply(strSlice, s, [a, b]) calls one, without
+  // the arguments array
+  var uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+  var StringPrototypeCharCodeAt = uncurryThis(String.prototype.charCodeAt), StringPrototypeCharAt = uncurryThis(String.prototype.charAt);
+  var BigIntPrototypeToString = uncurryThis(BigInt.prototype.toString), ArrayPrototypeShift = uncurryThis(Array.prototype.shift);
   var MapCtor = Map, MP = Map.prototype, mapHas = MP.has, mapGet = MP.get, mapSet = MP.set;
 
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
@@ -26,7 +35,7 @@
   function closeQuiet(it) { try { var r = it.return; if (r !== undefined && r !== null) apply(r, it, []); } catch (e) {} }
   function isConstructor(f) {
     if (!isCallable(f)) return false;
-    try { construct(String, [], f); return true; } catch (e) { return false; }
+    try { construct(StringCtor, [], f); return true; } catch (e) { return false; }
   }
   function getMethod(v, k) {
     var f = v[k];
@@ -85,8 +94,8 @@
         }
       }
       var arrayLike = Object(asyncItems), len = arrayLike.length;
-      len = +len; len = len !== len || len <= 0 ? 0 : (len === Infinity ? 9007199254740991 : Math.min(Math.floor(len), 9007199254740991));
-      A = isConstructor(C) ? construct(C, [len]) : new Array(len);
+      len = +len; len = len !== len || len <= 0 ? 0 : (len === Infinity ? 9007199254740991 : MathMin(MathFloor(len), 9007199254740991));
+      A = isConstructor(C) ? construct(C, [len]) : new ArrayCtor(len);
       for (; k < len; k++) {
         v = await arrayLike[k];
         if (mapping) v = await apply(mapfn, thisArg, [v, k]);
@@ -117,7 +126,7 @@
       var value = r.value, key;
       try {
         key = callback(value, k);
-        if (property) key = typeof key === "symbol" ? key : (isObject(key) ? toPropertyKey(key) : String(key));
+        if (property) key = typeof key === "symbol" ? key : (isObject(key) ? toPropertyKey(key) : StringCtor(key));
         else if (key === 0) key = 0;   // -0 to +0
       } catch (e) {
         closeQuiet(it);
@@ -130,7 +139,7 @@
     }
     return { keys: keys, groups: groups };
   }
-  function toPropertyKey(v) { var s = { [v]: 0 }; return Object.getOwnPropertySymbols(s).length ? Object.getOwnPropertySymbols(s)[0] : Object.keys(s)[0]; }
+  function toPropertyKey(v) { var s = { [v]: 0 }, syms = ObjectGetOwnPropertySymbols(s); return syms.length ? syms[0] : ObjectKeys(s)[0]; }
   var statics = {
     groupBy(items, callback) {
       var r = groupBy(items, callback, true), o = create(null);
@@ -171,7 +180,7 @@
   def(MP, "getOrInsertComputed", mapMethods.getOrInsertComputed);
   // 24.3 WeakMap and 24.4 WeakSet over Goccia.Weak's ephemeron tables
   var SetCtor = Set, SP = Set.prototype, setHas = SP.has, setAdd = SP.add, setDelete = SP.delete, mapDelete = MP.delete;
-  function canHoldWeakly(v) { return isObject(v) || (typeof v === "symbol" && Symbol.keyFor(v) === undefined); }
+  function canHoldWeakly(v) { return isObject(v) || (typeof v === "symbol" && SymbolKeyFor(v) === undefined); }
   // 24.1.1.2 AddEntriesFromIterable / the WeakSet constructor's loop
   function addEntries(target, iterable, adder, pairs) {
     var m = getMethod(iterable, SymIterator);
@@ -186,7 +195,7 @@
       var v = r.value;
       try {
         if (pairs) {
-          if (!isObject(v)) throw new TypeErr("Iterator value " + String(v) + " is not an entry object");
+          if (!isObject(v)) throw new TypeErr("Iterator value " + StringCtor(v) + " is not an entry object");
           apply(adder, target, [v[0], v[1]]);
         } else apply(adder, target, [v]);
       } catch (e) {
@@ -258,9 +267,9 @@
     if (!isObject(obj)) throw new TypeErr("the argument is not an object");
     var raw = obj.size, num = +raw;
     if (num !== num) throw new TypeErr("the argument's size is not a number");
-    var size = num === Infinity || num === -Infinity ? num : (num < 0 ? -Math.floor(-num) : Math.floor(num));
+    var size = num === Infinity || num === -Infinity ? num : (num < 0 ? -MathFloor(-num) : MathFloor(num));
     if (size === 0) size = 0;
-    if (size < 0) throw new RangeError("the argument's size is negative");
+    if (size < 0) throw new RangeErr("the argument's size is negative");
     var has = obj.has;
     if (!isCallable(has)) throw new TypeErr("the argument's has is not a function");
     var keys = obj.keys;
@@ -460,7 +469,7 @@
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   var B64VAL = [];
-  for (var bi = 0; bi < 64; bi++) B64VAL[B64.charCodeAt(bi)] = bi;
+  for (var bi = 0; bi < 64; bi++) B64VAL[StringPrototypeCharCodeAt(B64, bi)] = bi;
   var SyntaxErr = SyntaxError;
   // 23.3.3.1 ValidateUint8Array, ValidateTypedArrayBounds (a detached buffer)
   // IsImmutableBuffer of a typed array's buffer (the immutable ArrayBuffer proposal), read through the intrinsic
@@ -520,7 +529,7 @@
       return true;
     }
     for (;;) {
-      while (index < length && isAsciiWs(string.charCodeAt(index))) index++;
+      while (index < length && isAsciiWs(StringPrototypeCharCodeAt(string, index))) index++;
       if (index === length) {
         if (chunk.length > 0) {
           if (lastChunkHandling === "stop-before-partial") return { read: read, bytes: bytes, error: null };
@@ -530,19 +539,19 @@
         }
         return { read: length, bytes: bytes, error: null };
       }
-      var c = string.charCodeAt(index);
+      var c = StringPrototypeCharCodeAt(string, index);
       index++;
       if (c === 0x3D) {
         if (chunk.length < 2) return fail();
-        while (index < length && isAsciiWs(string.charCodeAt(index))) index++;
+        while (index < length && isAsciiWs(StringPrototypeCharCodeAt(string, index))) index++;
         if (chunk.length === 2) {
           if (index === length) {
             if (lastChunkHandling === "stop-before-partial") return { read: read, bytes: bytes, error: null };
             return fail();
           }
-          if (string.charCodeAt(index) === 0x3D) {
+          if (StringPrototypeCharCodeAt(string, index) === 0x3D) {
             index++;
-            while (index < length && isAsciiWs(string.charCodeAt(index))) index++;
+            while (index < length && isAsciiWs(StringPrototypeCharCodeAt(string, index))) index++;
           }
         }
         if (index < length) return fail();
@@ -579,7 +588,7 @@
     var length = string.length, bytes = [], read = 0;
     if (length % 2 !== 0) return { read: 0, bytes: bytes, error: new SyntaxErr("odd number of hex digits") };
     while (read < length && bytes.length < maxLength) {
-      var h = hexVal(string.charCodeAt(read)), l = hexVal(string.charCodeAt(read + 1));
+      var h = hexVal(StringPrototypeCharCodeAt(string, read)), l = hexVal(StringPrototypeCharCodeAt(string, read + 1));
       if (h < 0 || l < 0) return { read: read, bytes: bytes, error: new SyntaxErr("invalid hex digit") };
       read += 2;
       push(bytes, h * 16 + l);
@@ -675,7 +684,7 @@
   function toIndex(v) {
     if (typeof v === "bigint") throw new TypeErr("Cannot convert a BigInt to a number");
     var n = +v;
-    n = n !== n ? 0 : n === Infinity || n === -Infinity ? n : (n < 0 ? Math.ceil(n) : Math.floor(n));
+    n = n !== n ? 0 : n === Infinity || n === -Infinity ? n : (n < 0 ? MathCeil(n) : MathFloor(n));
     if (n < 0 || n > 9007199254740991) throw new RangeErr("index out of range");
     return n + 0;
   }
@@ -699,7 +708,7 @@
     if (typeof v === "number") throw new TypeErr("Cannot convert a Number to a BigInt");
     return BigCtor(v);
   }
-  function bitLength(b) { return (b < 0n ? -b : b).toString(2).length; }
+  function bitLength(b) { return BigIntPrototypeToString(b < 0n ? -b : b, 2).length; }
   var bigStatics = {
     asIntN(bits, bigint) {
       bits = toIndex(bits);
@@ -798,7 +807,8 @@
           // a cell whose target died stays registered until its job runs: removing it here cancels that job
           c.done = true;
           weakTakeHeld(c.box);
-          cells.splice(i, 1);
+          for (var j = i + 1; j < cells.length; j++) cells[j - 1] = cells[j];
+          cells.length--;
           removed = true;
         }
       }
@@ -830,7 +840,7 @@
       weakSetCleanup(function () {
         if (cleanupQueue.length === 0) collectDead();
         while (cleanupQueue.length > 0) {
-          var e = cleanupQueue.shift();
+          var e = ArrayPrototypeShift(cleanupQueue);
           if (e.cell.done) continue;
           e.cell.done = true;
           apply(e.registry.#callback, undefined, [weakTakeHeld(e.cell.box)]);
@@ -853,10 +863,10 @@
     escape(string) {
       var s = toStr(string), r = "";
       for (var i = 0; i < s.length; i++) {
-        var c = s.charCodeAt(i);
+        var c = StringPrototypeCharCodeAt(s, i);
         if (apply(strIndexOf, escapeOk, [apply(strCharAt, s, [i])]) >= 0) r += apply(strCharAt, s, [i]);
-        else if (c < 256) r += "%" + hexDigits.charAt(c >> 4) + hexDigits.charAt(c & 15);
-        else r += "%u" + hexDigits.charAt(c >> 12) + hexDigits.charAt((c >> 8) & 15) + hexDigits.charAt((c >> 4) & 15) + hexDigits.charAt(c & 15);
+        else if (c < 256) r += "%" + StringPrototypeCharAt(hexDigits, c >> 4) + StringPrototypeCharAt(hexDigits, c & 15);
+        else r += "%u" + StringPrototypeCharAt(hexDigits, c >> 12) + StringPrototypeCharAt(hexDigits, (c >> 8) & 15) + StringPrototypeCharAt(hexDigits, (c >> 4) & 15) + StringPrototypeCharAt(hexDigits, c & 15);
       }
       return r;
     },
@@ -865,16 +875,16 @@
       function hex(i, k) {
         var v = 0;
         for (var j = 0; j < k; j++) {
-          var c = s.charCodeAt(i + j), d;
+          var c = StringPrototypeCharCodeAt(s, i + j), d;
           if (c >= 48 && c <= 57) d = c - 48; else if (c >= 65 && c <= 70) d = c - 55; else if (c >= 97 && c <= 102) d = c - 87; else return -1;
           v = v * 16 + d;
         }
         return v;
       }
       for (var i = 0; i < n; i++) {
-        var ch = s.charAt(i);
+        var ch = StringPrototypeCharAt(s, i);
         if (ch === "%") {
-          if (i + 6 <= n && s.charAt(i + 1) === "u") { var u = hex(i + 2, 4); if (u >= 0) { r += fromCharCode(u); i += 5; continue; } }
+          if (i + 6 <= n && StringPrototypeCharAt(s, i + 1) === "u") { var u = hex(i + 2, 4); if (u >= 0) { r += fromCharCode(u); i += 5; continue; } }
           if (i + 3 <= n) { var b = hex(i + 1, 2); if (b >= 0) { r += fromCharCode(b); i += 2; continue; } }
         }
         r += ch;
@@ -956,7 +966,7 @@
       for (var i = 0; i < arguments.length; i++) {
         var c = +arguments[i];
         if (c !== c || c === Infinity || c === -Infinity || c !== (c < 0 ? -floor(-c) : floor(c)) || c < 0 || c > 0x10FFFF)
-          throw new RangeError("Invalid code point " + c);
+          throw new RangeErr("Invalid code point " + c);
         if (c < 0x10000) s += fromCharCode(c);
         else { c -= 0x10000; s += fromCharCode(0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)); }
       }
@@ -1079,7 +1089,7 @@
   // the compiler lowers is / match patterns to control flow and these helpers (opIntrinsic, INTRINSIC_MATCH_*)
   var SymCustomMatcher = Symbol("Symbol.customMatcher");
   defineProperty(Symbol, "customMatcher", { value: SymCustomMatcher, writable: false, enumerable: false, configurable: false });
-  var fnToString = Function.prototype.toString, ArraySlice = Array.prototype.slice;
+  var fnToString = Function.prototype.toString;
   var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor, ObjectCtor = Object;
   // a matcher's Symbol.customMatcher method, undefined when it has none
   function customMatcherOf(m) {
@@ -1099,13 +1109,13 @@
   // the built-in constructors whose patterns test a value's type: 0 when m is none of them
   function typeMatch(m, v) {
     if (m === ObjectCtor) return isObject(v) ? 1 : 2;
-    if (m === Array) return isArray(v) ? 1 : 2;
-    if (m === String) return typeof v === "string" ? 1 : 2;
-    if (m === Number) return typeof v === "number" ? 1 : 2;
-    if (m === Boolean) return typeof v === "boolean" ? 1 : 2;
-    if (m === Function) return isCallable(v) ? 1 : 2;
-    if (m === BigInt) return typeof v === "bigint" ? 1 : 2;
-    if (m === Symbol) return typeof v === "symbol" ? 1 : 2;
+    if (m === ArrayCtor) return isArray(v) ? 1 : 2;
+    if (m === StringCtor) return typeof v === "string" ? 1 : 2;
+    if (m === NumberCtor) return typeof v === "number" ? 1 : 2;
+    if (m === BooleanCtor) return typeof v === "boolean" ? 1 : 2;
+    if (m === FunctionCtor) return isCallable(v) ? 1 : 2;
+    if (m === BigIntCtor) return typeof v === "bigint" ? 1 : 2;
+    if (m === SymbolCtor) return typeof v === "symbol" ? 1 : 2;
     return 0;
   }
   function matchValue(subject, m) {
@@ -1167,7 +1177,12 @@
     }
     return out;
   }
-  function matchSlice(a, start) { return apply(ArraySlice, a, [start]); }
+  // a new array of a's elements from start on (Array.prototype.slice would look up a's constructor and Symbol.species)
+  function matchSlice(a, start) {
+    var r = [];
+    for (var i = start; i < a.length; i++) createDataProperty(r, r.length, a[i]);
+    return r;
+  }
   function matchFail() { throw new TypeErr("No pattern matched"); }
 
 

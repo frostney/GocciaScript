@@ -26,6 +26,9 @@ const mapGet = Map.prototype.get;
 const mapSet = Map.prototype.set;
 const mapHas = Map.prototype.has;
 const SetCtor = Set;
+const PromiseCtor = Promise;
+const promiseThen = Promise.prototype.then;
+const promiseResolve = Promise.resolve;
 const setHas = Set.prototype.has;
 const setAdd = Set.prototype.add;
 const symDescription = getOwnDesc(Symbol.prototype, "description").get;
@@ -170,6 +173,8 @@ export const installTripwire = () => {
     }
     return { value, error, threw, hits };
   };
+  // awaits fn's result while armed: the tripwire's own wait on it is a thenable whose then subscribes disarmed, so
+  // its PromiseResolve and then (each looking up the promise's constructor) are not recorded as the built-in's
   const runAsync = async (fn) => {
     hits = [];
     armed = true;
@@ -177,7 +182,17 @@ export const installTripwire = () => {
     let error;
     let threw = false;
     try {
-      value = await fn();
+      const result = fn();
+      value = await {
+        then(resolve, reject) {
+          armed = false;
+          try {
+            apply(promiseThen, apply(promiseResolve, PromiseCtor, [result]), [resolve, reject]);
+          } finally {
+            armed = true;
+          }
+        },
+      };
     } catch (e) {
       threw = true;
       error = e;
@@ -187,10 +202,25 @@ export const installTripwire = () => {
     return { value, error, threw, hits };
   };
 
+  // the caller awaits what watchAsync returns while the call is still in flight, and so still armed: a thenable
+  // whose then subscribes disarmed keeps the caller's own await (its PromiseResolve) out of the record
+  const settledLater = (promise) => ({
+    then(resolve, reject) {
+      const was = armed;
+      armed = false;
+      try {
+        apply(promiseThen, promise, [resolve, reject]);
+      } finally {
+        armed = was;
+      }
+    },
+  });
+
   return {
     // runs fn armed: { value, error, threw, hits }
     watch: run,
-    watchAsync: runAsync,
+    // runs fn armed and awaits its result, armed throughout; await what it returns
+    watchAsync: (fn) => settledLater(runAsync(fn)),
     // the intrinsic property at path (a value, or a getter's function) as the realm had it, marked covered
     original: lookup,
     // calls the method or getter at path on thisArg, armed
@@ -201,7 +231,7 @@ export const installTripwire = () => {
     // calls it and awaits its result, armed throughout
     invokeAsync(path, thisArg, ...args) {
       const f = lookup(path);
-      return runAsync(() => apply(f, thisArg, args));
+      return settledLater(runAsync(() => apply(f, thisArg, args)));
     },
     // constructs the constructor at path, armed
     construct(path, ...args) {

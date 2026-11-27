@@ -3,7 +3,7 @@ description: Temporal built-ins (the temporal prelude) look up nothing a script 
 features: [Temporal]
 ---*/
 
-import { THROWS, expectClean, installTripwire } from "../helpers/intrinsic-tripwire.js";
+import { THROWS, expectClean, installTripwire } from "./helpers/tripwire.js";
 
 const wire = installTripwire();
 afterAll(() => wire.uninstall());

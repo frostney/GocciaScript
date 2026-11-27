@@ -266,15 +266,15 @@
   var asyncIterDispose = {
     [SymAsyncDispose]() {
       var O = this;
-      return new Promise(function (resolve, reject) {
-        var ret;
-        try { ret = O.return; } catch (e) { reject(e); return; }
-        if (ret === undefined || ret === null) { resolve(undefined); return; }
-        if (!isCallable(ret)) { reject(new TypeErr("return is not a function")); return; }
-        var r;
-        try { r = apply(ret, O, []); } catch (e) { reject(e); return; }   // Call(return, O): no arguments
-        PromiseResolve(r).then(function () { resolve(undefined); }, reject);
-      });
+      // an async function: its abrupt completions reject (IfAbruptRejectPromise), and await is PromiseResolve then
+      // PerformPromiseThen, without looking up the result's then
+      return (async function () {
+        var ret = O.return;
+        if (ret === undefined || ret === null) return undefined;
+        if (!isCallable(ret)) throw new TypeErr("return is not a function");
+        await apply(ret, O, []);   // Call(return, O): no arguments
+        return undefined;
+      })();
     }
   }[SymAsyncDispose];
   def(AIP, SymAsyncDispose, asyncIterDispose);
