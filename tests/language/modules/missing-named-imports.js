@@ -1,4 +1,4 @@
-const expectMissingExportRejection = async (specifier) => {
+const expectMissingExportRejection = async (specifier, declaration) => {
   let error;
   try {
     await import(specifier);
@@ -7,12 +7,14 @@ const expectMissingExportRejection = async (specifier) => {
   }
   expect(error).toBeDefined();
   expect(String(error && error.message)).toContain("has no export named");
+  if (declaration) expect(error.stack).toContain(`${declaration})`);
 };
 
 describe("missing named imports reject identically in both engines", () => {
   test("rejects a missing named import from a JavaScript module", async () => {
     await expectMissingExportRejection(
       "../../../fixtures/modules/missing-named-import-js.js",
+      "missing-named-import-js.js:1:1",
     );
   });
 

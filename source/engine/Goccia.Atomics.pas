@@ -526,8 +526,7 @@ begin
     SetLength(AsyncDeadlines, AsyncCount * 2 + 8);
     SetLength(AsyncLive, AsyncCount * 2 + 8);
   end;
-  if IsInfinite(T) or (T > 1e15) then AsyncDeadlines[Token] := High(QWord)
-  else AsyncDeadlines[Token] := GetTickCount64 + QWord(Ceil(T));
+  AsyncDeadlines[Token] := WaitDeadline(T);
   AsyncLive[Token] := True;
   Inc(AsyncCount);
   Inc(AsyncPending);
