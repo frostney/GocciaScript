@@ -180,6 +180,14 @@ jobs:
           timeout 20 strace -o build/jit-permissions.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
           python3 scripts/engine/check-jit-publication.py build/jit-permissions.strace
 
+      - name: The optimizing tier's code is read-execute and released too
+        env:
+          GOCCIA_JIT: "1"
+          GOCCIA_OPT: "1"
+        run: |
+          timeout 20 strace -o build/jit-permissions-opt.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
+          python3 scripts/engine/check-jit-publication.py build/jit-permissions-opt.strace
+
       - name: Capped and measured uncapped entries report the same instruction units
         run: |
           fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
