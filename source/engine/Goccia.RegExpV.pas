@@ -26,14 +26,15 @@ procedure RegExpDone;
 implementation
 
 uses
-  Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, Goccia.Regex, Goccia.Instructions, Goccia.Snapshot, Goccia.ThreadCleanupRegistry;
+  Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, Goccia.Regex, Goccia.Instructions,
+  Goccia.Snapshot, Goccia.ThreadCleanupRegistry, Goccia.Error.Messages;
 
 {$I Goccia.RegExpPrelude.inc}
 
 type
   PCompiled = ^TCompiled;
   TCompiled = record
-    Prog: TRegExpProgram;
+    Charge: THeapExternalCharge;
     Pattern, Flags: UnicodeString;
     Global, Sticky, IgnoreCase, Multiline, Unicode, DotAll, HasIndices: Boolean;
     M: TRegexMatcher;   { one per compiled pattern: a match leaves its captures here until the next one }
@@ -51,42 +52,71 @@ begin
   if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
+procedure FreeCompiled(C: PCompiled);
+begin
+  C^.M.Free;
+  C^.Charge.Clear;
+  Dispose(C);
+end;
+
 { the compiled pattern (cached), or False with the SyntaxError's message in Msg }
 function TryCompile(const Pattern, Flags: UnicodeString; var C: PCompiled; var Msg: UnicodeString): Boolean;
-var Key: UnicodeString; P: TRegExpProgram;
+var Key: UnicodeString; Entry: PCompiled; Prog: TRegExpProgram; TextBytes: Int64;
 begin
+  TextBytes := (Int64(Length(Flags)) + Length(Pattern)) * SizeOf(WideChar);
+  CheckRegExpWorkspace(TextBytes + SizeOf(WideChar));
   Key := Flags + '/' + Pattern;
   if Compiled.TryGetValue(Key, C) then Exit(True);
+  New(Entry);
+  Entry^.M := nil;
+  Entry^.Charge := Default(THeapExternalCharge);
   try
-    ValidateRegExpFlags(Flags);
-    P := CompileRegExp(Pattern, Flags);
-  except
-    on E: Exception do
-    begin
-      Msg := 'Invalid regular expression: /' + Pattern + '/' + Flags + ': ' + UnicodeString(E.Message);
-      Exit(False);
+    { The cache owns both the lookup key and the separately stored pattern and flags. }
+    if not Entry^.Charge.TryGrow(SizeOf(TCompiled) + TextBytes * 2 + SizeOf(WideChar)) then
+      raise EHeapExternalMemoryLimit.Create(SErrorMemoryLimitExceeded);
+    try
+      ValidateRegExpFlags(Flags);
+      Prog := CompileRegExp(Pattern, Flags, @CheckRegExpWorkspace);
+    except
+      on E: EHeapExternalMemoryLimit do raise;
+      on E: Exception do
+      begin
+        Msg := 'Invalid regular expression: /' + Pattern + '/' + Flags + ': ' + UnicodeString(E.Message);
+        Exit(False);
+      end;
     end;
+    if not Entry^.Charge.TryGrow(RegExpProgramBytes(Prog)) then
+      raise EHeapExternalMemoryLimit.Create(SErrorMemoryLimitExceeded);
+    Entry^.Pattern := Pattern;
+    Entry^.Flags := Flags;
+    Entry^.Global := Pos('g', Flags) > 0;
+    Entry^.Sticky := Pos('y', Flags) > 0;
+    Entry^.IgnoreCase := Pos('i', Flags) > 0;
+    Entry^.Multiline := Pos('m', Flags) > 0;
+    Entry^.Unicode := (Pos('u', Flags) > 0) or (Pos('v', Flags) > 0);
+    Entry^.DotAll := Pos('s', Flags) > 0;
+    Entry^.HasIndices := Pos('d', Flags) > 0;
+    Entry^.M := TRegexMatcher.Create(Prog, Pattern);
+    { The matcher owns its code and outer class table. Only their nested data are still shared. }
+    Entry^.Charge.Release(Int64(Length(Prog.Code)) * SizeOf(UInt32) +
+      Int64(Length(Prog.CharClasses)) * SizeOf(TRegExpCharClass));
+    Compiled.Add(Key, Entry);
+    C := Entry;
+    Entry := nil;
+    Result := True;
+  finally
+    if Entry <> nil then FreeCompiled(Entry);
   end;
-  New(C);
-  C^.Prog := P;
-  C^.Pattern := Pattern;
-  C^.Flags := Flags;
-  C^.Global := Pos('g', Flags) > 0;
-  C^.Sticky := Pos('y', Flags) > 0;
-  C^.IgnoreCase := Pos('i', Flags) > 0;
-  C^.Multiline := Pos('m', Flags) > 0;
-  C^.Unicode := (Pos('u', Flags) > 0) or (Pos('v', Flags) > 0);
-  C^.DotAll := Pos('s', Flags) > 0;
-  C^.HasIndices := Pos('d', Flags) > 0;
-  C^.M := TRegexMatcher.Create(P, Pattern);
-  Compiled.Add(Key, C);
-  Result := True;
 end;
 
 function GetCompiled(const Pattern, Flags: UnicodeString; var C: PCompiled): Boolean;
 var Msg: UnicodeString;
 begin
-  Result := TryCompile(Pattern, Flags, C, Msg);
+  try
+    Result := TryCompile(Pattern, Flags, C, Msg);
+  except
+    on EHeapExternalMemoryLimit do Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
+  end;
   if not Result then ThrowError('SyntaxError', Msg);
 end;
 
@@ -182,6 +212,7 @@ begin
   if Sc.Interrupted then Exit(AbortInterrupted);
   { out of native stack: the RangeError a too-deep recursion is }
   if Sc.StackExhausted then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if Sc.MemoryExhausted then Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
   Result := ThrowError('Error', Sc.ErrorMessage);
 end;
 
@@ -1187,11 +1218,7 @@ var Cache: TDictionary<UnicodeString, PCompiled>; C: PCompiled;
 begin
   Cache := Compiled;
   if Cache = nil then Exit;
-  for C in Cache.Values do
-  begin
-    C^.M.Free;
-    Dispose(C);
-  end;
+  for C in Cache.Values do FreeCompiled(C);
   Cache.Free;
   Compiled := nil;
 end;
@@ -1372,8 +1399,7 @@ end;
   finalize a threadvar, and every engine thread leaves its strings, arrays and objects behind otherwise }
 procedure GocciaRegExpVThreadvarCleanup;
 begin
-  Compiled.Free;
-  Compiled := nil;
+  FreeCompiledPatterns;
   FreeAllLegacy;
   IntactKeys := nil;
   IntactSlots := nil;

@@ -13,11 +13,13 @@ type
   end;
 
   TUnicodeStringSequenceArray = array of TUnicodeStringSequence;
+  TUnicodeSequenceWorkspaceCheck = procedure(const ABytes: Int64) of object;
 
 function TryGetUnicodePropertyRanges(const AKey: string;
   out ARanges: TUnicodePropertyRangeArray): Boolean;
 function TryGetUnicodeStringPropertySequences(const AKey: string;
-  out ASequences: TUnicodeStringSequenceArray): Boolean;
+  out ASequences: TUnicodeStringSequenceArray;
+  const ACheckWorkspace: TUnicodeSequenceWorkspaceCheck = nil): Boolean;
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
   out AFoldedCodePoint: Cardinal): Boolean;
 function RegExpCanonicalizeCodePoint(ACodePoint: Cardinal;
@@ -129,7 +131,8 @@ end;
 function TryExtractStringSequences(const ABuffer: TBytes;
   const AContainer: TEmbeddedResourceContainer;
   const AEntry: TEmbeddedResourceEntry;
-  out ASequences: TUnicodeStringSequenceArray): Boolean;
+  out ASequences: TUnicodeStringSequenceArray;
+  const ACheckWorkspace: TUnicodeSequenceWorkspaceCheck): Boolean;
 var
   DataOffset, DataLength: Integer;
   I, J, MaxSequences, Offset, SequenceCount, SequenceLength: Integer;
@@ -152,6 +155,8 @@ begin
   if SequenceCountValue > UInt32(MaxSequences) then
     Exit;
   SequenceCount := Integer(SequenceCountValue);
+  if Assigned(ACheckWorkspace) then
+    ACheckWorkspace(Int64(SequenceCount) * SizeOf(TUnicodeStringSequence) + DataLength);
   SetLength(ASequences, SequenceCount);
 
   for I := 0 to SequenceCount - 1 do
@@ -402,7 +407,8 @@ begin
 end;
 
 function TryGetUnicodeStringPropertySequences(const AKey: string;
-  out ASequences: TUnicodeStringSequenceArray): Boolean;
+  out ASequences: TUnicodeStringSequenceArray;
+  const ACheckWorkspace: TUnicodeSequenceWorkspaceCheck): Boolean;
 var
   Resource: TBytes;
   Container: TEmbeddedResourceContainer;
@@ -413,7 +419,7 @@ begin
     TryReadEmbeddedResource(Resource) and
     TryReadEmbeddedResourceContainer(Resource, UCD_MAGIC, Container) and
     TryFindEmbeddedResourceEntry(Resource, AKey, Container, Entry) and
-    TryExtractStringSequences(Resource, Container, Entry, ASequences);
+    TryExtractStringSequences(Resource, Container, Entry, ASequences, ACheckWorkspace);
 end;
 
 function TryGetUnicodeSimpleCaseFold(ACodePoint: Cardinal;
@@ -753,7 +759,8 @@ begin
 end;
 
 function TryGetUnicodeStringPropertySequences(const AKey: string;
-  out ASequences: TUnicodeStringSequenceArray): Boolean;
+  out ASequences: TUnicodeStringSequenceArray;
+  const ACheckWorkspace: TUnicodeSequenceWorkspaceCheck): Boolean;
 begin
   Result := False;
   SetLength(ASequences, 0);

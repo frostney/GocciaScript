@@ -149,8 +149,9 @@ These hold for every native, built-in and host routine in `source/engine` and fo
 half of `GetAvailableMemoryBytes` (`MemoryDetection`: a Linux cgroup's memory limit when one is set, else physical
 memory), at most 8 GB on a 64-bit build or 700 MB on a 32-bit one. Where neither can be read, the default is that cap.
 
-What counts against the ceiling is old space (`GCOldBytes`) plus `HeapExternalBytes`, the bytes held outside the
-heap that are charged to it: SharedArrayBuffer blocks and a sandbox search's native working memory.
+What counts against the ceiling is old space (`GCOldBytes`) plus the external bytes charged to it. The shared
+counter covers SharedArrayBuffer blocks and a sandbox search's native working memory. Each engine also tracks
+its own `THeapExternalCharge` reservations, including retained RegExp programs and matcher storage.
 
 The nursery never holds more than the ceiling leaves free: `NurseryFitCeiling` sets the nursery's bound to the room
 between old space plus external bytes and the ceiling, at least 64 KiB (`NURSERY_MIN_ROOM`) and at most the nursery's
@@ -194,6 +195,12 @@ otherwise it runs a full collection and tests again. A reservation that still do
 maximum), `SharedArrayBuffer` blocks (`Goccia.Atomics`), a `Response` body (`Goccia.Fetch`) and the sandbox's file reads and
 search memory (`Goccia.Sandbox`). `HeapReserve` collects, so the caller's values must be rooted, as for any allocation.
 
+For storage outside the collector, `THeapExternalCharge.TryGrow` reserves and records bytes against the owning
+engine. Release the charge when freeing the storage. This includes failed construction and replacement of a buffer.
+RegExp uses preflight checks for compiler and optimizer workspace and keeps charges for the resulting program and
+matcher while the compiled pattern is cached. Matcher growth uses the non-collecting check while it reads the
+subject through a raw pointer.
+
 **What the ceiling does not bound.** It bounds the collected heap and the charged external bytes, not resident
 memory. Shapes, function templates, bytecode, atoms, the WeakMap and WeakSet tables, the parser's AST and the heap's
 free space are outside it, and old-space pages are kept until the engine ends, so a heap that shrinks after a
@@ -204,7 +211,7 @@ operating-system limit.
 
 `Goccia.gc.bytesAllocated` (`HeapUsedBytes`) is old space plus the nursery's used part: the size-class bytes of every
 old cell, whole large cells, and every byte bump-allocated in the nursery since the last minor collection, garbage
-included until a collection frees it. It does not include `HeapExternalBytes`, which counts against the ceiling all
+included until a collection frees it. It does not include charged external memory, which counts against the ceiling all
 the same, nor anything [outside the heap](#heap-layout).
 
 `TGocciaEngine.Memory` reports the same figures to a host (`TGocciaMemoryStats`): `LiveBytes` (`HeapUsedBytes`),
