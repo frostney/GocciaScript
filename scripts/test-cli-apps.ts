@@ -10,6 +10,18 @@
  * (compile, roundtrip, stdin, directory, .gbc rejection, source maps),
  * GocciaBenchmarkRunner (file, stdin, microbench API), GocciaREPL (banner,
  * evaluation, ASI, error recovery, uncaught throws).
+ *
+ * Usage: bun run scripts/test-cli-apps.ts [--section=<text>]... [--list]
+ *
+ *   --section=<text>  Run only the sections whose name contains <text>,
+ *                     ignoring case. Repeat it to run every section any of
+ *                     the texts matches. A text that matches no section
+ *                     fails the run.
+ *   --list            Print the section names, in run order, and run none.
+ *
+ * With no option every section runs. Each check sits in a section() call,
+ * so a selection runs only what it names and needs only the binaries those
+ * sections start.
  */
 
 import { $ } from "bun";
@@ -40,6 +52,7 @@ import {
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
+import { parseSectionArgs, SectionRunner } from "./test-cli/sections";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyModuleProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
@@ -82,36 +95,17 @@ function writeSandboxTree(
   return tree;
 }
 
-/**
- * Run one named section, recording a failure instead of aborting the run.
- *
- * This script is a straight sequence of assertions that throw, so the first
- * failure used to end the run and every later section went unexamined. On
- * platforms exercised only in CI that meant one defect per round: during the
- * 0.11.0 stack the Windows job reported a coverage assertion, then — after a
- * fix and another twenty-minute round — a second one 550 lines further down.
- * Collecting failures turns those rounds into one.
- *
- * Output on a green run is unchanged: the header prints, the body runs, and
- * nothing is recorded. A failing section prints its error where it happened
- * and the run continues; every failure is repeated at the end and the process
- * exits non-zero.
- */
-const sectionFailures: { name: string; error: unknown }[] = [];
-
-async function section(
-  name: string,
-  body: () => Promise<void> | void,
-): Promise<void> {
-  console.log(name);
-  try {
-    await body();
-  } catch (error) {
-    sectionFailures.push({ name, error });
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(`  FAILED: ${message}`);
-  }
+const USAGE = "Usage: bun run scripts/test-cli-apps.ts [--section=<text>]... [--list]";
+const sectionOptions = parseSectionArgs(process.argv.slice(2));
+if ("error" in sectionOptions) {
+  console.error(`${sectionOptions.error}\n${USAGE}`);
+  process.exit(2);
 }
+const sections = new SectionRunner(sectionOptions);
+
+/** Runs one named section; see SectionRunner in scripts/test-cli/sections.ts. */
+const section = (name: string, body: () => Promise<void> | void): Promise<void> =>
+  sections.section(name, body);
 
 
 /**
@@ -2313,8 +2307,7 @@ await section("Test262 Runner: child realm globals expose host hooks...", async 
     throw new Error(`Test262 child global hooks got: ${proc.stdout.toString()}`);
 });
 
-console.log("Test262 Runner: cross-realm weak constructors use the newTarget realm prototype...");
-{
+await section("Test262 Runner: cross-realm weak constructors use the newTarget realm prototype...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
     stdin: new TextEncoder().encode([
       "const child = $262.createRealm();",
@@ -2333,7 +2326,7 @@ console.log("Test262 Runner: cross-realm weak constructors use the newTarget rea
     throw new Error(`Bare cross-realm weak constructor probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
     throw new Error(`Bare cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
-}
+});
 
 // A built-in belongs to the realm that created it and runs there. Called from
 // another realm it has to hand control back to the caller's: the array literal
@@ -2667,8 +2660,7 @@ await section("Test262 Runner: ShadowRealm evaluate maps early errors to SyntaxE
     throw new Error(`Test262 Runner ShadowRealm evaluate mapped an error wrongly: ${proc.stdout.toString()}`);
 });
 
-console.log("Test262 Runner: rejected eval source preserves primitive singletons...");
-{
+await section("Test262 Runner: rejected eval source preserves primitive singletons...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
@@ -2695,7 +2687,7 @@ console.log("Test262 Runner: rejected eval source preserves primitive singletons
     throw new Error(`Bare rejected eval source probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue\ntrue\ntrue")
     throw new Error(`Bare rejected eval source probe got: ${proc.stdout.toString()}`);
-}
+});
 
 await section("Test262 Runner: bytecode eval keeps sloppy var declarations in the caller environment...", async () => {
   const proc = Bun.spawnSync([
@@ -5959,7 +5951,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
   if (json.ok === undefined) throw new Error(`Coverage --output=json should produce valid JSON with ok field`);
 });
 
-{
+await section("Coverage: Loader and TestRunner LCOV and JSON reports...", async () => {
   const tmp = makeTmp();
   try {
     console.log("Loader: coverage LCOV...");
@@ -6795,7 +6787,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // GocciaTestRunner
@@ -7672,7 +7664,7 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
 // A file-level throw emits no per-test reporter output, so the case above cannot
 // catch the reporter markers the testing library writes straight to stdout for
 // individual tests. These scenarios cover every marker-producing shape.
-{
+await section("TestRunner: JSON output keeps stdout clean, and hooks and suite errors are counted...", async () => {
   const scenarios: Array<{
     name: string;
     source: string;
@@ -8260,7 +8252,7 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
       clean(tmp);
     }
   }
-}
+});
 
 await section("TestRunner: an unhandled promise rejection fails whatever left it...", async () => {
   const tmp = makeTmp();
@@ -8765,7 +8757,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
 
 // -- Source maps (Loader) -------------------------------------------------------
 
-{
+await section("Loader: source maps...", async () => {
   const tmp = makeTmp();
   try {
     const jsxSource = [
@@ -8805,13 +8797,13 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // GocciaBundler
 // ============================================================================
 
-{
+await section("Bundler: compile, output paths, stdin, directories and source maps...", async () => {
   const tmp = makeTmp();
   try {
     console.log("Bundler: single file compile + roundtrip...");
@@ -8959,7 +8951,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
   } finally {
     clean(tmp);
   }
-}
+});
 
 await section("Bundler: constants folding to Infinity, NaN and -0 compile + roundtrip...", async () => {
   const tmp = makeTmp();
@@ -9076,7 +9068,7 @@ await section("BenchmarkRunner: results are reported under a polluted Array.prot
   }
 });
 
-{
+await section("BenchmarkRunner: file, stdin, JSON output, profiles and the microbench API...", async () => {
   const tmp = makeTmp();
   const benchEnv = {
     ...process.env,
@@ -9623,7 +9615,7 @@ await section("BenchmarkRunner: results are reported under a polluted Array.prot
   } finally {
     clean(tmp);
   }
-}
+});
 
 // ============================================================================
 // GocciaREPL
@@ -14216,8 +14208,7 @@ await section("Loader: --allow-net multiple hosts...", async () => {
   }
 });
 
-console.log("Loader: local fetch smoke with --allow-net...");
-await withFetchTestServer(async (baseUrl) => {
+await section("Loader: local fetch smoke with --allow-net...", () => withFetchTestServer(async (baseUrl) => {
   const tmp = makeTmp();
   const audit = join(tmp, "fetch-audit.jsonl");
   try {
@@ -14245,28 +14236,28 @@ await withFetchTestServer(async (baseUrl) => {
   } finally {
     clean(tmp);
   }
-});
+}));
 
-console.log("Loader: fetch re-checks the net capability on every redirect hop...");
-{
+await section("Loader: fetch re-checks the net capability on every redirect hop...", async () => {
   // The first hop names an allowed address; the redirect names a host the
   // capability does not allow, so the request is refused mid-flight.
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const url = new URL(request.url);
-      if (url.pathname === "/redirect")
-        return new Response(null, {
-          status: 302,
-          headers: { location: `http://localhost:${server.port}/final` },
-        });
-      return new Response("final", { status: 200 });
-    },
-  });
   const tmp = makeTmp();
   const audit = join(tmp, "redirect-audit.jsonl");
+  let server: ReturnType<typeof Bun.serve> | undefined;
   try {
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/redirect")
+          return new Response(null, {
+            status: 302,
+            headers: { location: `http://localhost:${url.port}/final` },
+          });
+        return new Response("final", { status: 200 });
+      },
+    });
     const { exitCode, json, stderr } = await runLoaderJsonAsync(
       [
         "globalThis.outcome = \"pending\";",
@@ -14288,10 +14279,10 @@ console.log("Loader: fetch re-checks the net capability on every redirect hop...
       event.kind === "net.fetch" && event.decision === "deny" && event.subject === "localhost"))
       throw new Error(`The refused redirect hop should be audited: ${JSON.stringify(events)}`);
   } finally {
-    server.stop(true);
+    server?.stop(true);
     clean(tmp);
   }
-}
+});
 
 // The first HTTPS handshake in a process loads OpenSSL on a fetch worker
 // thread. FPC 3.2.2's loader is not safe when several workers reach it at once:
@@ -14618,8 +14609,7 @@ await section("Loader: goccia.json multifile=true works without --multifile flag
   }
 });
 
-console.log("Loader: --module virtual modules use the ordinary module pipeline...");
-{
+await section("Loader: --module virtual modules use the ordinary module pipeline...", async () => {
   const source = [
     'import bytes from "host:asset";',
     'import source moduleSource from "host:pkg/main";',
@@ -14654,7 +14644,7 @@ console.log("Loader: --module virtual modules use the ordinary module pipeline..
     );
   if (!containsLine(proc.stdout.toString(), "host:pkg/main|host:pkg/dep|3|11|5|object"))
     throw new Error(`--module did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
-}
+});
 
 await section("Loader: dynamic import and ShadowRealm use configured virtual modules...", async () => {
   const source = [
@@ -14916,7 +14906,7 @@ await section("Runner sandbox mode: virtual modules share the CLI surface and ca
 // See docs/contributing/cli-conventions.md.
 // ============================================================================
 
-{
+await section('Stdin policy: piped stdin, an explicit "-" and closed stdin still run...', async () => {
   const tmp = makeNativeTmp();
   const stdinBenchEnv = {
     ...process.env,
@@ -15089,53 +15079,55 @@ await section("Runner sandbox mode: virtual modules share the CLI surface and ca
   } finally {
     clean(tmp);
   }
-}
+});
 
-console.log("Stdin policy: --help documents the stdin rule and escape hatch...");
-for (const app of [
-  { name: "GocciaRunner", bin: RUNNER },
-  { name: "GocciaScriptLoaderBare", bin: BARE },
-  { name: "GocciaTestRunner", bin: TESTRUNNER },
-  { name: "GocciaBenchmarkRunner", bin: BENCHRUNNER },
-  { name: "GocciaBundler", bin: BUNDLER },
-]) {
-  const proc = Bun.spawnSync([app.bin, "--help"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0)
-    throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  const help = normalizeLineEndings(proc.stdout.toString());
-  // The EOF key sequence is platform-specific: a Unix console ends input on
-  // Ctrl-D, a Windows console on Ctrl-Z followed by Enter, and the help text
-  // renders whichever one the local console honours (Goccia.CLI.Stdin).
-  const endOfInputKeys = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
-  for (const needle of ["Input:", `${app.name} < app.js`, '"-"', endOfInputKeys, "exits 2"]) {
-    if (!help.includes(needle))
-      throw new Error(`${app.name} --help is missing ${JSON.stringify(needle)}:\n${help}`);
+await section("Stdin policy: --help documents the stdin rule and escape hatch...", async () => {
+  for (const app of [
+    { name: "GocciaRunner", bin: RUNNER },
+    { name: "GocciaScriptLoaderBare", bin: BARE },
+    { name: "GocciaTestRunner", bin: TESTRUNNER },
+    { name: "GocciaBenchmarkRunner", bin: BENCHRUNNER },
+    { name: "GocciaBundler", bin: BUNDLER },
+  ]) {
+    const proc = Bun.spawnSync([app.bin, "--help"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const help = normalizeLineEndings(proc.stdout.toString());
+    // The EOF key sequence is platform-specific: a Unix console ends input on
+    // Ctrl-D, a Windows console on Ctrl-Z followed by Enter, and the help text
+    // renders whichever one the local console honours (Goccia.CLI.Stdin).
+    const endOfInputKeys = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
+    for (const needle of ["Input:", `${app.name} < app.js`, '"-"', endOfInputKeys, "exits 2"]) {
+      if (!help.includes(needle))
+        throw new Error(`${app.name} --help is missing ${JSON.stringify(needle)}:\n${help}`);
+    }
+    if (proc.stderr.toString() !== "")
+      throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
   }
-  if (proc.stderr.toString() !== "")
-    throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
-}
+});
 
-console.log("Stdin policy: GocciaREPL opts out...");
-for (const app of [
-  { name: "GocciaREPL", bin: REPL },
-]) {
-  const proc = Bun.spawnSync([app.bin, "--help"], { stdout: "pipe", stderr: "pipe" });
-  // Without these the test also passes when --help fails outright and prints
-  // nothing: an empty stdout trivially lacks "Input:". Same postconditions as
-  // the stdin-defaulting binaries above.
-  if (proc.exitCode !== 0)
-    throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stderr.toString() !== "")
-    throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
-  const help = normalizeLineEndings(proc.stdout.toString());
-  if (!help.includes(app.name))
-    throw new Error(`${app.name} --help did not print its own usage:\n${help}`);
-  if (help.includes("Input:"))
-    throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
-}
+await section("Stdin policy: GocciaREPL opts out...", async () => {
+  for (const app of [
+    { name: "GocciaREPL", bin: REPL },
+  ]) {
+    const proc = Bun.spawnSync([app.bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+    // Without these the test also passes when --help fails outright and prints
+    // nothing: an empty stdout trivially lacks "Input:". Same postconditions as
+    // the stdin-defaulting binaries above.
+    if (proc.exitCode !== 0)
+      throw new Error(`${app.name} --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (proc.stderr.toString() !== "")
+      throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
+    const help = normalizeLineEndings(proc.stdout.toString());
+    if (!help.includes(app.name))
+      throw new Error(`${app.name} --help did not print its own usage:\n${help}`);
+    if (help.includes("Input:"))
+      throw new Error(`${app.name} should not advertise the stdin rule:\n${help}`);
+  }
+});
 
 await section("TestRunner: vitest compatibility shim and its off-switch...", async () => {
   const tmp = makeTmp();
@@ -17235,15 +17227,4 @@ await section("Runner and TestRunner: a cancelled fetch frees its worker slot on
   }
 });
 
-if (sectionFailures.length > 0) {
-  console.error(`\n${sectionFailures.length} section(s) failed:`);
-  for (const failure of sectionFailures) {
-    const message =
-      failure.error instanceof Error ? failure.error.message : String(failure.error);
-    console.error(`  - ${failure.name}`);
-    console.error(`      ${message}`);
-  }
-  process.exit(1);
-}
-
-console.log("\nAll test-cli-apps.ts tests passed.");
+process.exit(sections.finish("test-cli-apps.ts"));

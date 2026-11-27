@@ -186,6 +186,12 @@ jobs:
             -obuild/embedding-instruction-counts-test scripts/engine/embedding-instruction-counts-test.pas
           GOCCIA_JIT=1 GOCCIA_JIT_HOT=8 timeout 20 build/embedding-instruction-counts-test
 
+      - name: Engines that share an instruction budget share one cap and count
+        run: |
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            -obuild/shared-instruction-budget-test scripts/engine/shared-instruction-budget-test.pas
+          timeout 60 build/shared-instruction-budget-test
+
       - name: Aborted runs discard queued work on a reused engine
         run: bash scripts/engine/aborted-run-test.sh
 
@@ -206,6 +212,14 @@ jobs:
           fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
             -obuild/embedder-host-work-test scripts/engine/embedder-host-work-test.pas
           python3 scripts/engine/embedder-host-work-test.py build/embedder-host-work-test
+
+      - name: Source and artifacts report the failing declaration's location
+        run: |
+          fixture=$(mktemp -d build/link-diagnostics.XXXXXX)
+          trap 'rm -rf "$fixture"' EXIT
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
+            "-o$fixture/link-diagnostics-test" scripts/engine/artifact-link-diagnostics-test.pas
+          timeout 20 "$fixture/link-diagnostics-test" "$fixture"
 
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests

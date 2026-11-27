@@ -11,8 +11,9 @@ pre-commit:
       run: ./format.pas {staged_files}
       stage_fixed: true
     lint-markdown:
-      glob: "**/*.md"
-      run: npx markdownlint-cli2 {staged_files}
+      # Only the staged Markdown files, each as a literal path; the script
+      # says how it picks them and why not from {staged_files}
+      run: sh scripts/lint-staged-markdown.sh
     check-doc-links:
       glob: "**/*.md"
       run: npx tsx scripts/check-doc-links.ts

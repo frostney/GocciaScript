@@ -2,7 +2,7 @@
 /**
  * suite-bump-pin.ts
  *
- * Update either a dedicated one-line SHA pin or a SUITE_SHA constant.
+ * Update a dedicated one-line SHA pin file.
  * Invoked by weekly bump workflows (TOML, JSON5, and YAML).
  *
  * Usage:
@@ -12,7 +12,6 @@
 import { readFileSync, writeFileSync } from "fs";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
-const SUITE_SHA_RE = /(SUITE_SHA\s*=\s*")([0-9a-f]{40})(")/g;
 
 function main(argv: string[]): number {
   if (argv.length !== 2 || !SHA_RE.test(argv[1])) {
@@ -31,29 +30,12 @@ function main(argv: string[]): number {
     return 1;
   }
 
-  let seen = 0;
-  let changed = 0;
-  let updated: string;
-  if (SHA_RE.test(text.trim())) {
-    seen = 1;
-    changed = text.trim() === newSha ? 0 : 1;
-    updated = `${newSha}\n`;
-  } else {
-    updated = text.replace(
-      SUITE_SHA_RE,
-      (full, prefix, oldSha, suffix) => {
-        seen++;
-        if (oldSha === newSha) return full;
-        changed++;
-        return `${prefix}${newSha}${suffix}`;
-      },
-    );
-  }
-
-  if (seen === 0) {
-    console.error(`${target}: no one-line SHA or SUITE_SHA constant found`);
+  if (!SHA_RE.test(text.trim())) {
+    console.error(`${target}: not a one-line SHA pin file`);
     return 1;
   }
+  const changed = text.trim() === newSha ? 0 : 1;
+  const updated = `${newSha}\n`;
 
   if (changed > 0) {
     writeFileSync(target, updated);

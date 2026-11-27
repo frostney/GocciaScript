@@ -451,15 +451,16 @@ Native embedders can replace snapshot persistence and source editing through
 
 **Official YAML Suite**
 
-For YAML parse-validity checks against the official `yaml-test-suite` (pinned to a specific SHA in the script), run:
+For YAML 1.2.2 checks against a prepared checkout of the official `yaml-test-suite` data branch, run:
 
 ```bash
-python3 scripts/run_yaml_test_suite.py
-python3 scripts/run_yaml_test_suite.py --output=tmp/yaml-suite-results.json
-python3 scripts/run_yaml_test_suite.py --suite-dir=/path/to/yaml-test-suite
+./build.pas yamlcompliancerunner
+./build/GocciaYAMLComplianceRunner --suite-dir=/path/to/yaml-test-suite --output=tmp/yaml-suite-results.json
 ```
 
-This check is intentionally parse-only: it compares whether each suite case should parse or fail, not whether Goccia's runtime values exactly match the suite's JSON fixtures. That distinction matters because Goccia intentionally canonicalizes complex YAML mapping keys into strings.
+Like the TOML runner below, it verifies the checkout against `tests/compliance/yaml-test-suite.pin` without fetching or cloning, and runs each case in its own worker process. A case is a directory with an `in.yaml`, at the top level or as a numbered variant one level down; the `name/` and `tags/` directories are symlink indexes of the same cases and are skipped. A valid case passes when `TGocciaYAMLParser.ParseDocuments(...)` reads it and, where the case has `in.json`, when its documents equal those JSON values: a tagged node compares as its content and an object's keys as a set. A case with an `error` file passes when the parser rejects it. The suite has no `in.json` for some valid cases, most of them with mapping keys JSON cannot hold (Goccia turns those into canonical strings); those cases are only checked to parse.
+
+Cases listed in `tests/compliance/yaml-test-suite.known-failures` may fail. The runner exits non-zero for any other failing case, for a listed case that passes, and for a listed case the suite lacks, so a change that fixes a case removes it from the list. `--known-failures=PATH` names another list, and `scripts/test-yaml-compliance-runner.py` checks each of these outcomes on small prepared suites. `.github/scripts/run-yaml-compliance.sh` checks out the pinned suite and runs the runner, in `pr.yml`'s `build` job and in `ci.yml`'s `yaml-compliance` job.
 
 **Official TOML Suite**
 
@@ -604,7 +605,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
 | Differential suites | `test-cli-differential.ts` runs each `scripts/differential/` suite under GocciaScript and the external runtimes its classification names, requiring them to agree on failed-test **name** sets and counts; vitest gates the testing-API suites (matchers, lifecycle, mocks) and bun gates the language ones, with bun advisory on matcher and lifecycle suites, skipped outright on mock suites, and `*.goccia.test.js` suites run under GocciaScript alone and must pass outright; a per-file timeout counts as a divergence. See [Differential Testing](differential-testing.md) |
 
-This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed.
+This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed. In [`test-cli-apps.ts`](../scripts/test-cli-apps.ts), put each new check, its fixture setup included, in a named `section()` call: `bun run scripts/test-cli-apps.ts --section=<text>` runs only the sections whose name contains the text, and `--list` prints the names. `test-cli-apps-selection.ts` fails the `cli` job when the selection logic breaks, or when code outside a section prints or throws during a selection.
 
 ## Pascal Unit Tests (Tertiary)
 
@@ -692,6 +693,7 @@ GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, 
 ```text
 supersede → build → test             → artifacts (main), release (tags)
                    → toml-compliance  →
+                   → yaml-compliance  →
                    → json5-compliance →
                    → awfy             →
                    → jetstream        →
@@ -708,6 +710,8 @@ docs, test-structure (no build)
 
 **`toml-compliance`** (all platforms) — Downloads the prebuilt `GocciaTOMLComplianceRunner`, prepares the exact pinned `toml-test` checkout, and relies on the runner exit status. CI performs only lightweight validation of the report envelope before uploading it.
 
+**`yaml-compliance`** (all platforms) — Downloads the prebuilt `GocciaYAMLComplianceRunner` and runs `.github/scripts/run-yaml-compliance.sh`, which checks out the pinned `yaml-test-suite` and relies on the runner exit status, then uploads the report.
+
 **`json5-compliance`** (all platforms) — Downloads `GocciaTestRunner`, verifies that the committed generated parser suite names the pinned JSON5 revision, and runs it together with the local stringify suite. CI relies on TestRunner's exit status and performs only lightweight validation of its JSON report before upload.
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in four shards, from the shared pin in `scripts/test262-suite-sha.txt`; `test262-merge` merges the shards, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
@@ -718,9 +722,9 @@ docs, test-structure (no build)
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries, builds the FFI fixture library, and runs CLI behavior smoke tests via Bun: `test-cli-assertions.ts` (the shared matchers), `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), `test-cli-permissions.ts` (capability flags, config `permissions` blocks, limits, and removed options), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence), `test-cli-embedded-resources.ts`, `test-cli-intl-taint.ts` (Intl robustness under lazy materialization), `test-cli-ffi-callback-slots.ts` (FFI callback slot exhaustion and reuse, in a process of its own), and `test-cli-differential.ts` (differential suites against Vitest and bun). On Linux and macOS, `test-cli-permissions.ts` fetches a name only the hosts file lists and `scripts/fetch-e2e.sh` an IPv6-only one, both added as for `test`. The x86-64 Linux leg also runs the pinned es-toolkit compatibility probes and uploads their classified JSON report. Windows runs additionally assert that `GocciaRunner` does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries, builds the FFI fixture library, and runs CLI behavior smoke tests via Bun: `test-cli-assertions.ts` (the shared matchers), `test-cli-apps-selection.ts` (section selection in `test-cli-apps.ts`), `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), `test-cli-permissions.ts` (capability flags, config `permissions` blocks, limits, and removed options), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence), `test-cli-embedded-resources.ts`, `test-cli-intl-taint.ts` (Intl robustness under lazy materialization), `test-cli-ffi-callback-slots.ts` (FFI callback slot exhaustion and reuse, in a process of its own), and `test-cli-differential.ts` (differential suites against Vitest and bun). On Linux and macOS, `test-cli-permissions.ts` fetches a name only the hosts file lists and `scripts/fetch-e2e.sh` an IPv6-only one, both added as for `test`. The x86-64 Linux leg also runs the pinned es-toolkit compatibility probes and uploads their classified JSON report. Windows runs additionally assert that `GocciaRunner` does not link against OpenSSL DLLs.
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
+**`artifacts`** (needs test + toml-compliance + yaml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
 **`nightly`** (`.github/workflows/nightly.yml`) — Runs on a schedule, every three hours. It takes the newest `CI` run that succeeded for a push to `main` and publishes that run's builds as the `nightly` prerelease when its commit is ahead of the one the last nightly was built from, or has diverged from it after a rewritten `main`; when nothing new has passed, or the run's one-day build artifacts have expired, it publishes nothing. "Run workflow" on `main` publishes the newest passing build at once. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
@@ -730,7 +734,7 @@ docs, test-structure (no build)
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 
-The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only because its outcomes are platform-independent for this engine; AWFY, JetStream and Web Tooling run on Linux x64 only for now, and measuring them on the other shipped platforms, which [ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)'s first target is judged on, is tracked in [#2102](https://github.com/frostney/GocciaScript/issues/2102)).
+The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `yaml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only because its outcomes are platform-independent for this engine; AWFY, JetStream and Web Tooling run on Linux x64 only for now, and measuring them on the other shipped platforms, which [ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)'s first target is judged on, is tracked in [#2102](https://github.com/frostney/GocciaScript/issues/2102)).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
@@ -746,7 +750,7 @@ build → test, boot-timing, benchmark*      → timing comment (benchmark* also
 docs, test-structure, website (no build)  * also needs build-main, a build of the PR's base commit
 ```
 
-`docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs the website's own checks ([Build System](build-system.md#pryml--pull-requests)).
+`build` also runs the official YAML suite on the binaries it built (`.github/scripts/run-yaml-compliance.sh`). `docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks. `website` runs the website's own checks ([Build System](build-system.md#pryml--pull-requests)).
 
 The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the per-file engines' heaps: collections and allocated bytes are summed over the files, in a parallel run live bytes add up across files and the peak is the largest `--jobs` files' peaks together, while in a sequential run the peak is the largest file's and the live bytes are the last file's (`AggregateMemoryStats` in `Goccia.CLI.FileEngine`). Freeing a file's engine and its heap at the end of the file is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
@@ -770,7 +774,7 @@ Weekly crons open (or update) a single PR every Monday with the latest upstream 
 | test262 | `test262-bump.yml` | 06:00 UTC | `scripts/test262-suite-sha.txt` |
 | toml-test | `toml-test-bump.yml` | 06:30 UTC | `tests/compliance/toml-test.pin` |
 | json5 | `json5-test-bump.yml` | 06:45 UTC | `tests/compliance/json5.pin` and `tests/built-ins/JSON5/upstream-parse.js` |
-| yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `scripts/run_yaml_test_suite.py` |
+| yaml-test-suite | `yaml-test-bump.yml` | 07:00 UTC | `tests/compliance/yaml-test-suite.pin` |
 
 Each workflow reuses a fixed branch (`chore/<suite>-bump`), so an unmerged PR is updated in place rather than replaced. See [test262.md](test262.md) for details on the test262 harness contract.
 
