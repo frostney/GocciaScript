@@ -187,6 +187,35 @@ m:
     ]);
   });
 
+  test("parses compact mappings with an omitted explicit key", () => {
+    const value = YAML.parse(`
+- ?
+  : named
+  b: two
+- outside
+`);
+
+    expect(value).toEqual([{ null: "named", b: "two" }, "outside"]);
+  });
+
+  test("parses compact mappings with an omitted explicit value", () => {
+    const value = YAML.parse(`
+- ? a
+  :
+  b: two
+  ? child
+  :
+  - nested
+  c: three
+- outside
+`);
+
+    expect(value).toEqual([
+      { a: null, b: "two", child: ["nested"], c: "three" },
+      "outside",
+    ]);
+  });
+
   test("rejects compact mappings as values of implicit keys", () => {
     expect(() => YAML.parse("- outer: inner: value")).toThrow(SyntaxError);
   });

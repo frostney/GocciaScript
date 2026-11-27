@@ -2104,7 +2104,6 @@ begin
     Exit(FTree.NewNull);
   if (CurrentLine.Indent = AParentIndent) and
      not StartsSequenceEntry(CurrentLine.Text) and
-     not StartsBlockMappingEntry(CurrentLine.Text) and
      ((CurrentLine.Text = '') or
       ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{'))) then
     Exit(FTree.NewNull);
