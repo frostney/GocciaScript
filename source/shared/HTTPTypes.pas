@@ -13,7 +13,9 @@ unit HTTPTypes;
 interface
 
 uses
-  SysUtils;
+  SysUtils,
+
+  NetworkCancellation;
 
 type
   THTTPHeader = record
@@ -82,6 +84,11 @@ type
       THTTPRedirectMode. DefaultHTTPPolicy sets hrmFollow; start from it
       rather than from an uninitialized record. }
     RedirectMode: THTTPRedirectMode;
+    { Optional: once cancelled, the request ends within one poll of
+      NETWORK_CANCELLATION_POLL_MILLISECONDS, wherever it waits on the
+      network, and raises EHTTPError (HTTP_REQUEST_CANCELLED_MESSAGE). The
+      caller keeps its reference for the length of the call. }
+    Cancellation: TNetworkCancellation;
   end;
 
   THTTPParsedURL = record
@@ -96,6 +103,8 @@ const
     the limit that was hard-coded in HTTPClient before it became configurable,
     so an embedder that never sets a policy sees no behavior change. }
   DEFAULT_MAX_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
+  { The error of a request its policy's Cancellation ended. }
+  HTTP_REQUEST_CANCELLED_MESSAGE = 'HTTP request cancelled';
 
 function DefaultHTTPPolicy: THTTPRequestPolicy;
 
@@ -128,6 +137,7 @@ begin
   Result.MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
   Result.HostCheck := nil;
   Result.RedirectMode := hrmFollow;
+  Result.Cancellation := nil;
 end;
 
 constructor EHTTPDestinationDenied.CreateDenied(const AScope, AReason: string);

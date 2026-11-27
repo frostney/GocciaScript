@@ -9854,46 +9854,62 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
   }
 });
 
-await section("Runner: an aborted fetch keeps its slot until its worker ends, so at most 16 requests run...", async () => {
-  // docs/built-ins-fetch.md: each host thread runs at most 16 requests, and a
-  // worker frees its slot when it finishes. Aborting a request rejects it at
-  // once, but its worker still waits on the socket, so the slot stays taken
-  // and the 17th request waits its turn: here until its own signal's deadline.
-  // The run itself does not wait for the aborted requests' workers.
+await section("Runner: an aborted fetch frees its slot at once, so requests queued behind aborted ones start...", async () => {
+  // docs/built-ins-fetch.md: each host thread runs at most 16 requests, and an
+  // abort stops the request's worker wherever it waits on the network, so its
+  // slot frees within one poll (#2216). Sixteen requests to a server that
+  // accepts and never answers hold every slot, plus four waiting their turn;
+  // once all are aborted, a request to a server that answers starts and is
+  // answered at once. Over https the aborted requests wait in their TLS
+  // handshakes (OpenSSL, SecureTransport or SChannel). The first runs have no
+  // deadline, so the hung sockets have no timeout; the last has a run
+  // deadline, which sends each connection attempt through a thread of its own.
   let connections = 0;
   const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { connections++; }, data() {} } });
+  const answering = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
   const tmp = makeNativeTmp();
   try {
-    const url = `http://127.0.0.1:${silent.port}/`;
-    writeFileSync(
-      join(tmp, "cap.js"),
-      [
-        "const controllers = Array.from({ length: 16 }, () => new AbortController());",
-        `const first = controllers.map((c) => fetch(${JSON.stringify(url)}, { signal: c.signal }).then(() => "ok", (e) => e.name));`,
-        "for (const c of controllers) c.abort();",
-        "console.log((await Promise.all(first)).every((r) => r === 'AbortError'));",
-        `try { await fetch(${JSON.stringify(url)}, { signal: AbortSignal.timeout(300) }); console.log("17th answered"); } catch (e) { console.log(e.name); }`,
-        "",
-      ].join("\n"),
-    );
-    const started = Date.now();
-    const run = Bun.spawn([RUNNER, `--allow-net=127.0.0.1`, join(tmp, "cap.js")], {
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 60_000,
-    });
-    const out = await new Response(run.stdout).text();
-    const err = await new Response(run.stderr).text();
-    await run.exited;
-    const lines = out.split(/\r?\n/).slice(0, 2);
-    if (JSON.stringify(lines) !== JSON.stringify(["true", "TimeoutError"]))
-      throw new Error(`The aborted requests should keep their slots: got ${JSON.stringify(lines)} ${err}`);
-    if (connections !== 16)
-      throw new Error(`The 17th request should wait for a slot, not connect: ${connections} connections`);
-    if (Date.now() - started > 30_000)
-      throw new Error("The run should not wait for the aborted requests' workers");
+    const cases: [string, string[]][] = [
+      ["http", []],
+      ["https", []],
+      ["http", ["--timeout=20000"]],
+    ];
+    for (const [scheme, extra] of cases) {
+      connections = 0;
+      const hung = `${scheme}://127.0.0.1:${silent.port}/`;
+      writeFileSync(
+        join(tmp, "slots.js"),
+        [
+          "const controllers = Array.from({ length: 20 }, () => new AbortController());",
+          `const aborted = controllers.map((c) => fetch(${JSON.stringify(hung)}, { signal: c.signal }).then(() => "ok", (e) => e.name));`,
+          // Let the sixteen running requests connect and block before the aborts.
+          "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);",
+          "for (const c of controllers) c.abort();",
+          "console.log((await Promise.all(aborted)).every((r) => r === 'AbortError'));",
+          "const started = Date.now();",
+          `const response = await fetch(${JSON.stringify(`http://127.0.0.1:${answering.port}/`)});`,
+          "console.log(response.status, Date.now() - started < 2000);",
+          "",
+        ].join("\n"),
+      );
+      const run = Bun.spawn([RUNNER, `--allow-net=127.0.0.1`, ...extra, join(tmp, "slots.js")], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 30_000,
+      });
+      const out = await new Response(run.stdout).text();
+      const err = await new Response(run.stderr).text();
+      await run.exited;
+      const lines = normalizeLineEndings(out).split("\n").slice(0, 2);
+      const label = `${scheme} ${extra.join(" ")}`.trim();
+      if (JSON.stringify(lines) !== JSON.stringify(["true", "200 true"]))
+        throw new Error(`${label}: the request after the aborted ones should be answered at once: got ${JSON.stringify(lines)} ${err}`);
+      if (connections !== 16)
+        throw new Error(`${label}: sixteen requests should have run and the waiting four never connected: ${connections} connections`);
+    }
   } finally {
     silent.stop(true);
+    answering.stop(true);
     clean(tmp);
   }
 });
