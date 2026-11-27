@@ -745,7 +745,7 @@ function FailureText(const AFileName: string; const AResult: TGocciaRunResult; c
   AEngine: TGocciaEngine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
   AFrames, ASuggestions, AColor: Boolean; ATimeoutMs, AMaxInstructions: Int64): string;
 var
-  Name, Suggestion, ErrorPath: string;
+  Name, Suggestion, ErrorPath, FramePath: string;
   Source, Loaded: TStringList;
 begin
   case AResult.Aborted of
@@ -787,16 +787,18 @@ begin
        (PathKey(ErrorPath, AFrameSource) <> PathKey(AFileName, AFrameSource)) then
     begin
       Source := nil;
-      if AFrames and ((AWithheld = '') or (PathKey(ErrorPath, AFrameSource) <> AWithheld)) and
-         AEngine.ModuleLoaded(UnicodeString(PathKey(ErrorPath, AFrameSource))) then
+      FramePath := '';
+      if AFrames then
+        FramePath := UTF8Encode(AEngine.ModuleSourcePath(UnicodeString(PathKey(ErrorPath, AFrameSource))));
+      if (FramePath <> '') and ((AWithheld = '') or (PathKey(ErrorPath, AFrameSource) <> AWithheld)) then
       begin
         try
           if Assigned(AFrameSource) then
-            Loaded := CreateFileTextLines(AFrameSource.SnapshotReadAllText(ErrorPath))
+            Loaded := CreateFileTextLines(AFrameSource.SnapshotReadAllText(FramePath))
           else
           begin
             Loaded := TStringList.Create;
-            Loaded.LoadFromFile(ErrorPath);
+            Loaded.LoadFromFile(FramePath);
           end;
           Source := Loaded;
         except

@@ -24,6 +24,9 @@ uses
   that is both the entry point and an imported module collapses into a
   single record instead of one record per spelling:
 
+    * the host's canonical path (symlinks and Windows short names
+      resolved, as module identity resolves them), or the lexical
+      absolute path where the host cannot canonicalize;
     * repo-relative when the file lives under a repository root (the
       nearest ancestor directory holding a `.git` entry, which is a
       directory in a normal clone and a file in a linked worktree or
@@ -290,7 +293,9 @@ function CoverageFunctionNameStart(const ASpan: TGocciaSourceSpan;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  FileUtils;
 
 
 { Coverage Path Canonicalization }
@@ -354,7 +359,13 @@ begin
     Exit;
   end;
 
-  Absolute := ExpandFileName(APath);
+  { The host's canonical path, as module identity uses (Goccia.Modules'
+    HostRealFilePath): an entry spelled through a symlink or a Windows short
+    name and the same file reached by import then share one key. A host that
+    cannot canonicalize keeps the lexical absolute path. }
+  Absolute := CanonicalHostPath(APath);
+  if Absolute = '' then
+    Absolute := ExpandFileName(APath);
   AResolved := Absolute;
 
   Root := FindRepositoryRoot(ExtractFileDir(Absolute));

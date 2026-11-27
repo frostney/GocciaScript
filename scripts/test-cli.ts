@@ -33,9 +33,11 @@ import {
 import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { assertPeakRssBelow, runWithPeakRss } from "./test-cli/rss";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
+import { verifyModuleIdentity } from "./test-cli/module-identity";
 
 verifyOutputEncoding();
 verifyReporterEncoding();
+verifyModuleIdentity();
 
 // -- Stdin smoke (Loader) ------------------------------------------------------
 
@@ -406,7 +408,9 @@ console.log("A static import of a missing module is located at its declaration..
     writeFileSync(dep, '// dep\nexport { a as b } from "./missing.js";\n');
     const cases = [
       [entry, `--> ${entry}:2:1`],
-      [viaDep, `--> ${dep}:2:1`],
+      // Module requests resolve from the canonical referrer directory. On Windows
+      // the native realpath expands the 8.3 components that tmpdir() may use.
+      [viaDep, `--> ${realpathSync.native(dep)}:2:1`],
     ] as const;
     for (const [file, expected] of cases) {
       const proc = Bun.spawnSync([RUNNER, file], {

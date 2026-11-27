@@ -96,6 +96,9 @@ type
       scope covering it. Deny wins over grants and exemptions alike. }
     function DeniesPath(const ACapability: TGocciaCapability;
       const APath: string): Boolean;
+    { read/ffi: match a path the caller already canonicalized. }
+    function DeniesCanonicalPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
 
     { Generic request query. read/ffi take a path, net takes `host`,
       `host:port`, or `[v6]:port`, import takes `node_modules` or a provider
@@ -906,11 +909,17 @@ end;
 
 function TGocciaCapabilities.DeniesPath(
   const ACapability: TGocciaCapability; const APath: string): Boolean;
-var
-  Path: string;
 begin
-  Path := CanonicalPathRequest(ACapability, APath);
-  Result := (Path = '') or LayersDenyCanonicalPath(FLayers, ACapability, Path);
+  Result := DeniesCanonicalPath(ACapability, CanonicalPathRequest(ACapability, APath));
+end;
+
+function TGocciaCapabilities.DeniesCanonicalPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
+begin
+  if not (ACapability in [gcRead, gcFFI]) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s is not a path capability', [CapabilityName(ACapability)]);
+  Result := (APath = '') or LayersDenyCanonicalPath(FLayers, ACapability, APath);
 end;
 
 function TGocciaCapabilities.AllowsPath(

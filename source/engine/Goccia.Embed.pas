@@ -204,6 +204,7 @@ type
     { whether the run's entry loaded a module from Path (an absolute path), not the host before it: a host shows a
       code frame of such a file only }
     function ModuleLoaded(const Path: UnicodeString): Boolean;
+    function ModuleSourcePath(const Path: UnicodeString): UnicodeString;
     { the engine's heap now; call it on the engine's thread }
     function Memory: TGocciaMemoryStats;
     { a deterministic run's stream for a child engine (a sandbox's nested run), forked from realm 0's as a realm's
@@ -720,7 +721,12 @@ end;
 
 function TGocciaEngine.ModuleLoaded(const Path: UnicodeString): Boolean;
 begin
-  Result := ModuleLoadedSince(Path, FModuleMark);
+  Result := ModuleSourcePath(Path) <> '';
+end;
+
+function TGocciaEngine.ModuleSourcePath(const Path: UnicodeString): UnicodeString;
+begin
+  Result := ModuleSourcePathSince(Path, FModuleMark);
 end;
 
 function TGocciaEngine.Memory: TGocciaMemoryStats;
@@ -1121,7 +1127,7 @@ begin
     { the module loads again under its record (Goccia.Modules LoadArtifactRecord, with its own module id); this
       read only settled the goal and the checks }
     A.Info.Free;
-    SetProvidedArtifact(EntryKey, FArtifactBytes);
+    SetProvidedArtifact(EntryKey, EntryKeyOf(FileName), FArtifactBytes);
   end
   else
   begin
@@ -1140,7 +1146,7 @@ begin
   finally
     FArtifactEntry := False;
     FArtifactBytes := '';
-    SetProvidedArtifact('', '');
+    SetProvidedArtifact('', '', '');
   end;
 end;
 

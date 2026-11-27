@@ -1,8 +1,8 @@
 // The CLI host's modules: goccia:* and the other host specifiers, as the preludes register them in
 // shared.hostModules (key -> a function returning the module's exports object, or its JavaScript source text).
-// Goccia.Modules asks Goccia.HostAPI's hook, which calls shared.loadHostModule(key): undefined for no host module, the
-// source text, or the export names and values interleaved. Called first, with the global object, the host's natives
-// (n) and the preludes' shared internals.
+// Goccia.Modules asks Goccia.HostAPI's hook, which calls shared.loadHostModule(key, filePath): undefined for no host
+// module, the source text, or the export names and values interleaved. Called first, with the global object, the
+// host's natives (n) and the preludes' shared internals.
 (function (G, n, shared) {
   'use strict';
   const registry = Object.create(null);
@@ -28,25 +28,35 @@
   };
   const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
     '.tsv': 'TSV', '.yaml': 'YAML', '.yml': 'YAML', '.toml': 'TOML' };
-  shared.hasHostModule = (key) => registry[key] !== undefined;
-  shared.loadHostModule = (key) => {
-    const make = registry[key];
+  let hasFileVirtualModules = false;
+  shared.findHostModule = (key) => {
+    if (registry[key] !== undefined) return key;
+    if (hasFileVirtualModules && n.isAbsolutePath(key)) {
+      const fileKey = n.virtualFileKey(key);
+      if (registry[fileKey] !== undefined) return fileKey;
+    }
+    return undefined;
+  };
+  shared.loadHostModule = (key, filePath) => {
+    const make = filePath === '' ? registry[key] : undefined;
     let exports;
     if (make !== undefined) {
       exports = make();
       if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
     } else {
-      const format = n.isAbsolutePath(key) ? formats[extensionOf(key)] : undefined;
+      if (filePath === '') return undefined;
+      const extension = extensionOf(key);
+      const format = n.isAbsolutePath(filePath) ? formats[extension] : undefined;
       if (format === undefined) return undefined;
-      const text = n.readText(key);
+      const text = n.readText(key, filePath);
       if (text === undefined) return undefined;
       // a parse failure names the specifier the module was imported by, not the host path
       const specifier = n.specifierOf(key);
       let value;
       try {
-        value = format(text, key, specifier);
+        value = format(text, key, specifier, filePath);
       } catch (e) {
-        const kind = FORMAT_NAMES[extensionOf(key)];
+        const kind = FORMAT_NAMES[extension];
         if (kind !== undefined && e instanceof SyntaxError)
           throw new SyntaxError(`Failed to parse ${kind} module "${specifier}": ${e.message}`);
         throw e;
@@ -91,12 +101,12 @@
     }
     return out;
   };
-  const textAsset = (raw, path) => {
+  const textAsset = (raw, path, _specifier, readPath) => {
     const text = toLF(raw);
     const slash = lastSlash(path);
     const fileName = path.slice(slash + 1);
     const metadata = Object.freeze({ kind: 'text', path, fileName, extension: extensionOf(path),
-      byteLength: n.fileSize(path) });
+      byteLength: n.fileSize(readPath) });
     return exportList(['content', text, 'default', text, 'metadata', metadata]);
   };
   formats['.txt'] = textAsset;
@@ -144,7 +154,9 @@
         throw new TypeError(`Virtual module "${address}" must be an object with content`);
       const type = descriptor.type === undefined ? 'javascript' : descriptor.type;
       const content = descriptor.content;
-      const key = isRelative(address) && base ? joinPath(base, address) : address;
+      const path = isRelative(address) && base ? joinPath(base, address) : address;
+      const isFile = n.isAbsolutePath(path);
+      const key = isFile ? n.virtualFileKey(path) : path;
       if (n.moduleLoaded(key))
         throw new TypeError(`Virtual module "${key}" cannot be replaced after it has been loaded.`);
       if (registry[key] !== undefined && virtualKeys[key] === undefined)
@@ -177,6 +189,7 @@
       }
       registry[key] = make;
       virtualKeys[key] = true;
+      if (isFile) hasFileVirtualModules = true;
     }
   };
 })
