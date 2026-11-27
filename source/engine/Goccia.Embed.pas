@@ -16,6 +16,7 @@ uses
 type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
+  IGocciaAbortHandle = Goccia.VM.IGocciaAbortHandle;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -93,6 +94,7 @@ type
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FSetupAborted: TGocciaAbort;
+    FNextRunAbort: IRunAbortSignal;
     FMaxFrames: Integer;
     FHostReady: Boolean;
     FExposeTimers: Boolean;
@@ -158,6 +160,7 @@ type
     function InstallHost(var Err: UnicodeString): Boolean;
     procedure SetHeapSnapshots(V: Boolean);
     procedure SetOnModuleWarning(const Value: TGocciaModuleWarningEvent);
+    function RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
   public
     { builds this thread's engine; one at a time per thread }
     constructor Create;
@@ -167,6 +170,8 @@ type
       ShadowRealm switch and ConfigJson (the host config as a JSON object of strings, goccia.json's keys) are
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
+    { Call on the engine thread before Run or RunArtifact. The returned handle targets that one entry. }
+    function CaptureAbortHandle: IGocciaAbortHandle;
     function Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
     { Run for a bytecode file (a .gbc entry, Goccia.Artifact): its recorded goal unless SourceKind names one (a
       conflicting one is an error), its profile checked against the settings before anything of it runs, a
@@ -1151,7 +1156,44 @@ begin
   end;
 end;
 
+function TGocciaEngine.CaptureAbortHandle: IGocciaAbortHandle;
+begin
+  FNextRunAbort := NewRunAbortSignal;
+  Result := FNextRunAbort;
+end;
+
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
+var Signal: IRunAbortSignal; Requested: Boolean;
+begin
+  Signal := FNextRunAbort;
+  if Signal = nil then Exit(RunEntry(FileName, Source));
+  FNextRunAbort := nil;
+  BeginRunAbort(Signal);
+  try
+    if not RunAbortRequested then Result := RunEntry(FileName, Source)
+    else Result := Default(TGocciaRunResult);
+  finally
+    Requested := EndRunAbort;
+  end;
+  if Requested and (Result.Aborted = gaNone) then
+  begin
+    Result.Ok := False;
+    Result.Aborted := gaHostAbort;
+    Result.ErrorIsError := True;
+    Result.ErrorName := 'Error';
+    Result.ErrorText := SHostRunCancelled;
+    Result.ErrorMessage := Result.ErrorText;
+    Result.ErrorFile := '';
+    Result.ErrorLine := 0;
+    Result.ErrorColumn := 0;
+    Result.ErrorSuggestion := '';
+    Result.ErrorResolvedPath := '';
+    Result.HasResult := False;
+    Result.ResultText := '';
+  end;
+end;
+
+function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
@@ -1350,6 +1392,7 @@ begin
       Result.HasResult := Result.Ok;
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
+    if (AbortKind = 0) and RunAbortRequested then AbortInterrupted;
     case AbortKind of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;

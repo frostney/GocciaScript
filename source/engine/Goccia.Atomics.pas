@@ -454,7 +454,7 @@ begin
   InterruptWord := CurrentInterruptWord;
   if InterruptWord^ <> 0 then Exit(AbortInterrupted);
   WaitInterrupt := nil;
-  if LimitRemainingMs > 0 then WaitInterrupt := InterruptWord;
+  if (LimitRemainingMs > 0) or RunAbortArmed then WaitInterrupt := InterruptWord;
   R := SharedWait(SharedBlockOf(O^.Aux1), ByteIdx, @CellStillHolds, @Cell, T, WaitInterrupt);
   if InterruptWord^ <> 0 then Exit(AbortInterrupted);
   case R of
@@ -561,7 +561,7 @@ begin
     else Wait := Next - Now_;
     Remaining := LimitRemainingMs;
     if (Remaining > 0) and (Remaining < Wait) then Wait := Remaining;
-    Done := SharedAsyncPoll(Wait);
+    Done := SharedAsyncPoll(Wait, @WaitForRunEvent);
     if (Interrupt <> 0) and not PollInterrupt then Exit(False);
     for I := 0 to High(Done) do SettleAsync(Done[I], 'ok');
     Now_ := GetTickCount64;
@@ -597,7 +597,7 @@ procedure PumpAsyncWaits;
 var Done: TBoundArray; I: Integer; Now_: QWord;
 begin
   if AsyncPending <= 0 then Exit;
-  Done := SharedAsyncPoll(0);
+  Done := SharedAsyncPoll(0, @WaitForRunEvent);
   for I := 0 to High(Done) do SettleAsync(Done[I], 'ok');
   Now_ := GetTickCount64;
   for I := 0 to AsyncCount - 1 do

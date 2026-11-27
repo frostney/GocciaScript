@@ -724,7 +724,7 @@ begin
       Slice := WAIT_SLICE_MS;
       if (Earliest <> 0) and (Earliest - Now_ < Slice) then Slice := Earliest - Now_;
       if (Until_ <> 0) and (Until_ - Now_ < Slice) then Slice := Until_ - Now_;
-      RTLEventWaitFor(Owner.Wake, Slice);
+      WaitForRunEvent(Owner.Wake, Slice);
       RTLEventResetEvent(Owner.Wake);
     end;
   EnterCriticalSection(Owner.Lock);

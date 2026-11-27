@@ -61,7 +61,7 @@ end.
 
 | Group | Members |
 |-------|---------|
-| Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact` |
+| Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact`, `CaptureAbortHandle` |
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
 | Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment` |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
@@ -143,7 +143,8 @@ GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor in
 | StartExecutionTimeout, StartInstructionLimit, SetMaxStackDepth, TGarbageCollector.MaxBytes | `TimeoutMs`, `MaxInstructions`, `MaxFrames`, `MaxMemory` |
 | UnhandledRejections | `FailOnUnhandledRejection` |
 | Pascal exceptions from a run | Fields of `TGocciaRunResult` ([Error Handling](#error-handling)) |
-| CaptureAbortHandle, Engine.FetchTransport | None ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread), [Fetch Transport](#fetch-transport)) |
+| CaptureAbortHandle | [TGocciaEngine.CaptureAbortHandle](#aborting-a-run-from-another-thread) |
+| Engine.FetchTransport | None ([Fetch Transport](#fetch-transport)) |
 
 ## Engine Lifecycle & Realm Isolation
 
@@ -472,7 +473,14 @@ Engine.MaxFrames := 5000;
 
 ### Aborting a Run from Another Thread
 
-`TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled sees the interrupt only at loop back edges and counts no instructions, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
+On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArtifact`. Hold the returned
+`IGocciaAbortHandle` in the thread that may call `Request`. A request made before the run prevents it from starting.
+A request during execution ends it past guest handlers with `Aborted = gaHostAbort`. The engine interrupts its fetch
+and Atomics waits, then discards pending guest work under the same rules as a timeout.
+
+The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
+Use a fresh handle for every run. The interpreter handles runs with an abort handle armed. Compilation and custom
+blocking native functions can reach the abort only when they return or encounter an engine checkpoint.
 
 ### Call Stack Depth Limit
 
