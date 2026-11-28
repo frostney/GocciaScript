@@ -5,9 +5,15 @@
 # GOCCIA_HOST gives them GocciaHost.gc()), and every test file under tests/ (scripts/engine/gcstress-tests.py).
 #   GOCCIA_WT_DIR  the Web Tooling digest bundles; GOCCIA_JS_DIR  the JetStream bundles (jetstream-*.js);
 #   GOCCIA_AWFY_DIR  the AWFY bundles (awfy-*.js, optional); GOCCIA_ENGINE_BIN  the binary (default build/engine/goccia)
+# Every step runs a copy of that binary, made in a temporary directory at the start and removed at the end, so a
+# rebuild of build/engine/goccia during the run (the build replaces that file) does not fail what is left of it.
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
-ENGINE=${GOCCIA_ENGINE_BIN:-build/engine/goccia}; KB=${1:-256}; ref=scripts/engine/digests.txt
+KB=${1:-256}; ref=scripts/engine/digests.txt
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/gcstress.XXXXXX") || exit 1
+trap 'rm -rf "$WORK"' EXIT
+ENGINE=$WORK/goccia
+cp "${GOCCIA_ENGINE_BIN:-build/engine/goccia}" "$ENGINE" || exit 1
 run() {
   f=$1; n=$(basename $f .js)
   # AWFY without --gc-verify: verifying after every collection walks the whole heap, and Havlak's takes hours
