@@ -127,7 +127,7 @@ Built-ins written as JavaScript preludes (WeakMap, WeakRef, Temporal, Intl, ...)
 
 ### Shapes and Property Storage
 
-A shape (`TShape`) maps each key to a slot index and attribute byte and names the object's prototype. Adding a property moves the object along a transition edge to a child shape (`ShapeAdd`, `AddProperty`); objects built the same way share shapes, which is what the inline caches key on. A shape with more than 8 transitions hashes them. An object that reaches 64 properties gets a private dictionary shape (`IsDict`), changed in place. Deleting a property (`DeleteProperty`) or changing its attributes (`ChangeFlags`) rebuilds the object's shape from its prototype's root shape (`RootShapeFor`).
+A shape (`TShape`) maps each key to a slot index and attribute byte and names the object's prototype. Adding a property moves the object along a transition edge to a child shape (`ShapeAdd`, `AddProperty`); objects built the same way share shapes, which is what the inline caches key on. A shape with more than 8 transitions hashes them. An object that reaches 64 properties gets a private dictionary shape (`IsDict`), changed in place and retired by the major collection after its object dies ([Garbage Collector — Prototypes and Shapes](garbage-collector.md#prototypes-and-shapes)). Deleting a property (`DeleteProperty`) or changing its attributes (`ChangeFlags`) rebuilds the object's shape from its prototype's root shape (`RootShapeFor`).
 
 Attribute bits (`Goccia.Core`):
 

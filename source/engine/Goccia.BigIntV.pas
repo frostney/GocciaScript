@@ -47,6 +47,7 @@ begin
   begin
     Size := (Size + 7) and not 7;
     C := GetMem(Size);
+    HeapNativeCharge(Size + NATIVE_BLOCK_OVERHEAD, True);
     C^.Hdr.Size := Size;
     C^.Hdr.Kind := ckBigInt;
     C^.Hdr.Flags := cfPermanent or cfOld;

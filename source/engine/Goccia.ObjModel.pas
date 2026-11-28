@@ -56,10 +56,42 @@ procedure DataDesc(var D: TPropDesc; V: TValue; W, E, C: Boolean);
 function SameValueV(A, B: TValue): Boolean;
 procedure InitObjModel;
 
+{ whether no object on O's prototype chain can have the integer key K without its atom existing (see the
+  implementation): a lookup of K then finds nothing, and none makes K's atom }
+function IdxAbsent(O: TValue; K: Int64): Boolean;
+
 implementation
 
 uses
   SysUtils, Math, Goccia.Instructions, Goccia.VM, Goccia.Typed;
+
+{ whether no object on O's prototype chain can have the integer key K without its atom existing: each keeps its
+  keys in its shape (no exotic index handling, and no dense elements, or an ordinary array's that end before K),
+  and shapes hold atoms only. A lookup of an index no atom names then finds nothing, and no atom is made for it: an
+  array-like with a huge length, or a sparse array's holes, would otherwise intern one permanent atom per index it
+  visits }
+function IdxAbsent(O: TValue; K: Int64): Boolean;
+var P: PObj; Depth: Integer;
+begin
+  Result := False;
+  if IntAtomIfExists(K) <> nil then Exit;
+  Depth := 0;
+  while IsObject(O) do
+  begin
+    P := ObjOf(O);
+    if P^.OKind = okArray then
+    begin
+      if (P^.Elements <> nil) and (K < P^.Elements^.Len) then Exit;
+    end
+    else if (P^.Elements <> nil) or not (P^.OKind in [0, okFunction, okNative, okBound, okError, okBoolean, okNumber,
+       okMap, okSet, okIterator, okGenerator]) or ((P^.Hdr.Flags and cfEmulatesUndefined) <> 0) then Exit;
+    Inc(Depth);
+    if Depth > 64 then Exit;
+    O := P^.Shape^.Proto;
+  end;
+  Result := True;
+end;
+
 
 threadvar
   AtomEnumerable, AtomConfigurable, AtomWritable, AtomGet, AtomSet: PStr;
@@ -479,7 +511,12 @@ begin
       Exit(True);
     end;
   end;
-  ArraySetLengthAny(P, NewLen);
+  { the reservation can collect: O read back from its root }
+  PushRoot(O);
+  if not ArraySetLengthReserved(O, NewLen) then begin PopRoots(1); Exit(False); end;
+  O := RootAt(TempTop - 1);
+  PopRoots(1);
+  P := ObjOf(O);
   if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
   Result := True;
 end;
@@ -945,6 +982,9 @@ begin
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    { each attribute change on a dictionary object makes a shape and allocates no cell: the collection their charges
+      ask for runs here, where O and its keys are rooted }
+    HeapChargeCollect;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     EmptyDesc(D);
     D.HasConfigurable := True; D.Configurable := False;
@@ -1844,7 +1884,9 @@ begin
     Def(RootAt(TempTop - 1), 'deleteProperty', Reflect_DeleteProperty2, 2);
     Def(RootAt(TempTop - 1), 'has', Reflect_Has2, 2);
     Def(RootAt(TempTop - 1), 'ownKeys', Reflect_OwnKeys2, 1);
-    DefineOwn(RootAt(TempTop - 1), SymKey(SymToStringTagW), StrFromUnicode('Reflect'), pfConfigurable);
+    PushRoot(StrFromUnicode('Reflect'));
+    DefineOwn(RootAt(TempTop - 2), SymKey(SymToStringTagW), RootAt(TempTop - 1), pfConfigurable);
+    PopRoots(1);
     PopRoots(1);
   end;
 end;

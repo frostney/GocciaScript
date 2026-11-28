@@ -272,7 +272,7 @@ function BufferOf(const Bytes: TBytes; var Res: TValue): Boolean;
 var B: PObj; Proto: TValue;
 begin
   if not HeapReserve(Length(Bytes)) then
-    Exit(ThrowError('RangeError', 'Allocation failed: GC heap size exceeds the configured memory limit'));
+    Exit(ThrowMemoryLimit);
   if GetV(GlobalObj, AtomOf('ArrayBuffer'), Proto) and GetV(Proto, AtomPrototype, Proto) then
   else
   begin
@@ -349,7 +349,7 @@ begin
     begin
       Text := Box.Fs.ReadAllText(Path);
       if not HeapReserve(Int64(Length(Text)) * 2) then
-        Exit(ThrowError('RangeError', 'Allocation failed: GC heap size exceeds the configured memory limit'));
+        Exit(ThrowMemoryLimit);
       Res := StrFromUnicode(Text);
       Exit(True);
     end;
@@ -664,7 +664,7 @@ begin
   try
     Found := SandboxGrep(Box.Fs, Files, Opt);
   except
-    on E: ENativeMemoryLimit do Exit(ThrowError('RangeError', E.Message));
+    on E: ENativeMemoryLimit do Exit(ThrowMemoryLimit(E.Message));
     on E: ESandboxGrepPatternError do Exit(ThrowError('SyntaxError', E.Message));
     on E: ERegExpStackExhausted do Exit(ThrowError('RangeError', E.Message));
     on E: ERegExpRuntimeError do Exit(ThrowError('Error', E.Message));

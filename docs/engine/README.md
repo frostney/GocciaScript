@@ -98,8 +98,8 @@ memory limit` ([ADR 0185](../adr/0185-g2-refuses-memory-at-the-next-safe-point.m
 frames on the stack it is `RangeError: Maximum call stack size exceeded` with the stack-memory suggestion. A script
 can catch it, drop what it holds and go on. Eight refusals in a row that free nothing end the run as a spent limit
 does, with `Fatal error: Live heap of N bytes exceeds the memory limit of M bytes` (exit 1; GocciaRunner's JSON report
-names it `MemoryLimitError`). An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, is a
-`RangeError` at once. Compiled loops poll for both at every back edge (one compare of the thread's `Interrupt`): the
+names it `MemoryLimitError`). An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, an array's
+elements or a built string, is a `RangeError` at once. Compiled loops poll for both at every back edge (one compare of the thread's `Interrupt`): the
 baseline code exits to the interpreter there, and an optimized region leaves at the jump with its frame state
 written back. `scripts/engine/limits-test.sh` checks all of this.
 

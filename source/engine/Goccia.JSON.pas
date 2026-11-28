@@ -405,7 +405,11 @@ begin
   if (Rec <> nil) and SameValueV(ObjOf(TempRoots[RecVals])^.Elements^.Data[Rec.ValIdx], RootAt(TempTop - 2)) then
   begin
     if not IsObject(RootAt(TempTop - 2)) then
-      DefineOwn(RootAt(TempTop - 1), AtomOf('source'), StrFromUnicode(Copy(JSrc, Rec.SrcStart, Rec.SrcLen)), pfDefault);
+    begin
+      PushRoot(StrFromUnicode(Copy(JSrc, Rec.SrcStart, Rec.SrcLen)));
+      DefineOwn(RootAt(TempTop - 2), AtomOf('source'), RootAt(TempTop - 1), pfDefault);
+      PopRoots(1);
+    end;
     Elems := Rec.Elements;
     Ents := Rec.Entries;
     EKeys := Rec.Keys;
@@ -512,6 +516,9 @@ type
     HasPropList: Boolean;
     Gap, Indent: UnicodeString;
     Depth: Integer;
+    { Buf is outside the heap: the bytes of it charged against the memory limit (OutOk) }
+    Charge: THeapExternalCharge;
+    Charged: Int64;
   end;
 
 procedure Put(var O: TJOut; const S: UnicodeString); inline;
@@ -590,13 +597,88 @@ begin
 end;
 
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean; forward;
+function SerializeValue(var O: TJOut; V: TValue; var Skip: Boolean): Boolean; forward;
 
-{ before each element or member: the text so far within MAX_STRING_LENGTH (the buffer is a UnicodeString, which the
-  memory limit does not count) and no limit spent (an array's length is the script's, up to 2^53 - 1) }
+{ before each element or member: the text so far within MAX_STRING_LENGTH, the buffer's growth since the last one
+  charged against the memory limit (a UnicodeString outside the heap; after a collection when it does not fit: the
+  serializers hold their values in roots here) and no limit spent (an array's length is the script's, up to
+  2^53 - 1) }
+{ the buffer's capacity charged against the memory limit up to Cap code units, after a collection when it does not
+  fit (the callers hold their values in roots); False with the refusal, the text given up first }
+function OutCharge(var O: TJOut; Cap: Int64): Boolean;
+var Grown: Int64;
+begin
+  Grown := Cap * SizeOf(WideChar) - O.Charged;
+  if Grown > 0 then
+  begin
+    if not O.Charge.TryGrow(Grown) then
+    begin
+      O.Buf := '';
+      O.Len := 0;
+      O.Charge.Clear;
+      O.Charged := 0;
+      Exit(ThrowMemoryLimit);
+    end;
+    Inc(O.Charged, Grown);
+  end;
+  Result := True;
+end;
+
+{ room for Extra more code units, charged before the buffer grows to hold them: a long string's escaped text, written
+  in one go, does not grow the buffer past the limit before a check }
+function OutReserve(var O: TJOut; Extra: Int64): Boolean;
+var Cap: Int64;
+begin
+  if O.Len + Extra > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+  if O.Len + Extra <= Length(O.Buf) then Exit(True);
+  Cap := Max(Int64(Length(O.Buf)) * 2, O.Len + Extra + 64);
+  if Cap > MAX_STRING_LENGTH then Cap := O.Len + Extra;
+  if not OutCharge(O, Cap) then Exit(False);
+  SetLength(O.Buf, Cap);
+  Result := True;
+end;
+
+{ the code units Quote writes for N code units at S }
+function QuotedLength(S: PWideChar; N: Integer): Int64;
+var I: Integer; C: Word;
+begin
+  Result := 2;
+  I := 0;
+  while I < N do
+  begin
+    C := Ord(S[I]);
+    if (C = $22) or (C = $5C) or (C = 8) or (C = 9) or (C = 10) or (C = 12) or (C = 13) then Inc(Result, 2)
+    else if C < $20 then Inc(Result, 6)
+    else if (C < $D800) or (C > $DFFF) then Inc(Result)
+    else if (C <= $DBFF) and (I + 1 < N) and (Ord(S[I + 1]) >= $DC00) and (Ord(S[I + 1]) <= $DFFF) then
+    begin
+      Inc(Result, 2);
+      Inc(I);
+    end
+    else Inc(Result, 6);   { a lone surrogate }
+    Inc(I);
+  end;
+end;
+
+{ QuoteStr with its escaped text reserved first (OutReserve); S is read again from a root after the reservation,
+  which can collect }
+function QuoteChecked(var O: TJOut; S: PStr): Boolean;
+begin
+  PushRoot(MkPtr(S));
+  Result := OutReserve(O, QuotedLength(StrChars(S), S^.Len));
+  S := StrOf(RootAt(TempTop - 1));
+  PopRoots(1);
+  if Result then QuoteStr(O, S);
+end;
+
+{ before each element or member: the text so far within MAX_STRING_LENGTH, the buffer's growth since the last one
+  charged against the memory limit (a UnicodeString outside the heap; after a collection when it does not fit: the
+  serializers hold their values in roots here) and no limit spent (an array's length is the script's, up to
+  2^53 - 1) }
 function OutOk(var O: TJOut): Boolean;
 begin
   if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-  Result := PollInterrupt;
+  Result := OutCharge(O, Length(O.Buf)) and PollInterrupt;
 end;
 
 function InStack(var O: TJOut; V: TValue): Boolean;
@@ -642,7 +724,7 @@ begin
     Mark := O.Len;
     if Any then PutC(O, ',');
     if O.Gap <> '' then NewLine(O);
-    QuoteStr(O, K);
+    if not QuoteChecked(O, K) then begin PopRoots(2); Exit(False); end;
     PutC(O, ':');
     if O.Gap <> '' then PutC(O, ' ');
     if not SerializeProp(O, K, RootAt(TempTop - 2), Skip) then begin PopRoots(2); Exit(False); end;
@@ -661,9 +743,22 @@ begin
   Result := True;
 end;
 
+{ an ordinary array's own element I, a primitive other than a BigInt (whose prototype may have toJSON): Get(A, I) is
+  that value, with no key }
+function OwnPrimitiveElement(A: TValue; I: Int64; var V: TValue): Boolean;
+var P: PObj;
+begin
+  Result := False;
+  if not IsObject(A) then Exit;
+  P := ObjOf(A);
+  if (P^.OKind <> okArray) or (P^.Elements = nil) or (I >= P^.Elements^.Len) then Exit;
+  V := P^.Elements^.Data[I];
+  Result := (V <> VHole) and not IsObject(V) and not IsBigInt(V);
+end;
+
 { 25.5.2.7 SerializeJSONArray }
 function SerializeArray(var O: TJOut; V: TValue): Boolean;
-var Len, I: Int64; Stepback: UnicodeString; Skip: Boolean;
+var Len, I: Int64; Stepback: UnicodeString; Skip: Boolean; E: TValue;
 begin
   if InStack(O, V) then Exit(ThrowTypeError('Converting circular structure to JSON'));
   if O.Depth >= MAX_DEPTH then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -680,8 +775,20 @@ begin
     if not OutOk(O) then begin PopRoots(1); Exit(False); end;
     if I > 0 then PutC(O, ',');
     if O.Gap <> '' then NewLine(O);
-    if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
-    if Skip then Put(O, 'null');
+    { an index no atom names and no object on the chain can have (a sparse array's hole): undefined, so null; and an
+      element of an array's own that is a primitive, which has no toJSON: its value. Neither makes I's atom, which
+      would live as long as the engine }
+    if (O.Replacer < 0) and IdxAbsent(RootAt(TempTop - 1), I) then Put(O, 'null')
+    else if (O.Replacer < 0) and OwnPrimitiveElement(RootAt(TempTop - 1), I, E) then
+    begin
+      if not SerializeValue(O, E, Skip) then begin PopRoots(1); Exit(False); end;
+      if Skip then Put(O, 'null');
+    end
+    else
+    begin
+      if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
+      if Skip then Put(O, 'null');
+    end;
     Inc(I);
   end;
   if (Len > 0) and (O.Gap <> '') then
@@ -699,7 +806,7 @@ end;
 
 { 25.5.2.2 SerializeJSONProperty(state, key, holder); Skip when it is undefined }
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean;
-var V, F, S: TValue; CA: array[0..1] of TValue; D: Double; IsArr: Boolean; Ob: PObj;
+var V, F: TValue; CA: array[0..1] of TValue;
 begin
   Skip := False;
   PushRoot(Holder);
@@ -723,6 +830,14 @@ begin
     if not CallValue(TempRoots[O.Replacer], RootAt(TempTop - 1), @CA[0], 2, V) then begin PopRoots(1); Exit(False); end;
   end;
   PopRoots(1);
+  Result := SerializeValue(O, V, Skip);
+end;
+
+{ SerializeJSONProperty's steps from 4 on: V after toJSON and the replacer }
+function SerializeValue(var O: TJOut; V: TValue; var Skip: Boolean): Boolean;
+var S: TValue; D: Double; IsArr: Boolean; Ob: PObj;
+begin
+  Skip := False;
   if IsObject(V) then
   begin
     Ob := ObjOf(V);
@@ -733,7 +848,14 @@ begin
       okRawJSON:
         begin
           if not GetV(V, AtomOf('rawJSON'), S) then Exit(False);
-          if IsString(S) then Put(O, StrToUnicode(StrOf(S)));
+          if IsString(S) then
+          begin
+            PushRoot(S);
+            if not OutReserve(O, StrOf(S)^.Len) then begin PopRoots(1); Exit(False); end;
+            S := RootAt(TempTop - 1);
+            PopRoots(1);
+            Put(O, StrToUnicode(StrOf(S)));
+          end;
           Exit(True);
         end;
     else
@@ -743,7 +865,7 @@ begin
   if V = VNull then begin Put(O, 'null'); Exit(True); end;
   if V = VTrue then begin Put(O, 'true'); Exit(True); end;
   if V = VFalse then begin Put(O, 'false'); Exit(True); end;
-  if IsString(V) then begin QuoteStr(O, StrOf(V)); Exit(True); end;
+  if IsString(V) then Exit(QuoteChecked(O, StrOf(V)));
   if IsInt(V) then begin Put(O, UnicodeString(IntToStr(IntOf(V)))); Exit(True); end;
   if IsNumber(V) then
   begin
@@ -764,17 +886,10 @@ begin
 end;
 
 { 25.5.2 JSON.stringify(value, replacer, space) }
-function JSON_Stringify(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O: TJOut; R, Sp, V: TValue; IsArr, Skip, Dup: Boolean; Len, I: Int64; D: Double; K: PStr;
-  X, N: Integer; S: UnicodeString;
+function StringifyTo(var O: TJOut; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var R, Sp, V: TValue; IsArr, Skip, Dup: Boolean; Len, I: Int64; D: Double; K: PStr;
+  X, N: Integer; S: UnicodeString; P: PStr;
 begin
-  O.Len := 0;
-  O.Replacer := -1;
-  O.HasPropList := False;
-  O.Gap := '';
-  O.Indent := '';
-  O.Depth := 0;
-  SetLength(O.Buf, 64);
   R := Arg(Args, Argc, 2);
   PushRoot(Arg(Args, Argc, 1));
   PushRoot(R);
@@ -851,8 +966,37 @@ begin
   PopRoots(N);
   if Skip then Res := VUndefined
   else if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'))
-  else Res := StrFromUnicode(Copy(O.Buf, 1, O.Len));
+  else
+  begin
+    { the text as a heap string: refused before it is made when it does not fit }
+    if not HeapReserve(StringBytes(O.Len)) then
+    begin
+      O.Buf := '';
+      O.Charge.Clear;
+      O.Charged := 0;
+      Exit(ThrowMemoryLimit);
+    end;
+    P := NewString(O.Len);
+    if O.Len > 0 then Move(O.Buf[1], StrChars(P)[0], O.Len * SizeOf(WideChar));
+    Res := MkPtr(P);
+  end;
   Result := True;
+end;
+
+function JSON_Stringify(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var O: TJOut;
+begin
+  O.Len := 0;
+  O.Replacer := -1;
+  O.HasPropList := False;
+  O.Gap := '';
+  O.Indent := '';
+  O.Depth := 0;
+  O.Charge := Default(THeapExternalCharge);
+  O.Charged := 0;
+  SetLength(O.Buf, 64);
+  Result := StringifyTo(O, Args, Argc, Res);
+  O.Charge.Clear;
 end;
 
 { ---------------- rawJSON / isRawJSON ---------------- }

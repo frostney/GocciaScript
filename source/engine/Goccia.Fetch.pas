@@ -500,7 +500,7 @@ begin
     Col := 0;
   end;
   { collects when the entry does not fit yet; nothing below reads Args }
-  if not Charge.TryGrow(Bytes) then Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
+  if not Charge.TryGrow(Bytes) then Exit(ThrowMemoryLimit);
   if Owner = nil then Owner := TFetchOwner.Create;
   Id := NextId;
   Inc(NextId);
@@ -690,14 +690,20 @@ begin
     begin
       PushRoot(MakeError(RangeErrorProto,
         'Allocation failed: GC heap size exceeds the configured memory limit'));
+      { the suggestion every early refusal carries (ThrowMemoryLimit's) }
+      SetErrorHostSuggestion(RootAt(TempTop - 1), SSuggestMemoryLimitExceeded);
       Exit(Settle([MkInt(P.Id), MkInt(1), RootAt(TempTop - 1)]));
     end;
     PushRoot(MkPtr(NewArray(0, Length(W.Response.Headers))));
     for I := 0 to High(W.Response.Headers) do
     begin
       PushRoot(MkPtr(NewArray(0, 2)));
-      DefineElemRaw(RootAt(TempTop - 1), 0, StrFromUnicode(W.Response.Headers[I].Name));
-      DefineElemRaw(RootAt(TempTop - 1), 1, StrFromUnicode(W.Response.Headers[I].Value));
+      PushRoot(StrFromUnicode(W.Response.Headers[I].Name));
+      DefineElemRaw(RootAt(TempTop - 2), 0, RootAt(TempTop - 1));
+      PopRoots(1);
+      PushRoot(StrFromUnicode(W.Response.Headers[I].Value));
+      DefineElemRaw(RootAt(TempTop - 2), 1, RootAt(TempTop - 1));
+      PopRoots(1);
       Pair := RootAt(TempTop - 1);
       DefineElemRaw(RootAt(TempTop - 2), I, Pair);
       PopRoots(1);

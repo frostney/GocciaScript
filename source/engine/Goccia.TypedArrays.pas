@@ -156,7 +156,7 @@ begin
   if not HeapReserve(Max(Len, MaxLen)) then
   begin
     PopRoots(1);
-    Exit(ThrowError('RangeError', 'Array buffer allocation of ' + IntToStr(Max(Len, MaxLen)) +
+    Exit(ThrowMemoryLimit('Array buffer allocation of ' + IntToStr(Max(Len, MaxLen)) +
       ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
   end;
   P := RootAt(TempTop - 1);
@@ -371,7 +371,7 @@ begin
   if not HeapReserve(Len * TAElemSize[Kind]) then
   begin
     PopRoots(1);
-    Exit(ThrowError('RangeError', 'Array buffer allocation of ' + IntToStr(Len * TAElemSize[Kind]) +
+    Exit(ThrowMemoryLimit('Array buffer allocation of ' + IntToStr(Len * TAElemSize[Kind]) +
       ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
   end;
   B := MkPtr(NewArrayBuffer(Len * TAElemSize[Kind], ArrayBufferProtoV));

@@ -225,9 +225,15 @@ begin
         A^.Elements^.Data[11] := MkBool(Info.InLeapYear);
         if not Info.HasEra then A^.Elements^.Data[5] := VUndefined;
         { strings last: each allocation may move the array }
-        ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 2, StrFromUnicode(UnicodeString(Info.MonthCode)));
+        PushRoot(StrFromUnicode(UnicodeString(Info.MonthCode)));
+        ValueArrayStore(ObjOf(RootAt(TempTop - 2))^.Elements, 2, RootAt(TempTop - 1));
+        PopRoots(1);
         if Info.HasEra then
-          ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 4, StrFromUnicode(UnicodeString(Info.Era)));
+        begin
+          PushRoot(StrFromUnicode(UnicodeString(Info.Era)));
+          ValueArrayStore(ObjOf(RootAt(TempTop - 2))^.Elements, 4, RootAt(TempTop - 1));
+          PopRoots(1);
+        end;
         Res := RootAt(TempTop - 1);
         PopRoots(1);
       end;
@@ -249,7 +255,9 @@ begin
       begin
         PushRoot(MkPtr(NewArray(2, 2)));
         ObjOf(RootAt(TempTop - 1))^.Elements^.Data[1] := MkInt(EraYear);
-        ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 0, StrFromUnicode(UnicodeString(Era)));
+        PushRoot(StrFromUnicode(UnicodeString(Era)));
+        ValueArrayStore(ObjOf(RootAt(TempTop - 2))^.Elements, 0, RootAt(TempTop - 1));
+        PopRoots(1);
         Res := RootAt(TempTop - 1);
         PopRoots(1);
       end;

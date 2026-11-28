@@ -116,7 +116,7 @@ begin
   try
     Result := TryCompile(Pattern, Flags, C, Msg);
   except
-    on EHeapExternalMemoryLimit do Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
+    on EHeapExternalMemoryLimit do Exit(ThrowMemoryLimit);
   end;
   if not Result then ThrowError('SyntaxError', Msg);
 end;
@@ -213,7 +213,7 @@ begin
   if Sc.Interrupted then Exit(AbortInterrupted);
   { out of native stack: the RangeError a too-deep recursion is }
   if Sc.StackExhausted then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  if Sc.MemoryExhausted then Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
+  if Sc.MemoryExhausted then Exit(ThrowMemoryLimit);
   Result := ThrowError('Error', Sc.ErrorMessage);
 end;
 

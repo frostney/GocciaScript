@@ -1862,10 +1862,13 @@ console.log("--max-memory (override)...");
 console.log("--max-memory (OOM triggers RangeError)...");
 {
   // Leave room for the live heap, native startup storage and the result's
-  // element slots. The mapped element objects should exhaust the budget.
-  const ELEMENTS = 5000;
+  // element slots. The native storage includes the engine's own atoms and
+  // shapes, which count against the limit (about 1.5 MB at startup) but not
+  // in bytesAllocated. The mapped element objects, about 48 bytes each past
+  // their slots, exhaust the margin.
+  const ELEMENTS = 200_000;
   const POINTER_BYTES = 8;
-  const MARGIN_BYTES = 256 * 1024;
+  const MARGIN_BYTES = 4 * 1024 * 1024;
   const probe = await $`echo 'Goccia.gc(); console.log(Goccia.gc.bytesAllocated);' | ${RUNNER} --compat-asi 2>/dev/null`.quiet().nothrow();
   const liveBytes = Number.parseInt(probe.text().trim().split("\n")[0], 10);
   if (probe.exitCode !== 0 || !Number.isFinite(liveBytes) || liveBytes <= 0) {
@@ -1913,6 +1916,95 @@ ${copy};
         assertPeakRssBelow(run, label, 40 * 1024 * 1024);
       }
     }
+  } finally {
+    clean(dir);
+  }
+}
+
+console.log("--max-memory (memory outside the heap is charged; sized allocations are refused before they are made)...");
+{
+  // Each script grows memory the collected heap did not count before #1173:
+  // atoms and dictionary shapes for array indices past the dense limit and
+  // for fresh string keys, permanent symbols, and the text buffers of native
+  // string builders; or asks for one allocation larger than the limit (an
+  // array's elements, a built string, a sparse copy). Each must be refused
+  // with a catchable RangeError while the process stays within twice the
+  // ceiling above an idle run: before the fix they peaked at 3 to 30 times it.
+  const ceiling = 64 * 1024 * 1024;
+  const cases: Record<string, string> = {
+    "sparse fill": "new Array(2e8).fill(0);",
+    "fresh string keys": "const o = {}; let i = 0; while (i < 5e7) { o['k' + i] = 0; i++; }",
+    "symbols": "const a = []; let i = 0; while (i < 5e7) { a.push(Symbol()); i++; }",
+    "dense holes": "new Array(6e7);",
+    "length setter": "const a = []; a.length = 6e7;",
+    "padEnd": "''.padEnd(5e8, 'ab');",
+    "repeat": "'ab'.repeat(2.5e8);",
+    "join": "new Array(2e8).join('ab');",
+    "JSON.stringify": "JSON.stringify(new Array(1e8));",
+    "replaceAll": "'a'.repeat(1e6).replaceAll('a', 'b'.repeat(500));",
+    "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
+    "repeated $' substitutions": "('a' + 'b'.repeat(1e6)).replace('a', \"$'\".repeat(50));",
+    "escaped JSON scalar": "JSON.stringify('\\0'.repeat(1e7));",
+    "replaceAll through its own callback": "const s = 'a'.repeat(1e6); let d = 0; const f = () => { d++; if (d < 20) s.replaceAll('a', f); throw new Error('stop'); }; s.replaceAll('a', f);",
+  };
+  const permanent = new Set(["sparse fill", "fresh string keys", "symbols"]);
+  const dir = mkdtemp("goccia-native-charge-");
+  try {
+    const path = join(dir, "grow.js");
+    // The bound is above an idle run of the same binary, so that it does not
+    // depend on how much a platform's runtime and allocator hold before the
+    // script starts: on Linux x64 the cases measure 1.0 to 1.5 times the
+    // ceiling above an idle run's ~20 MB.
+    writeFileSync(path, "console.log('idle');\n");
+    const idleRun = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, path]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    const bound = (idleRun.peakRssBytes ?? 0) + 2 * ceiling;
+    for (const [label, body] of Object.entries(cases)) {
+      writeFileSync(path, `let caught = 'none';\ntry {\n${body}\n} catch (e) { caught = e.name; }\nconsole.log('caught', caught);\n`);
+      const run = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
+      // Keys and symbols live as long as the engine: once they fill the
+      // limit, the next collection refuses again, which can land after the
+      // catch. Those runs may end with that refusal uncaught.
+      const refusedAgain = permanent.has(label) && run.exitCode === 1 &&
+        run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit");
+      if (!refusedAgain && (run.exitCode !== 0 || !run.output.includes("caught RangeError")))
+        throw new Error(`${label} should be refused with a catchable RangeError: exit ${run.exitCode}, ${run.output}`);
+      assertPeakRssBelow(run, `${label}, above an idle run`, bound);
+    }
+    // Retrying with fresh keys after each refusal: the keys live as long as
+    // the engine, so a later refusal can come inside a catch handler, even the
+    // first, and end the run, but the process stays bounded instead of growing
+    // each round (8 rounds reached 1.65 GB at 16 MiB before #1173).
+    writeFileSync(path, [
+      "let base = 1e8; let r = 0;",
+      "while (r < 8) {",
+      "  try { const a = []; a.length = 4e9; let i = 0; while (i < 5e7) { a[base + i] = 0; i++; } } catch (e) { console.log('round', r, e.name); }",
+      "  base += 5e7; r++;",
+      "}",
+      "console.log('done');",
+      "",
+    ].join("\n"));
+    const retry = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
+    if (![0, 1].includes(retry.exitCode) ||
+        !retry.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
+      throw new Error(`Retries with fresh sparse keys should each be refused: exit ${retry.exitCode}, ${retry.output}`);
+    assertPeakRssBelow(retry, "retry with fresh sparse keys, above an idle run", bound);
+    // Freezing a wide object changes each attribute in turn, a new shape each
+    // time and no heap cell: it completes, and the shapes it drops are
+    // collected on the way instead of piling up (543 MB at 16 MiB before).
+    writeFileSync(path, "const o = {}; for (const i of Array.from({ length: 4000 }, (_, i) => i)) o['p' + i] = i; Object.freeze(o); console.log('frozen', Object.isFrozen(o));\n");
+    const freeze = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--timeout=60000", path]);
+    if (freeze.exitCode !== 0 || !freeze.output.includes("frozen true"))
+      throw new Error(`Freezing a wide object should complete: exit ${freeze.exitCode}, ${freeze.output}`);
+    assertPeakRssBelow(freeze, "freezing a wide object, above an idle run", bound);
+    // A refusal made before the allocation carries the suggestion the refusal
+    // at a safe point does.
+    writeFileSync(path, "''.padEnd(5e8, 'ab');\n");
+    const early = Bun.spawnSync([RUNNER, `--max-memory=${ceiling}`, path], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const earlyOut = early.stdout.toString() + early.stderr.toString();
+    if (early.exitCode !== 1 || !earlyOut.includes("Allocation failed: GC heap size exceeds the configured memory limit") ||
+        !earlyOut.includes("Suggestion: call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory"))
+      throw new Error(`An early refusal should print the memory limit's suggestion: exit ${early.exitCode}, ${earlyOut}`);
   } finally {
     clean(dir);
   }
@@ -1974,39 +2066,67 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
   };
   try {
     const path = join(dir, "regexp.js");
+    // The room left with no compiled RegExp, measured: the largest buffer that
+    // fits, to 16 KiB. The engine's own keys and shapes count against the
+    // limit beside bytesAllocated, so it is not read from that.
+    writeFileSync(path, `
+const pattern = ${JSON.stringify(pattern)};
+if (!(${expressions.control})) throw new Error('expected a match');
+Goccia.gc();
+let lo = 0;
+let hi = Goccia.gc.maxBytes;
+for (const _ of Array.from({ length: 40 })) {
+  if (hi - lo <= 16 * 1024) break;
+  const mid = Math.floor((lo + hi) / 2);
+  try { new ArrayBuffer(mid); lo = mid; } catch { hi = mid; }
+}
+console.log('fits', lo);
+`);
+    const control = Bun.spawnSync([RUNNER, "--max-memory=16MiB", "--timeout=10000", path], { stdout: "pipe", stderr: "pipe" });
+    const controlOut = control.stdout.toString() + control.stderr.toString();
+    const fits = Number(/^fits (\d+)$/m.exec(controlOut)?.[1]);
+    if (control.exitCode !== 0 || !Number.isFinite(fits) || fits <= 0)
+      throw new Error(`The control run should measure the room left: ${controlOut}`);
+    // A buffer that fits without a compiled RegExp is refused while one is
+    // cached, before its bytes are committed.
     for (const [name, match] of Object.entries(expressions)) {
+      if (name === "control") continue;
       writeFileSync(path, `
 const pattern = ${JSON.stringify(pattern)};
 if (!(${match})) throw new Error('expected a match');
 Goccia.gc();
-// Leave room for a small allocation and the call itself. A compiled RegExp
-// also holds native storage, which is outside bytesAllocated.
-const available = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;
-new ArrayBuffer(available - 256 * 1024);
+new ArrayBuffer(${fits});
 console.log('buffer allocated');
 `);
       const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
-      if (name === "control") {
-        if (run.exitCode !== 0 || !containsLine(run.output, "buffer allocated"))
-          throw new Error(`The buffer should fit without a compiled RegExp: ${run.output}`);
-      } else {
-        if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
-          throw new Error(`The buffer should be refused while the ${name} program is cached: ${run.output}`);
-        assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
-      }
+      if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
+        throw new Error(`The buffer should be refused while the ${name} program is cached: ${run.output}`);
+      assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
     }
     const operations = {
       compile: 'const re = new RegExp("a".repeat(64 * 1024)); console.log(re.source.length);',
       "compile literal": `console.log(/${"a".repeat(64 * 1024)}/.source.length);`,
       match: 'const re = new RegExp("a".repeat(256)); console.log(re.test("a".repeat(48 * 1024)));',
     };
+    // The padding leaves 1 MiB of what fits (measured: the engine's own keys
+    // and shapes count against the limit too) for the RegExp's workspace. A
+    // literal is compiled with the script, before the padding exists, so its
+    // run takes a limit its compile alone cannot fit under.
+    const limits: Record<string, string> = { compile: "4MiB", "compile literal": "2MiB", match: "4MiB" };
     for (const [name, operation] of Object.entries(operations)) {
       writeFileSync(path, `
-const padding = new ArrayBuffer(512 * 1024);
+let lo = 0;
+let hi = Goccia.gc.maxBytes;
+for (const _ of Array.from({ length: 40 })) {
+  if (hi - lo <= 16 * 1024) break;
+  const mid = Math.floor((lo + hi) / 2);
+  try { new ArrayBuffer(mid); lo = mid; } catch { hi = mid; }
+}
+const padding = new ArrayBuffer(Math.max(lo - 1024 * 1024, 0));
 ${operation}
 console.log(padding.byteLength);
 `);
-      const run = await runWithPeakRss([RUNNER, "--max-memory=2MiB", "--timeout=10000", path]);
+      const run = await runWithPeakRss([RUNNER, `--max-memory=${limits[name]}`, "--timeout=10000", path]);
       if (run.exitCode !== 1 || !run.output.includes("RangeError") ||
           !run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
         throw new Error(`RegExp ${name} should report a memory-limit RangeError: ${run.output}`);
@@ -3021,9 +3141,10 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
     "",
   ].join("\n");
 
-  // Include the now-charged native startup storage. The collection count below
-  // still requires all 30 manual collections during the recursive calls.
-  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=800000", "--compat-asi"], { timeout: 30_000 });
+  // Include the now-charged native startup storage: about 1.7 MB with the
+  // engine's own property keys and shapes. The collection count below still
+  // requires all 30 manual collections during the recursive calls.
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=2000000", "--compat-asi"], { timeout: 30_000 });
   if (exitCode !== 0) throw new Error(`Manual GC active-call exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call should return positive bytesAllocated`);
   if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call should report at least 30 collections, got ${json.memory?.gc?.collections}`);

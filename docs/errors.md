@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`) and `MemoryLimitError` (`--max-memory`)
-- **`--max-memory` refuses at the next safe point** -- a full collection that leaves more live than the limit makes the next back edge or call throw a **catchable** `RangeError`, so a script can drop what it holds and go on; eight refusals in a row that free nothing end the run with the **uncatchable** `MemoryLimitError`. An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, is a `RangeError` at once ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md))
+- **`--max-memory` refuses at the next safe point** -- a full collection that leaves more live than the limit makes the next back edge or call throw a **catchable** `RangeError`, so a script can drop what it holds and go on; eight refusals in a row that free nothing end the run with the **uncatchable** `MemoryLimitError`. An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, an array's elements or a built string, is a `RangeError` at once ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md), [ADR 0202](adr/0202-the-memory-limit-counts-keys-and-shapes-and-refuses-sized-allocations-first.md))
 - **Engine-integrity faults** -- Not an error type at all: an access violation, a failed internal assertion or another engine fault is never turned into a JavaScript error; it unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one, and the application stops with an `Engine fault:` diagnostic and exit code `70`. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) and [ADR 0201](adr/0201-every-application-stops-on-an-engine-fault.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`. A promise left rejected with no handler is reported as an uncaught error and fails the run
@@ -40,7 +40,8 @@ catchable `RangeError` (`Allocation failed: GC heap size exceeds the configured
 memory limit`), thrown at the next back edge or call after the full collection
 that found the heap over the limit; only when the script keeps holding the
 memory does the run end with `MemoryLimitError`. An explicit reservation that
-cannot fit, such as an `ArrayBuffer`'s bytes, throws its `RangeError` at once.
+cannot fit, such as an `ArrayBuffer`'s bytes, an array's elements or a built
+string, throws its `RangeError` at once, with the same suggestion.
 
 Another thread stops a run through the handle `TGocciaEngine.CaptureAbortHandle`
 returns ([Aborting a Run from Another Thread](embedding.md#aborting-a-run-from-another-thread)):

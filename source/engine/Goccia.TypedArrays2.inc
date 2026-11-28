@@ -1086,7 +1086,9 @@ var I: Integer; F, AP, Tmp: TValue;
   procedure Tag(Target: TValue; const Name: UnicodeString);
   begin
     PushRoot(Target);
-    DefineOwn(RootAt(TempTop - 1), SymKey(SymToStringTagW), StrFromUnicode(Name), pfConfigurable);
+    PushRoot(StrFromUnicode(Name));
+    DefineOwn(RootAt(TempTop - 2), SymKey(SymToStringTagW), RootAt(TempTop - 1), pfConfigurable);
+    PopRoots(1);
     PopRoots(1);
   end;
   { a constructor: prototype (fixed), prototype.constructor, the global binding }
