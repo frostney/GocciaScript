@@ -121,9 +121,12 @@ catches these.
 Dispatch it once, on the head that will merge: after the review rounds' fixes
 are pushed. Its macOS jobs wait for runners the whole account shares, five at
 a time, and a run on an earlier head has to be repeated once review fixes
-land. A stacked branch is frozen once it is ready, so its run comes after its
-last review round and before it is marked ready. When the run fails, fix the
-failure on the branch and dispatch again for the new head. A dispatched run's
+land. A stacked branch runs it after its last review round and before it is
+marked ready. When the run fails, fix the failure and dispatch again for the
+new head: on the branch itself while it is not frozen, and for a frozen stack
+layer in the stack's top fix layer, as the
+[stack reference](https://github.com/frostney/known-good-route/blob/main/address-feedback/references/stack.md)
+describes. A dispatched run's
 checks do not appear on the pull request, and it belongs to the commit it
 started from, so check the run for the branch's current head SHA rather than
 the newest run.

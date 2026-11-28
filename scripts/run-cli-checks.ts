@@ -75,11 +75,12 @@ function parseArgs(argv: string[]): { jobs: number; names: string[] } {
 }
 
 function selectChecks(names: string[]): Check[] {
-  const onWindows = process.platform === "win32";
-  if (names.length === 0) return CHECKS.filter((check) => !(onWindows && check.posixOnly));
+  const available = (check: Check) => !(process.platform === "win32" && check.posixOnly);
+  if (names.length === 0) return CHECKS.filter(available);
   return names.map((name) => {
     const check = CHECKS.find((candidate) => candidate.name === name);
     if (!check) throw new Error(`No check named ${name}; known: ${CHECKS.map((c) => c.name).join(", ")}`);
+    if (!available(check)) throw new Error(`${name} does not run on Windows`);
     return check;
   });
 }
@@ -106,12 +107,19 @@ async function collect(stream: ReadableStream<Uint8Array>, into: string[]): Prom
 
 async function run(check: Check): Promise<Result> {
   const started = performance.now();
-  const child = Bun.spawn(check.command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   // Both streams go into one log in the order they arrive, so a check's
   // errors stay next to the output that led to them.
   const chunks: string[] = [];
-  await Promise.all([collect(child.stdout, chunks), collect(child.stderr, chunks)]);
-  const exitCode = await child.exited;
+  let exitCode: number;
+  try {
+    const child = Bun.spawn(check.command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    await Promise.all([collect(child.stdout, chunks), collect(child.stderr, chunks)]);
+    exitCode = await child.exited;
+  } catch (error) {
+    // A check that cannot start fails on its own; the others still run.
+    chunks.push(`could not start ${check.command.join(" ")}: ${error instanceof Error ? error.message : String(error)}\n`);
+    exitCode = 127;
+  }
   const result = { check, exitCode, seconds: (performance.now() - started) / 1000 };
   report(result, chunks.join(""));
   return result;
