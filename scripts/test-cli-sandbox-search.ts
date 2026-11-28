@@ -182,6 +182,98 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- a search's native work counts against the instruction cap ---------------
+//
+// Each case runs one script over two trees that cost the same JavaScript work
+// (neither finds the text): the smallest cap at which it finishes over the
+// small tree must stop it over the large one with the instruction limit. The
+// scan cases keep the paths and line counts and lengthen the lines; the walk
+// case adds files the glob does not select.
+
+/** "done", "limit" (the instruction limit stopped the run), or a thrown error for anything else. */
+function runCapped(tree: Record<string, FileSpec>, body: string, cap: number): "done" | "limit" {
+  try {
+    const out = runInTree(tree, body, [`--max-instructions=${cap}`]).trim();
+    if (out === "done") return "done";
+    throw new Error(`unexpected output at cap ${cap}: ${out}`);
+  } catch (error) {
+    if (/Execution exceeded instruction limit of \d+/.test((error as Error).message)) return "limit";
+    throw error;
+  }
+}
+
+/** margin: the large tree must also stop at the small tree's cap plus this many units. */
+function checkCap(name: string, body: string, small: Record<string, FileSpec>, large: Record<string, FileSpec>, margin = 0) {
+  try {
+    let low = 1;
+    let high = 100000;
+    if (runCapped(small, body, high) !== "done") throw new Error(`the small tree did not finish within ${high}`);
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (runCapped(small, body, middle) === "done") high = middle;
+      else low = middle + 1;
+    }
+    if (runCapped(small, body, low) !== "done") throw new Error(`the small tree did not finish at ${low}`);
+    if (runCapped(large, body, low + margin) !== "limit") throw new Error(`the large tree finished within ${low + margin}`);
+    console.log(`${name}: ok (${low})`);
+  } catch (error) {
+    failures.push(`${name}: ${(error as Error).message}`);
+  }
+}
+
+{
+  const short: Record<string, FileSpec> = {};
+  const long: Record<string, FileSpec> = {};
+  for (let i = 0; i < 14; i++) {
+    short[`/f${i}.txt`] = "a\n";
+    long[`/f${i}.txt`] = "a".repeat(1024 * 1024) + "\n";
+  }
+  checkCap("literal scan cap", 'grep("b", { glob: "*.txt" }); console.log("done");', short, long);
+  checkCap("ignoreCase scan cap", 'grep("ab", { glob: "*.txt", ignoreCase: true }); console.log("done");', short, long);
+  checkCap("regex scan cap", 'grep("ab", { glob: "*.txt", regex: true }); console.log("done");', short, long);
+}
+
+// One attempt per line that does the work itself: over 1 MiB "a" lines, ^a*b
+// runs a greedy loop and backtracks it in the matcher's dispatch loop, which
+// 1 MiB "c" lines at the same positions (no match either) never enter. The
+// margin keeps the positions' own polls from passing for the attempt's.
+{
+  const fewer: Record<string, FileSpec> = {};
+  const more: Record<string, FileSpec> = {};
+  for (let i = 0; i < 14; i++) {
+    fewer[`/f${i}.txt`] = "c".repeat(1024 * 1024) + "\n";
+    more[`/f${i}.txt`] = "a".repeat(1024 * 1024) + "\n";
+  }
+  checkCap("regex attempt cap", 'grep("^a*b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
+}
+
+// Short lookarounds that add up: ^(?:(?=a{200})a)*b over 100,000 "a"s runs a
+// 200-step lookahead per character, each under the dispatch loop's poll
+// interval, while the outer loop takes a few steps per character. 100,000 "c"s
+// at the same positions never enter the loop.
+{
+  const fewer: Record<string, FileSpec> = { "/f.txt": "c".repeat(100000) + "\n" };
+  const more: Record<string, FileSpec> = { "/f.txt": "a".repeat(100000) + "\n" };
+  checkCap("lookaround cap", 'grep("^(?:(?=a{200})a)*b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
+}
+
+// A backreference compares its whole capture in one step: over 8,000 "a"s,
+// ^(a+)\1b compares about 16 million code points that 8,000 "b"s at the same
+// positions do not. Measured on Linux x86-64, the "a"s' other work costs some
+// 30 units more and the comparisons some 230: a margin of 100 tells them apart.
+{
+  const fewer: Record<string, FileSpec> = { "/f.txt": "b".repeat(8000) + "\n" };
+  const more: Record<string, FileSpec> = { "/f.txt": "a".repeat(8000) + "\n" };
+  checkCap("backreference cap", 'grep("^(a+)\\\\1b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
+}
+
+{
+  const few: Record<string, FileSpec> = { "/f.txt": "a\n" };
+  const many: Record<string, FileSpec> = { "/f.txt": "a\n" };
+  for (let i = 0; i < 3000; i++) many[`/u${i}.dat`] = "x";
+  checkCap("walk cap", 'grep("b", { glob: "*.txt" }); console.log("done");', few, many);
+}
+
 // -- adversarial inputs stay cheap ---------------------------------------------
 
 {

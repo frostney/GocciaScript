@@ -18,6 +18,10 @@ const
 procedure EnterNativeDataDepth(const AOperation: string = '');
 procedure LeaveNativeDataDepth;
 procedure CheckNativeWork;
+{ whether the calling thread's engine set a NativeWorkHook, read in this unit:
+  another unit asks here rather than reading the threadvar across units
+  (docs/core-patterns.md) }
+function NativeWorkHooked: Boolean;
 function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
@@ -40,9 +44,22 @@ type
   ENativeMemoryLimit = class(Exception);
   { The nesting guard's refusal, for the engine to throw as a RangeError. }
   ENativeDepthLimit = class(Exception);
+  { The engine's charge for native work: AUnits of it counted against the
+    run's limits. False leaves the engine's error pending: a limit's or a
+    host's cancellation that ends the run, or a catchable RangeError when a
+    memory limit refusal is delivered there. }
+  TNativeWorkHook = function(const AUnits: QWord): Boolean;
+  { CheckNativeWork's refusal under a TNativeWorkHook: the engine's error is
+    pending (see TNativeWorkHook), and the native returns False without
+    throwing anything else, so that error is what the script sees. }
+  ENativeWorkStopped = class(Exception);
 
 threadvar
   NativeBytesHook: TNativeBytesHook;
+  { While a thread's engine has one, CheckNativeWork charges through it
+    instead of the interpreter's counters (Goccia.InstructionLimit,
+    Goccia.Timeout). }
+  NativeWorkHook: TNativeWorkHook;
 
 implementation
 
@@ -61,6 +78,13 @@ var H: TNativeBytesHook;
 begin
   H := NativeBytesHook;
   Result := H(ABytes, AReserve);
+end;
+
+function CallNativeWorkHook(const AUnits: QWord): Boolean;
+var H: TNativeWorkHook;
+begin
+  H := NativeWorkHook;
+  Result := H(AUnits);
 end;
 
 
@@ -88,8 +112,27 @@ begin
     Dec(GNativeDataDepth);
 end;
 
+{ never inlined into the unit that asks: a threadvar read across units (docs/core-patterns.md); noinline itself is
+  not in every supported compiler }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+function NativeWorkHooked: Boolean;
+begin
+  Result := Assigned(NativeWorkHook);
+end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
+
 procedure CheckNativeWork;
 begin
+  if Assigned(NativeWorkHook) then
+  begin
+    if not CallNativeWorkHook(1) then
+      raise ENativeWorkStopped.Create('native work stopped by the run''s limits');
+    Exit;
+  end;
   // Counts its own unit below: the unmetered poll keeps the budget from
   // charging this work twice.
   CheckExecutionTimeoutUnmetered;
