@@ -2688,6 +2688,8 @@ begin
   EntryEvalPromise := VUndefined;
   AddRoot(@ResolveErrorV);
   ResolveErrorV := VUndefined;
+  { a valid root before the allocation below: the slot still holds an earlier engine's table on this thread }
+  LoadFailureTable := VUndefined;
   AddRoot(@LoadFailureTable);
   if not TableNewNative(nil, 0, LoadFailureTable) then LoadFailureTable := VUndefined;
   AddRoot(@JSModSources);
