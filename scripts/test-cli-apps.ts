@@ -9686,24 +9686,52 @@ await section("REPL: error recovery...", async () => {
   if (!out.includes("4")) throw new Error(`After error, second expression should produce 4, got: ${out}`);
 });
 
-await section("REPL: a spent execution limit leaves the session usable...", async () => {
+// The lines of a REPL session's output, each without the prompt a REPL that
+// does not echo piped input prints its output after.
+function replOutputLines(stdout: string): string[] {
+  return normalizeLineEndings(stdout).split("\n").map((line) => line.replace(/^(> )+/, ""));
+}
+
+await section("REPL: a spent execution limit leaves the session usable and takes the line's queued work with it...", async () => {
   for (const [flag, diagnostic] of [
     ["--max-instructions=1000", "Fatal error: Execution exceeded instruction limit of 1000"],
     ["--timeout=100ms", "Fatal error: file timed out after 100ms"],
   ]) {
     const proc = Bun.spawnSync([REPL, "--compat-while-loops", flag], {
-      stdin: new TextEncoder().encode("while (true) {}\n6 * 7;\n"),
+      stdin: new TextEncoder().encode(
+        'Promise.resolve(1).then(() => console.log("JOB FROM ABORTED LINE")); setTimeout(() => console.log("TIMER FROM ABORTED LINE"), 0); while (true) {}\n6 * 7;\n',
+      ),
       stdout: "pipe",
       stderr: "pipe",
       timeout: 10_000,
     });
-    const stdout = normalizeLineEndings(proc.stdout.toString());
+    const stdout = proc.stdout.toString();
     const stderr = proc.stderr.toString();
-    // A REPL that does not echo piped input prints the result after its prompt.
-    const recovered = stdout.split("\n").some((line) => line === "42" || line === "> 42");
-    if (proc.exitCode !== 0 || !recovered || !`${stdout}\n${stderr}`.includes(diagnostic))
+    const lines = replOutputLines(stdout);
+    if (proc.exitCode !== 0 || !lines.includes("42") || !`${stdout}\n${stderr}`.includes(diagnostic))
       throw new Error(`REPL did not recover after ${flag}: ${stdout}\n${stderr}`);
+    // The aborted line's job and timer never run, not even with the next line.
+    if (lines.includes("JOB FROM ABORTED LINE") || lines.includes("TIMER FROM ABORTED LINE"))
+      throw new Error(`REPL ran an aborted line's queued work after ${flag}: ${stdout}\n${stderr}`);
   }
+});
+
+await section("REPL: a line that throws takes its queued jobs and timers with it...", async () => {
+  const proc = Bun.spawnSync([REPL], {
+    stdin: new TextEncoder().encode(
+      'Promise.resolve().then(() => console.log("JOB FROM THROWN LINE")); setTimeout(() => console.log("TIMER FROM THROWN LINE"), 0); throw new Error("boom")\n1 + 1\n',
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 10_000,
+  });
+  const stdout = proc.stdout.toString();
+  const stderr = proc.stderr.toString();
+  const lines = replOutputLines(`${stdout}\n${stderr}`);
+  if (proc.exitCode !== 0 || !lines.includes("2") || !lines.includes("Error: boom"))
+    throw new Error(`REPL did not report the thrown line and go on: ${stdout}\n${stderr}`);
+  if (lines.includes("JOB FROM THROWN LINE") || lines.includes("TIMER FROM THROWN LINE"))
+    throw new Error(`REPL ran a thrown line's queued work with the next line: ${stdout}\n${stderr}`);
 });
 
 await section("REPL: an unhandled promise rejection is reported and the session continues...", async () => {
@@ -17084,6 +17112,28 @@ await section("Runner: a globals module and a host-environment provider run unde
     const error = envelope.files?.[0]?.error ?? envelope.error;
     if (envelope.ok !== false || error?.type !== "TimeoutError")
       throw new Error(`a --globals module that times out should report a TimeoutError, got ${JSON.stringify(error)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("TestRunner: a test that meets the instruction limit inside a promise job reports the limit...", async () => {
+  const tmp = makeTmp();
+  try {
+    const spin = "const it = { [Symbol.iterator]() { return { next: () => ({ done: false }) }; } };";
+    writeFileSync(
+      join(tmp, "spin.test.js"),
+      `${spin}\ntest("spins after an await", async () => { await Promise.resolve(); for (const _ of it) {} });\n`,
+    );
+    const run = Bun.spawnSync([resolve(TESTRUNNER), "spin.test.js", "-P", "--max-instructions=100000", "--no-progress"], {
+      cwd: tmp,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 30000,
+    });
+    const out = normalizeLineEndings(run.stdout.toString() + run.stderr.toString());
+    if (run.exitCode === 0 || !out.includes("Execution exceeded instruction limit of 100000") || out.includes(": undefined"))
+      throw new Error(`the test runner should report the instruction limit, got (exit ${run.exitCode}):\n${out}`);
   } finally {
     clean(tmp);
   }

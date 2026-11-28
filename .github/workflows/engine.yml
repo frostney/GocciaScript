@@ -221,6 +221,9 @@ jobs:
             "-o$fixture/link-diagnostics-test" scripts/engine/artifact-link-diagnostics-test.pas
           timeout 20 "$fixture/link-diagnostics-test" "$fixture"
 
+      - name: A symlinked bytecode Script resolves import() from the real directory across runs
+        run: bash scripts/engine/script-artifact-imports-test.sh
+
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests
 
