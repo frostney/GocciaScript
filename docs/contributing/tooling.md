@@ -305,8 +305,10 @@ end;
 
 `./build.pas flagscan` compiles every engine program for the build's target
 with assembler listings and fails when `scripts/engine/flagscan.py` finds an
-add or subtract on memory followed directly by a conditional jump under a
-masked test. The Engine workflow runs it for each x86 target; with
+add or subtract on memory followed directly by a conditional jump whose
+statement, read from the source, has an `and`: however the mask is spelled or
+broken over lines. A logical `and` in such a condition is reported too; test
+the counter in a statement of its own. The Engine workflow runs it for each x86 target; with
 `FPC_TARGET_CPU=i386 FPC_TARGET_OS=win32` it checks the `-O1` build locally
 without a Windows toolchain, since it neither assembles nor links.
 
