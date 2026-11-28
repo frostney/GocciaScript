@@ -247,6 +247,16 @@ function checkCap(name: string, body: string, small: Record<string, FileSpec>, l
   checkCap("regex attempt cap", 'grep("^a*b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
 }
 
+// Short lookarounds that add up: ^(?:(?=a{200})a)*b over 100,000 "a"s runs a
+// 200-step lookahead per character, each under the dispatch loop's poll
+// interval, while the outer loop takes a few steps per character. 100,000 "c"s
+// at the same positions never enter the loop.
+{
+  const fewer: Record<string, FileSpec> = { "/f.txt": "c".repeat(100000) + "\n" };
+  const more: Record<string, FileSpec> = { "/f.txt": "a".repeat(100000) + "\n" };
+  checkCap("lookaround cap", 'grep("^(?:(?=a{200})a)*b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
+}
+
 // A backreference compares its whole capture in one step: over 8,000 "a"s,
 // ^(a+)\1b compares about 16 million code points that 8,000 "b"s at the same
 // positions do not. Measured on Linux x86-64, the "a"s' other work costs some

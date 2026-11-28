@@ -110,6 +110,8 @@ const
   POLLS_PER_CHARGE_MASK = 255;
   { a backreference comparison polls every this-plus-one code points it compares }
   BACKREF_POLL_MASK = 255;
+  { the matcher's dispatch loop polls every this-plus-one steps, its lookarounds' included }
+  DISPATCH_POLL_MASK = 255;
 
 threadvar
   MatcherPolls: Cardinal;
@@ -642,8 +644,12 @@ function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
   AEndPos: PInteger = nil; ABackward: Boolean = False;
-  ALookDepth: Integer = 0): Boolean;
+  ALookDepth: Integer = 0; APollSteps: PInteger = nil): Boolean;
 var
+  { steps since the last dispatch poll, shared with the lookarounds this call runs (APollSteps): their short runs
+    add up to a poll, while each call keeps its own step ceiling }
+  OwnPollSteps: Integer;
+  PollSteps: PInteger;
   PC, InputPos: Integer;
   Instr: UInt32;
   Op: TRegExpOpCode;
@@ -974,6 +980,13 @@ begin
   InputPos := AStartPos;
   StepCount := 0;
   StepLimit := RegExpStepLimit(AInput.Length);
+  if APollSteps = nil then
+  begin
+    OwnPollSteps := 0;
+    PollSteps := @OwnPollSteps;
+  end
+  else
+    PollSteps := APollSteps;
   StackTop := -1;
   RepeatDepth := 0;
   // The memo records that a path failed at an instruction and position, and
@@ -993,9 +1006,14 @@ begin
     // throttle: the clock is read once per ~262K steps, bounding deadline
     // overshoot to low milliseconds at typical step costs. Under an engine's
     // native work hook, PollMatcher charges a unit every 256 polls instead:
-    // one per 64K steps here.
-    if (StepCount and 255) = 0 then
+    // one per 64K steps here. The count runs on through the lookarounds this
+    // call starts, so their short runs reach a poll too.
+    Inc(PollSteps^);
+    if PollSteps^ > DISPATCH_POLL_MASK then
+    begin
+      PollSteps^ := 0;
       PollMatcher;
+    end;
 
     Instr := AProgram.Code[PC];
     Op := TRegExpOpCode(Instr and $FF);
@@ -1408,7 +1426,7 @@ begin
           if ALookDepth >= NESTING_UNCHECKED_DEPTH then
             CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, False, ALookDepth + 1);
+            SlotCount, LookStack, PC + 1, nil, False, ALookDepth + 1, PollSteps);
           if Negated then
           begin
             if LookMatched then
@@ -1438,7 +1456,7 @@ begin
           if ALookDepth >= NESTING_UNCHECKED_DEPTH then
             CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, True, ALookDepth + 1);
+            SlotCount, LookStack, PC + 1, nil, True, ALookDepth + 1, PollSteps);
           if Negated then
           begin
             if LookMatched then

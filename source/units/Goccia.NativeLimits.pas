@@ -21,7 +21,7 @@ procedure CheckNativeWork;
 { whether the calling thread's engine set a NativeWorkHook, read in this unit:
   another unit asks here rather than reading the threadvar across units
   (docs/core-patterns.md) }
-function NativeWorkHooked: Boolean; noinline;
+function NativeWorkHooked: Boolean;
 function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
@@ -112,10 +112,18 @@ begin
     Dec(GNativeDataDepth);
 end;
 
+{ never inlined into the unit that asks: a threadvar read across units (docs/core-patterns.md); noinline itself is
+  not in every supported compiler }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
 function NativeWorkHooked: Boolean;
 begin
   Result := Assigned(NativeWorkHook);
 end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
 
 procedure CheckNativeWork;
 begin
