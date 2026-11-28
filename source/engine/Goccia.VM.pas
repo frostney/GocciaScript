@@ -2641,6 +2641,22 @@ end;
 
 function ThrowMemoryLimit(const Msg: UnicodeString): Boolean;
 begin
+  { the collection that refused this request found the heap over the limit too, and marked that refusal pending:
+    this error is it, delivered here rather than again at the next safe point (its strike already counted) }
+  if MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(False) then
+  begin
+    if Msg <> '' then
+    begin
+      MemDelivering := True;
+      try
+        ThrowError('RangeError', Msg);
+        SetErrorHostSuggestion(Pending, SSuggestMemoryLimitExceeded);
+      finally
+        MemDelivering := False;
+      end;
+    end;
+    Exit(False);
+  end;
   { as DeliverMemoryRefusal's: making the error does not refuse again (the refused request's caller may still hold
     what took the heap to the limit, a builder's buffer) }
   MemDelivering := True;
