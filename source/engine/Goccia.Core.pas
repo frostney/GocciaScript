@@ -3154,17 +3154,17 @@ begin
 end;
 
 { a value array's next capacity past Cap that holds Need: twice Cap, or, when that would not fit under HeapCeiling,
-  Need and a sixteenth more (Need alone when not even that fits), so the last growth before the limit does not
-  allocate twice what is used }
+  Need and a sixteenth more, so the last growth before the limit does not allocate twice what is used. Never less:
+  growth stays geometric, and a growth that does not fit is refused after it is made, as any old-space cell is (one
+  that grew by a single slot would copy the whole array, and collect, at every add) }
 function GrowValueCap(Cap, Need, Least: Integer): Integer;
 var Snug: Int64;
 begin
   Result := Cap * 2;
   if Result < Need then Result := Need;
   if Result < Least then Result := Least;
-  if (HeapCeiling <= 0) or (Result <= Need + Need div 16) or HeapHasRoom(ValueArrayBytes(Result)) then Exit;
-  Snug := Int64(Need) + Need div 16;
-  if not HeapHasRoom(ValueArrayBytes(Snug)) then Snug := Need;
+  if (HeapCeiling <= 0) or HeapHasRoom(ValueArrayBytes(Result)) then Exit;
+  Snug := Int64(Need) + Max(Need div 16, Least);
   if Snug < Result then Result := Snug;
 end;
 

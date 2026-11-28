@@ -62,10 +62,10 @@ Peak resident memory before the `RangeError`, Linux x86-64, `GocciaRunner` (abou
 | Script | Limit | Before | After |
 |---|---|---|---|
 | `Array.prototype.toSpliced.call({length: 2e8}, 0, 0)` | 16 MiB | 20 MB | 20 MB |
-| `new Array(2e8).fill(0)` | 16 / 64 / 256 MiB | 196 / 729 / 2,797 MB | 41 / 107 / 374 MB |
+| `new Array(2e8).fill(0)` | 16 / 64 / 256 MiB | 196 / 729 / 2,797 MB | 41 / 108 / 373 MB |
 | `o["k" + i] = 0` in a loop | 16 / 64 MiB | 200 / 721 MB | 46 / 115 MB |
 | `a.push(Symbol())` in a loop | 16 / 64 MiB | 156 / 564 MB | 36 / 84 MB |
-| 8 rounds of fresh sparse keys, each refusal caught | 16 MiB | 1,453 MB | 42 MB |
+| 8 rounds of fresh sparse keys, each refusal caught | 16 MiB | 1,453 MB | 43 MB |
 | `new Array(6e7)` | 16 / 256 MiB | 477 / 477 MB | 20 / 20 MB |
 | `"".padEnd(5e8, "ab")` | 16 MiB | 1,927 MB | 20 MB |
 | `"ab".repeat(2.5e8)` | 16 MiB | 1,926 MB | 20 MB |
