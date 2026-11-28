@@ -607,7 +607,10 @@ GOCCIA_NURSERY_KB=16 build/engine/goccia --test --gc-verify tests/built-ins/Prom
   `--gc-verify`, and reports a file whose totals differ or whose stressed run
   crashes.
 
-It prints the number of `OK` lines and every `BAD` and `TIMEOUT` line. A
+It prints the number of `OK` lines and every `BAD` and `TIMEOUT` line. The
+sweep and `gcstress-tests.py` each run a copy of the engine binary made in a
+temporary directory, so rebuilding `build/engine/goccia` while they run does
+not fail the rest of the run. A
 `TIMEOUT` is not a failure: verifying a large heap at every collection is slow,
 and the deep-chain tests under `tests/built-ins/Goccia/gc` take longest. Run it
 for any change near allocation or rooting, as part of the

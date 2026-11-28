@@ -10,11 +10,14 @@ Prints one line per such file, "BAD <file>: <what>", and "TIMEOUT <file>" for on
 TIMEOUT_S (not a failure: verifying the heap at every collection of a deep structure is slow), then
 "OK tests (<n> files)" when no file is BAD. Exits 1 when one is.
 
+The run uses a copy of the given binary, made in a temporary directory at the start and removed at the end, so a
+rebuild of build/engine/goccia while the run goes on (the build replaces that file) does not fail the remaining files.
+
 Usage: gcstress-tests.py <goccia binary> [jobs] [dir ...]   (default dir: tests)"""
-import json, os, re, subprocess, sys
+import json, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
-ENGINE = sys.argv[1]
+GIVEN_ENGINE = sys.argv[1]
 JOBS = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 DIRS = sys.argv[3:] or ['tests']
 KB = os.environ.get('GOCCIA_NURSERY_KB', '16')
@@ -70,8 +73,14 @@ def check(path):
 
 
 files = [f for d in DIRS for f in discover(d)]
-with ThreadPoolExecutor(JOBS) as ex:
-    results = list(ex.map(check, files))
+work = tempfile.mkdtemp(prefix='gcstress-tests-')
+try:
+    ENGINE = os.path.join(work, os.path.basename(GIVEN_ENGINE))
+    shutil.copy2(GIVEN_ENGINE, ENGINE)
+    with ThreadPoolExecutor(JOBS) as ex:
+        results = list(ex.map(check, files))
+finally:
+    shutil.rmtree(work, ignore_errors=True)
 bad = [(f, why) for f, why in results if why and why != 'TIMEOUT']
 for f, why in results:
     if why == 'TIMEOUT':
