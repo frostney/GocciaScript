@@ -768,6 +768,7 @@ begin
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));   { Keys moved if the allocation above collected }
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if IsString(KV) then ArrayPush(ObjOf(RootAt(TempTop - 1)), KV);
   end;
@@ -889,13 +890,15 @@ var Keys, Syms: TValue; I, N: Integer; A: PObj;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxyOwnKeys(O, Res));
   PushRoot(O);
-  Keys := OwnKeys(ObjOf(O), False);
+  if not OwnKeys(ObjOf(O), False, Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
   { the symbol keys after the strings }
   A := ObjOf(RootAt(TempTop - 2));
   for I := 0 to A^.Shape^.Count - 1 do
     if (A^.Shape^.Keys[I]^.Hdr.Extra and kfSymbol) <> 0 then
     begin
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
+      A := ObjOf(RootAt(TempTop - 2));
       Syms := KeyToValue(A^.Shape^.Keys[I]);
       ArrayPush(ObjOf(RootAt(TempTop - 1)), Syms);
       A := ObjOf(RootAt(TempTop - 2));
@@ -924,6 +927,7 @@ begin
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     if not GetOwnPropertyV(RootAt(TempTop - 2), K, D, Found) then begin PopRoots(3); Exit(False); end;
     if not Found or not D.Enumerable then Continue;
@@ -951,6 +955,7 @@ begin
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(4); Exit(False); end;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     Skip := False;
     for J := 0 to ArrayLen(ObjOf(RootAt(TempTop - 4))) - 1 do
@@ -991,6 +996,7 @@ begin
     { each attribute change on a dictionary object makes a shape and allocates no cell: the collection their charges
       ask for runs here, where O and its keys are rooted }
     HeapChargeCollect;
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     EmptyDesc(D);
     D.HasConfigurable := True; D.Configurable := False;
@@ -1020,6 +1026,7 @@ begin
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     if not GetOwnPropertyV(RootAt(TempTop - 2), K, Cur, Found) then begin PopRoots(2); Exit(False); end;
     if not Found then Continue;
@@ -1245,6 +1252,7 @@ begin
   J := 0;
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3 + J * 3); Exit; end;
     K := KeyOf(ObjOf(RootAt(Base + 2))^.Elements^.Data[I]);
     if not GetOwnPropertyV(RootAt(Base + 1), K, Cur, Found) then begin PopRoots(3 + J * 3); Exit; end;
     if not Found or not Cur.Enumerable then Continue;
@@ -1256,6 +1264,7 @@ begin
   end;
   for I := 0 to J - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3 + J * 3); Exit; end;
     Descs[I].Value := RootAt(TempTop - (J - I) * 3);
     Descs[I].Get := RootAt(TempTop - (J - I) * 3 + 1);
     Descs[I].Set_ := RootAt(TempTop - (J - I) * 3 + 2);
@@ -1302,6 +1311,7 @@ begin
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));   { Keys moved if the allocation above collected }
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     K := KeyOf(ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I]);
     if not GetOwnPropertyV(RootAt(TempTop - 3), K, D, Found) then begin PopRoots(3); Exit(False); end;
     if not Found then Continue;
@@ -1647,18 +1657,21 @@ end;
 function EnumerableOwn(O: TValue; Kind: Integer; var Res: TValue): Boolean;
 var Keys, V, KV, E: TValue; I, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if not (ObjOf(O)^.OKind in [okProxy, okModuleNS]) and (Kind = 0) then begin Res := OwnKeys(ObjOf(O), True); Exit(True); end;
+  if not (ObjOf(O)^.OKind in [okProxy, okModuleNS]) and (Kind = 0) then Exit(OwnKeys(ObjOf(O), True, Res));
   PushRoot(O);
   if ObjOf(O)^.OKind = okProxy then
   begin
     if not OwnPropertyKeysV(O, Keys) then begin PopRoots(1); Exit(False); end;
   end
-  else Keys := OwnKeys(ObjOf(O), True);
+  else if not OwnKeys(ObjOf(O), True, Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
   PushRoot(MkPtr(NewArray(0, 8)));
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));   { Keys moved if the allocation above collected }
+  { a key's value and its entry are made with no call or back edge in between: each polls the run's limits, so a
+    String object's millions of characters end at a deadline or a memory refusal like a script loop }
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if not IsString(KV) then Continue;
     K := KeyOf(KV);
@@ -1744,13 +1757,14 @@ var O, Keys, KV: TValue; I, N: Integer; Sym: Boolean;
 begin
   if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
   Sym := NativeData = 1;
-  if (ObjOf(O)^.OKind <> okProxy) and not Sym then begin Res := OwnKeys(ObjOf(O), False); Exit(True); end;
+  if (ObjOf(O)^.OKind <> okProxy) and not Sym then Exit(OwnKeys(ObjOf(O), False, Res));
   if not OwnPropertyKeysV(O, Keys) then Exit(False);
   PushRoot(Keys);
   PushRoot(MkPtr(NewArray(0, 4)));
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));   { Keys moved if the allocation above collected }
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if IsString(KV) <> Sym then ArrayPush(ObjOf(RootAt(TempTop - 1)), KV);
   end;
@@ -1775,6 +1789,7 @@ begin
     N := ArrayLen(ObjOf(Keys));
     for J := 0 to N - 1 do
     begin
+      if not PollInterrupt then begin PopRoots(3); Exit(False); end;
       K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[J]);
       if not GetOwnPropertyV(RootAt(TempTop - 2), K, D, Found) then begin PopRoots(3); Exit(False); end;
       if not Found or not D.Enumerable then Continue;

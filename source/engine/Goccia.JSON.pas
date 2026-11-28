@@ -53,9 +53,7 @@ var Keys, KV: TValue; I, N: Integer; D: TPropDesc; Found: Boolean;
 begin
   if ObjOf(O)^.OKind <> okProxy then
   begin
-    Res := OwnKeys(ObjOf(O), True);
-    if OwnKeysFailed then begin OwnKeysFailed := False; Exit(False); end;
-    Exit(True);
+    Exit(OwnKeys(ObjOf(O), True, Res));
   end;
   PushRoot(O);
   if not OwnPropertyKeysV(O, Keys) then begin PopRoots(1); Exit(False); end;
@@ -64,6 +62,7 @@ begin
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if not IsString(KV) then Continue;
     if not GetOwnPropertyV(RootAt(TempTop - 3), Atomize(StrOf(KV)), D, Found) then begin PopRoots(3); Exit(False); end;

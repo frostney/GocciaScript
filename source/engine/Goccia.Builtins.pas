@@ -333,8 +333,7 @@ var V: TValue;
 begin
   V := Arg(Args, Argc, 1);
   if not IsObject(V) then begin Res := MkPtr(NewArray(0, 0)); Exit(True); end;
-  Res := OwnKeys(ObjOf(V), True);
-  Result := True;
+  Result := OwnKeys(ObjOf(V), True, Res);
 end;
 
 function Object_Values(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -342,13 +341,14 @@ var V, Keys, X: TValue; I, N: Integer; A: PObj;
 begin
   V := Arg(Args, Argc, 1);
   if not IsObject(V) then begin Res := MkPtr(NewArray(0, 0)); Exit(True); end;
-  Keys := OwnKeys(ObjOf(V), True);
+  if not OwnKeys(ObjOf(V), True, Keys) then Exit(False);
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
   A := NewArray(0, N);
   PushRoot(MkPtr(A));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     if not GetV(Args[1], Atomize(StrOf(ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I])), X) then begin PopRoots(2); Exit(False); end;
     ArrayPush(ObjOf(RootAt(TempTop - 1)), X);
   end;
@@ -362,13 +362,14 @@ var V, Keys, X: TValue; I, N: Integer; A, P: PObj;
 begin
   V := Arg(Args, Argc, 1);
   if not IsObject(V) then begin Res := MkPtr(NewArray(0, 0)); Exit(True); end;
-  Keys := OwnKeys(ObjOf(V), True);
+  if not OwnKeys(ObjOf(V), True, Keys) then Exit(False);
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
   A := NewArray(0, N);
   PushRoot(MkPtr(A));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     if not GetV(Args[1], Atomize(StrOf(ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I])), X) then begin PopRoots(2); Exit(False); end;
     PushRoot(X);
     P := NewArray(2, 2);
@@ -388,11 +389,12 @@ begin
   for I := 2 to Argc do
   begin
     if not IsObject(Args[I]) then Continue;
-    Keys := OwnKeys(ObjOf(Args[I]), True);
+    if not OwnKeys(ObjOf(Args[I]), True, Keys) then Exit(False);
     PushRoot(Keys);
     N := ArrayLen(ObjOf(Keys));
     for J := 0 to N - 1 do
     begin
+      if not PollInterrupt then begin PopRoots(1); Exit(False); end;
       K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[J]));
       if not GetV(Args[I], K, V) then begin PopRoots(1); Exit(False); end;
       if not SetV(Args[1], K, V) then begin PopRoots(1); Exit(False); end;
@@ -528,8 +530,7 @@ var V: TValue;
 begin
   V := Arg(Args, Argc, 1);
   if not IsObject(V) then begin Res := MkPtr(NewArray(0, 0)); Exit(True); end;
-  Res := OwnKeys(ObjOf(V), False);
-  Result := True;
+  Result := OwnKeys(ObjOf(V), False, Res);
 end;
 
 function ObjProto_HasOwnProperty(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2612,14 +2613,14 @@ begin
     PopRoots(1);
     Exit(True);
   end;
-  Keys := OwnKeys(ObjOf(V), True);
-  if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(1); Exit(False); end;
+  if not OwnKeys(ObjOf(V), True, Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
   S := '{';
   First := True;
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(2); Exit(False); end;
     K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
     if not GetV(RootAt(TempTop - 2), K, X) then begin PopRoots(2); Exit(False); end;
     if not JSONStr(X, Out_, Sk, Depth + 1) then begin PopRoots(2); Exit(False); end;

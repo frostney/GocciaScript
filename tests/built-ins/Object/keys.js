@@ -103,6 +103,25 @@ test("Object.keys sorts many array-index keys inserted in descending order", () 
   expect(keys.every((key, index) => key === String(index))).toBe(true);
 });
 
+test("Object.keys merges an array's elements with the index keys it holds apart", () => {
+  const array = ["a", "b", "c"];
+  array[5_000_000] = "far";
+  array[4_000_000] = "farther in";
+  array[7] = "near";
+
+  expect(Object.keys(array)).toEqual(["0", "1", "2", "7", "4000000", "5000000"]);
+});
+
+test("Object.keys merges a String object's characters with its own index keys", () => {
+  const string = new String("abc");
+  string[9] = "nine";
+  string[4] = "four";
+  string.name = "named";
+
+  expect(Object.keys(string)).toEqual(["0", "1", "2", "4", "9", "name"]);
+  expect(Object.getOwnPropertyNames(string)).toEqual(["0", "1", "2", "4", "9", "length", "name"]);
+});
+
 test("Object.keys throws for null", () => {
   expect(() => Object.keys(null)).toThrow(TypeError);
 });
