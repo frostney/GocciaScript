@@ -2054,7 +2054,7 @@ end;
 { String.prototype.replace / replaceAll with a string pattern }
 function StrProto_Replace(Args: TArgs; Argc: Integer; var Res: TValue; All: Boolean): Boolean;
 var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv: Integer;
-  F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
+  CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
   Charged, Grown: Int64; Cap: Integer;
   { before U takes Extra more code units: U within MAX_STRING_LENGTH, and its growth charged against the memory limit
     (U is outside the heap; after a collection when it does not fit: the values are rooted here) }
@@ -2103,8 +2103,6 @@ begin
   P := StrToUnicode(StrOf(RootAt(TempTop - 2)));
   if Rep <> nil then R := StrToUnicode(StrOf(RootAt(TempTop - 1))) else R := '';
   PopRoots(1);
-  { the callback, read from its argument slot: the reservation above can collect }
-  F := Arg(Args, Argc, 2);
   { the match positions, 0-based }
   N := 0;
   SetLength(Positions, 0);
@@ -2135,7 +2133,8 @@ begin
   U := '';
   Last := 0;
   Result := False;
-  PushRoot(F); PushRoot(Args[0]);
+  { the callback, read from its argument slot as it is rooted: every reservation above can collect }
+  PushRoot(Arg(Args, Argc, 2)); PushRoot(Args[0]);
   I := 0;
   while I < N do
   begin

@@ -1155,6 +1155,7 @@ function OverCeiling(Size: SizeInt): Boolean; forward;
 function ShapesDueMajor: Boolean; forward;
 
 function AllocCell(Size: SizeInt; Kind: Byte): PCell;
+var OldSize: SizeInt;
 begin
   Size := (Size + 7) and not 7;
   if Size < 16 then Size := 16;
@@ -1162,9 +1163,13 @@ begin
     then die in a minor collection instead of filling old space }
   if Size > (NurseryLimit - NurseryStart) div 16 then
   begin
-    { direct old-space allocation still counts toward the major trigger }
-    if (GCOldBytes + Size - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or
-       OverCeiling(Size) then
+    { direct old-space allocation still counts toward the major trigger, with the bytes AllocOld charges for it: a
+      small cell's size class (2,064 bytes take 4,096), so that a cell the test let through does not find the heap
+      over the limit once it is made, and refuse with no collection before it }
+    OldSize := Size;
+    if OldSize <= LARGE_LIMIT then OldSize := ClassSizes[ClassOf[OldSize shr 3]];
+    if (GCOldBytes + OldSize - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or
+       OverCeiling(OldSize) then
     begin
       CollectMinor;
       CollectMajor;
