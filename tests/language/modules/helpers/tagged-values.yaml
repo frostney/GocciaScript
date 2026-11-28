@@ -1,5 +1,6 @@
 %YAML 1.2
 %TAG !e! tag:example.com,2026:
+---
 name: !!str true
 count: !!int "42"
 enabled: !!bool "true"

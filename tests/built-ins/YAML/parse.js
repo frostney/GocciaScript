@@ -195,7 +195,7 @@ m:
 - outside
 `);
 
-    expect(value).toEqual([{ null: "named", b: "two" }, "outside"]);
+    expect(value).toEqual([{ "": "named", b: "two" }, "outside"]);
   });
 
   test("parses compact mappings with an omitted explicit value", () => {
@@ -218,6 +218,174 @@ m:
 
   test("rejects compact mappings as values of implicit keys", () => {
     expect(() => YAML.parse("- outer: inner: value")).toThrow(SyntaxError);
+  });
+
+  test("rejects entries indented under no collection", () => {
+    // suite case ZVH3: the entry is less indented than the mapping it follows
+    expect(() => YAML.parse("- key: value\n - item1\n")).toThrow(SyntaxError);
+  });
+
+  test("continues a plain scalar on a more indented dash line", () => {
+    expect(YAML.parse("? a\n - b\n")).toEqual({ "a - b": null });
+    expect(YAML.parse("a: 1\n - b\n")).toEqual({ a: "1 - b" });
+  });
+
+  test("rejects a block sequence on the same line as a mapping key", () => {
+    // suite case 5U3A
+    expect(() => YAML.parse("key: - a\n     - b\n")).toThrow(SyntaxError);
+  });
+
+  test("rejects a key and value continued on a more indented line", () => {
+    // a plain scalar cannot hold ": ", and an implicit key ends on its line
+    expect(() => YAML.parse("a: 1\n b: 2\n")).toThrow(SyntaxError);
+  });
+
+  test("gives a node property before a compact mapping to its first key", () => {
+    const value = YAML.parse(`
+- &first a: 1
+  b: *first
+- !!str c: 2
+`);
+
+    expect(value).toEqual([{ a: 1, b: "a" }, { c: 2 }]);
+  });
+
+  test("parses collections and block scalars as explicit keys", () => {
+    // suite cases M5DY and 5WE3
+    const value = YAML.parse(`
+? - Detroit Tigers
+  - Chicago cubs
+: - 2001-07-23
+? [ New York Yankees,
+    Atlanta Braves ]
+: [ 2001-07-02, 2001-08-12 ]
+? |
+  block key
+: - one
+  - two
+`);
+
+    expect(value).toEqual({
+      '["Detroit Tigers", "Chicago cubs"]': ["2001-07-23"],
+      '["New York Yankees", "Atlanta Braves"]': ["2001-07-02", "2001-08-12"],
+      "block key\n": ["one", "two"],
+    });
+  });
+
+  test("parses a root mapping key with no value before the next key", () => {
+    expect(YAML.parse("a:\nb: 2\n")).toEqual({ a: null, b: 2 });
+  });
+
+  test("rejects a block collection on the line of an empty key", () => {
+    // an empty key's value, like an implicit key's, starts on a new line
+    expect(() => YAML.parse(": a: b\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse(": - a\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("? a\n: b\n: c: d\n")).toThrow(SyntaxError);
+    // an explicit key's value may be a compact collection
+    expect(YAML.parse("? x\n: a: b\n")).toEqual({ x: { a: "b" } });
+    expect(YAML.parse("? x\n: - a\n")).toEqual({ x: ["a"] });
+  });
+
+  test("separates an explicit key from a flow node by a tab", () => {
+    expect(YAML.parse("?\tfoo\n")).toEqual({ foo: null });
+    expect(YAML.parse("? \t[a]\n")).toEqual({ '["a"]': null });
+    expect(() => YAML.parse("?\t- a\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("?\tkey: value\n")).toThrow(SyntaxError);
+  });
+
+  test("rejects block scalar indicators as flow scalars", () => {
+    expect(() => YAML.parse("{a: |b}")).toThrow(SyntaxError);
+    expect(() => YAML.parse("[>b]")).toThrow(SyntaxError);
+  });
+
+  test("indents flow collection lines past the block node", () => {
+    expect(() => YAML.parse("k: {c k\n:\n v\n }\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("k: [a\nb]\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("- [4\n\t\n foo\n ]\n")).toThrow(SyntaxError);
+    // a closing bracket may sit at the block node's indentation
+    expect(YAML.parse('args: [\n  "--a",\n  "--b"\n]\n')).toEqual({
+      args: ["--a", "--b"],
+    });
+    expect(YAML.parse("foo: [ {\n  bar: 1\n} ]\n")).toEqual({
+      foo: [{ bar: 1 }],
+    });
+  });
+
+  test("parses an empty explicit key in a flow sequence", () => {
+    expect(YAML.parse("[? : value]")).toEqual([{ "": "value" }]);
+    expect(YAML.parse("[? , x]")).toEqual([{ "": null }, "x"]);
+    expect(YAML.parse("[? ]")).toEqual([{ "": null }]);
+  });
+
+  test("keeps the escapes of a verbatim tag", () => {
+    // a verbatim tag is delivered as written (YAML 1.2.2 6.9.1)
+    const value = YAML.parse("!<tag:yaml.org,2002:%69nt> nope");
+    expect(value.tagName).toBe("tag:yaml.org,2002:%69nt");
+    expect(value.value).toBe("nope");
+    expect(YAML.parse("!foo%21 x").tagName).toBe("!foo!");
+  });
+
+  test("counts an implicit key's length in characters", () => {
+    expect(YAML.parse("\u{1F600}".repeat(600) + ": 1")).toEqual({
+      ["\u{1F600}".repeat(600)]: 1,
+    });
+    expect(() => YAML.parse("x".repeat(1025) + ": 1")).toThrow(SyntaxError);
+  });
+
+  test("limits a flow sequence pair's implicit key to 1024 characters", () => {
+    expect(() => YAML.parse("[" + "x".repeat(1025) + ": 1]")).toThrow(SyntaxError);
+    expect(YAML.parse("[" + "x".repeat(1024) + ": 1]")[0]["x".repeat(1024)]).toBe(1);
+    // a key in braces has no limit
+    expect(YAML.parse("{" + "x".repeat(1025) + ": 1}")["x".repeat(1025)]).toBe(1);
+  });
+
+  test("holds DEL, C1 controls and noncharacters only in quoted scalars", () => {
+    expect(() => YAML.parse("a: \u007fb\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: \u0086b\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("# \u007f\na: 1\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: |\n  \uffff\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: \ud800\n")).toThrow(SyntaxError);
+    expect(YAML.parse('a: "\u007f\u0086\uffff"\nb: x\u0085y\n')).toEqual({
+      a: "\u007f\u0086\uffff",
+      b: "x\u0085y",
+    });
+  });
+
+  test("rejects malformed tag handles and escapes", () => {
+    // a named handle is word characters, without "_" (YAML 1.2.2 6.8.2.1)
+    expect(() =>
+      YAML.parse("%TAG !foo_bar! tag:example.com,2026:\n---\n!foo_bar!x value\n"),
+    ).toThrow(SyntaxError);
+    // an escape is UTF-8, and an overlong encoding is no UTF-8
+    expect(() => YAML.parse('!!%C1%A9nt "12"')).toThrow(SyntaxError);
+    expect(() => YAML.parse('!!%E0%81%A9nt "12"')).toThrow(SyntaxError);
+    expect(() => YAML.parse('!!%F0%80%81%A9nt "12"')).toThrow(SyntaxError);
+    expect(YAML.parse("!e%C3%A9 x").tagName).toBe("!e\u00e9");
+  });
+
+  test("rejects verbatim tags that are no tag", () => {
+    // YAML 1.2.2 6.9.1
+    expect(() => YAML.parse("!<> x")).toThrow(SyntaxError);
+    expect(() => YAML.parse("!<!> 12")).toThrow(SyntaxError);
+    expect(() => YAML.parse("!<$:?> x")).toThrow(SyntaxError);
+    expect(YAML.parse("!<!bar> x").tagName).toBe("!bar");
+  });
+
+  test("rejects C0 control characters in the text", () => {
+    expect(() => YAML.parse("a: \u0001b\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse('"a\u0007"\n')).toThrow(SyntaxError);
+    expect(() => YAML.parse("# c\u001b\na: 1\n")).toThrow(SyntaxError);
+    // tab, line feed and carriage return are allowed, and escapes spell
+    // any character
+    expect(YAML.parse('a:\tb\r\nc: "\\a\\x01"\r\n')).toEqual({
+      a: "b",
+      c: "\u0007\u0001",
+    });
+  });
+
+  test("reads the non-specific tag as a string", () => {
+    // suite case S4JQ
+    expect(YAML.parse('- "12"\n- 12\n- ! 12\n')).toEqual(["12", 12, "12"]);
   });
 
   test("parses flow collections, comments, and scalar values", () => {
@@ -275,10 +443,8 @@ items:
     expect(value.items[0][0][""]).toBe("empty key");
   });
 
-  test("parses inline sequence values after mapping keys", () => {
+  test("parses compact sequences as explicit mapping values", () => {
     const value = YAML.parse(`
-key: - a
-     - b
 explicit:
   ? a
   : -\tb
@@ -286,9 +452,6 @@ explicit:
        - d
 `);
 
-    expect(value.key.length).toBe(2);
-    expect(value.key[0]).toBe("a");
-    expect(value.key[1]).toBe("b");
     expect(value.explicit.a.length).toBe(2);
     expect(value.explicit.a[0]).toBe("b");
     expect(value.explicit.a[1].length).toBe(2);
@@ -312,7 +475,8 @@ folded: >
     expect(value.mapping.length).toBe(1);
     expect(value.mapping[0]).toBe("x x");
     expect(value.literal).toBe("literal\n\ttext\n");
-    expect(value.folded).toBe("\ndetected\n");
+    // a tab after the indentation is content, not an empty line
+    expect(value.folded).toBe("\t\ndetected\n");
   });
 
   test("parses tags and anchors inside flow collection entries", () => {
@@ -332,8 +496,9 @@ nested: { a: !!seq [1, 2], b: !!map { c: 3 } }
   });
 
   test("preserves custom tag metadata inside flow collections", () => {
-    const value = YAML.parse(`
+    const [value] = YAML.parse(`
 %TAG !e! tag:example.com,2026:
+---
 items: [!e!x 1, !foo { a: 2 }, entry: &x !e!y test, again: *x]
 `);
 
@@ -652,9 +817,10 @@ message: |
   });
 
   test("parses YAML directives and standard tags", () => {
-    const value = YAML.parse(`
+    const [value] = YAML.parse(`
 %YAML 1.2
 %TAG !e! tag:example.com,2026:
+---
 name: !!str true
 count: !!int "42"
 ratio: !!float "3.5"
@@ -685,12 +851,13 @@ payload: !!binary SGVsbG8=
     expect(value.created.tagName).toBe("tag:yaml.org,2002:timestamp");
     expect(value.created.value).toBe("2026-04-02");
     expect(value.payload.tagName).toBe("tag:yaml.org,2002:binary");
-    expect(value.payload.value).toBe("Hello");
+    expect(value.payload.value).toBe("SGVsbG8=");
   });
 
   test("supports the primary %TAG handle", () => {
-    const value = YAML.parse(`
+    const [value] = YAML.parse(`
 %TAG ! tag:example.com,2026:
+---
 node: !widget demo
 `);
 
@@ -774,6 +941,20 @@ items:
     );
   });
 
+  test("requires a document start marker after directives", () => {
+    // a directive document begins with "---" (YAML 1.2.2 9.2)
+    expect(() => YAML.parse("%YAML 1.2\nkey: value\n")).toThrow(SyntaxError);
+    expect(YAML.parse("%YAML 1.2\n---\nkey: value\n")).toEqual([
+      { key: "value" },
+    ]);
+  });
+
+  test("separates a %TAG handle from its prefix", () => {
+    expect(() =>
+      YAML.parse('%TAG !e!tag:example.com,2026:\n---\n!e!foo "bar"\n'),
+    ).toThrow(SyntaxError);
+  });
+
   test("throws on invalid YAML directives", () => {
     expect(() =>
       YAML.parse(`
@@ -800,6 +981,12 @@ name: app
 name: app
 `),
     ).toThrow(SyntaxError);
+  });
+
+  test("merges only a mapping or a sequence of mappings", () => {
+    expect(() => YAML.parse("a: &x [*x]\nb:\n  <<: *x\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("a: &x [[{k: 1}]]\nb:\n  <<: *x\n")).toThrow(SyntaxError);
+    expect(YAML.parse("a: &x [{k: 1}, {j: 2}]\nb:\n  <<: *x\n").b).toEqual({ k: 1, j: 2 });
   });
 
   test("throws on unknown aliases", () => {

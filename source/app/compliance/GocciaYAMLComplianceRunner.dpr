@@ -1,12 +1,12 @@
 program GocciaYAMLComplianceRunner;
 
-{ Runs TGocciaYAMLParser over a prepared checkout of the yaml-test-suite data
+{ Runs the YAML parser over a prepared checkout of the yaml-test-suite data
   branch (github.com/yaml/yaml-test-suite). Each case runs in a worker process
-  of this executable. A valid case passes when it parses and, where the case
-  has in.json, when its documents equal those JSON values; a case with an
-  error file passes when the parser rejects it. Cases listed in the
-  known-failures file may fail; the run fails on any other failure and on a
-  listed case that passes or no longer exists. }
+  of this executable. A valid case passes when TGocciaYAMLEventParser gives
+  the events of its test.event and, where the case has in.json, when
+  TGocciaYAMLParser's documents equal those JSON values; a case with an error
+  file passes when the event parser rejects it. Any other result fails the
+  run. }
 
 {$I Goccia.inc}
 
@@ -23,6 +23,7 @@ uses
   Goccia.JSON.Utils,
   Goccia.TextFiles,
   Goccia.YAML,
+  Goccia.YAML.Events,
 
   NumericText,
   StringBuffer;
@@ -31,9 +32,9 @@ const
   SUITE_NAME = 'yaml-test-suite';
   SUITE_VERSION = '1.2.2';
   DEFAULT_PIN_PATH = 'tests/compliance/yaml-test-suite.pin';
-  DEFAULT_KNOWN_FAILURES_PATH = 'tests/compliance/yaml-test-suite.known-failures';
   CASE_INPUT_FILE = 'in.yaml';
   CASE_VALUES_FILE = 'in.json';
+  CASE_EVENTS_FILE = 'test.event';
   CASE_ERROR_FILE = 'error';
   { the data branch's indexes of the cases by name and by tag: symlinks to
     the case directories, so walking them runs each case again }
@@ -44,6 +45,8 @@ const
   WORKER_EXIT_USAGE = 2;
   WORKER_EXIT_UNEXPECTED_EXCEPTION = 3;
   WORKER_EXIT_NO_JSON_FORM = 4;
+  { the events parsed, but composing the documents failed }
+  WORKER_EXIT_VALUES_REJECTED = 5;
 
 type
   EYAMLNoJSONForm = class(Exception);
@@ -353,6 +356,44 @@ begin
       [APath, DescribeNode(AExpected), DescribeNode(AActual)]);
 end;
 
+{ the worker's events, a JSON array of test.event lines, against the
+  case's test.event }
+function SameEvents(const AExpectedText, AActualJSON: string;
+  out AMessage: string): Boolean;
+var
+  Actual: TGocciaDataTree;
+  Expected: TStringList;
+  I: Integer;
+  ActualLine, ExpectedLine: string;
+begin
+  Expected := TStringList.Create;
+  Actual := ParseJSONDataTree(AActualJSON);
+  try
+    Expected.Text := AExpectedText;
+    for I := 0 to Max(Expected.Count, Actual.Root.Count) - 1 do
+    begin
+      if I < Expected.Count then
+        ExpectedLine := Expected[I]
+      else
+        ExpectedLine := '(none)';
+      if I < Actual.Root.Count then
+        ActualLine := Actual.Root.Items[I].StringValue
+      else
+        ActualLine := '(none)';
+      if ExpectedLine <> ActualLine then
+      begin
+        AMessage := Format('event %d: expected %s, got %s',
+          [I + 1, ExpectedLine, ActualLine]);
+        Exit(False);
+      end;
+    end;
+    Result := True;
+  finally
+    Actual.Free;
+    Expected.Free;
+  end;
+end;
+
 constructor TYAMLComplianceExecutor.Create(const AExecutable,
   ASuiteDirectory: string; const ATimeoutMilliseconds: Integer);
 begin
@@ -366,7 +407,7 @@ procedure TYAMLComplianceExecutor.ExecuteCase(const ACaseID: string;
   const AIndex: Integer; out AResult: TComplianceCaseResult);
 var
   ActualJSON, ExpectedJSON: TGocciaDataTree;
-  Arguments: TStringList;
+  Arguments, OutputLines: TStringList;
   Directory, MessageText, ValuesPath: string;
   ProcessResult: TComplianceProcessResult;
 begin
@@ -407,6 +448,15 @@ begin
         end;
         Exit;
       end;
+    { an error case is invalid syntax, which the event parser must find }
+    WORKER_EXIT_VALUES_REJECTED:
+      begin
+        if AResult.Valid then
+          AResult.Outcome := coFalseReject
+        else
+          AResult.Outcome := coFalseAccept;
+        Exit;
+      end;
     WORKER_EXIT_USAGE:
       Exit;
   else
@@ -419,25 +469,39 @@ begin
     AResult.MessageText := '';
     Exit;
   end;
-  ValuesPath := CaseFile(Directory, CASE_VALUES_FILE);
-  if not FileExists(ValuesPath) then
-  begin
-    AResult.Outcome := coPassed;
-    AResult.MessageText := '';
-    Exit;
-  end;
-  if ProcessResult.ExitCode = WORKER_EXIT_NO_JSON_FORM then
-  begin
-    AResult.Outcome := coMismatch;
-    Exit;
-  end;
+
   ExpectedJSON := nil;
   ActualJSON := nil;
+  OutputLines := TStringList.Create;
   try
     try
+      OutputLines.Text := ProcessResult.StdOutText;
+      if OutputLines.Count < 2 then
+        raise Exception.Create('the worker printed no events and documents');
+      if not SameEvents(
+          ReadUTF8FileText(CaseFile(Directory, CASE_EVENTS_FILE)),
+          OutputLines[0], MessageText) then
+      begin
+        AResult.Outcome := coMismatch;
+        AResult.MessageText := MessageText;
+        Exit;
+      end;
+      ValuesPath := CaseFile(Directory, CASE_VALUES_FILE);
+      if not FileExists(ValuesPath) then
+      begin
+        AResult.Outcome := coPassed;
+        AResult.MessageText := '';
+        Exit;
+      end;
+      if ProcessResult.ExitCode = WORKER_EXIT_NO_JSON_FORM then
+      begin
+        AResult.Outcome := coMismatch;
+        AResult.MessageText := OutputLines[1];
+        Exit;
+      end;
       ExpectedJSON := ParseJSONDataTree(
         JSONStreamAsArray(ReadUTF8FileText(ValuesPath)));
-      ActualJSON := ParseJSONDataTree(Trim(ProcessResult.StdOutText));
+      ActualJSON := ParseJSONDataTree(OutputLines[1]);
       if SameJSONValue(ExpectedJSON.Root, ActualJSON.Root, 'documents',
           MessageText) then
       begin
@@ -450,6 +514,7 @@ begin
         AResult.MessageText := MessageText;
       end;
     finally
+      OutputLines.Free;
       ActualJSON.Free;
       ExpectedJSON.Free;
     end;
@@ -529,79 +594,71 @@ begin
   end;
 end;
 
-{ The case IDs the known-failures file lists, one per line; text after "#"
-  is a comment }
-function ReadKnownFailures(const APath: string): TStringList;
+procedure PrintFailingCases(const AResults: TComplianceCaseResultArray);
 var
-  I, CommentAt: Integer;
-  Lines: TStringList;
-  LineText: string;
+  I: Integer;
 begin
-  Result := TStringList.Create;
-  Result.Sorted := True;
-  Result.Duplicates := dupError;
-  if not FileExists(APath) then
-    raise Exception.CreateFmt('Known-failures file not found: %s', [APath]);
-  Lines := TStringList.Create;
-  try
-    Lines.Text := ReadUTF8FileText(APath);
-    for I := 0 to Lines.Count - 1 do
-    begin
-      LineText := Lines[I];
-      CommentAt := Pos('#', LineText);
-      if CommentAt > 0 then
-        LineText := Copy(LineText, 1, CommentAt - 1);
-      LineText := Trim(LineText);
-      if LineText <> '' then
-        Result.Add(LineText);
-    end;
-  finally
-    Lines.Free;
-  end;
+  for I := 0 to High(AResults) do
+    if AResults[I].Outcome <> coPassed then
+      WriteLn('  ', AResults[I].ID, ' ', ComplianceOutcomeName(AResults[I].Outcome),
+        ': ', AResults[I].MessageText);
 end;
 
-function JSONStringArray(const AValues: TStrings): string;
+{ the stream's events as a JSON array of test.event lines }
+function EventsJSON(const AText: string): string;
 var
   Buffer: TStringBuffer;
-  I: Integer;
+  Event: TGocciaYAMLEvent;
+  Events: TGocciaYAMLEventParser;
 begin
   Buffer := TStringBuffer.Create;
   Buffer.AppendChar('[');
-  for I := 0 to AValues.Count - 1 do
-  begin
-    if I > 0 then
-      Buffer.AppendChar(',');
-    Buffer.Append(QuoteJSONString(AValues[I]));
+  Events := TGocciaYAMLEventParser.Create(AText);
+  try
+    repeat
+      Event := Events.NextEvent;
+      if Buffer.Length > 1 then
+        Buffer.AppendChar(',');
+      AppendASCIIJSONString(Buffer, YAMLEventText(Event));
+    until Event.Kind = yekStreamEnd;
+  finally
+    Events.Free;
   end;
   Buffer.AppendChar(']');
   Result := Buffer.ToString;
 end;
 
-procedure PrintCaseIDs(const AHeading: string; const AIDs: TStrings);
-var
-  I: Integer;
-begin
-  if AIDs.Count = 0 then
-    Exit;
-  WriteLn(AHeading, ' (', AIDs.Count, '):');
-  for I := 0 to AIDs.Count - 1 do
-    WriteLn('  ', AIDs[I]);
-end;
-
+{ prints the events on one line, then the documents as plain JSON }
 procedure RunWorker;
 var
-  Directory: string;
+  Directory, Events, SourceText: string;
   Parser: TGocciaYAMLParser;
   Documents: TGocciaDataTree;
 begin
   if not ReadOptionValue('case', Directory) then
     Halt(WORKER_EXIT_USAGE);
+  try
+    SourceText := ReadUTF8FileText(CaseFile(Directory, CASE_INPUT_FILE));
+    Events := EventsJSON(SourceText);
+  except
+    on E: EGocciaYAMLParseError do
+    begin
+      WriteLn(E.Message);
+      Halt(WORKER_EXIT_REJECTED);
+    end;
+    on E: Exception do
+    begin
+      WriteLn(E.ClassName, ': ', E.Message);
+      Halt(WORKER_EXIT_UNEXPECTED_EXCEPTION);
+    end;
+  end;
+
   Parser := TGocciaYAMLParser.Create;
   try
     try
-      Documents := Parser.ParseDocuments(
-        ReadUTF8FileText(CaseFile(Directory, CASE_INPUT_FILE)));
+      Documents := Parser.ParseDocuments(SourceText);
       try
+        WriteLn(Events);
         WriteLn(PlainJSON(Documents.Root));
       finally
         Documents.Free;
@@ -616,12 +673,12 @@ begin
       on E: EGocciaYAMLParseError do
       begin
         WriteLn(E.Message);
-        Halt(WORKER_EXIT_REJECTED);
+        Halt(WORKER_EXIT_VALUES_REJECTED);
       end;
       on E: EGocciaDataDepthError do
       begin
         WriteLn(E.Message);
-        Halt(WORKER_EXIT_REJECTED);
+        Halt(WORKER_EXIT_VALUES_REJECTED);
       end;
       on E: Exception do
       begin
@@ -638,20 +695,19 @@ end;
 procedure PrintUsage(var AOutput: Text);
 begin
   WriteLn(AOutput, 'Usage: GocciaYAMLComplianceRunner --suite-dir=PATH [options]');
-  WriteLn(AOutput, '  --pin-file=PATH        Expected suite revision pin');
-  WriteLn(AOutput, '  --known-failures=PATH  Cases allowed to fail');
-  WriteLn(AOutput, '  --jobs=N               Maximum concurrent case processes');
-  WriteLn(AOutput, '  --timeout=N            Per-case timeout in milliseconds');
-  WriteLn(AOutput, '  --output=PATH          Write the complete JSON report');
+  WriteLn(AOutput, '  --pin-file=PATH   Expected suite revision pin');
+  WriteLn(AOutput, '  --jobs=N          Maximum concurrent case processes');
+  WriteLn(AOutput, '  --timeout=N       Per-case timeout in milliseconds');
+  WriteLn(AOutput, '  --output=PATH     Write the complete JSON report');
 end;
 
 function RunCoordinator: Integer;
 var
-  Cases, KnownFailures, NowPassing, Unexpected, Unknown: TStringList;
+  Cases: TStringList;
   Coordinator: TComplianceCoordinator;
   Executor: TYAMLComplianceExecutor;
-  I, Index, Jobs, TimeoutMilliseconds: Integer;
-  KnownFailuresPath, OutputPath, PinPath, Revision, SuiteDirectory: string;
+  Jobs, TimeoutMilliseconds: Integer;
+  OutputPath, PinPath, Revision, SuiteDirectory: string;
   ReportJSON: string;
   Results: TComplianceCaseResultArray;
   DurationMilliseconds, StartedAt: QWord;
@@ -662,11 +718,17 @@ begin
     PrintUsage(StdErr);
     Exit(2);
   end;
+  // the known-failures list is gone: every case must pass
+  if ReadOptionValue('known-failures', OutputPath) or
+     HasCommandLineFlag('known-failures') then
+  begin
+    WriteLn(StdErr, 'Error: --known-failures was removed; every case must pass, ',
+      'so run without it');
+    Exit(2);
+  end;
   SuiteDirectory := ExpandFileName(SuiteDirectory);
   if not ReadOptionValue('pin-file', PinPath) then
     PinPath := DEFAULT_PIN_PATH;
-  if not ReadOptionValue('known-failures', KnownFailuresPath) then
-    KnownFailuresPath := DEFAULT_KNOWN_FAILURES_PATH;
   Revision := ReadRequiredPin(PinPath);
   VerifySuiteRevision(SuiteDirectory, Revision);
   Jobs := PositiveIntegerOption('jobs', DefaultComplianceJobs);
@@ -674,16 +736,11 @@ begin
     DEFAULT_COMPLIANCE_TIMEOUT_MS);
   ReadOptionValue('output', OutputPath);
 
-  KnownFailures := nil;
-  NowPassing := TStringList.Create;
-  Unexpected := TStringList.Create;
-  Unknown := TStringList.Create;
   Cases := DiscoverCases(SuiteDirectory);
   try
     if Cases.Count = 0 then
       raise Exception.CreateFmt('No YAML cases discovered in %s',
         [SuiteDirectory]);
-    KnownFailures := ReadKnownFailures(KnownFailuresPath);
     Executor := TYAMLComplianceExecutor.Create(ExpandFileName(ParamStr(0)),
       SuiteDirectory, TimeoutMilliseconds);
     Coordinator := TComplianceCoordinator.Create(Executor);
@@ -694,63 +751,34 @@ begin
       Coordinator.Free;
       Executor.Free;
     end;
-    DurationMilliseconds := GetTickCount64 - StartedAt;
-    Summary := SummarizeComplianceResults(Results);
-
-    for I := 0 to High(Results) do
-    begin
-      if KnownFailures.Find(Results[I].ID, Index) then
-      begin
-        if Results[I].Outcome = coPassed then
-          NowPassing.Add(Results[I].ID);
-      end
-      else if Results[I].Outcome <> coPassed then
-        Unexpected.Add(Results[I].ID);
-    end;
-    for I := 0 to KnownFailures.Count - 1 do
-      if Cases.IndexOf(KnownFailures[I]) < 0 then
-        Unknown.Add(KnownFailures[I]);
-
-    ReportJSON := Format(
-      '{"reportVersion":%d,"runner":{"name":%s,"version":%d},' +
-      '"suite":{"name":%s,"version":%s,"revision":%s},' +
-      '"mode":"native-values","jobs":%d,' +
-      '"timing":{"durationMilliseconds":%d,"timeoutMilliseconds":%d},' +
-      '"summary":%s,' +
-      '"knownFailures":{"path":%s,"listed":%d,"unexpectedFailures":%s,' +
-      '"nowPassing":%s,"notInSuite":%s},' +
-      '"cases":%s}',
-      [COMPLIANCE_REPORT_VERSION,
-       QuoteJSONString('GocciaYAMLComplianceRunner'),
-       COMPLIANCE_RUNNER_VERSION, QuoteJSONString(SUITE_NAME),
-       QuoteJSONString(SUITE_VERSION), QuoteJSONString(Revision),
-       Min(Jobs, Max(1, Summary.Total)), DurationMilliseconds,
-       TimeoutMilliseconds, ComplianceSummaryJSON(Summary),
-       QuoteJSONString(KnownFailuresPath), KnownFailures.Count,
-       JSONStringArray(Unexpected), JSONStringArray(NowPassing),
-       JSONStringArray(Unknown), ComplianceCasesJSON(Results)]);
-    if OutputPath <> '' then
-      WriteJSONFile(OutputPath, ReportJSON);
-    WriteLn('YAML compliance: ', Summary.Passed, '/', Summary.Total,
-      ' passed, ', KnownFailures.Count, ' known failures listed');
-    WriteLn(ComplianceSummaryJSON(Summary));
-    PrintCaseIDs('Failing cases not in ' + KnownFailuresPath, Unexpected);
-    PrintCaseIDs('Passing cases to remove from ' + KnownFailuresPath,
-      NowPassing);
-    PrintCaseIDs('Cases in ' + KnownFailuresPath + ' that the suite lacks',
-      Unknown);
-    if (Unexpected.Count > 0) or (NowPassing.Count > 0) or
-       (Unknown.Count > 0) then
-      Result := 1
-    else
-      Result := 0;
   finally
     Cases.Free;
-    KnownFailures.Free;
-    NowPassing.Free;
-    Unexpected.Free;
-    Unknown.Free;
   end;
+  DurationMilliseconds := GetTickCount64 - StartedAt;
+  Summary := SummarizeComplianceResults(Results);
+
+  ReportJSON := Format(
+    '{"reportVersion":%d,"runner":{"name":%s,"version":%d},' +
+    '"suite":{"name":%s,"version":%s,"revision":%s},' +
+    '"mode":"native-events-and-values","jobs":%d,' +
+    '"timing":{"durationMilliseconds":%d,"timeoutMilliseconds":%d},' +
+    '"summary":%s,"cases":%s}',
+    [COMPLIANCE_REPORT_VERSION,
+     QuoteJSONString('GocciaYAMLComplianceRunner'),
+     COMPLIANCE_RUNNER_VERSION, QuoteJSONString(SUITE_NAME),
+     QuoteJSONString(SUITE_VERSION), QuoteJSONString(Revision),
+     Min(Jobs, Max(1, Summary.Total)), DurationMilliseconds,
+     TimeoutMilliseconds, ComplianceSummaryJSON(Summary),
+     ComplianceCasesJSON(Results)]);
+  if OutputPath <> '' then
+    WriteJSONFile(OutputPath, ReportJSON);
+  WriteLn('YAML compliance: ', Summary.Passed, '/', Summary.Total, ' passed');
+  WriteLn(ComplianceSummaryJSON(Summary));
+  PrintFailingCases(Results);
+  if Summary.Failed > 0 then
+    Result := 1
+  else
+    Result := 0;
 end;
 
 begin
