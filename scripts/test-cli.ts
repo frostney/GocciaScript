@@ -1961,9 +1961,9 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
       assertPeakRssBelow(run, label, 2 * ceiling);
     }
     // Retrying with fresh keys after each refusal: the keys live as long as
-    // the engine, so a later refusal can come inside a catch handler and end
-    // the run, but the process stays bounded instead of growing each round
-    // (8 rounds reached 1.65 GB at 16 MiB before #1173).
+    // the engine, so a later refusal can come inside a catch handler, even the
+    // first, and end the run, but the process stays bounded instead of growing
+    // each round (8 rounds reached 1.65 GB at 16 MiB before #1173).
     writeFileSync(path, [
       "let base = 1e8; let r = 0;",
       "while (r < 8) {",
@@ -1974,8 +1974,8 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
       "",
     ].join("\n"));
     const retry = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
-    if (![0, 1].includes(retry.exitCode) || !retry.output.includes("round 0 RangeError") ||
-        (retry.exitCode === 1 && !retry.output.includes("RangeError")))
+    if (![0, 1].includes(retry.exitCode) ||
+        !retry.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
       throw new Error(`Retries with fresh sparse keys should each be refused: exit ${retry.exitCode}, ${retry.output}`);
     assertPeakRssBelow(retry, "retry with fresh sparse keys", 2 * ceiling);
     // A refusal made before the allocation carries the suggestion the refusal
