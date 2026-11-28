@@ -2055,7 +2055,7 @@ end;
 function StrProto_Replace(Args: TArgs; Argc: Integer; var Res: TValue; All: Boolean): Boolean;
 var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv: Integer;
   F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
-  Charged, Grown: Int64;
+  Charged, Grown: Int64; Cap: Integer;
   { before U takes Extra more code units: U within MAX_STRING_LENGTH, and its growth charged against the memory limit
     (U is outside the heap; after a collection when it does not fit: the values are rooted here) }
   function Grow(Extra: Int64): Boolean;
@@ -2090,27 +2090,45 @@ begin
     if not StrArg(Args, Argc, 2, Rep) then begin PopRoots(1); Exit(False); end;
     R := StrToUnicode(Rep);
   end;
-  Pat := StrOf(RootAt(TempTop - 1));
-  PopRoots(1);   { no allocation until the positions are found }
+  { the copies of the subject, pattern and replacement, and the match positions, are outside the heap: charged
+    against the memory limit as they are made, after a collection when they do not fit (the pattern stays rooted) }
+  Charge := Default(THeapExternalCharge);
+  Charged := 0;
+  if not Charge.TryGrow((Int64(Length(T)) + Length(P) + Length(R)) * SizeOf(WideChar)) then
+  begin
+    PopRoots(1);
+    T := ''; R := '';
+    Exit(ThrowMemoryLimit);
+  end;
   { the match positions, 0-based }
   N := 0;
   SetLength(Positions, 0);
   Adv := Max(1, Length(P));
-  Pos_ := FindIn(StrOf(Args[0]), Pat, 0);
+  Pos_ := FindIn(StrOf(Args[0]), StrOf(RootAt(TempTop - 1)), 0);
   while Pos_ >= 0 do
   begin
-    SetLength(Positions, N + 1);
+    if N >= Length(Positions) then
+    begin
+      Cap := Max(16, Length(Positions) * 2);
+      if not Charge.TryGrow(Int64(Cap - Length(Positions)) * SizeOf(Integer)) then
+      begin
+        PopRoots(1);
+        T := ''; R := ''; Positions := nil;
+        Charge.Clear;
+        Exit(ThrowMemoryLimit);
+      end;
+      SetLength(Positions, Cap);
+    end;
     Positions[N] := Pos_;
     Inc(N);
     if not All then Break;
     if Pos_ + Adv > Length(T) then Break;
-    Pos_ := FindIn(StrOf(Args[0]), Pat, Pos_ + Adv);
+    Pos_ := FindIn(StrOf(Args[0]), StrOf(RootAt(TempTop - 1)), Pos_ + Adv);
   end;
-  if N = 0 then begin Res := Args[0]; Exit(True); end;
+  PopRoots(1);
+  if N = 0 then begin Charge.Clear; Res := Args[0]; Exit(True); end;
   U := '';
   Last := 0;
-  Charge := Default(THeapExternalCharge);
-  Charged := 0;
   Result := False;
   PushRoot(F); PushRoot(Args[0]);
   I := 0;

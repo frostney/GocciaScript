@@ -1945,6 +1945,7 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
     "repeated $' substitutions": "('a' + 'b'.repeat(1e6)).replace('a', \"$'\".repeat(50));",
     "escaped JSON scalar": "JSON.stringify('\\0'.repeat(1e7));",
+    "replaceAll through its own callback": "const s = 'a'.repeat(1e6); let d = 0; const f = () => { d++; if (d < 20) s.replaceAll('a', f); throw new Error('stop'); }; s.replaceAll('a', f);",
   };
   const permanent = new Set(["sparse fill", "fresh string keys", "symbols"]);
   const dir = mkdtemp("goccia-native-charge-");
