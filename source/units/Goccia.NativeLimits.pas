@@ -18,6 +18,10 @@ const
 procedure EnterNativeDataDepth(const AOperation: string = '');
 procedure LeaveNativeDataDepth;
 procedure CheckNativeWork;
+{ whether the calling thread's engine set a NativeWorkHook, read in this unit:
+  another unit asks here rather than reading the threadvar across units
+  (docs/core-patterns.md) }
+function NativeWorkHooked: Boolean;
 function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
@@ -41,11 +45,13 @@ type
   { The nesting guard's refusal, for the engine to throw as a RangeError. }
   ENativeDepthLimit = class(Exception);
   { The engine's charge for native work: AUnits of it counted against the
-    run's limits, False when a limit or a host's cancellation ends the run
-    (its abort then pending in the engine). }
+    run's limits. False leaves the engine's error pending: a limit's or a
+    host's cancellation that ends the run, or a catchable RangeError when a
+    memory limit refusal is delivered there. }
   TNativeWorkHook = function(const AUnits: QWord): Boolean;
-  { CheckNativeWork's refusal under a TNativeWorkHook: the run's abort is
-    pending, and the native returns False without throwing anything else. }
+  { CheckNativeWork's refusal under a TNativeWorkHook: the engine's error is
+    pending (see TNativeWorkHook), and the native returns False without
+    throwing anything else, so that error is what the script sees. }
   ENativeWorkStopped = class(Exception);
 
 threadvar
@@ -104,6 +110,11 @@ procedure LeaveNativeDataDepth;
 begin
   if GNativeDataDepth > 0 then
     Dec(GNativeDataDepth);
+end;
+
+function NativeWorkHooked: Boolean;
+begin
+  Result := Assigned(NativeWorkHook);
 end;
 
 procedure CheckNativeWork;

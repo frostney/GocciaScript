@@ -184,36 +184,59 @@ for (const treeName of Object.keys(vectors.trees)) {
 
 // -- a search's native work counts against the instruction cap ---------------
 //
-// The same script over a tree without its files and over 14 MiB of them does
-// the same JavaScript work (neither finds the text): the smallest cap at which
-// it finishes without the files must stop it with them.
+// Each case runs one script over two trees that cost the same JavaScript work
+// (neither finds the text): the smallest cap at which it finishes over the
+// small tree must stop it over the large one with the instruction limit. The
+// scan cases keep the paths and line counts and lengthen the lines; the walk
+// case adds files the glob does not select.
 
-{
-  const body = 'grep("b", { glob: "*.txt" }); console.log("done");';
-  const empty: Record<string, FileSpec> = { "/readme.md": "x\n" };
-  const big: Record<string, FileSpec> = { "/readme.md": "x\n" };
-  for (let i = 0; i < 14; i++) big[`/f${i}.txt`] = "a".repeat(1024 * 1024);
-  const finishes = (tree: Record<string, FileSpec>, cap: number): boolean => {
-    try {
-      return runInTree(tree, body, [`--max-instructions=${cap}`]).trim() === "done";
-    } catch (error) {
-      if (/exceeded instruction limit/.test((error as Error).message)) return false;
-      throw error;
-    }
-  };
+/** "done", "limit" (the instruction limit stopped the run), or a thrown error for anything else. */
+function runCapped(tree: Record<string, FileSpec>, body: string, cap: number): "done" | "limit" {
+  try {
+    const out = runInTree(tree, body, [`--max-instructions=${cap}`]).trim();
+    if (out === "done") return "done";
+    throw new Error(`unexpected output at cap ${cap}: ${out}`);
+  } catch (error) {
+    if (/Execution exceeded instruction limit of \d+/.test((error as Error).message)) return "limit";
+    throw error;
+  }
+}
+
+function checkCap(name: string, body: string, small: Record<string, FileSpec>, large: Record<string, FileSpec>) {
   try {
     let low = 1;
     let high = 100000;
+    if (runCapped(small, body, high) !== "done") throw new Error(`the small tree did not finish within ${high}`);
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
-      if (finishes(empty, middle)) high = middle;
+      if (runCapped(small, body, middle) === "done") high = middle;
       else low = middle + 1;
     }
-    if (finishes(big, low)) throw new Error(`14 MiB of search finished within the cap of ${low} an empty search needs`);
-    console.log(`search instruction cap: ok (${low})`);
+    if (runCapped(small, body, low) !== "done") throw new Error(`the small tree did not finish at ${low}`);
+    if (runCapped(large, body, low) !== "limit") throw new Error(`the large tree finished within ${low}`);
+    console.log(`${name}: ok (${low})`);
   } catch (error) {
-    failures.push(`search instruction cap: ${(error as Error).message}`);
+    failures.push(`${name}: ${(error as Error).message}`);
   }
+}
+
+{
+  const short: Record<string, FileSpec> = {};
+  const long: Record<string, FileSpec> = {};
+  for (let i = 0; i < 14; i++) {
+    short[`/f${i}.txt`] = "a\n";
+    long[`/f${i}.txt`] = "a".repeat(1024 * 1024) + "\n";
+  }
+  checkCap("literal scan cap", 'grep("b", { glob: "*.txt" }); console.log("done");', short, long);
+  checkCap("ignoreCase scan cap", 'grep("ab", { glob: "*.txt", ignoreCase: true }); console.log("done");', short, long);
+  checkCap("regex scan cap", 'grep("ab", { glob: "*.txt", regex: true }); console.log("done");', short, long);
+}
+
+{
+  const few: Record<string, FileSpec> = { "/f.txt": "a\n" };
+  const many: Record<string, FileSpec> = { "/f.txt": "a\n" };
+  for (let i = 0; i < 3000; i++) many[`/u${i}.dat`] = "x";
+  checkCap("walk cap", 'grep("b", { glob: "*.txt" }); console.log("done");', few, many);
 }
 
 // -- adversarial inputs stay cheap ---------------------------------------------
