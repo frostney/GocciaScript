@@ -106,6 +106,9 @@ async function collect(stream: ReadableStream<Uint8Array>, into: string[]): Prom
 }
 
 async function run(check: Check): Promise<Result> {
+  // Named when it starts, so a log cut short by a timeout still says which
+  // checks were running.
+  console.log(`started ${check.name}`);
   const started = performance.now();
   // Both streams go into one log in the order they arrive, so a check's
   // errors stay next to the output that led to them.
