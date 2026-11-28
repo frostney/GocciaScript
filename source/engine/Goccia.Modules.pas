@@ -2561,9 +2561,10 @@ begin
         M := Mods[I];
         if M.Superseded then Continue;
         if (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then M.Superseded := True
-        else if (I >= Mark) and (M.Status in [msNew, msLinked]) then
+        else if M.Status in [msNew, msLinked] then
           { a record this recovery superseded: one an ordinary reload superseded before (a changed file) is not the
-            abort's }
+            abort's. An older record counts too: the cancelled run may have linked its requests anew (a source phase
+            import that failed earlier for a missing dependency) }
           for D in M.Deps do
             if (D <> nil) and Fresh.Contains(D) then
             begin

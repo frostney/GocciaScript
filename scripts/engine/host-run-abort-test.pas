@@ -361,6 +361,27 @@ begin
     Check(RunResult.Ok and (RunResult.ResultText = 'true'),
       'a cancellation dropped a source whose dependency an ordinary reload replaced: ' + RunResult.ResultText +
       RunResult.ErrorMessage);
+    { a record from an earlier run (its source phase import failed for a missing dependency) whose requests the
+      cancelled run linked anew, to a dependency the cancellation cut short: it goes too, so a later import
+      evaluates the dependency afresh instead of meeting the cancellation }
+    WriteModule(Directory, 'relinked-source.mjs', 'import { dep } from "./relinked-dep.mjs"; export const value = dep + 1;');
+    RunResult := AEngine.Run(Directory + PathDelim + 'relinked-missing.mjs',
+      'try { await import.source("./relinked-source.mjs"); "loaded" } catch { "missing" }');
+    Check(RunResult.Ok and (RunResult.ResultText = 'missing'),
+      'the source import without its dependency gave ' + RunResult.ResultText + RunResult.ErrorMessage);
+    WriteModule(Directory, 'relinked-dep.mjs', 'if (globalThis.cancelRelinked) requestAbort(); ' +
+      'const step = () => 0; step(); export const dep = 4;');
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'relinked-entry.mjs',
+      'globalThis.cancelRelinked = true; await import.source("./relinked-source.mjs"); ' +
+      'await import("./relinked-dep.mjs"); 1;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the relinking run was not cancelled: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'relinked-check.mjs',
+      'globalThis.cancelRelinked = false; const { value } = await import("./relinked-source.mjs"); value;');
+    Check(RunResult.Ok and (RunResult.ResultText = '5'),
+      'an earlier record relinked to a cancelled dependency met the cancellation: ' + RunResult.ResultText +
+      RunResult.ErrorMessage);
   finally
     CurrentAbort := nil;
     AEngine.Free;
@@ -373,6 +394,8 @@ begin
     DeleteFile(Directory + PathDelim + 'deferred.mjs');
     DeleteFile(Directory + PathDelim + 'reloaded-dep.mjs');
     DeleteFile(Directory + PathDelim + 'reloaded-source.mjs');
+    DeleteFile(Directory + PathDelim + 'relinked-source.mjs');
+    DeleteFile(Directory + PathDelim + 'relinked-dep.mjs');
     RemoveDir(Directory);
   end;
 end;
