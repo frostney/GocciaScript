@@ -105,6 +105,12 @@ uses
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout;
 
+const
+  { an engine's native work hook is charged a unit every this-plus-one PollMatcher calls }
+  POLLS_PER_CHARGE_MASK = 255;
+  { a backreference comparison polls every this-plus-one code points it compares }
+  BACKREF_POLL_MASK = 255;
+
 threadvar
   MatcherPolls: Cardinal;
 
@@ -119,7 +125,7 @@ begin
     { the threadvar read and written in statements of their own (docs/core-patterns.md) }
     Polls := MatcherPolls + 1;
     MatcherPolls := Polls;
-    if (Polls and 255) = 0 then CheckNativeWork;
+    if (Polls and POLLS_PER_CHARGE_MASK) = 0 then CheckNativeWork;
   end
   else CheckExecutionTimeout;
 end;
@@ -665,6 +671,7 @@ var
   ComparePos: Integer;
   RefCP, InputCP: Cardinal;
   RefByteLen, InputByteLen: Integer;
+  BackrefCompared: Integer;
   RepeatStack: array of Integer;
   RepeatDepth: Integer;
 
@@ -1260,8 +1267,13 @@ begin
           end;
           RefPos := RefStart;
           LookMatched := True;
+          BackrefCompared := 0;
           while RefPos < RefEnd do
           begin
+            { one step compares the whole capture: a long one is polled as it goes }
+            Inc(BackrefCompared);
+            if (BackrefCompared and BACKREF_POLL_MASK) = 0 then
+              PollMatcher;
             if not ReadInputCodePoint(AInput, RefPos, BackrefUnicode,
                RefCP, RefByteLen) then
             begin

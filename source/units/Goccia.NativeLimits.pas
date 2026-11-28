@@ -21,7 +21,7 @@ procedure CheckNativeWork;
 { whether the calling thread's engine set a NativeWorkHook, read in this unit:
   another unit asks here rather than reading the threadvar across units
   (docs/core-patterns.md) }
-function NativeWorkHooked: Boolean;
+function NativeWorkHooked: Boolean; noinline;
 function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);

@@ -202,7 +202,8 @@ function runCapped(tree: Record<string, FileSpec>, body: string, cap: number): "
   }
 }
 
-function checkCap(name: string, body: string, small: Record<string, FileSpec>, large: Record<string, FileSpec>) {
+/** margin: the large tree must also stop at the small tree's cap plus this many units. */
+function checkCap(name: string, body: string, small: Record<string, FileSpec>, large: Record<string, FileSpec>, margin = 0) {
   try {
     let low = 1;
     let high = 100000;
@@ -213,7 +214,7 @@ function checkCap(name: string, body: string, small: Record<string, FileSpec>, l
       else low = middle + 1;
     }
     if (runCapped(small, body, low) !== "done") throw new Error(`the small tree did not finish at ${low}`);
-    if (runCapped(large, body, low) !== "limit") throw new Error(`the large tree finished within ${low}`);
+    if (runCapped(large, body, low + margin) !== "limit") throw new Error(`the large tree finished within ${low + margin}`);
     console.log(`${name}: ok (${low})`);
   } catch (error) {
     failures.push(`${name}: ${(error as Error).message}`);
@@ -230,6 +231,30 @@ function checkCap(name: string, body: string, small: Record<string, FileSpec>, l
   checkCap("literal scan cap", 'grep("b", { glob: "*.txt" }); console.log("done");', short, long);
   checkCap("ignoreCase scan cap", 'grep("ab", { glob: "*.txt", ignoreCase: true }); console.log("done");', short, long);
   checkCap("regex scan cap", 'grep("ab", { glob: "*.txt", regex: true }); console.log("done");', short, long);
+}
+
+// One attempt per line that does the work itself: over 1 MiB "a" lines, ^a*b
+// runs a greedy loop and backtracks it in the matcher's dispatch loop, which
+// 1 MiB "c" lines at the same positions (no match either) never enter. The
+// margin keeps the positions' own polls from passing for the attempt's.
+{
+  const fewer: Record<string, FileSpec> = {};
+  const more: Record<string, FileSpec> = {};
+  for (let i = 0; i < 14; i++) {
+    fewer[`/f${i}.txt`] = "c".repeat(1024 * 1024) + "\n";
+    more[`/f${i}.txt`] = "a".repeat(1024 * 1024) + "\n";
+  }
+  checkCap("regex attempt cap", 'grep("^a*b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
+}
+
+// A backreference compares its whole capture in one step: over 8,000 "a"s,
+// ^(a+)\1b compares about 16 million code points that 8,000 "b"s at the same
+// positions do not. Measured on Linux x86-64, the "a"s' other work costs some
+// 30 units more and the comparisons some 230: a margin of 100 tells them apart.
+{
+  const fewer: Record<string, FileSpec> = { "/f.txt": "b".repeat(8000) + "\n" };
+  const more: Record<string, FileSpec> = { "/f.txt": "a".repeat(8000) + "\n" };
+  checkCap("backreference cap", 'grep("^(a+)\\\\1b", { glob: "*.txt", regex: true }); console.log("done");', fewer, more, 100);
 }
 
 {
