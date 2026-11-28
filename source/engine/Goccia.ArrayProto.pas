@@ -1327,21 +1327,23 @@ function JoinVia(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): 
 var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; Used: Integer; LA: array[0..1] of TValue; Base: Integer;
   Charge: THeapExternalCharge;
   function Add(S: PStr): Boolean;
-  var NewLen: Integer; Ok: Boolean;
+  var NewLen, Need: Integer; Ok: Boolean;
   begin
     if Int64(Used) + S^.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
     Result := True;
     if Used + S^.Len > Length(B) then
     begin
-      { B is outside the heap: its growth is charged against the memory limit, after a collection when it does not
-        fit (S rooted meanwhile), just what is needed when twice B does not fit }
-      NewLen := Max(Length(B) * 2, Used + S^.Len + 16);
+      { B is outside the heap: its growth is charged against the memory limit, after a collection when twice B does
+        not fit (S rooted meanwhile); then half the growth, and half again, down to what this string needs, so B
+        still grows by a good part of the room left and the next strings do not all collect }
+      Need := Used + S^.Len + 16;
+      NewLen := Max(Length(B) * 2, Need);
       PushRoot(MkPtr(S));
       Ok := Charge.TryGrow(Int64(NewLen - Length(B)) * SizeOf(WideChar));
-      if not Ok then
+      while not Ok and (NewLen > Need) do
       begin
-        NewLen := Used + S^.Len + 16;
-        Ok := Charge.TryGrow(Int64(NewLen - Length(B)) * SizeOf(WideChar));
+        NewLen := Max(Length(B) + (NewLen - Length(B)) div 2, Need);
+        Ok := Charge.TryGrow(Int64(NewLen - Length(B)) * SizeOf(WideChar), False);
       end;
       S := StrOf(RootAt(TempTop - 1));
       PopRoots(1);

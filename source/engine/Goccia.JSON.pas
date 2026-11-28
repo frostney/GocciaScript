@@ -593,6 +593,7 @@ begin
 end;
 
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean; forward;
+function SerializeValue(var O: TJOut; V: TValue; var Skip: Boolean): Boolean; forward;
 
 { before each element or member: the text so far within MAX_STRING_LENGTH, the buffer's growth since the last one
   charged against the memory limit (a UnicodeString outside the heap; after a collection when it does not fit: the
@@ -681,9 +682,22 @@ begin
   Result := True;
 end;
 
+{ an ordinary array's own element I, a primitive other than a BigInt (whose prototype may have toJSON): Get(A, I) is
+  that value, with no key }
+function OwnPrimitiveElement(A: TValue; I: Int64; var V: TValue): Boolean;
+var P: PObj;
+begin
+  Result := False;
+  if not IsObject(A) then Exit;
+  P := ObjOf(A);
+  if (P^.OKind <> okArray) or (P^.Elements = nil) or (I >= P^.Elements^.Len) then Exit;
+  V := P^.Elements^.Data[I];
+  Result := (V <> VHole) and not IsObject(V) and not IsBigInt(V);
+end;
+
 { 25.5.2.7 SerializeJSONArray }
 function SerializeArray(var O: TJOut; V: TValue): Boolean;
-var Len, I: Int64; Stepback: UnicodeString; Skip: Boolean;
+var Len, I: Int64; Stepback: UnicodeString; Skip: Boolean; E: TValue;
 begin
   if InStack(O, V) then Exit(ThrowTypeError('Converting circular structure to JSON'));
   if O.Depth >= MAX_DEPTH then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -700,9 +714,15 @@ begin
     if not OutOk(O) then begin PopRoots(1); Exit(False); end;
     if I > 0 then PutC(O, ',');
     if O.Gap <> '' then NewLine(O);
-    { an index no atom names and no object on the chain can have (a sparse array's hole): undefined, so null, with
-      no atom made for it }
+    { an index no atom names and no object on the chain can have (a sparse array's hole): undefined, so null; and an
+      element of an array's own that is a primitive, which has no toJSON: its value. Neither makes I's atom, which
+      would live as long as the engine }
     if (O.Replacer < 0) and IdxAbsent(RootAt(TempTop - 1), I) then Put(O, 'null')
+    else if (O.Replacer < 0) and OwnPrimitiveElement(RootAt(TempTop - 1), I, E) then
+    begin
+      if not SerializeValue(O, E, Skip) then begin PopRoots(1); Exit(False); end;
+      if Skip then Put(O, 'null');
+    end
     else
     begin
       if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
@@ -725,7 +745,7 @@ end;
 
 { 25.5.2.2 SerializeJSONProperty(state, key, holder); Skip when it is undefined }
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean;
-var V, F, S: TValue; CA: array[0..1] of TValue; D: Double; IsArr: Boolean; Ob: PObj;
+var V, F: TValue; CA: array[0..1] of TValue;
 begin
   Skip := False;
   PushRoot(Holder);
@@ -749,6 +769,14 @@ begin
     if not CallValue(TempRoots[O.Replacer], RootAt(TempTop - 1), @CA[0], 2, V) then begin PopRoots(1); Exit(False); end;
   end;
   PopRoots(1);
+  Result := SerializeValue(O, V, Skip);
+end;
+
+{ SerializeJSONProperty's steps from 4 on: V after toJSON and the replacer }
+function SerializeValue(var O: TJOut; V: TValue; var Skip: Boolean): Boolean;
+var S: TValue; D: Double; IsArr: Boolean; Ob: PObj;
+begin
+  Skip := False;
   if IsObject(V) then
   begin
     Ob := ObjOf(V);
