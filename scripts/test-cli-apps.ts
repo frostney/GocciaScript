@@ -53,7 +53,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { parseSectionArgs, SectionRunner } from "./test-cli/sections";
-import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
+import { runWithPeakRss, assertPeakRssBelow } from "./test-cli/rss";
 import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyModuleProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 import { verifyBundlerLayout } from "./test-cli-bundler-layout";
@@ -9958,6 +9958,15 @@ await section("Runner: an aborted fetch frees its slot at once, so requests queu
   }
 });
 
+// A run the memory limit ended: the RangeError of a refusal, or, once eight
+// refusals in a row freed nothing, the uncatchable Live heap error (ADR 0185).
+// Each request whose reservation is refused is rejected on its own, so a script
+// that keeps issuing requests reaches the eighth.
+function refusedByMemoryLimit(out: string): boolean {
+  return (out.includes("RangeError") && out.includes("memory limit")) ||
+    /Live heap of \d+ bytes exceeds the memory limit of \d+ bytes/.test(out);
+}
+
 async function runFetchScript(tmp: string, name: string, lines: string[], extra: string[] = []) {
   const script = join(tmp, name);
   writeFileSync(script, [...lines, ""].join("\n"));
@@ -10010,7 +10019,7 @@ await section("Runner: a waiting request's storage counts against --max-memory..
       "",
     ].join("\n"));
     const run = await runWithPeakRss([resolve(RUNNER), script, "--allow-net=127.0.0.1", "--max-memory=16MiB", "--timeout=20s"]);
-    if (run.exitCode === 0 || !run.output.includes("RangeError") || !run.output.includes("memory limit"))
+    if (run.exitCode === 0 || !refusedByMemoryLimit(run.output))
       throw new Error(`the waiting requests should exhaust --max-memory (exit ${run.exitCode}):\n${run.output}`);
     assertPeakRssBelow(run, "waiting fetch requests under --max-memory=16MiB", 160 * 1024 * 1024);
   } finally {
@@ -10039,7 +10048,7 @@ await section("Runner: a waiting request is charged for its URL as percent-encod
       ],
       ["--max-memory=32MiB", "--timeout=20s"],
     );
-    if (exitCode === 0 || !out.includes("RangeError") || !out.includes("memory limit"))
+    if (exitCode === 0 || !refusedByMemoryLimit(out))
       throw new Error(`the waiting requests' encoded URLs should exhaust --max-memory (exit ${exitCode}):\n${out}`);
   } finally {
     silent.stop(true);
@@ -15643,16 +15652,12 @@ await section("Memory budget: property storage growth is refused before it happe
   }
 });
 
-// The gate is per-allocation, and the budget's used-figure does not grow with
-// property descriptors, so spreading the same properties across many objects
-// escapes it entirely: the section above refuses one 4M-property object, and
-// this one runs 480k properties to completion at eight times the same budget.
-//
-// This asserts the hole, not a guarantee. It is here because ADR 0106 states
-// the gap in measured bytes and a prose statement rots silently; if the
-// aggregate is ever bounded, the RSS floor below fails and the ADR and
-// docs/garbage-collector.md have to be revisited rather than left wrong.
-await section("Memory budget: aggregated small-object growth is NOT bounded (ADR 0106 A1)...", async () => {
+// Spreading the same properties across many objects once escaped the budget:
+// ADR 0106 Amendment 1 measured it running to completion at about five times
+// the limit. Each object past 64 properties has a dictionary shape, and shapes
+// now count against the limit (ADR 0202), so the aggregate is refused too,
+// before the process holds far more than the limit.
+await section("Memory budget: aggregated small-object growth is bounded (ADR 0202)...", async () => {
   const tmp = makeTmp();
   try {
     const distributed = join(tmp, "properties-distributed.js");
@@ -15670,19 +15675,12 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
     );
 
     const run = await runWithPeakRss([BARE, "--max-memory=16777216", distributed]);
-    if (run.exitCode !== 0 || !run.output.includes("objects 4000"))
-      throw new Error(
-        `Distributed property growth is now refused. That is a real ` +
-          `improvement, but ADR 0106 Amendment 1 documents it as permitted — ` +
-          `update the ADR and docs/garbage-collector.md, then rewrite this ` +
-          `section as a refusal test:\n${run.output}`,
-      );
-    // Measured ~80 MiB against a 16 MiB budget. The floor is 2x the budget:
-    // high enough that a merely-idle process cannot reach it, low enough to
-    // survive platform differences in page size and allocator behaviour, and
-    // low enough that the sampler fallback undershooting a spike cannot fail
-    // it.
-    assertPeakRssAbove(run, "distributed property growth", 32 * 1024 * 1024);
+    if (run.exitCode !== 1 || run.output.includes("objects 4000") ||
+        !run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
+      throw new Error(`Distributed property growth should be refused by the memory limit:\n${run.output}`);
+    // Measured ~37 MB, the process's own ~20 MB included, against ~80 MB when
+    // the shapes were not counted. The ceiling is four times the 16 MiB budget.
+    assertPeakRssBelow(run, "distributed property growth", 64 * 1024 * 1024);
   } finally {
     clean(tmp);
   }

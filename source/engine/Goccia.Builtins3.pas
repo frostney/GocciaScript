@@ -387,6 +387,9 @@ begin
   I := 0;
   while I < ObjOf(RootAt(TempTop - 1))^.Shape^.Count do
   begin
+    { each attribute change on a dictionary object makes a shape and allocates no cell: the collection their charges
+      ask for runs here, where O is rooted }
+    HeapChargeCollect;
     S := ObjOf(RootAt(TempTop - 1))^.Shape;
     if (S^.Keys[I]^.Hdr.Extra and kfPrivate) <> 0 then begin Inc(I); Continue; end;   { private elements stay }
     F := S^.PFlags[I] and not pfConfigurable;

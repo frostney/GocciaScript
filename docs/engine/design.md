@@ -34,7 +34,7 @@ The collector moves young cells, so code re-reads cell pointers from a root afte
 An object is a record: header, shape, elements (dense array storage or nil), overflow slots and inline slots.
 The shape maps property keys to slots and flags and holds the prototype, so a receiver's shape fixes the head
 of its prototype chain. Shapes form a transition tree; a shape with more than 8 transitions hashes them, and an
-object past 64 properties gets a private dictionary shape. Inline caches record (shape, slot) for own
+object past 64 properties gets a private dictionary shape, retired once no live object has it. Inline caches record (shape, slot) for own
 properties and (receiver shape, holder, holder shape) for prototype hits, and add transitions for stores.
 Strings are UTF-16 cells with length and hash; long concatenations build growable views.
 

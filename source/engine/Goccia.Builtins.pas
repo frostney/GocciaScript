@@ -836,7 +836,12 @@ begin
       A := NewArray(0, 0);
       ArraySetLengthAny(A, Trunc(D));
     end
-    else A := NewArray(Trunc(D), Trunc(D));
+    else
+    begin
+      { the elements (holes) are allocated at once: refused before they are when they do not fit }
+      if not ReserveHeap(ValueArrayBytes(Trunc(D))) then Exit(False);
+      A := NewArray(Trunc(D), Trunc(D));
+    end;
   end
   else
   begin
@@ -1882,7 +1887,7 @@ end;
 
 { 22.1.3.19 String.prototype.repeat ( count ) }
 function StrProto_Repeat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; D: Double; N, L: Int64; I: SizeInt; U: UnicodeString;
+var S, R: PStr; D: Double; N, L: Int64; I: SizeInt;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if Arg(Args, Argc, 1) = VUndefined then D := 0
@@ -1894,20 +1899,23 @@ begin
   L := S^.Len;
   if (N = 0) or (L = 0) then begin Res := MkPtr(AtomOf('')); Exit(True); end;
   if L * N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-  SetLength(U, L * N);
-  for I := 0 to N - 1 do Move(StrChars(S)[0], U[I * L + 1], L * SizeOf(WideChar));
-  Res := StrFromUnicode(U);
+  { built in the heap string itself, refused before it is made when it does not fit }
+  if not ReserveHeap(StringBytes(L * N)) then Exit(False);
+  R := NewString(L * N);
+  S := StrOf(Args[0]);
+  for I := 0 to N - 1 do Move(StrChars(S)[0], StrChars(R)[I * L], L * SizeOf(WideChar));
+  Res := MkPtr(R);
   Result := True;
 end;
 
 function StrProto_Pad(Args: TArgs; Argc: Integer; var Res: TValue; AtStart: Boolean): Boolean;
-var S, F: PStr; N: Int64; I: SizeInt; T, Fill, P: UnicodeString;
+var S, F, R: PStr; N: Int64; I: SizeInt; TL, PL, At: Integer; Fill: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
-  T := StrToUnicode(StrOf(Args[0]));
+  TL := StrOf(Args[0])^.Len;
   { 22.1.3.17.1 StringPaddingBuiltinsImpl steps 4-5: nothing to pad returns S before fillString is coerced }
-  if N <= Length(T) then begin Res := Args[0]; Exit(True); end;
+  if N <= TL then begin Res := Args[0]; Exit(True); end;
   if (Argc >= 2) and (Args[2] <> VUndefined) then
   begin
     if not StrArg(Args, Argc, 2, F) then Exit(False);
@@ -1916,10 +1924,17 @@ begin
   else Fill := ' ';
   if Fill = '' then begin Res := Args[0]; Exit(True); end;
   if N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-  { the filler repeated and truncated to N - Length(T) code units }
-  SetLength(P, N - Length(T));
-  for I := 0 to Length(P) - 1 do P[I + 1] := Fill[I mod Length(Fill) + 1];
-  if AtStart then Res := StrFromUnicode(P + T) else Res := StrFromUnicode(T + P);
+  { built in the heap string itself, refused before it is made when it does not fit: the filler repeated and
+    truncated to N - TL code units, before or after the string }
+  if not ReserveHeap(StringBytes(N)) then Exit(False);
+  R := NewString(N);
+  S := StrOf(Args[0]);
+  PL := N - TL;
+  if AtStart then At := 0 else At := TL;
+  for I := 0 to PL - 1 do StrChars(R)[At + I] := Fill[I mod Length(Fill) + 1];
+  if AtStart then At := PL else At := 0;
+  if TL > 0 then Move(StrChars(S)[0], StrChars(R)[At], TL * SizeOf(WideChar));
+  Res := MkPtr(R);
   Result := True;
 end;
 function StrProto_PadStart(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2016,64 +2031,197 @@ begin
   end;
 end;
 
+{ the length of StringSubstitution's result, without building it }
+function SubstitutionLength(MatchedLen, StrLen, Position: Integer; const Rep: UnicodeString): Int64;
+var I: Integer;
+begin
+  Result := 0;
+  I := 1;
+  while I <= Length(Rep) do
+  begin
+    if (Rep[I] = '$') and (I < Length(Rep)) then
+      case Rep[I + 1] of
+        '$': begin Inc(Result); Inc(I, 2); Continue; end;
+        '&': begin Inc(Result, MatchedLen); Inc(I, 2); Continue; end;
+        '`': begin Inc(Result, Position); Inc(I, 2); Continue; end;
+        #39: begin Inc(Result, Max(StrLen - Position - MatchedLen, 0)); Inc(I, 2); Continue; end;
+      end;
+    Inc(Result);
+    Inc(I);
+  end;
+end;
+
 { String.prototype.replace / replaceAll with a string pattern }
 function StrProto_Replace(Args: TArgs; Argc: Integer; var Res: TValue; All: Boolean): Boolean;
-var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv: Integer;
-  F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean;
+var S, Pat, Rep, RS: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv, Used: Integer;
+  CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
+  Grown: Int64; Cap: Integer;
+  { room in U for Extra more code units: within MAX_STRING_LENGTH, and U's growth charged against the memory limit
+    before it is made (U is outside the heap; after a collection when it does not fit: the values are rooted here).
+    U grows by doubling, or by halves of that down to what is needed when twice does not fit, and the text is moved
+    into it: no copy of U is made per replacement }
+  function Grow(Extra: Int64): Boolean;
+  var Need, NewCap: Int64; Ok: Boolean;
+  begin
+    Need := Used + Extra;
+    if Need > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+    Result := True;
+    if Need <= Length(U) then Exit;
+    NewCap := Max(Int64(Length(U)) * 2, Need + 16);
+    if NewCap > MAX_STRING_LENGTH then NewCap := Need;
+    Ok := Charge.TryGrow((NewCap - Length(U)) * SizeOf(WideChar));
+    while not Ok and (NewCap > Need) do
+    begin
+      NewCap := Max(Length(U) + (NewCap - Length(U)) div 2, Need);
+      Ok := Charge.TryGrow((NewCap - Length(U)) * SizeOf(WideChar), False);
+    end;
+    if not Ok then
+    begin
+      { the result is given up: its buffer goes before the error is made }
+      U := '';
+      Charge.Clear;
+      Exit(ThrowMemoryLimit);
+    end;
+    SetLength(U, NewCap);
+  end;
+  procedure Put(Src: PWideChar; Len: Integer);
+  begin
+    if Len <= 0 then Exit;
+    Move(Src^, U[Used + 1], Len * SizeOf(WideChar));
+    Inc(Used, Len);
+  end;
+  { StringSubstitution's text for the match at Position, put straight into U (Grow reserved SubstitutionLength) }
+  procedure PutSubstitution(Position: Integer);
+  var J, Tail: Integer;
+  begin
+    J := 1;
+    while J <= Length(R) do
+    begin
+      if (R[J] = '$') and (J < Length(R)) then
+        case R[J + 1] of
+          '$': begin Put(@R[J], 1); Inc(J, 2); Continue; end;
+          '&': begin if Length(P) > 0 then Put(@P[1], Length(P)); Inc(J, 2); Continue; end;
+          '`': begin if Position > 0 then Put(@T[1], Position); Inc(J, 2); Continue; end;
+          #39:
+            begin
+              Tail := Length(T) - Position - Length(P);
+              if Tail > 0 then Put(@T[Position + Length(P) + 1], Tail);
+              Inc(J, 2);
+              Continue;
+            end;
+        end;
+      Put(@R[J], 1);
+      Inc(J);
+    end;
+  end;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not StrArg(Args, Argc, 1, Pat) then Exit(False);
-  T := StrToUnicode(StrOf(Args[0]));
-  P := StrToUnicode(Pat);
-  F := Arg(Args, Argc, 2);
-  Functional := IsCallable(F);
-  R := '';
+  Functional := IsCallable(Arg(Args, Argc, 2));
   PushRoot(MkPtr(Pat));
+  Rep := nil;
   if not Functional then
   begin
     if not StrArg(Args, Argc, 2, Rep) then begin PopRoots(1); Exit(False); end;
-    R := StrToUnicode(Rep);
   end;
-  Pat := StrOf(RootAt(TempTop - 1));
-  PopRoots(1);   { no allocation until the positions are found }
+  if Rep <> nil then PushRoot(MkPtr(Rep)) else PushRoot(VUndefined);
+  { the copies of the subject, pattern and replacement, and the match positions, are outside the heap: charged
+    against the memory limit before they are made, after a collection when they do not fit (the pattern and the
+    replacement stay rooted), once the replacement's conversion, which can run the script, is done }
+  Charge := Default(THeapExternalCharge);
+  Grown := Int64(StrOf(Args[0])^.Len) + StrOf(RootAt(TempTop - 2))^.Len;
+  if Rep <> nil then Inc(Grown, Rep^.Len);
+  if not Charge.TryGrow(Grown * SizeOf(WideChar)) then
+  begin
+    PopRoots(2);
+    Exit(ThrowMemoryLimit);
+  end;
+  T := StrToUnicode(StrOf(Args[0]));
+  P := StrToUnicode(StrOf(RootAt(TempTop - 2)));
+  if Rep <> nil then R := StrToUnicode(StrOf(RootAt(TempTop - 1))) else R := '';
+  PopRoots(1);
   { the match positions, 0-based }
   N := 0;
   SetLength(Positions, 0);
   Adv := Max(1, Length(P));
-  Pos_ := FindIn(StrOf(Args[0]), Pat, 0);
+  Pos_ := FindIn(StrOf(Args[0]), StrOf(RootAt(TempTop - 1)), 0);
   while Pos_ >= 0 do
   begin
-    SetLength(Positions, N + 1);
+    if N >= Length(Positions) then
+    begin
+      Cap := Max(16, Length(Positions) * 2);
+      if not Charge.TryGrow(Int64(Cap - Length(Positions)) * SizeOf(Integer)) then
+      begin
+        PopRoots(1);
+        T := ''; R := ''; Positions := nil;
+        Charge.Clear;
+        Exit(ThrowMemoryLimit);
+      end;
+      SetLength(Positions, Cap);
+    end;
     Positions[N] := Pos_;
     Inc(N);
     if not All then Break;
     if Pos_ + Adv > Length(T) then Break;
-    Pos_ := FindIn(StrOf(Args[0]), Pat, Pos_ + Adv);
+    Pos_ := FindIn(StrOf(Args[0]), StrOf(RootAt(TempTop - 1)), Pos_ + Adv);
   end;
-  if N = 0 then begin Res := Args[0]; Exit(True); end;
+  PopRoots(1);
+  if N = 0 then begin Charge.Clear; Res := Args[0]; Exit(True); end;
   U := '';
+  Used := 0;
   Last := 0;
-  PushRoot(F); PushRoot(Args[0]);
-  for I := 0 to N - 1 do
+  Result := False;
+  { the callback, read from its argument slot as it is rooted: every reservation above can collect }
+  PushRoot(Arg(Args, Argc, 2)); PushRoot(Args[0]);
+  I := 0;
+  while I < N do
   begin
-    U := U + Copy(T, Last + 1, Positions[I] - Last);
+    { the text before the match, and a substitution, reserved before they are written (a $` or $' repeats the
+      subject) }
+    if Functional then
+    begin
+      if not Grow(Positions[I] - Last) then Break;
+    end
+    else if not Grow(Positions[I] - Last + SubstitutionLength(Length(P), Length(T), Positions[I], R)) then Break;
+    if Positions[I] > Last then Put(@T[Last + 1], Positions[I] - Last);
     if Functional then
     begin
       M := StrFromUnicode(P);
       CallArgs[0] := M; CallArgs[1] := MkInt(Positions[I]); CallArgs[2] := RootAt(TempTop - 1);
-      if not CallValue(RootAt(TempTop - 2), VUndefined, @CallArgs[0], 3, CR) then begin PopRoots(2); Exit(False); end;
-      if not ToStringV(CR, M) then begin PopRoots(2); Exit(False); end;
-      U := U + StrToUnicode(StrOf(M));
+      if not CallValue(RootAt(TempTop - 2), VUndefined, @CallArgs[0], 3, CR) then Break;
+      if not ToStringV(CR, M) then Break;
+      PushRoot(M);
+      if not Grow(StrOf(M)^.Len) then begin PopRoots(1); Break; end;
+      M := RootAt(TempTop - 1);
+      PopRoots(1);
+      Put(StrChars(StrOf(M)), StrOf(M)^.Len);
     end
-    else U := U + StringSubstitution(P, T, Positions[I], R);
+    else PutSubstitution(Positions[I]);
     Last := Positions[I] + Length(P);
+    Inc(I);
   end;
   PopRoots(2);
-  U := U + Copy(T, Last + 1, MaxInt);
-  Res := StrFromUnicode(U);
-  Result := True;
+  if (I >= N) and Grow(Length(T) - Last) then
+  begin
+    if Length(T) > Last then Put(@T[Last + 1], Length(T) - Last);
+    { the result, a heap string as long as the text: refused before it is made when it does not fit, then moved
+      out of U }
+    if HeapReserve(StringBytes(Used)) then
+    begin
+      RS := NewString(Used);
+      if Used > 0 then Move(U[1], StrChars(RS)^, Used * SizeOf(WideChar));
+      Res := MkPtr(RS);
+      Result := True;
+    end
+    else
+    begin
+      U := '';
+      Charge.Clear;
+      ThrowMemoryLimit;
+    end;
+  end;
+  Charge.Clear;
 end;
-
 function StrProto_ReplaceOne(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin Result := StrProto_Replace(Args, Argc, Res, False); end;
 function StrProto_ReplaceAll(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2709,6 +2857,7 @@ function NewSymbol(const Desc: UnicodeString): TValue;
 var C: PByte;
 begin
   C := GetMem(24);
+  HeapNativeCharge(24 + NATIVE_BLOCK_OVERHEAD, True);
   PCell(C)^.Size := 24;
   PCell(C)^.Kind := ckSymbol;
   PCell(C)^.Flags := cfPermanent or cfOld;
