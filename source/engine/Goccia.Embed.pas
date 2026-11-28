@@ -981,7 +981,7 @@ begin
     TimeOriginInit;
   end
   else
-    SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
+    SeedMathRandom(MixedMathRandomSeed(QWord(PtrUInt(Self))));
   { fetch() judges destinations by the capability set (none without one) }
   if FHasCapabilities then SetFetchPolicy(FCapabilities, FFetchMaxResponseBytes)
   else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);

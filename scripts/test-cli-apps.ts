@@ -10546,6 +10546,39 @@ await section("Runner sandbox mode: deterministic nested engines use stable dist
   }
 });
 
+// Ten unrelated uniform numbers all fall within 0.1 of each other with probability about 1e-8; ten engines created back
+// to back from a time-based seed without mixing printed first values within 0.016 of each other (#2272).
+await section("Runner sandbox mode: nested engines created back to back get unrelated Math.random streams...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(() => Number(runScript("/child.js").result));',
+          'console.log(values.join("|"));',
+        ].join("\n"),
+      },
+      { path: "/child.js", text: "Math.random();" },
+    ]);
+
+    const proc = Bun.spawnSync([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = proc.stdout.toString().trim();
+    const values = output.split("|").map(Number);
+    if (proc.exitCode !== 0 || values.length !== 10 || values.some((v) => !(v >= 0 && v < 1)))
+      throw new Error(`Sandbox mode nested Math.random: expected ten numbers, got ${output}${proc.stderr.toString()}`);
+    const spread = Math.max(...values) - Math.min(...values);
+    if (spread <= 0.1)
+      throw new Error(`Sandbox mode nested Math.random: ten engines' first values span only ${spread}: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a runScript child's stderr carries no host-side suggestion...", async () => {
   const tmp = makeNativeTmp();
   try {
