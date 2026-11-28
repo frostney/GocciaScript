@@ -1,12 +1,32 @@
 # Architecture Decision Records
 
-Durable architecture and implementation decisions for GocciaScript. New ADRs use the lightweight format from `.agents/skills/grill-with-docs/ADR-FORMAT.md`: a short title and enough context to explain what changed and why.
+Durable architecture and implementation decisions for GocciaScript. Each ADR has a short title and enough context to explain what changed and why: a date, its areas, related links, and Context, Decision and Consequences sections.
 
 ## Executive Summary
 
 - **One decision per file** — Each ADR captures the original decision context, date, area, and supporting links.
 - **Append-only history** — Do not rewrite existing ADRs to match later implementation; add a new ADR that supersedes or refines the old one.
 - **Historical migration** — The former single-file decision entries were moved here without changing their decision text.
+
+## Numbering
+
+Take a new ADR's number with:
+
+```bash
+npx tsx scripts/adr.ts new "<title>"   # --slug <slug> sets the file name
+```
+
+It reserves the next free number by creating the ref `refs/adr/<NNNN>` on `origin`, then writes
+`docs/adr/<NNNN>-<slug>.md` from the template and adds the entry below. The remote creates a ref only once, so two
+branches never hold the same number and an ADR is never renumbered ([ADR 0203](0203-adr-numbers-are-reserved-on-the-remote.md)).
+Do not take the highest number in your checkout plus one: another open branch may already hold it.
+
+- **Renaming an ADR** — `npx tsx scripts/adr.ts move docs/adr/<NNNN>-<old>.md "<new title>"` keeps the number and
+  moves the reservation to the new file name.
+- **Without push access** — write the ADR and ask a maintainer to reserve its number.
+- **The check** — `npx tsx scripts/adr.ts check` runs in CI and fails when two ADRs share a number, when an ADR after
+  0202 has no reservation or its reservation names another file, and when this list does not have every ADR once.
+- **This list** — merges with Git's `union` driver (`.gitattributes`), so entries two branches append both stay.
 
 ## Records
 
@@ -212,3 +232,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0200 — YAML is parsed by a port of saphyr's scanner and event parser](0200-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
 - [0201 — Every application stops on an engine fault](0201-every-application-stops-on-an-engine-fault.md)
 - [0202 — The memory limit counts property keys, symbols and shapes, and refuses sized allocations before they are made](0202-the-memory-limit-counts-keys-and-shapes-and-refuses-sized-allocations-first.md)
+- [0203 — An ADR's number is reserved on the remote before its file is written](0203-adr-numbers-are-reserved-on-the-remote.md)
