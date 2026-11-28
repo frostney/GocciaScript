@@ -40,9 +40,20 @@ type
   ENativeMemoryLimit = class(Exception);
   { The nesting guard's refusal, for the engine to throw as a RangeError. }
   ENativeDepthLimit = class(Exception);
+  { The engine's charge for native work: AUnits of it counted against the
+    run's limits, False when a limit or a host's cancellation ends the run
+    (its abort then pending in the engine). }
+  TNativeWorkHook = function(const AUnits: QWord): Boolean;
+  { CheckNativeWork's refusal under a TNativeWorkHook: the run's abort is
+    pending, and the native returns False without throwing anything else. }
+  ENativeWorkStopped = class(Exception);
 
 threadvar
   NativeBytesHook: TNativeBytesHook;
+  { While a thread's engine has one, CheckNativeWork charges through it
+    instead of the interpreter's counters (Goccia.InstructionLimit,
+    Goccia.Timeout). }
+  NativeWorkHook: TNativeWorkHook;
 
 implementation
 
@@ -61,6 +72,13 @@ var H: TNativeBytesHook;
 begin
   H := NativeBytesHook;
   Result := H(ABytes, AReserve);
+end;
+
+function CallNativeWorkHook(const AUnits: QWord): Boolean;
+var H: TNativeWorkHook;
+begin
+  H := NativeWorkHook;
+  Result := H(AUnits);
 end;
 
 
@@ -90,6 +108,12 @@ end;
 
 procedure CheckNativeWork;
 begin
+  if Assigned(NativeWorkHook) then
+  begin
+    if not CallNativeWorkHook(1) then
+      raise ENativeWorkStopped.Create('native work stopped by the run''s limits');
+    Exit;
+  end;
   // Counts its own unit below: the unmetered poll keeps the budget from
   // charging this work twice.
   CheckExecutionTimeoutUnmetered;

@@ -182,6 +182,40 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- a search's native work counts against the instruction cap ---------------
+//
+// The same script over a tree without its files and over 14 MiB of them does
+// the same JavaScript work (neither finds the text): the smallest cap at which
+// it finishes without the files must stop it with them.
+
+{
+  const body = 'grep("b", { glob: "*.txt" }); console.log("done");';
+  const empty: Record<string, FileSpec> = { "/readme.md": "x\n" };
+  const big: Record<string, FileSpec> = { "/readme.md": "x\n" };
+  for (let i = 0; i < 14; i++) big[`/f${i}.txt`] = "a".repeat(1024 * 1024);
+  const finishes = (tree: Record<string, FileSpec>, cap: number): boolean => {
+    try {
+      return runInTree(tree, body, [`--max-instructions=${cap}`]).trim() === "done";
+    } catch (error) {
+      if (/exceeded instruction limit/.test((error as Error).message)) return false;
+      throw error;
+    }
+  };
+  try {
+    let low = 1;
+    let high = 100000;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (finishes(empty, middle)) high = middle;
+      else low = middle + 1;
+    }
+    if (finishes(big, low)) throw new Error(`14 MiB of search finished within the cap of ${low} an empty search needs`);
+    console.log(`search instruction cap: ok (${low})`);
+  } catch (error) {
+    failures.push(`search instruction cap: ${(error as Error).message}`);
+  }
+}
+
 // -- adversarial inputs stay cheap ---------------------------------------------
 
 {
