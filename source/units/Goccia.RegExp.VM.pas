@@ -99,10 +99,10 @@ implementation
 uses
   TextSemantics,
 
+  Goccia.NativeLimits,
   Goccia.NestingLimit,
   Goccia.RegExp.UnicodeData,
   Goccia.ThreadCleanupRegistry,
-  Goccia.NativeLimits,
   Goccia.Timeout;
 
 threadvar
