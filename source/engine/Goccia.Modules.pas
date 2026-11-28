@@ -116,6 +116,9 @@ procedure SetEntryCompletionWanted(Wanted: Boolean);
   False when no import failed since ClearLoadFailure }
 procedure ClearLoadFailure;
 function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+{ whether V is the error the recorded load failure (LoadFailure) failed with: a run's uncaught value is located at
+  that failure only when it is, so a load failure the script caught (a dynamic import's) does not locate another }
+function LoadFailureIs(V: TValue): Boolean;
 { the first imported module of the run that did not parse: its path, the error's name, line, column and suggestion;
   False when none failed (the host reports it where it is, as GocciaRunner does) }
 function ModuleParseFailure(out Path, Name: UnicodeString; out Line, Column: Integer;
@@ -574,6 +577,8 @@ end;
 threadvar
   ProvidedPath, ProvidedSrc: UnicodeString;
   LoadFailPath: UnicodeString;
+  { the error the recorded load failure failed with (rooted) }
+  LoadFailError: TValue;
   { the first imported module that did not parse (ModuleParseFailure) }
   ParseFailPath, ParseFailName, ParseFailSuggestion: UnicodeString;
   ParseFailLine, ParseFailColumn: Integer;
@@ -590,6 +595,7 @@ procedure ClearLoadFailure;
 begin
   ParseFailPath := '';
   LoadFailPath := '';
+  LoadFailError := VUndefined;
   LoadFailLine := 0;
   LoadFailColumn := 0;
 end;
@@ -611,6 +617,14 @@ begin
   Line := LoadFailLine;
   Column := LoadFailColumn;
   Result := Path <> '';
+end;
+
+function LoadFailureIs(V: TValue): Boolean;
+begin
+  if LoadFailPath = '' then Exit(False);
+  { a failure recorded without an error object (none pending) locates as before }
+  if not IsObject(LoadFailError) then Exit(True);
+  Result := IsObject(V) and (ObjOf(V) = ObjOf(LoadFailError));
 end;
 
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -1013,6 +1027,7 @@ begin
         LoadFailPath := Path;
         LoadFailLine := M.Info.RequestLines[I];
         LoadFailColumn := M.Info.RequestColumns[I];
+        LoadFailError := Pending;
       end;
       M.RequestsState := 0;
       Exit(False);
@@ -2639,6 +2654,8 @@ begin
   EntryEvalPromise := VUndefined;
   AddRoot(@ResolveErrorV);
   ResolveErrorV := VUndefined;
+  AddRoot(@LoadFailError);
+  LoadFailError := VUndefined;
   AddRoot(@JSModSources);
   JSModSources := MkPtr(NewArray(0, 0));
   AddRoot(@PendingImports);

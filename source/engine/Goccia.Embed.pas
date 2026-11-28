@@ -1325,7 +1325,7 @@ function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeStr
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn, ScriptId: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled, HasErrorLocation: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
+  Compiled, HasErrorLocation, FailedToLoad: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1583,12 +1583,14 @@ begin
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
       HasErrorLocation := (AbortKind = 0) and DescribeThrown(RootAt(TempTop - 1), Result);
+      { the recorded load failure locates the run's error only when it is that failure's (a caught one does not) }
+      FailedToLoad := LoadFailureIs(RootAt(TempTop - 1));
       { the value the run failed with, kept in the completion's root for the finally's discard }
       TempRoots[TempTop - 2] := RootAt(TempTop - 1);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
-      if not HasErrorLocation and LoadFailure(FailPath, FailLine, FailColumn) then
+      if not HasErrorLocation and FailedToLoad and LoadFailure(FailPath, FailLine, FailColumn) then
       begin
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then

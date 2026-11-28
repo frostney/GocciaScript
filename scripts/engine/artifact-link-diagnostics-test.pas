@@ -134,6 +134,36 @@ begin
   end;
 end;
 
+{ A load failure the script caught does not locate a later error: the run's own throw is reported where it is. An
+  uncaught one still names the declaration that did not load. }
+procedure CheckCaughtLoadFailure(const AEntry, AFailurePath: UnicodeString);
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    RunResult := Engine.Run(AEntry,
+      'await import("./load-failure.mjs").catch(() => {});'#10 + 'throw new Error("x");');
+    Check(not RunResult.Ok and (RunResult.ErrorName = 'Error') and (RunResult.ErrorText = 'x'),
+      'caught load failure: the later error read ' + RunResult.ErrorName + ': ' + RunResult.ErrorText);
+    Check((RunResult.ErrorFile = AEntry) and (RunResult.ErrorLine = 2) and (RunResult.ErrorColumn = 7),
+      'caught load failure: the later error was located at ' + RunResult.ErrorFile + ':' +
+      IntToStr(RunResult.ErrorLine) + ':' + IntToStr(RunResult.ErrorColumn));
+  finally
+    Engine.Free;
+  end;
+  Engine := TGocciaEngine.Create;
+  try
+    RunResult := Engine.Run(AEntry, 'await import("./load-failure.mjs");');
+    Check(not RunResult.Ok and (RunResult.ErrorFile = AFailurePath) and (RunResult.ErrorLine = 1) and
+      (RunResult.ErrorColumn = 1), 'uncaught load failure: located at ' + RunResult.ErrorFile + ':' +
+      IntToStr(RunResult.ErrorLine) + ':' + IntToStr(RunResult.ErrorColumn) + ' (' + RunResult.ErrorName + ')');
+  finally
+    Engine.Free;
+  end;
+end;
+
 procedure CheckSnapshot(const AEntry, AImportPath: UnicodeString);
 const
   Source = 'try { await import("./dynamic.mjs"); } catch (error) { expect(error).toBeDefined(); }';
@@ -285,6 +315,7 @@ begin
   CheckCase(Directory + 'script.jsx', 'const x = <x/>; ' + MissingImport, 1, 17, gskScript);
   CheckDynamic(Directory + 'dynamic-entry.mjs', Directory + 'dynamic.mjs');
   CheckLinkFailurePrecedence(Directory + 'precedence.mjs', Directory + 'dynamic.mjs');
+  CheckCaughtLoadFailure(Directory + 'caught.mjs', Directory + 'load-failure.mjs');
   CheckSnapshot(Directory + 'snapshot.mjs', Directory + 'dynamic.mjs');
   CheckCompanionIsolation(Directory + 'collides.mjs', Directory + 'collides.mjs#script-imports');
   CheckDuplicateScriptBinding(Directory + 'repeated.mjs');
