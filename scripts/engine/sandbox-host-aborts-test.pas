@@ -4,7 +4,9 @@ program SandboxHostAbortsTest;
   exception), an embedder native's sandbox ceiling (sfkResourceLimit, past the script's handlers) and an audit sink
   that cannot take an event, the run's own or a nested run's (EGocciaCapabilityAuditDeliveryError, as before); and
   that the first of two causes stays the run's (a ceiling after a failed audit; an audit that fails while a
-  cancelled run's work is discarded); and that a run a request stops before it starts on an engine whose last run's sink failed reports no audit failure.
+  cancelled run's work is discarded, also when the request came after the run's last check, and a ceiling there);
+  that an audit failed while a script error's work is discarded is not the run's audit failure; and that a run a
+  request stops before it starts on an engine whose last run's sink failed reports no audit failure.
   Prints "Sandbox host aborts: passed". }
 
 {$mode delphiunicode}{$H+}
@@ -47,6 +49,9 @@ type
   public
     Pending: Boolean;
     Discarded: Boolean;
+    Ceiling: Boolean;       // the discard also reaches a ceiling, after the audit
+    RequestFirst: Boolean;  // the first discard requests the run's abort handle and leaves the work pending
+    NoAudit: Boolean;       // the discard reaches only the ceiling
     function HasPending: Boolean; override;
     function Pump(TimeoutMs: Cardinal): Boolean; override;
     procedure Discard; override;
@@ -102,9 +107,19 @@ end;
 
 procedure TAuditOnDiscard.Discard;
 begin
+  if RequestFirst then
+  begin
+    { a script error's cleanup, after the run's last check: the request makes Run cancel the run and discard again }
+    RequestFirst := False;
+    GFixture.Handle.Request;
+    Exit;
+  end;
   Pending := False;
   Discarded := True;
-  GFixture.Engine.Audit(gckNetFetch, False, 'example.com', 'the fixture');
+  if not NoAudit then
+    GFixture.Engine.Audit(gckNetFetch, False, 'example.com', 'the fixture');
+  if Ceiling then
+    SandboxCeiling('native budget exhausted');
 end;
 
 function TAuditOnDiscard.Mark: QWord;
@@ -223,6 +238,94 @@ begin
   end;
 end;
 
+{ pend(): the host work is pending, so the run's end discards it (the event loop would pump it first) }
+function PendNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  TAuditOnDiscard(GFixture.Work).Pending := True;
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ Host work whose discard fails an audit and then reaches a ceiling, on an engine whose sink fails: a request that
+  lands while a script error's work is discarded, after the run's last check, leaves the run cancelled, with no audit
+  failure and no ceiling from the discard that follows; a script error alone leaves no audit failure either. }
+procedure CheckDiscardAfterRun;
+var
+  Engine: TGocciaEngine;
+  Work: TAuditOnDiscard;
+  R: TGocciaRunResult;
+  Err: UnicodeString;
+begin
+  Engine := TGocciaEngine.Create;
+  Work := TAuditOnDiscard.Create;
+  try
+    Engine.Capabilities := TGocciaCapabilities.None;
+    Engine.AuditSink := GFixture.FailingSink;
+    GFixture.Engine := Engine;
+    if not Engine.PrepareHost(Err) then
+      Fail('PrepareHost: ' + string(Err));
+    PushRoot(NewNativeFunction(@PendNative, 'pend', 0));
+    try
+      if not InjectGlobalBinding('pend', RootAt(TempTop - 1)) then
+        Fail('inject pend');
+    finally
+      PopRoots(1);
+    end;
+    GFixture.Work := Work;
+    Work.Ceiling := True;
+    Engine.SetHostWork(Work);
+
+    GFixture.Handle := Engine.CaptureAbortHandle;
+    Work.RequestFirst := True;
+    TakeSandboxCeiling;
+    R := Engine.Run('/late.js', 'pend(); throw new Error("late");');
+    GFixture.Handle := nil;
+    if not Work.Discarded then
+      Fail('the late cancellation never discarded its host work')
+    else if (R.Aborted <> gaHostAbort) or (R.ErrorText <> SHostRunCancelled) then
+      Fail(Format('a late cancellation whose discard failed an audit ended with abort %d "%s"', [Ord(R.Aborted),
+        R.ErrorText]))
+    else if Engine.AuditDeliveryFailed then
+      Fail('an audit failed while a late cancellation''s work was discarded became the run''s audit failure')
+    else if TakeSandboxCeiling then
+      Fail('a ceiling reached while a late cancellation''s work was discarded became the run''s ceiling');
+
+    // the same with a ceiling alone, which no failed audit recorded an abort before
+    Work.Discarded := False;
+    Work.NoAudit := True;
+    GFixture.Handle := Engine.CaptureAbortHandle;
+    Work.RequestFirst := True;
+    TakeSandboxCeiling;
+    R := Engine.Run('/late-ceiling.js', 'pend(); throw new Error("late");');
+    GFixture.Handle := nil;
+    Work.NoAudit := False;
+    if not Work.Discarded then
+      Fail('the late cancellation never discarded its host work')
+    else if (R.Aborted <> gaHostAbort) or (R.ErrorText <> SHostRunCancelled) then
+      Fail(Format('a late cancellation whose discard reached a ceiling ended with abort %d "%s"', [Ord(R.Aborted),
+        R.ErrorText]))
+    else if TakeSandboxCeiling then
+      Fail('a ceiling alone reached while a late cancellation''s work was discarded became the run''s ceiling');
+
+    Work.Discarded := False;
+    R := Engine.Run('/throws.js', 'pend(); throw new Error("boom");');
+    if not Work.Discarded then
+      Fail('the script error never discarded its host work')
+    else if R.Aborted <> gaNone then
+      Fail(Format('a script error whose discard failed an audit ended with abort %d "%s"', [Ord(R.Aborted),
+        R.ErrorText]))
+    else if Engine.AuditDeliveryFailed then
+      Fail('an audit failed while a script error''s work was discarded became the run''s audit failure');
+    TakeSandboxCeiling;
+    Engine.SetHostWork(nil);
+  finally
+    GFixture.Engine := nil;
+    GFixture.Work := nil;
+    Engine.Free;
+    Work.Free;
+  end;
+end;
+
 { An engine whose run's audit sink failed, then a run a request stops before it starts: no audit failure is reported
   for the second (TGocciaEngine.AuditDeliveryFailed). }
 procedure CheckReusedEngine;
@@ -331,6 +434,7 @@ begin
       FreeAndNil(Fixture.Work);
     end;
 
+    CheckDiscardAfterRun;
     CheckReusedEngine;
   finally
     Fixture.Ready.Free;

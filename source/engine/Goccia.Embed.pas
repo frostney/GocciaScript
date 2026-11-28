@@ -299,9 +299,9 @@ type
       site. A sink that raises ends the run past every handler (gaHostAbort). Set before Run }
     property AuditSink: TGocciaCapabilityAuditSink read FAuditSink write FAuditSink;
     { the engine's own audit sink could not take an event, which ended the operation with HostAbort (Aborted =
-      gaHostAbort) before anything else ended it: reset when Run (and RunArtifact) starts, set by Run and by the test
-      and benchmark suites (RunTests, RunBenchmarks) that run afterwards. The hosts that raise
-      EGocciaCapabilityAuditDeliveryError tell that abort from a host's own by it }
+      gaHostAbort) before anything else ended it: reset when Run (and RunArtifact) starts, set by Run, which keeps it
+      only for a run it returns as gaHostAbort, and by the test and benchmark suites (RunTests, RunBenchmarks) that run
+      afterwards. The hosts that raise EGocciaCapabilityAuditDeliveryError tell that abort from a host's own by it }
     property AuditDeliveryFailed: Boolean read FAuditDeliveryFailed;
     { the run's capability set (ADR 0122): with the ffi capability the FFI global is installed, and FFI.open judges
       each library by its scopes. Set before the host is prepared; without it there is no FFI }
@@ -1291,7 +1291,13 @@ begin
   { a run that never starts (a request before it, a host that cannot be set up) has had no audit failure either }
   FAuditDeliveryFailed := False;
   Signal := FNextRunAbort;
-  if Signal = nil then Exit(RunEntry(FileName, Source));
+  if Signal = nil then
+  begin
+    Result := RunEntry(FileName, Source);
+    { an audit that failed while a script error's work was discarded did not end the run }
+    if Result.Aborted <> gaHostAbort then FAuditDeliveryFailed := False;
+    Exit;
+  end;
   FNextRunAbort := nil;
   { the engine's own setup runs before the handle binds: a request cannot leave the host half installed, and takes
     effect when the run starts (RunEntry reports a setup that failed) }
@@ -1331,11 +1337,20 @@ begin
       nothing, and what earlier runs left stays. }
     if Started then
     begin
-      DiscardFailedRunWork(WeakMark, FModuleEvaluationMark, VUndefined, SHostRunCancelled, False);
-      SupersedeFailedModulesFrom(FRunModuleMark);
+      { under the cancellation, as an abort the run observed is discarded: an audit or a ceiling the discard reports
+        does not replace it }
+      HoldHostCancellation;
+      try
+        DiscardFailedRunWork(WeakMark, FModuleEvaluationMark, VUndefined, SHostRunCancelled, False);
+        SupersedeFailedModulesFrom(FRunModuleMark);
+      finally
+        LimitsDisarm;
+      end;
     end;
     ReportHostCancellation(Result);
   end;
+  { an audit that failed while a script error's work was discarded did not end the run }
+  if Result.Aborted <> gaHostAbort then FAuditDeliveryFailed := False;
 end;
 
 function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;

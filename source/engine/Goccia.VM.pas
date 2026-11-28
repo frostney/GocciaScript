@@ -285,6 +285,10 @@ function AbortErrorMessage: UnicodeString;
 function HostAbort(const Msg: UnicodeString): Boolean;
 { the host abort's message (AbortKind 4) }
 function HostAbortMessage: UnicodeString;
+{ records the host's cancellation (AbortKind 4, SHostRunCancelled) without throwing, unless an abort is recorded: a
+  run a request cancelled after its last check discards its work under it, so that what the discard reports (an audit
+  the sink refuses, a ceiling) does not become the run's cause. LimitsDisarm clears it }
+procedure HoldHostCancellation;
 
 type
   { the capability decisions an engine reports to its host (Goccia.Embed OnAudit): a Function constructor's, a
@@ -1124,6 +1128,13 @@ end;
 function HostAbortMessage: UnicodeString;
 begin
   Result := HostAbortText;
+end;
+
+procedure HoldHostCancellation;
+begin
+  if AbortKind <> 0 then Exit;
+  AbortKind := 4;
+  HostAbortText := SHostRunCancelled;
 end;
 
 function AuditDecision(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;

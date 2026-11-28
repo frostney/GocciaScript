@@ -283,13 +283,13 @@ The third constructor argument is an optional `TSandboxFsClock` that stamps ever
 
 ### Sandbox run outcomes
 
-`Run` returns a `TGocciaSandboxRunResult` whose `FailureKind` tells a script error from a resource ceiling or a timeout (`SandboxFailureKindName`). The host's own failures are the exception: it raises them.
+`Run` returns a `TGocciaSandboxRunResult` whose `FailureKind` tells a script error, a resource ceiling, a timeout and a host error apart (`SandboxFailureKindName`). A host error (`sfkHostError`) is a run the host could not carry out, such as one whose `OnConfigureEngine` raised an exception, or a run the embedder stopped. `Run` raises an exception only for an audit the sink could not take.
 
 - **The embedder's abort.** An abort handle that `OnConfigureEngine` captures ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread)) stops that run, which `Run` returns as `sfkHostError` with the abort's message, so the embedder that requested it decides what it was.
 - **The embedder's ceiling.** A native the embedder installs can end the run at a ceiling of its own, such as its native memory budget, with `SandboxCeiling(Msg)` (`Goccia.Sandbox`), as the sandbox's own natives end it at the nesting depth: past every handler, reported as `sfkResourceLimit` with `Msg`.
-- **A failed audit.** An audit sink that cannot take an event makes `Run` raise `EGocciaCapabilityAuditDeliveryError`, whether the sink is the run's own or a `runScript` or shell child's. The sandbox tells the two apart: `TGocciaEngine.AuditDeliveryFailed` covers only that engine's own sink, and `TakeSandboxAuditFailure` a child's.
+- **A failed audit.** An audit sink that cannot take an event makes `Run` raise `EGocciaCapabilityAuditDeliveryError` instead of returning a result, whether the sink is the run's own or a `runScript` or shell child's. The sandbox tells the two apart: `TGocciaEngine.AuditDeliveryFailed` covers only that engine's own sink, and `TakeSandboxAuditFailure` a child's.
 
-The first cause that ends a run stays its cause. A ceiling after a failed audit changes nothing, and neither does an audit that fails while a stopped run's work is discarded.
+The first cause that ends a run stays its cause. A ceiling after a failed audit changes nothing. Neither does an audit or a ceiling while the work of a run that already ended is discarded, whether the run was stopped, even by a request that came after its last check, or failed with a script error.
 
 ## Console Output Capture
 
