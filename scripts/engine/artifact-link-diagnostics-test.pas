@@ -138,12 +138,19 @@ type
   { a native module whose factory fails with a primitive: its error cannot carry a record }
   TPrimitiveFailure = class
     function Make(var ExportList: TValue): Boolean;
+    { fails with an Error after its specifier resolved: the record has no missing module of its own }
+    function MakeError(var ExportList: TValue): Boolean;
   end;
 
 function TPrimitiveFailure.Make(var ExportList: TValue): Boolean;
 begin
   Pending := MkInt(17);
   Result := False;
+end;
+
+function TPrimitiveFailure.MakeError(var ExportList: TValue): Boolean;
+begin
+  Result := ThrowError('Error', 'the factory failed');
 end;
 
 procedure CheckRun(AEngine: TGocciaEngine; const AMode, AEntry, ASource, AName, APath: UnicodeString;
@@ -210,6 +217,51 @@ begin
   finally
     Engine.Free;
   end;
+  { an object made from a caught failure's error inherits none of its record }
+  Engine := TGocciaEngine.Create;
+  try
+    RunResult := Engine.Run(Entry,
+      'const caught = await import("./load-failure.mjs").catch((error) => error);'#10 +
+      'throw Object.create(caught);');
+    Check(not RunResult.Ok and (RunResult.ErrorName <> 'RuntimeError') and (RunResult.ErrorFile <> Failure),
+      'an object inheriting a caught failure read ' + RunResult.ErrorName + ' at ' + RunResult.ErrorFile);
+  finally
+    Engine.Free;
+  end;
+  { a direct import() of a missing file, caught, leaves no resolved path for a later failure whose own specifier
+    resolved (a native module whose factory fails) }
+  Files := TStringList.Create;
+  try
+    Files.Text := 'import "test:error";';
+    Files.SaveToFile(ADirectory + 'error-wrapper.mjs');
+  finally
+    Files.Free;
+  end;
+  Factory := TPrimitiveFailure.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Err := '';
+    Check(Engine.DefineNativeModule('test:error', Factory.MakeError, Err), 'could not define the module: ' + Err);
+    RunResult := Engine.Run(Entry,
+      'await import("./missing-direct.mjs").catch(() => {});'#10 + 'await import("./error-wrapper.mjs");');
+    Check(not RunResult.Ok and (RunResult.ErrorFile = ADirectory + 'error-wrapper.mjs') and
+      (Pos('missing-direct', RunResult.ErrorResolvedPath) = 0),
+      'a later failure took a caught import''s resolved path: ' + RunResult.ErrorFile + ' resolved ' +
+      RunResult.ErrorResolvedPath);
+  finally
+    Engine.Free;
+    Factory.Free;
+  end;
+  { an importer under a directory whose name holds U+0001 keeps its location in the record (a specifier cannot
+    hold it, but a host's entry path can) }
+  Check(ForceDirectories(string(ADirectory + 'odd'#1'dir')), 'could not create the odd directory');
+  Engine := TGocciaEngine.Create;
+  try
+    CheckRun(Engine, 'a load failure under an odd directory name', ADirectory + 'odd'#1'dir/entry.mjs',
+      'const before = 1;'#10 + 'import "./absent.mjs";', 'RuntimeError', ADirectory + 'odd'#1'dir/entry.mjs', 2, 1);
+  finally
+    Engine.Free;
+  end;
   Factory := TPrimitiveFailure.Create;
   Engine := TGocciaEngine.Create;
   try
@@ -226,11 +278,41 @@ begin
     Err := '';
     Check(Engine.DefineNativeModule('test:primitive', Factory.Make, Err), 'could not define the module: ' + Err);
     RunResult := Engine.Run(Entry, 'await import("./primitive-wrapper.mjs");');
-    Check(not RunResult.Ok and (RunResult.ErrorMessage = '17'),
-      'an uncaught primitive load failure read ' + RunResult.ErrorName + ' ' + RunResult.ErrorMessage);
+    Check(not RunResult.Ok and (RunResult.ErrorMessage = '17') and not RunResult.ErrorIsError and
+      (RunResult.ErrorFile = '') and (RunResult.ErrorLine = 0) and (RunResult.ErrorColumn = 0),
+      'an uncaught primitive load failure read ' + RunResult.ErrorName + ' ' + RunResult.ErrorMessage + ' at ' +
+      RunResult.ErrorFile + ':' + IntToStr(RunResult.ErrorLine) + ':' + IntToStr(RunResult.ErrorColumn));
   finally
     Engine.Free;
     Factory.Free;
+  end;
+end;
+
+{ A caught module load error still takes a heap snapshot: its record is kept beside it, not on it. }
+procedure CheckLoadErrorSnapshot(const AEntry: UnicodeString);
+const
+  Source = 'try { await import("./load-failure.mjs"); } catch (error) { expect(error).toBeDefined(); }';
+var
+  Engine: TGocciaEngine;
+  RunResult: TGocciaRunResult;
+  Roots: TArray<TGocciaHeapRoot>;
+  ErrorText: UnicodeString;
+  Observations: Integer;
+begin
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.TestMode := True;
+    Engine.HeapSnapshots := True;
+    Check(Engine.PrepareHost(ErrorText), 'could not prepare snapshot host: ' + ErrorText);
+    Check(InstallTestingAPI(ErrorText), 'could not prepare snapshot observer: ' + ErrorText);
+    RunResult := Engine.Run(AEntry, Source);
+    Engine.EndTests;
+    Check(RunResult.Ok, 'catching the load error failed: ' + RunResult.ErrorMessage);
+    Roots := Engine.HeapSnapshotObserved(Observations);
+    Check((Observations = 1) and (Length(Roots) = 1), 'expected to observe exactly one caught load error');
+    Check(Length(Roots[0].Data) > 0, 'a caught load error refused a snapshot: ' + Roots[0].Refusal);
+  finally
+    Engine.Free;
   end;
 end;
 
@@ -387,6 +469,7 @@ begin
   CheckLinkFailurePrecedence(Directory + 'precedence.mjs', Directory + 'dynamic.mjs');
   CheckCaughtLoadFailure(Directory);
   CheckSnapshot(Directory + 'snapshot.mjs', Directory + 'dynamic.mjs');
+  CheckLoadErrorSnapshot(Directory + 'load-snapshot.mjs');
   CheckCompanionIsolation(Directory + 'collides.mjs', Directory + 'collides.mjs#script-imports');
   CheckDuplicateScriptBinding(Directory + 'repeated.mjs');
   CheckCase(Directory + 'bom.mjs', #$FEFF + MissingImport, 1, 1);

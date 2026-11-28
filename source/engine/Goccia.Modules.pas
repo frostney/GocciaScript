@@ -184,6 +184,7 @@ implementation
 
 uses
   SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.VM,
+  Goccia.Weak,
   Goccia.Compiler, Goccia.Eval, Goccia.FileExtensions, Goccia.Promise, Goccia.ThreadCleanupRegistry, TextEncoding, Goccia.EngineFault;
 
 
@@ -269,8 +270,8 @@ threadvar
   JSModSources: TValue;
   JSModSourceProto: TValue;
   JSModSourceKey: PStr;
-  { the internal key a module load failure's record is kept under on its error (RecordLoadFailure) }
-  LoadFailureKey: PStr;
+  { the engine's table of module load failure records, keyed by each failure's error (RecordLoadFailure) }
+  LoadFailureTable: TValue;
   JSModuleSourcesOn: Boolean;
   { the evaluation promise of the entry RunModuleFile ran last }
   EntryEvalPromise: TValue;
@@ -590,60 +591,83 @@ threadvar
   Completion: TValue;
   CompletionRootedGen: Integer;
 
-const
-  { the fields of a load failure's record, in this order }
-  LOAD_FAILURE_FIELD = #1;
-
-{ V's own record of a load failure, '' when it has none }
-function LoadFailureRecord(V: TValue): UnicodeString;
-var R, Saved: TValue;
+{ the engine's table of load failure records: an ephemeron table (Goccia.Weak) keyed by each failure's error. The
+  record stays beside its error, not on it, so the error's own properties (what a heap snapshot keeps) are unchanged,
+  a caught error is not kept alive, and no other value can reach the record through a prototype or a proxy }
+function LoadFailureTableCall(Fn: TNativeFn; Key, Value: TValue; Argc: Integer; out Res: TValue): Boolean;
+var A: array[0..3] of TValue;
 begin
-  Result := '';
-  { an internal key, which a script cannot define or reach: only a record the loader made is found, and nothing of
-    the script's runs (no proxy is asked) }
-  if (LoadFailureKey = nil) or not IsObject(V) or (ObjOf(V)^.OKind in [okProxy, okModuleNS]) then Exit;
-  { the lookup allocates nothing; a failed one leaves the error pending as it was (it may be the very error being
-    recorded) }
-  Saved := Pending;
-  if not GetV(V, LoadFailureKey, R) then
-  begin
-    Pending := Saved;
-    Exit;
-  end;
-  if IsString(R) then Result := StrToUnicode(StrOf(R));
+  A[0] := VUndefined;
+  A[1] := LoadFailureTable;
+  A[2] := Key;
+  A[3] := Value;
+  Result := Fn(@A[0], Argc, Res);
 end;
 
-{ records a load failure on the pending error, when it is an object without one: the innermost failure's stays }
+{ V's record of a load failure, '' when it has none }
+function LoadFailureRecord(V: TValue): UnicodeString;
+var R: TValue;
+begin
+  Result := '';
+  if not IsObject(LoadFailureTable) or not IsObject(V) then Exit;
+  if LoadFailureTableCall(@TableGetNative, V, VUndefined, 2, R) and IsString(R) then Result := StrToUnicode(StrOf(R));
+end;
+
+{ a field of a record: its length, a colon, then the text, so any path round-trips }
+function RecordField(const Text: UnicodeString): UnicodeString;
+begin
+  Result := IntToStr(Length(Text)) + ':' + Text;
+end;
+
+{ the next field of Text from At (advanced past it); False when Text is not a record }
+function NextRecordField(const Text: UnicodeString; var At: Integer; out Field: UnicodeString): Boolean;
+var Colon, Len: Integer;
+begin
+  Result := False;
+  Field := '';
+  Colon := At;
+  while (Colon <= Length(Text)) and (Text[Colon] <> ':') do Inc(Colon);
+  if (Colon > Length(Text)) or not TryStrToInt(string(Copy(Text, At, Colon - At)), Len) or (Len < 0) or
+     (Colon + Len > Length(Text)) then Exit;
+  Field := Copy(Text, Colon + 1, Len);
+  At := Colon + 1 + Len;
+  Result := True;
+end;
+
+{ records a load failure for the pending error, when it is an object without one: the innermost failure's stays }
 procedure RecordLoadFailure(Parse: Boolean; const Path: UnicodeString; Line, Column: Integer;
   const Name, Suggestion: UnicodeString);
-var Resolved, Text: UnicodeString;
+var Resolved, Text: UnicodeString; R: TValue;
 begin
-  if (LoadFailureKey = nil) or not IsObject(Pending) or (LoadFailureRecord(Pending) <> '') then Exit;
+  if not IsObject(LoadFailureTable) or not IsObject(Pending) or (LoadFailureRecord(Pending) <> '') then Exit;
   Resolved := '';
   if not Parse and Assigned(TakeLoadFailureResolved) then Resolved := TakeLoadFailureResolved();
-  Text := BoolToStr(Parse, '1', '0') + LOAD_FAILURE_FIELD + Path + LOAD_FAILURE_FIELD + IntToStr(Line) +
-    LOAD_FAILURE_FIELD + IntToStr(Column) + LOAD_FAILURE_FIELD + Name + LOAD_FAILURE_FIELD + Suggestion +
-    LOAD_FAILURE_FIELD + Resolved;
+  Text := RecordField(BoolToStr(Parse, '1', '0')) + RecordField(Path) + RecordField(IntToStr(Line)) +
+    RecordField(IntToStr(Column)) + RecordField(Name) + RecordField(Suggestion) + RecordField(Resolved);
   { the text allocated and rooted first: Pending is read after it, so a moving collection cannot leave it stale }
   PushRoot(StrFromUnicode(Text));
-  DefineOwn(Pending, LoadFailureKey, RootAt(TempTop - 1), pfHidden);
+  LoadFailureTableCall(@TableSetNative, Pending, RootAt(TempTop - 1), 3, R);
   PopRoots(1);
 end;
 
 function DescribeLoadFailure(V: TValue; out Failure: TModuleLoadFailure): Boolean;
-var Fields: TUnicodeStringArray;
+var Text, Kind, LineText, ColumnText: UnicodeString; At: Integer;
 begin
   Failure := Default(TModuleLoadFailure);
-  Fields := LoadFailureRecord(V).Split([LOAD_FAILURE_FIELD]);
-  Result := Length(Fields) = 7;
-  if not Result then Exit;
-  Failure.Parse := Fields[0] = '1';
-  Failure.Path := UnicodeString(Fields[1]);
-  Failure.Line := StrToIntDef(Fields[2], 0);
-  Failure.Column := StrToIntDef(Fields[3], 0);
-  Failure.Name := UnicodeString(Fields[4]);
-  Failure.Suggestion := UnicodeString(Fields[5]);
-  Failure.Resolved := UnicodeString(Fields[6]);
+  Text := LoadFailureRecord(V);
+  At := 1;
+  Result := (Text <> '') and NextRecordField(Text, At, Kind) and NextRecordField(Text, At, Failure.Path) and
+    NextRecordField(Text, At, LineText) and NextRecordField(Text, At, ColumnText) and
+    NextRecordField(Text, At, Failure.Name) and NextRecordField(Text, At, Failure.Suggestion) and
+    NextRecordField(Text, At, Failure.Resolved);
+  if not Result then
+  begin
+    Failure := Default(TModuleLoadFailure);
+    Exit;
+  end;
+  Failure.Parse := Kind = '1';
+  Failure.Line := StrToIntDef(LineText, 0);
+  Failure.Column := StrToIntDef(ColumnText, 0);
 end;
 
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -1029,6 +1053,8 @@ begin
     SourceOnly := not EvaluatedRequest(M, M.Info.Requests[I]);
     SourcePhaseRequest := SourceOnly;
     try
+      { a candidate path an earlier resolution left (a caught import()'s) is not this request's }
+      if Assigned(TakeLoadFailureResolved) then TakeLoadFailureResolved();
       Resolved := ResolveRequest(M.Info.Requests[I], M.Address.ReferrerPath);
     finally
       SitePath := '';
@@ -2654,7 +2680,6 @@ begin
   AddRoot(@AMSCtor); AddRoot(@HostModSource); AddRoot(@JSModSourceProto);
   RealmVals([@AMSCtor, @HostModSource, @JSModSourceProto]);
   JSModSourceKey := NewKeyAtom('%moduleSource', kfInternal);
-  LoadFailureKey := NewKeyAtom('%loadFailure', kfInternal);
   { the module map and the pending dynamic imports belong to the agent's first realm }
   if RealmInit then Exit;
   Mods := TList<TModRec>.Create;
@@ -2663,6 +2688,8 @@ begin
   EntryEvalPromise := VUndefined;
   AddRoot(@ResolveErrorV);
   ResolveErrorV := VUndefined;
+  AddRoot(@LoadFailureTable);
+  if not TableNewNative(nil, 0, LoadFailureTable) then LoadFailureTable := VUndefined;
   AddRoot(@JSModSources);
   JSModSources := MkPtr(NewArray(0, 0));
   AddRoot(@PendingImports);
