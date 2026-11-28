@@ -160,6 +160,14 @@ jobs:
       - name: Build the engine, GocciaRunner, GocciaBundler and GocciaFuzzHarness
         run: ./build.pas --prod engine runner bundler fuzzharness
 
+      # FPC 3.3.1 drops the test in `Inc(N); if (N and 255) = 0` when N is in
+      # memory (frostney/fpc-toolchain#23): every engine program's listings,
+      # as this target compiles them, must have no such jump.
+      - name: Masked tests the compiler dropped
+        run: |
+          python3 scripts/engine/flagscan.py --self-test
+          ./build.pas --prod flagscan
+
       - name: Execution limits
         run: bash scripts/engine/limits-test.sh build/engine/goccia
 
@@ -353,6 +361,16 @@ jobs:
               ;;
           esac
           ./build.pas --prod testrunner
+
+      # As the engine job's step, for this target: i386-win32 builds at -O1,
+      # where a local in memory loses its masked test too. The scanner reads
+      # x86 code only.
+      - name: Masked tests the compiler dropped
+        if: matrix.cpu != 'aarch64'
+        env:
+          FPC_TARGET_CPU: ${{ matrix.cpu }}
+          FPC_TARGET_OS: ${{ matrix.os }}
+        run: ./build.pas --prod flagscan
 
       - name: Upload the build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
