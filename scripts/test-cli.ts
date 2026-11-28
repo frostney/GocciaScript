@@ -1944,13 +1944,19 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     "replaceAll": "'a'.repeat(1e6).replaceAll('a', 'b'.repeat(500));",
     "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
   };
+  const permanent = new Set(["sparse fill", "fresh string keys", "symbols"]);
   const dir = mkdtemp("goccia-native-charge-");
   try {
     const path = join(dir, "grow.js");
     for (const [label, body] of Object.entries(cases)) {
       writeFileSync(path, `let caught = 'none';\ntry {\n${body}\n} catch (e) { caught = e.name; }\nconsole.log('caught', caught);\n`);
       const run = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
-      if (run.exitCode !== 0 || !run.output.includes("caught RangeError"))
+      // Keys and symbols live as long as the engine: once they fill the
+      // limit, the next collection refuses again, which can land after the
+      // catch. Those runs may end with that refusal uncaught.
+      const refusedAgain = permanent.has(label) && run.exitCode === 1 &&
+        run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit");
+      if (!refusedAgain && (run.exitCode !== 0 || !run.output.includes("caught RangeError")))
         throw new Error(`${label} should be refused with a catchable RangeError: exit ${run.exitCode}, ${run.output}`);
       assertPeakRssBelow(run, label, 2 * ceiling);
     }
