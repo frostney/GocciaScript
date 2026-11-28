@@ -17,6 +17,9 @@ type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
   TGocciaNativeModuleFactory = TNativeModuleFactory;
+  { a module an embedder supplies when it is first imported: its source text or a bytecode file (DefineModuleProvider) }
+  TGocciaModuleProvider = TModuleProvider;
+  TGocciaModuleProviderAnswer = TModuleProviderAnswer;
   TGocciaEmbedderWork = TEmbedderWork;
   IGocciaAbortHandle = Goccia.VM.IGocciaAbortHandle;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
@@ -152,6 +155,8 @@ type
     FRandomRoot: IGocciaHostRandom;
     FProfileOpcodes, FProfileFunctions: Boolean;
     FJSModuleSources: Boolean;
+    { Run, RunTests and RunBenchmarks under way (a host callback such as a module provider runs inside them) }
+    FEntryDepth: Integer;
     FProjectRoot: string;
     FHostEnvironmentGuest: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
@@ -180,6 +185,10 @@ type
     procedure SetHeapSnapshots(V: Boolean);
     procedure SetOnModuleWarning(const Value: TGocciaModuleWarningEvent);
     function RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
+    function RunEntered(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
+    function RunTestsEntered(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
+    function RunBenchmarksEntered(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
+      out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
   public
     { builds this thread's engine; one at a time per thread }
     constructor Create;
@@ -246,6 +255,10 @@ type
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
     { Registers a native factory for an import, with the same lifetime as this engine. }
     function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+      var Err: UnicodeString): Boolean;
+    { Registers a provider asked for an import's source text or bytecode file when it is first imported, with the same
+      lifetime as this engine; until then the registration holds nothing in the engine's heap. }
+    function DefineModuleProvider(const Specifier: UnicodeString; Provider: TGocciaModuleProvider;
       var Err: UnicodeString): Boolean;
     { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
     procedure SetHostWork(Work: TGocciaEmbedderWork);
@@ -719,6 +732,12 @@ begin
   Result := HostReady(Err) and Goccia.HostAPI.DefineNativeModule(Specifier, Factory, Err);
 end;
 
+function TGocciaEngine.DefineModuleProvider(const Specifier: UnicodeString; Provider: TGocciaModuleProvider;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := HostReady(Err) and Goccia.HostAPI.DefineModuleProvider(Specifier, Provider, Err);
+end;
+
 { the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
   performance's time origin taken from them, then the time zone read; False with the error pending }
 function TGocciaEngine.LoadHostEnvironment: Boolean;
@@ -1046,9 +1065,22 @@ begin
 end;
 
 function TGocciaEngine.DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
+var Previous: TArtifactCheck; PreviousSources: Boolean;
 begin
   TakeHostError;
-  Result := HostReady(Err) and Goccia.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
+  if not HostReady(Err) then Exit(False);
+  { a config's JavaScript manifests import as InjectModuleGlobals' module does: their bytecode imports are checked
+    against the engine's settings, and the check in force before (a run's, when a provider calls this) comes back }
+  Previous := CurrentArtifactCheck;
+  PreviousSources := JSModuleSourcesEnabled;
+  SetArtifactCheck(CheckArtifact);
+  SetJSModuleSources(FJSModuleSources);
+  try
+    Result := Goccia.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
+  finally
+    SetArtifactCheck(Previous);
+    SetJSModuleSources(PreviousSources);
+  end;
 end;
 
 function TGocciaEngine.DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
@@ -1064,9 +1096,16 @@ begin
 end;
 
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
-var WeakMark, ModuleMark: Int64;
+var WeakMark, ModuleMark: Int64; Previous: TArtifactCheck; PreviousSources: Boolean;
 begin
   TakeHostError;
+  { setup arms the engine's limits for the globals module and disarms them after: inside an entry (a host callback,
+    such as a module provider) that would take the entry's own limits away, so it is refused before anything changes }
+  if FEntryDepth > 0 then
+  begin
+    Err := 'InjectModuleGlobals cannot be called while the engine runs an entry';
+    Exit(False);
+  end;
   if not HostReady(Err) then Exit(False);
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
@@ -1075,9 +1114,17 @@ begin
   Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   Result := False;
+  { a bytecode module the globals module imports (a provided module's answer) is checked as a run's imports are; the
+    check in force before comes back }
+  Previous := CurrentArtifactCheck;
+  PreviousSources := JSModuleSourcesEnabled;
+  SetArtifactCheck(CheckArtifact);
+  SetJSModuleSources(FJSModuleSources);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
+    SetArtifactCheck(Previous);
+    SetJSModuleSources(PreviousSources);
     case LimitAbortKind of
       1: FSetupAborted := gaTimeout;
       2: FSetupAborted := gaInstructionLimit;
@@ -1092,9 +1139,22 @@ begin
 end;
 
 function TGocciaEngine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var Previous: TArtifactCheck; PreviousSources: Boolean;
 begin
   TakeHostError;
-  Result := HostReady(Err) and Goccia.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
+  if not HostReady(Err) then Exit(False);
+  { as InjectModuleGlobals: the manifest module's bytecode imports are checked against the engine's settings, and
+    the check in force before comes back }
+  Previous := CurrentArtifactCheck;
+  PreviousSources := JSModuleSourcesEnabled;
+  SetArtifactCheck(CheckArtifact);
+  SetJSModuleSources(FJSModuleSources);
+  try
+    Result := Goccia.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
+  finally
+    SetArtifactCheck(Previous);
+    SetJSModuleSources(PreviousSources);
+  end;
 end;
 
 function TGocciaEngine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
@@ -1286,6 +1346,37 @@ begin
 end;
 
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
+begin
+  Inc(FEntryDepth);
+  try
+    Result := RunEntered(FileName, Source);
+  finally
+    Dec(FEntryDepth);
+  end;
+end;
+
+function TGocciaEngine.RunTests(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
+begin
+  Inc(FEntryDepth);
+  try
+    Result := RunTestsEntered(Json, Err, Aborted);
+  finally
+    Dec(FEntryDepth);
+  end;
+end;
+
+function TGocciaEngine.RunBenchmarks(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
+  out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
+begin
+  Inc(FEntryDepth);
+  try
+    Result := RunBenchmarksEntered(Deterministic, Entries, Total, DurationNanoseconds, Err, Aborted);
+  finally
+    Dec(FEntryDepth);
+  end;
+end;
+
+function TGocciaEngine.RunEntered(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
 var Signal: IRunAbortSignal; Requested, Started: Boolean; Err: UnicodeString; WeakMark: Int64;
 begin
   { a run that never starts (a request before it, a host that cannot be set up) has had no audit failure either }
@@ -1680,7 +1771,7 @@ begin
   end;
 end;
 
-function TGocciaEngine.RunTests(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
+function TGocciaEngine.RunTestsEntered(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
   TakeHostError;
   Aborted := gaNone;
@@ -1742,8 +1833,8 @@ begin
   E.ErrorColumn := R.ErrorColumn;
 end;
 
-function TGocciaEngine.RunBenchmarks(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
-  out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
+function TGocciaEngine.RunBenchmarksEntered(Deterministic: Boolean; out Entries: TGocciaBenchEntries;
+  out Total: Integer; out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
   TakeHostError;
   BenchDescribeThrown := @DescribeBenchThrown;

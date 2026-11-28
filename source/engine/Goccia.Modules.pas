@@ -58,10 +58,15 @@ function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue)
 type
   { a host's modules: for a request key, try only the host registry when FilePath is empty and only the
     file at FilePath otherwise. 1 with Exp an array of the module's export names and values, interleaved (a
-    synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
-    has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly lookup
-    asks for source text for a typed import and must not initialize a native factory. }
+    synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 3 with the module's
+    bytecode file handed over through SetHostModuleArtifact (loaded and checked as an imported .gbc file is), 0
+    when the host has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly
+    lookup asks for source text for a typed import and must not initialize a native factory or ask a provider. }
   THostModuleHook = function(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
+const
+  { THostModuleHook's answer of a bytecode file (SetHostModuleArtifact) }
+  HOST_MODULE_BYTECODE = 3;
+type
   THostModuleKeyHook = function(const Key: UnicodeString): Boolean;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
@@ -70,6 +75,11 @@ type
   THostResolveHook = function(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
     out VirtualKey: Boolean): Integer;
 
+{ the bytecode file a host module hook answers with (its result 3), taken by the load that called the hook }
+procedure SetHostModuleArtifact(const Bytes: RawByteString);
+{ instead of the bytes: why the host refused the answer before handing it over (the load records it as the file's
+  error, as it records a file that fails verification) }
+procedure SetHostModuleArtifactRefusal(const Reason: UnicodeString);
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil;
   NoSourceHook: THostModuleKeyHook = nil; SupportsFileFormats: Boolean = False);
@@ -92,6 +102,8 @@ procedure SetProvidedSource(const Path, Source: UnicodeString);
 { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source text
   module's source phase import gives one }
 procedure SetJSModuleSources(On: Boolean);
+{ the setting in force, for a caller that sets the engine's own for a while and puts this one back }
+function JSModuleSourcesEnabled: Boolean;
 { this thread's module records so far: a mark ModuleSourcePathSince counts from }
 { heap snapshots (Goccia.HeapSnapshot): module record I's path and compiled code (nil for a host, JSON or source-phase
   record); False past the last }
@@ -163,6 +175,8 @@ type
   TArtifactCheck = function(const A: TGocciaArtifact; var Err: UnicodeString): Boolean of object;
 { this thread's bytecode check (nil: every valid bytecode module is accepted) }
 procedure SetArtifactCheck(Check: TArtifactCheck);
+{ the check in force, for a caller that installs its own for a while and puts this one back }
+function CurrentArtifactCheck: TArtifactCheck;
 { the module record a bytecode file at GbcPath loads as: its directory and name with the extension of the source
   it was compiled from (a .js file for none), so an import of the source and one of the file share it }
 function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
@@ -400,6 +414,16 @@ begin
   {$POP}
 end;
 
+{ SourceHashOf's FNV-1a over a bytecode file's bytes }
+function BytesHashOf(const B: RawByteString): QWord;
+var I: Integer;
+begin
+  {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+  Result := 14695981039346656037;
+  for I := 1 to Length(B) do Result := (Result xor Ord(B[I])) * 1099511628211;
+  {$POP}
+end;
+
 procedure SetFileReadHook(Hook: TFileReadHook);
 begin
   FileRead := Hook;
@@ -506,6 +530,32 @@ begin
     end;
   end;
   Result := True;
+end;
+
+threadvar
+  { the bytecode file the host module hook answered with (SetHostModuleArtifact), until LoadModule takes it }
+  HostModuleArtifact: RawByteString;
+  HostModuleArtifactRefusal: UnicodeString;
+
+procedure SetHostModuleArtifact(const Bytes: RawByteString);
+begin
+  HostModuleArtifact := Bytes;
+  HostModuleArtifactRefusal := '';
+end;
+
+procedure SetHostModuleArtifactRefusal(const Reason: UnicodeString);
+begin
+  HostModuleArtifact := '';
+  HostModuleArtifactRefusal := Reason;
+end;
+
+{ the bytecode file the hook answered with, or the reason it was refused; the hand-over is cleared }
+function TakeHostModuleArtifact(out Refusal: UnicodeString): RawByteString;
+begin
+  Result := HostModuleArtifact;
+  Refusal := HostModuleArtifactRefusal;
+  HostModuleArtifact := '';
+  HostModuleArtifactRefusal := '';
 end;
 
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook, NoSourceHook: THostModuleKeyHook;
@@ -956,6 +1006,11 @@ begin
   ArtifactCheck := Check;
 end;
 
+function CurrentArtifactCheck: TArtifactCheck;
+begin
+  Result := ArtifactCheck;
+end;
+
 function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
 var Ext: UnicodeString;
 begin
@@ -1081,19 +1136,22 @@ end;
 { a module record keyed Key made from the bytecode file bytes B (read from From): read, verified, checked
   against the run's profile (ArtifactCheck), then its requests loaded }
 function LoadArtifactRecord(const Address: TModuleAddress; const From: UnicodeString; const B: RawByteString;
-  var M: TModRec): Boolean;
+  var M: TModRec; const Refusal: UnicodeString = ''): Boolean;
 var A: TGocciaArtifact; Err: UnicodeString;
 begin
+  A := Default(TGocciaArtifact);
   M := TModRec.Create;
   M.Address := Address;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
   M.HasModified := False;
-  M.Hash := 0;
+  { the file's own bytes identify its code, as a source module's text does (a heap snapshot's restore compares them) }
+  M.Hash := BytesHashOf(B);
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
-  Err := '';
-  if LoadArtifact(PByte(B), Length(B), Address.Path, M.Id + 1, A, Err) then
+  Err := Refusal;
+  { a refused answer is recorded as the file's error, as a file that fails verification is }
+  if (Refusal = '') and LoadArtifact(PByte(B), Length(B), Address.Path, M.Id + 1, A, Err) then
   begin
     if A.Info = nil then
     begin
@@ -1168,8 +1226,8 @@ end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec;
   const CompanionSource: UnicodeString): Boolean;
-var Path, Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
-  Modified: TDateTime;
+var Path, Src, Err, ErrName, Prov, Refusal: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
+  Modified: TDateTime; Bytes: RawByteString;
 begin
   Path := Address.Path;
   if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
@@ -1240,6 +1298,12 @@ begin
     case I of
       1: Exit(MakeHostModule(Address, V, M));
       2: Src := StrToUnicode(StrOf(V));
+      { a bytecode file under the host's key: one record, checked against the run's profile like an imported .gbc }
+      HOST_MODULE_BYTECODE:
+        begin
+          Bytes := TakeHostModuleArtifact(Refusal);
+          Exit(LoadArtifactRecord(Address, Path, Bytes, M, Refusal));
+        end;
       -1: Exit(False);
     end;
     if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
@@ -1478,13 +1542,19 @@ end;
 
 { ---- 16.2.1.5.2 Link ---- }
 
-procedure CollectGraph(M: TModRec; L: TList<TModRec>);
+{ the graph's records not linked yet, in L; False when one of them is still loading its imports (RequestsState 1: a
+  load a host callback started while an import of that record was being supplied), whose dependency slots are not
+  all filled yet }
+function CollectGraph(M: TModRec; L: TList<TModRec>): Boolean;
 var D: TModRec;
 begin
+  Result := True;
   if (M.Status <> msNew) or (L.IndexOf(M) >= 0) then Exit;
   M.Status := msLinking;
   L.Add(M);
-  for D in M.Deps do CollectGraph(D, L);
+  if M.RequestsState = 1 then Exit(False);
+  for D in M.Deps do
+    if (D = nil) or not CollectGraph(D, L) then Exit(False);
 end;
 
 function LinkFail(L: TList<TModRec>): Boolean;
@@ -1516,7 +1586,11 @@ var L: TList<TModRec>; M: TModRec; I, J: Integer; Clo, Gen, Tbl: TValue; R: TRes
 begin
   L := TList<TModRec>.Create;
   try
-    CollectGraph(Root, L);
+    if not CollectGraph(Root, L) then
+    begin
+      ThrowTypeError('A module of the graph of ' + DiagnosticSource(Root) + ' is still loading its imports');
+      Exit(LinkFail(L));
+    end;
     { every module's InitializeEnvironment start: its table, then its function run to its first suspension }
     for M in L do
     begin
@@ -2654,13 +2728,20 @@ end;
 
 function HasModuleSource(M: TModRec): Boolean;
 begin
-  { the host's source module, and with experimental JavaScript module sources every source text module }
-  Result := Assigned(M) and ((M.Address.Path = HostSourceSpecifier) or (JSModuleSourcesOn and (M.Tpl <> nil)));
+  { the host's source module, and with experimental JavaScript module sources every source text module except a host
+    module that has none (a native or provided module, even once an evaluation request loaded it) }
+  Result := Assigned(M) and ((M.Address.Path = HostSourceSpecifier) or
+    (JSModuleSourcesOn and (M.Tpl <> nil) and not NativeModuleHasNoSource(M.Address)));
 end;
 
 procedure SetJSModuleSources(On: Boolean);
 begin
   JSModuleSourcesOn := On;
+end;
+
+function JSModuleSourcesEnabled: Boolean;
+begin
+  Result := JSModuleSourcesOn;
 end;
 
 procedure ModulesDone;

@@ -54,8 +54,9 @@ Files are versioned with the engine: rebuild them after upgrading GocciaScript.
 |-----|-----------|
 | `CompileArtifact(FileName, Source, Bytes, R)` | Compiles `Source` as `Run` would (the engine's `SourceKind`, `Profile` and module-source setting) and returns the file's bytes; `False` with `R`'s error fields set for source that does not compile |
 | `RunArtifact(FileName, Bytes)` | Runs the bytes as the entry, with the profile and goal checks above, and returns a `TGocciaRunResult` like `Run` |
+| `DefineModuleProvider(Specifier, Provider, Err)` | Registers a virtual address whose module the provider supplies when it is first imported, as source text or as a Module file's bytes, loaded with the checks above ([Provided modules](embedding.md#provided-modules)) |
 
-Imports of `.gbc` files go through the module loader (`Goccia.Modules`): an explicit `.gbc` specifier, or the companion a resolver with `PreferBytecodeCompanions` selects. The loader reads files through the thread's file reader, which a host can replace with `SetFileReadHook`, as sandbox mode does for its virtual filesystem. There is no API for registering bytecode buffers under import addresses.
+Imports of `.gbc` files go through the module loader (`Goccia.Modules`): an explicit `.gbc` specifier, or the companion a resolver with `PreferBytecodeCompanions` selects. The loader reads files through the thread's file reader, which a host can replace with `SetFileReadHook`, as sandbox mode does for its virtual filesystem. A bytecode buffer the host holds in memory is imported under a virtual address through a module provider.
 
 Lower down, `Goccia.Artifact` provides `SaveArtifact` (a compiled Script or Module to bytes; it raises `EGocciaArtifact` for a template the format cannot hold, such as a lazy function not compiled yet) and `LoadArtifact` (read and verify; the templates join the calling thread's engine and live as long as it). One engine runs per thread, so load and run bytecode on the engine's own thread.
 
