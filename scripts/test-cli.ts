@@ -2082,13 +2082,25 @@ console.log('fits', lo);
       "compile literal": `console.log(/${"a".repeat(64 * 1024)}/.source.length);`,
       match: 'const re = new RegExp("a".repeat(256)); console.log(re.test("a".repeat(48 * 1024)));',
     };
+    // The padding leaves 1 MiB of what fits (measured: the engine's own keys
+    // and shapes count against the limit too) for the RegExp's workspace. A
+    // literal is compiled with the script, before the padding exists, so its
+    // run takes a limit its compile alone cannot fit under.
+    const limits: Record<string, string> = { compile: "4MiB", "compile literal": "2MiB", match: "4MiB" };
     for (const [name, operation] of Object.entries(operations)) {
       writeFileSync(path, `
-const padding = new ArrayBuffer(512 * 1024);
+let lo = 0;
+let hi = Goccia.gc.maxBytes;
+for (const _ of Array.from({ length: 40 })) {
+  if (hi - lo <= 16 * 1024) break;
+  const mid = Math.floor((lo + hi) / 2);
+  try { new ArrayBuffer(mid); lo = mid; } catch { hi = mid; }
+}
+const padding = new ArrayBuffer(Math.max(lo - 1024 * 1024, 0));
 ${operation}
 console.log(padding.byteLength);
 `);
-      const run = await runWithPeakRss([RUNNER, "--max-memory=2MiB", "--timeout=10000", path]);
+      const run = await runWithPeakRss([RUNNER, `--max-memory=${limits[name]}`, "--timeout=10000", path]);
       if (run.exitCode !== 1 || !run.output.includes("RangeError") ||
           !run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
         throw new Error(`RegExp ${name} should report a memory-limit RangeError: ${run.output}`);
