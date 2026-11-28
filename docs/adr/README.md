@@ -211,3 +211,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0199 — import.meta and Script imports follow the real path](0199-import-meta-and-script-imports-follow-the-real-path.md)
 - [0200 — YAML is parsed by a port of saphyr's scanner and event parser](0200-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
 - [0201 — Every application stops on an engine fault](0201-every-application-stops-on-an-engine-fault.md)
+- [0202 — The memory limit counts property keys, symbols and shapes, and refuses sized allocations before they are made](0202-the-memory-limit-counts-keys-and-shapes-and-refuses-sized-allocations-first.md)
