@@ -66,6 +66,9 @@ const
   okIterator = 12;  { array/string iterator: Aux1 = iterated, Aux2 = index/kind }
   okGenerator = 13;
   okProxy = 21;     { Aux1 = target, Aux2 = handler (not an object once revoked); OFlags 16 = callable }
+  { Goccia.RegExpV: Native = its compiled pattern (nil until RegExpInitialize), whose first field, an Integer, a major
+    collection sets to GCMajorCount when it finds the RegExp alive: the patterns it leaves unset are freed }
+  okRegExp = 17;
   ofBigLen = 32;    { an array whose length is past its dense elements (see ArrayLength) }
   ArrayDenseMax = 64 * 1024 * 1024;   { the longest an array's elements grow }
 
@@ -1402,6 +1405,8 @@ begin
           GCVisit(O^.Shape^.Proto);
           { a dictionary lives while its object does (RetireDeadShapes) }
           if O^.Shape^.IsDict then O^.Shape^.LiveMajor := GCMajorCount;
+          { and a compiled pattern while a RegExp uses it (Goccia.RegExpV) }
+          if (O^.OKind = okRegExp) and (O^.Native <> nil) then PInteger(O^.Native)^ := GCMajorCount;
         end;
       end;
   end;

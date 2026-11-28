@@ -12,9 +12,6 @@ interface
 uses
   SysUtils, Math, Generics.Collections, Goccia.Core, Goccia.VM;
 
-const
-  okRegExp = 17;
-
 procedure InitRegExp;
 { the spec layer in prelude/regexp.js: after every other built-in }
 procedure InitRegExpPrelude;
@@ -34,33 +31,18 @@ uses
 type
   PCompiled = ^TCompiled;
   TCompiled = record
+    { first: the last major collection that found a RegExp using it (Goccia.Core's ScanCell sets it, okRegExp) }
+    LiveMajor: Integer;
+    { native code using it with no RegExp to keep it (a string pattern's search, a RegExp being made) }
+    Pins: Integer;
     Charge: THeapExternalCharge;
     Key, Pattern, Flags: UnicodeString;
     Global, Sticky, IgnoreCase, Multiline, Unicode, DotAll, HasIndices: Boolean;
     M: TRegexMatcher;   { one per compiled pattern: a match leaves its captures here until the next one }
-    { the RegExp objects whose [[RegExpMatcher]] this is, as the collector last counted them (RefObjs) }
-    Refs: Integer;
-    { native code using it with no such object to keep it (a string pattern's search, an object being made) }
-    Pins: Integer;
-    { while Refs is 0 it is idle: in the list from IdleHead (the last used) to IdleTail, which collections free }
-    Idle: Boolean;
-    IdlePrev, IdleNext: PCompiled;
   end;
-
-const
-  { the idle compiled patterns a minor collection keeps, the last used first; a full collection frees every one }
-  IDLE_KEEP = 64;
 
 threadvar
   Compiled: TDictionary<UnicodeString, PCompiled>;
-  IdleHead, IdleTail: PCompiled;
-  IdleCount: Integer;
-  { each RegExp object with its compiled pattern, as it was given one; RegExpFinalizeHook drops a pair whose object
-    died or was given another (RegExp.prototype.compile). RefCharge covers the arrays }
-  RefObjs: array of PObj;
-  RefEnts: array of PCompiled;
-  RefCount: Integer;
-  RefCharge: THeapExternalCharge;
   RegExpProto, StrReplaceOrig, StrSplitOrig, StrReplaceAllOrig, Scratch: TValue;
   AtomLastIndex, AtomIndex, AtomInput, AtomGroups: PStr;
   RegExpShape: PShape;    { a RegExp object's shape while lastIndex is its only own property: it is slot 0 }
@@ -78,98 +60,27 @@ begin
   Dispose(C);
 end;
 
-procedure IdleRemove(C: PCompiled);
-begin
-  if not C^.Idle then Exit;
-  if C^.IdlePrev <> nil then C^.IdlePrev^.IdleNext := C^.IdleNext else IdleHead := C^.IdleNext;
-  if C^.IdleNext <> nil then C^.IdleNext^.IdlePrev := C^.IdlePrev else IdleTail := C^.IdlePrev;
-  C^.IdlePrev := nil;
-  C^.IdleNext := nil;
-  C^.Idle := False;
-  Dec(IdleCount);
-end;
-
-{ C, with nothing referring to it, becomes the idle pattern used last }
-procedure IdlePush(C: PCompiled);
-begin
-  IdleRemove(C);
-  C^.IdleNext := IdleHead;
-  if IdleHead <> nil then IdleHead^.IdlePrev := C else IdleTail := C;
-  IdleHead := C;
-  C^.Idle := True;
-  Inc(IdleCount);
-end;
-
-{ frees the idle patterns past Keep, the least recently used first, and their charges with them; a pinned one stays }
-procedure EvictIdle(Keep: Integer);
-var C, Prev: PCompiled;
-begin
-  C := IdleTail;
-  while (C <> nil) and (IdleCount > Keep) do
-  begin
-    Prev := C^.IdlePrev;
-    if C^.Pins = 0 then
-    begin
-      IdleRemove(C);
-      Compiled.Remove(C^.Key);
-      FreeCompiled(C);
-    end;
-    C := Prev;
-  end;
-end;
-
-procedure DropRef(C: PCompiled);
-begin
-  Dec(C^.Refs);
-  if C^.Refs = 0 then IdlePush(C);
-end;
-
-{ after every collection (it allocates nothing on the heap): a dead RegExp object, or one given another pattern, no
-  longer keeps its pattern. A minor collection keeps the IDLE_KEEP idle patterns used last for the next RegExp of the
-  same source; a full one, which a refusal runs before it gives up, frees them all }
+{ after a major collection, which set LiveMajor in the pattern of every RegExp it found alive: frees the patterns no
+  RegExp uses, with their charges, unless native code is using one (Pins). A refusal runs a major collection before it
+  gives up, so a pattern nothing uses does not hold the memory limit (it allocates nothing on the heap) }
 procedure RegExpFinalizeHook;
-var I, J: Integer; P: Pointer; C: PCompiled;
+var Unused: array of PCompiled; C: PCompiled; N, I, Major: Integer;
 begin
-  if Compiled = nil then Exit;
-  J := 0;
-  for I := 0 to RefCount - 1 do
-  begin
-    P := RefObjs[I];
-    C := RefEnts[I];
-    if GCSurvives(P) and (PObj(P)^.Native = C) then
+  if GCInMinor or (Compiled = nil) then Exit;
+  Major := GCMajorCount;
+  N := 0;
+  SetLength(Unused, Compiled.Count);
+  for C in Compiled.Values do
+    if (C^.LiveMajor <> Major) and (C^.Pins = 0) then
     begin
-      RefObjs[J] := PObj(P);
-      RefEnts[J] := C;
-      Inc(J);
-    end
-    else
-      DropRef(C);
+      Unused[N] := C;
+      Inc(N);
+    end;
+  for I := 0 to N - 1 do
+  begin
+    Compiled.Remove(Unused[I]^.Key);
+    FreeCompiled(Unused[I]);
   end;
-  RefCount := J;
-  if GCInMinor then EvictIdle(IDLE_KEEP) else EvictIdle(0);
-end;
-
-{ room for one more RegExp object in RefObjs, charged: it may collect, so the caller holds nothing unrooted }
-function ReserveRef: Boolean;
-var Cap: Integer;
-begin
-  if RefCount < Length(RefObjs) then Exit(True);
-  Cap := RefCount * 2 + 64;
-  if not RefCharge.TryGrow(Int64(Cap - Length(RefObjs)) * (SizeOf(PObj) + SizeOf(PCompiled))) then Exit(False);
-  SetLength(RefObjs, Cap);
-  SetLength(RefEnts, Cap);
-  Result := True;
-end;
-
-{ O's [[RegExpMatcher]] is C from now on, with room reserved (ReserveRef) }
-procedure TakeRef(O: PObj; C: PCompiled);
-begin
-  O^.Native := C;
-  RefObjs[RefCount] := O;
-  RefEnts[RefCount] := C;
-  Inc(RefCount);
-  IdleRemove(C);
-  Inc(C^.Refs);
 end;
 
 { the compiled pattern (cached), or False with the SyntaxError's message in Msg }
@@ -179,19 +90,12 @@ begin
   TextBytes := (Int64(Length(Flags)) + Length(Pattern)) * SizeOf(WideChar);
   CheckRegExpWorkspace(TextBytes + SizeOf(WideChar));
   Key := Flags + '/' + Pattern;
-  if Compiled.TryGetValue(Key, C) then
-  begin
-    if C^.Idle then IdlePush(C);
-    Exit(True);
-  end;
+  if Compiled.TryGetValue(Key, C) then Exit(True);
   New(Entry);
   Entry^.M := nil;
   Entry^.Charge := Default(THeapExternalCharge);
-  Entry^.Refs := 0;
+  Entry^.LiveMajor := 0;
   Entry^.Pins := 0;
-  Entry^.Idle := False;
-  Entry^.IdlePrev := nil;
-  Entry^.IdleNext := nil;
   try
     { The cache owns both the lookup key and the separately stored pattern and flags. }
     if not Entry^.Charge.TryGrow(SizeOf(TCompiled) + TextBytes * 2 + SizeOf(WideChar)) then
@@ -224,9 +128,8 @@ begin
     { The matcher owns its code and outer class table. Only their nested data are still shared. }
     Entry^.Charge.Release(Int64(Length(Prog.Code)) * SizeOf(UInt32) +
       Int64(Length(Prog.CharClasses)) * SizeOf(TRegExpCharClass));
+    { until a RegExp uses it, a major collection may free it once the caller is done with it }
     Compiled.Add(Key, Entry);
-    { idle until a RegExp object takes it: a collection may free it once the caller is done with it }
-    IdlePush(Entry);
     C := Entry;
     Entry := nil;
     Result := True;
@@ -277,21 +180,14 @@ begin
   Result := '';
 end;
 
-{ a RegExp object with C: C is pinned while the object is made, as nothing refers to it until then }
+{ a RegExp object with C: C is pinned while the object is made, as no RegExp uses it until then }
 function NewRegExpObject(C: PCompiled; var Res: TValue): Boolean;
-var O: PObj;
 begin
   Inc(C^.Pins);
-  if not ReserveRef then
-  begin
-    Dec(C^.Pins);
-    Exit(ThrowMemoryLimit);
-  end;
   Res := AllocRegExp(RegExpProto);
-  O := ObjOf(Res);
-  O^.Slots[0] := MkInt(0);
-  TakeRef(O, C);
   Dec(C^.Pins);
+  ObjOf(Res)^.Native := C;
+  ObjOf(Res)^.Slots[0] := MkInt(0);
   Result := True;
 end;
 
@@ -352,15 +248,16 @@ begin
   Result := ThrowError('Error', Sc.ErrorMessage);
 end;
 
-{ C's matcher on S from Start. A match reads S in place, so it cannot collect: when its storage cannot grow without a
-  collection (GrowthRefused), this collects for what it asked, with Re and S rooted and read back (a collection moves
-  what was in the nursery) and C pinned, and matches again. Each retry gets further than the last; a refusal the
-  collection made no room for leaves the matcher Failed with MemoryExhausted, for MatchFailed }
-function ExecMatch(C: PCompiled; var Re: TValue; var S: PStr; Start: Integer; RequireStart: Boolean): Boolean;
+{ ExecMatch's retries: the match stopped because its storage could not grow without a collection. This collects for
+  what it asked, with Re and S rooted and read back (a collection moves what was in the nursery) and C pinned, and
+  matches again. Each retry gets further than the last; a refusal the collection made no room for leaves the matcher
+  Failed with MemoryExhausted, for MatchFailed }
+function ExecMatchAfterCollecting(C: PCompiled; var Re: TValue; var S: PStr; Start: Integer;
+  RequireStart: Boolean): Boolean;
 var Sc: TRegexMatcher; Wanted: Int64; Room: Boolean;
 begin
   Sc := C^.M;
-  Result := Sc.Exec(StrChars(S), S^.Len, Start, RequireStart);
+  Result := False;
   Wanted := 0;
   while Sc.GrowthRefused and (Sc.GrowthWanted > Wanted) do
   begin
@@ -376,6 +273,14 @@ begin
     if not Room then Exit(False);
     Result := Sc.Exec(StrChars(S), S^.Len, Start, RequireStart);
   end;
+end;
+
+{ C's matcher on S from Start. A match reads S in place, so it cannot collect: when its storage cannot grow without a
+  collection (GrowthRefused), ExecMatchAfterCollecting collects and matches again }
+function ExecMatch(C: PCompiled; var Re: TValue; var S: PStr; Start: Integer; RequireStart: Boolean): Boolean; inline;
+begin
+  Result := C^.M.Exec(StrChars(S), S^.Len, Start, RequireStart);
+  if C^.M.GrowthRefused then Result := ExecMatchAfterCollecting(C, Re, S, Start, RequireStart);
 end;
 
 { UpdateLegacyRegExpStaticProperties / InvalidateLegacyRegExpStaticProperties after a successful match }
@@ -711,7 +616,14 @@ begin
     end;
     RecordLegacy(Re, Sc, S);
     if GS then ObjOf(Re)^.Slots[0] := MkInt(Sc.MatchEnd);
-    if WantArray then Res := MatchArray(Sc, C, S);
+    if WantArray then
+    begin
+      { the array reads the captures from C's matcher while it allocates, and nothing here roots Re (a caller may hold
+        a RegExp nothing else does): C stays while it does }
+      Inc(C^.Pins);
+      Res := MatchArray(Sc, C, S);
+      Dec(C^.Pins);
+    end;
     Exit(True);
   end;
   PushRoot(Re); PushRoot(MkPtr(S));
@@ -924,14 +836,10 @@ end;
 
 { RegExpInitialize's parse: N.init(O, P, F) with P and F strings }
 function N_Init(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var C: PCompiled; Room: Boolean;
+var C: PCompiled;
 begin
   if not GetCompiled(StrToUnicode(StrOf(Args[2])), StrToUnicode(StrOf(Args[3])), C) then Exit(False);
-  Inc(C^.Pins);
-  Room := ReserveRef;
-  Dec(C^.Pins);
-  if not Room then Exit(ThrowMemoryLimit);
-  TakeRef(ObjOf(Args[1]), C);
+  ObjOf(Args[1])^.Native := C;
   Res := VUndefined;
   Result := True;
 end;
@@ -1388,13 +1296,6 @@ begin
   for C in Cache.Values do FreeCompiled(C);
   Cache.Free;
   Compiled := nil;
-  IdleHead := nil;
-  IdleTail := nil;
-  IdleCount := 0;
-  RefObjs := nil;
-  RefEnts := nil;
-  RefCount := 0;
-  RefCharge.Clear;
 end;
 
 procedure RegExpDone;

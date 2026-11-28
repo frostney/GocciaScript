@@ -1732,14 +1732,15 @@ end;
 function TRegexMatcher.Exec(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
 begin
   FGrowthWanted := 0;
-  GrowthRefusedBytes := 0;
   try
     Result := Execute(Chars, Len, Start, RequireStart);
   except
     on EHeapExternalMemoryLimit do
     begin
+      { only RefuseMatchGrowth raises it while a match runs; it is read and cleared here, off the matching path }
       FErr := 6;
       FGrowthWanted := GrowthRefusedBytes;
+      GrowthRefusedBytes := 0;
       Result := False;
     end;
   end;
