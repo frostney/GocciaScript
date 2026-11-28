@@ -36,6 +36,7 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
 - A run with an armed handle runs in the interpreter, as a run with a limit does, so it does not use the JIT.
 - The handle covers the entry only: it has expired by the time `RunTests` or `RunBenchmarks` runs, and a request
   while the entry waits for a nested sandbox run on another thread takes effect only once that run returns.
-- A module evaluation that the run started and an abort cut short, an entry's or its imports', loads again on a later
-  run. A finished one stays, as does a module the run only loaded, such as a source phase import's, with its source
-  object.
+- A module evaluation that the run started and a cancellation cut short, an entry's or its imports', loads again on a
+  later run. A limit's abort instead leaves its error in such a module, so a later import rejects with it, as the
+  engine does for a run that fails. A finished one stays, as does a module the run only loaded, such as a source
+  phase import's, with its source object.

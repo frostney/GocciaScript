@@ -208,3 +208,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0196 — An aborted fetch stops at its next socket poll](0196-an-aborted-fetch-stops-at-its-next-socket-poll.md)
 - [0197 — Engines share an instruction budget through reserves](0197-engines-share-an-instruction-budget-through-reserves.md)
 - [0198 — An abort handle belongs to the next run and expires with it](0198-an-abort-handle-belongs-to-the-next-run.md)
+- [0199 — import.meta and Script imports follow the real path](0199-import-meta-and-script-imports-follow-the-real-path.md)

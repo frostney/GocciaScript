@@ -508,7 +508,7 @@ if not R.Ok then
 
 `FailureText` (`Goccia.CLI.FileEngine`) formats a failed run as `GocciaRunner` prints it, with a code frame.
 
-**Unhandled rejections.** A promise left rejected with no handler (ES2026 §27.2.1.9 HostPromiseRejectionTracker) fails the run only when `FailOnUnhandledRejection` is set; its reason is then the uncaught error. It is off by default, so an embedder that wants the CLI behaviour ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)) sets it, as `GocciaRunner`, `GocciaREPL` and `TGocciaSandboxHost` do. What a run left rejected is cleared with it, so the next run on the engine is not blamed.
+**Unhandled rejections.** A promise left rejected with no handler (ES2026 §27.2.1.9 HostPromiseRejectionTracker) fails the run only when `FailOnUnhandledRejection` is set; its reason is then the uncaught error. It is off by default, so an embedder that wants the CLI behaviour ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)) sets it, as `GocciaRunner`, `GocciaREPL` and `TGocciaSandboxHost` do. What a run left rejected is cleared with it, so the next run on the engine is not blamed; a run that fails also takes its other pending work with it ([Execution Limits](#execution-limits)).
 
 **Host exceptions.** Pascal exceptions can still reach the host from host-level failures, such as a constructor that cannot build the engine (see [Building an Embedding](#building-an-embedding)).
 
@@ -516,7 +516,9 @@ if not R.Ok then
 
 Four limits bound a run. Each is a property read by `Run`; 0 means none (`MaxMemory` 0: the default ceiling). A run with a timeout, an instruction budget or a frame bound runs without the JIT, since compiled code counts no instructions and reaches the timeout's interrupt only at loop back edges, and so does a run with `Coverage` or a profile; the memory limit leaves the JIT on.
 
-When `Run` or `RunArtifact` returns an `Aborted` reason, the engine discards queued jobs, timers, finalization work and asynchronous waits. It stops waiting for outstanding fetches and drops their completions. A request already dispatched may finish on its worker. Globals and changes made before the abort remain visible to later runs on the same engine.
+When `Run` or `RunArtifact` returns an `Aborted` reason, or fails with an uncaught exception, the engine discards the work pending when the run ends, including work the host queued before it: queued jobs, timers and intervals, finalization work, asynchronous waits and [asynchronous host work](#asynchronous-host-work). It stops waiting for outstanding fetches and drops their completions. A request already dispatched may finish on its worker. A module whose asynchronous evaluation the run started and did not finish records the abort's error, or the uncaught value, as its evaluation error, so a later import rejects with it as it would had the module thrown (ES2026 §16.2.1.6.1.3.5 AsyncModuleExecutionRejected). A module evaluation the abort handle's cancellation cut short is the exception: it loads again on a later run ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread)). `InjectModuleGlobals`, `RunTests` and `RunBenchmarks` discard the same work when they fail or abort; a module their failure leaves unfinished records the error they failed with, and their `Err` is the limit's message after an abort. Globals and changes made before the failure remain visible to later runs on the same engine. A nested sandbox run (`runScript`) runs on an engine of its own, so a child that fails leaves its caller's work alone.
+
+`ErrorMessage` of an aborted run is the limit's error (`Error: Execution timed out after 2000ms`), wherever in the run the limit was met, and `ErrorName` and `ErrorText` give its name and message.
 
 ```pascal
 Engine.TimeoutMs := 2000;
@@ -550,8 +552,8 @@ On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArt
 A request during execution ends it past guest handlers with `Aborted = gaHostAbort`, even when a native function
 that made the request returns an error. The engine interrupts its fetch and Atomics waits, then discards pending guest
 work under the same rules as a timeout. A module evaluation that the run started and the request cut short loads
-again on a later run. A module the run only loaded, such as a source phase import's, stays, and so does its source
-object. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
+again on a later run, where a limit's abort leaves the limit's error in it instead. A module the run only loaded, such
+as a source phase import's, stays, and so does its source object. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
 
 The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
 Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do
