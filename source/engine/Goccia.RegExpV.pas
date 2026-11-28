@@ -12,9 +12,6 @@ interface
 uses
   SysUtils, Math, Generics.Collections, Goccia.Core, Goccia.VM;
 
-const
-  okRegExp = 17;
-
 procedure InitRegExp;
 { the spec layer in prelude/regexp.js: after every other built-in }
 procedure InitRegExpPrelude;
@@ -34,8 +31,12 @@ uses
 type
   PCompiled = ^TCompiled;
   TCompiled = record
+    { first: the last major collection that found a RegExp using it (Goccia.Core's ScanCell sets it, okRegExp) }
+    LiveMajor: Integer;
+    { native code using it with no RegExp to keep it (a string pattern's search, a RegExp being made) }
+    Pins: Integer;
     Charge: THeapExternalCharge;
-    Pattern, Flags: UnicodeString;
+    Key, Pattern, Flags: UnicodeString;
     Global, Sticky, IgnoreCase, Multiline, Unicode, DotAll, HasIndices: Boolean;
     M: TRegexMatcher;   { one per compiled pattern: a match leaves its captures here until the next one }
   end;
@@ -59,6 +60,29 @@ begin
   Dispose(C);
 end;
 
+{ after a major collection, which set LiveMajor in the pattern of every RegExp it found alive: frees the patterns no
+  RegExp uses, with their charges, unless native code is using one (Pins). A refusal runs a major collection before it
+  gives up, so a pattern nothing uses does not hold the memory limit (it allocates nothing on the heap) }
+procedure RegExpFinalizeHook;
+var Unused: array of PCompiled; C: PCompiled; N, I, Major: Integer;
+begin
+  if GCInMinor or (Compiled = nil) then Exit;
+  Major := GCMajorCount;
+  N := 0;
+  SetLength(Unused, Compiled.Count);
+  for C in Compiled.Values do
+    if (C^.LiveMajor <> Major) and (C^.Pins = 0) then
+    begin
+      Unused[N] := C;
+      Inc(N);
+    end;
+  for I := 0 to N - 1 do
+  begin
+    Compiled.Remove(Unused[I]^.Key);
+    FreeCompiled(Unused[I]);
+  end;
+end;
+
 { the compiled pattern (cached), or False with the SyntaxError's message in Msg }
 function TryCompile(const Pattern, Flags: UnicodeString; var C: PCompiled; var Msg: UnicodeString): Boolean;
 var Key: UnicodeString; Entry: PCompiled; Prog: TRegExpProgram; TextBytes: Int64;
@@ -70,6 +94,8 @@ begin
   New(Entry);
   Entry^.M := nil;
   Entry^.Charge := Default(THeapExternalCharge);
+  Entry^.LiveMajor := 0;
+  Entry^.Pins := 0;
   try
     { The cache owns both the lookup key and the separately stored pattern and flags. }
     if not Entry^.Charge.TryGrow(SizeOf(TCompiled) + TextBytes * 2 + SizeOf(WideChar)) then
@@ -88,6 +114,7 @@ begin
     end;
     if not Entry^.Charge.TryGrow(RegExpProgramBytes(Prog)) then
       raise EHeapExternalMemoryLimit.Create(SErrorMemoryLimitExceeded);
+    Entry^.Key := Key;
     Entry^.Pattern := Pattern;
     Entry^.Flags := Flags;
     Entry^.Global := Pos('g', Flags) > 0;
@@ -101,6 +128,7 @@ begin
     { The matcher owns its code and outer class table. Only their nested data are still shared. }
     Entry^.Charge.Release(Int64(Length(Prog.Code)) * SizeOf(UInt32) +
       Int64(Length(Prog.CharClasses)) * SizeOf(TRegExpCharClass));
+    { until a RegExp uses it, a major collection may free it once the caller is done with it }
     Compiled.Add(Key, Entry);
     C := Entry;
     Entry := nil;
@@ -152,19 +180,22 @@ begin
   Result := '';
 end;
 
-function NewRegExpObject(C: PCompiled): TValue;
+{ a RegExp object with C: C is pinned while the object is made, as no RegExp uses it until then }
+function NewRegExpObject(C: PCompiled; var Res: TValue): Boolean;
 begin
-  Result := AllocRegExp(RegExpProto);
-  ObjOf(Result)^.Native := C;
-  ObjOf(Result)^.Slots[0] := MkInt(0);
+  Inc(C^.Pins);
+  Res := AllocRegExp(RegExpProto);
+  Dec(C^.Pins);
+  ObjOf(Res)^.Native := C;
+  ObjOf(Res)^.Slots[0] := MkInt(0);
+  Result := True;
 end;
 
 function CreateRegExp(Pattern, Flags: PStr; var Res: TValue): Boolean;
 var C: PCompiled;
 begin
   if not GetCompiled(StrToUnicode(Pattern), StrToUnicode(Flags), C) then Exit(False);
-  Res := NewRegExpObject(C);
-  Result := True;
+  Result := NewRegExpObject(C, Res);
 end;
 
 { an initialized RegExp: [[RegExpMatcher]] set }
@@ -215,6 +246,41 @@ begin
   if Sc.StackExhausted then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   if Sc.MemoryExhausted then Exit(ThrowMemoryLimit);
   Result := ThrowError('Error', Sc.ErrorMessage);
+end;
+
+{ ExecMatch's retries: the match stopped because its storage could not grow without a collection. This collects for
+  what it asked, with Re and S rooted and read back (a collection moves what was in the nursery) and C pinned, and
+  matches again. Each retry gets further than the last; a refusal the collection made no room for leaves the matcher
+  Failed with MemoryExhausted, for MatchFailed }
+function ExecMatchAfterCollecting(C: PCompiled; var Re: TValue; var S: PStr; Start: Integer;
+  RequireStart: Boolean): Boolean;
+var Sc: TRegexMatcher; Wanted: Int64; Room: Boolean;
+begin
+  Sc := C^.M;
+  Result := False;
+  Wanted := 0;
+  while Sc.GrowthRefused and (Sc.GrowthWanted > Wanted) do
+  begin
+    Wanted := Sc.GrowthWanted;
+    Inc(C^.Pins);
+    PushRoot(Re);
+    PushRoot(MkPtr(S));
+    Room := HeapReserve(Wanted);
+    S := StrOf(RootAt(TempTop - 1));
+    Re := RootAt(TempTop - 2);
+    PopRoots(2);
+    Dec(C^.Pins);
+    if not Room then Exit(False);
+    Result := Sc.Exec(StrChars(S), S^.Len, Start, RequireStart);
+  end;
+end;
+
+{ C's matcher on S from Start. A match reads S in place, so it cannot collect: when its storage cannot grow without a
+  collection (GrowthRefused), ExecMatchAfterCollecting collects and matches again }
+function ExecMatch(C: PCompiled; var Re: TValue; var S: PStr; Start: Integer; RequireStart: Boolean): Boolean; inline;
+begin
+  Result := C^.M.Exec(StrChars(S), S^.Len, Start, RequireStart);
+  if C^.M.GrowthRefused then Result := ExecMatchAfterCollecting(C, Re, S, Start, RequireStart);
 end;
 
 { UpdateLegacyRegExpStaticProperties / InvalidateLegacyRegExpStaticProperties after a successful match }
@@ -530,7 +596,8 @@ begin
   C := CompiledOf(Re);
   if (ObjOf(Re)^.Shape = RegExpShape) and IsInt(ObjOf(Re)^.Slots[0]) then
   begin
-    { an integer own lastIndex: read and written in place, no code runs, so nothing needs a root }
+    { an integer own lastIndex: read and written in place, and no code runs; ExecMatch roots Re and S across the
+      collection a match's growth may need and reads them back }
     GS := C^.Global or C^.Sticky;
     if GS then
     begin
@@ -540,7 +607,7 @@ begin
     end
     else LI := 0;
     Sc := C^.M;
-    Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
+    Matched := ExecMatch(C, Re, S, LI, C^.Sticky);
     if Sc.Failed then Exit(MatchFailed(Sc));
     if not Matched then
     begin
@@ -549,7 +616,14 @@ begin
     end;
     RecordLegacy(Re, Sc, S);
     if GS then ObjOf(Re)^.Slots[0] := MkInt(Sc.MatchEnd);
-    if WantArray then Res := MatchArray(Sc, C, S);
+    if WantArray then
+    begin
+      { the array reads the captures from C's matcher while it allocates, and nothing here roots Re (a caller may hold
+        a RegExp nothing else does): C stays while it does }
+      Inc(C^.Pins);
+      Res := MatchArray(Sc, C, S);
+      Dec(C^.Pins);
+    end;
     Exit(True);
   end;
   PushRoot(Re); PushRoot(MkPtr(S));
@@ -565,7 +639,7 @@ begin
     Exit(True);
   end;
   Sc := C^.M;
-  Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
+  Matched := ExecMatch(C, Re, S, LI, C^.Sticky);
   if Sc.Failed then begin PopRoots(2); Exit(MatchFailed(Sc)); end;
   if not Matched then
   begin
@@ -713,8 +787,7 @@ begin
     if P = VUndefined then PS := '' else PS := StrToUnicode(StrOf(P));
     if F = VUndefined then FS := '' else FS := StrToUnicode(StrOf(F));
     if not GetCompiled(PS, FS, C) then Exit(False);
-    Res := NewRegExpObject(C);
-    Exit(True);
+    Exit(NewRegExpObject(C, Res));
   end;
   NT := CurNewTarget;
   CA[0] := P; CA[1] := F; CA[2] := NT;
@@ -813,7 +886,7 @@ begin
   while St <= S^.Len do
   begin
     Sc := C^.M;
-    Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
+    Ok := ExecMatch(C, Args[1], S, St, C^.Sticky);
     if Sc.Failed then
     begin
       PopRoots(1);
@@ -845,7 +918,7 @@ begin
     if Arg(Args, Argc, 1) = VUndefined then PS := ''
     else begin if not ToStringV(Args[1], V) then Exit(False); PS := StrToUnicode(StrOf(V)); end;
     if not GetCompiled(PS, '', C) then Exit(False);
-    V := NewRegExpObject(C);
+    if not NewRegExpObject(C, V) then Exit(False);
     if Argc < 1 then Exit(BuiltinExec(V, StrOf(Args[0]), True, Res, M));
     Args[1] := V;   { a stack slot: it keeps the new RegExp rooted }
   end
@@ -876,7 +949,8 @@ begin
   { lastIndex is set to 0 for the search and back afterwards: unchanged }
   S := StrOf(Args[0]);
   Sc := C^.M;
-  Ok := Sc.Exec(StrChars(S), S^.Len, 0, C^.Sticky);
+  V := VUndefined;
+  Ok := ExecMatch(C, V, S, 0, C^.Sticky);
   if Sc.Failed then Exit(MatchFailed(Sc));
   if Ok then
   begin
@@ -1021,7 +1095,7 @@ begin
   begin
     S := StrOf(Args[0]);
     Sc := C^.M;
-    Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
+    Ok := ExecMatch(C, Args[1], S, St, C^.Sticky);
     if Sc.Failed then
     begin
       { a global search: the spec's loop has set lastIndex to where this attempt starts, and the attempt that
@@ -1172,7 +1246,7 @@ begin
   if S^.Len = 0 then
   begin
     Sc := C^.M;
-    Ok := Sc.Exec(StrChars(S), S^.Len, 0, True);
+    Ok := ExecMatch(C, Args[1], S, 0, True);
     if Sc.Failed then begin PopRoots(1); Exit(MatchFailed(Sc)); end;
     if Ok then RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
     if not Ok then ArrayPush(ObjOf(RootAt(TempTop - 1)), Args[0]);
@@ -1185,7 +1259,7 @@ begin
   begin
     S := StrOf(Args[0]);
     Sc := C^.M;
-    Ok := Sc.Exec(StrChars(S), S^.Len, Q, True);
+    Ok := ExecMatch(C, Args[1], S, Q, True);
     if Sc.Failed then begin PopRoots(1); Exit(MatchFailed(Sc)); end;
     if not Ok then begin Q := NextIndex(S, Q, C^.Unicode); Continue; end;
     RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
@@ -1250,6 +1324,7 @@ begin
       state were that engine's) }
     FreeCompiledPatterns;
     Compiled := TDictionary<UnicodeString, PCompiled>.Create;
+    AddGCFinalizeHook(@RegExpFinalizeHook);
     RegExpShape := nil;
     MatchShape := nil;
     IntactShape := nil;

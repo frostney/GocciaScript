@@ -24,7 +24,7 @@ immediates, and only a value tagged as a pointer refers to a cell ([Engine desig
 | Old space, small | Cells of up to 16,384 bytes, rounded up to one of 22 size classes, in 256 KiB pages per class | Marked and swept by a major collection; a freed cell goes on its class's free list |
 | Old space, large | Cells over 16,384 bytes, each its own block | Marked and swept; a dead one is freed at once |
 | Permanent | Atoms (interned property keys), key atoms (symbol keys, private names, engine slots), symbols and a few engine-owned cells (`cfPermanent`) | Never collected; freed with the heap. Charged against the [memory ceiling](#memory-ceiling) |
-| Outside the heap | Shapes, function templates and bytecode, the atom table, WeakMap and WeakSet tables, SharedArrayBuffer blocks | Owned by their units; shapes are retired by a major collection ([below](#prototypes-and-shapes)) and charged against the ceiling while they live |
+| Outside the heap | Shapes, function templates and bytecode, the atom table, WeakMap and WeakSet tables, SharedArrayBuffer blocks, compiled RegExp patterns | Owned by their units; shapes and the patterns no RegExp uses are freed by a major collection ([below](#prototypes-and-shapes), [Memory Ceiling](#memory-ceiling)), and both are charged against the ceiling while they live |
 
 The default nursery is 8 MiB (`EngineNurseryBytes`, used by `EngineInit` and so by `TGocciaEngine`). A cell larger than
 1/16 of the nursery is allocated directly in old space (`AllocOld`): a large temporary such as a long concatenation
@@ -221,8 +221,12 @@ allocation.
 For storage outside the collector, `THeapExternalCharge.TryGrow` reserves and records bytes against the owning
 engine. Release the charge when freeing the storage. This includes failed construction and replacement of a buffer.
 RegExp uses preflight checks for compiler and optimizer workspace and keeps charges for the resulting program and
-matcher while the compiled pattern is cached. Matcher growth uses the non-collecting check while it reads the
-subject through a raw pointer.
+matcher while the compiled pattern is cached. A pattern stays cached while a RegExp uses it: a major collection
+marks the pattern of each RegExp it finds alive, as it marks a dictionary shape, and then frees the patterns it left
+unmarked, with their charges. A refusal runs a major collection before it gives up. Native code that uses a pattern
+no RegExp holds, such as a string pattern's `search`, pins it for as long as it may collect. Matcher growth uses the
+non-collecting check while it reads the subject through a raw pointer. A refusal stops the match, and the caller
+collects for the bytes it asked for, with the subject and the RegExp rooted, then matches again.
 
 **What the ceiling does not bound.** It bounds the collected heap and the charged bytes, not resident memory.
 Function templates, bytecode, the WeakMap and WeakSet tables, the parser's AST, the native allocator's free blocks and

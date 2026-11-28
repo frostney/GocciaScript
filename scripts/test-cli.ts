@@ -2061,8 +2061,8 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
   const pattern = "a".repeat(32 * 1024);
   const expressions = {
     control: `pattern === ${JSON.stringify(pattern)}`,
-    constructor: "new RegExp(pattern).test(pattern)",
-    literal: `/${pattern}/.test(pattern)`,
+    constructor: "new RegExp(pattern)",
+    literal: `/${pattern}/`,
   };
   try {
     const path = join(dir, "regexp.js");
@@ -2087,16 +2087,19 @@ console.log('fits', lo);
     const fits = Number(/^fits (\d+)$/m.exec(controlOut)?.[1]);
     if (control.exitCode !== 0 || !Number.isFinite(fits) || fits <= 0)
       throw new Error(`The control run should measure the room left: ${controlOut}`);
-    // A buffer that fits without a compiled RegExp is refused while one is
-    // cached, before its bytes are committed.
-    for (const [name, match] of Object.entries(expressions)) {
+    // A buffer that fits without a compiled RegExp is refused while a live
+    // RegExp keeps one cached, before its bytes are committed. (A RegExp the
+    // script dropped frees its pattern at the next major collection:
+    // tests/built-ins/Goccia/gc/native-memory/regexp-patterns.js.)
+    for (const [name, regexp] of Object.entries(expressions)) {
       if (name === "control") continue;
       writeFileSync(path, `
 const pattern = ${JSON.stringify(pattern)};
-if (!(${match})) throw new Error('expected a match');
+const re = ${regexp};
+if (!re.test(pattern)) throw new Error('expected a match');
 Goccia.gc();
 new ArrayBuffer(${fits});
-console.log('buffer allocated');
+console.log('buffer allocated', re.source.length);
 `);
       const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
       if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
@@ -2132,6 +2135,33 @@ console.log(padding.byteLength);
         throw new Error(`RegExp ${name} should report a memory-limit RangeError: ${run.output}`);
       assertPeakRssBelow(run, `RegExp ${name} workspace refusal`, 40 * 1024 * 1024);
     }
+  } finally {
+    clean(dir);
+  }
+}
+
+console.log("--max-memory (a match's storage collects garbage before it is refused)...");
+{
+  // The heap is full of dead arrays when the match starts. A match reads its
+  // subject in place and cannot collect, so its backtracking storage stops
+  // the match, the engine collects, and the match runs again. Measured at
+  // 8 MiB: without the collection the match is refused from 35,000 repetitions
+  // up to 80,000; with it, it matches up to 60,000.
+  const dir = mkdtemp("goccia-regexp-growth-");
+  try {
+    const path = join(dir, "growth.js");
+    writeFileSync(path, `
+const subject = "ab".repeat(45000);
+const re = /^(a|ab)*$/;
+let keep = null;
+for (const i of Array.from({ length: 300 }, (_, k) => k)) keep = new Array(4000).fill(i);
+keep = null;
+console.log(re.test(subject));
+`);
+    const run = Bun.spawnSync([RUNNER, "--max-memory=8MiB", "--timeout=20000", path], { stdout: "pipe", stderr: "pipe" });
+    const output = run.stdout.toString() + run.stderr.toString();
+    if (run.exitCode !== 0 || !/^true$/m.test(output))
+      throw new Error(`A match on a heap full of garbage should collect and match: exit ${run.exitCode}: ${output}`);
   } finally {
     clean(dir);
   }
