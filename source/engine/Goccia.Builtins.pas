@@ -2079,27 +2079,32 @@ var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not StrArg(Args, Argc, 1, Pat) then Exit(False);
-  T := StrToUnicode(StrOf(Args[0]));
-  P := StrToUnicode(Pat);
-  F := Arg(Args, Argc, 2);
-  Functional := IsCallable(F);
-  R := '';
+  Functional := IsCallable(Arg(Args, Argc, 2));
   PushRoot(MkPtr(Pat));
+  Rep := nil;
   if not Functional then
   begin
     if not StrArg(Args, Argc, 2, Rep) then begin PopRoots(1); Exit(False); end;
-    R := StrToUnicode(Rep);
   end;
+  if Rep <> nil then PushRoot(MkPtr(Rep)) else PushRoot(VUndefined);
   { the copies of the subject, pattern and replacement, and the match positions, are outside the heap: charged
-    against the memory limit as they are made, after a collection when they do not fit (the pattern stays rooted) }
+    against the memory limit before they are made, after a collection when they do not fit (the pattern and the
+    replacement stay rooted), once the replacement's conversion, which can run the script, is done }
   Charge := Default(THeapExternalCharge);
   Charged := 0;
-  if not Charge.TryGrow((Int64(Length(T)) + Length(P) + Length(R)) * SizeOf(WideChar)) then
+  Grown := Int64(StrOf(Args[0])^.Len) + StrOf(RootAt(TempTop - 2))^.Len;
+  if Rep <> nil then Inc(Grown, Rep^.Len);
+  if not Charge.TryGrow(Grown * SizeOf(WideChar)) then
   begin
-    PopRoots(1);
-    T := ''; R := '';
+    PopRoots(2);
     Exit(ThrowMemoryLimit);
   end;
+  T := StrToUnicode(StrOf(Args[0]));
+  P := StrToUnicode(StrOf(RootAt(TempTop - 2)));
+  if Rep <> nil then R := StrToUnicode(StrOf(RootAt(TempTop - 1))) else R := '';
+  PopRoots(1);
+  { the callback, read from its argument slot: the reservation above can collect }
+  F := Arg(Args, Argc, 2);
   { the match positions, 0-based }
   N := 0;
   SetLength(Positions, 0);

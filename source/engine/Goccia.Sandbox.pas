@@ -651,7 +651,7 @@ begin
   try
     Found := SandboxGrep(Box.Fs, Files, Opt);
   except
-    on E: ENativeMemoryLimit do Exit(ThrowError('RangeError', E.Message));
+    on E: ENativeMemoryLimit do Exit(ThrowMemoryLimit(E.Message));
     on E: ESandboxGrepPatternError do Exit(ThrowError('SyntaxError', E.Message));
     on E: ERegExpStackExhausted do Exit(ThrowError('RangeError', E.Message));
     on E: ERegExpRuntimeError do Exit(ThrowError('Error', E.Message));

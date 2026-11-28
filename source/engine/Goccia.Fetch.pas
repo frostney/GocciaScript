@@ -690,6 +690,8 @@ begin
     begin
       PushRoot(MakeError(RangeErrorProto,
         'Allocation failed: GC heap size exceeds the configured memory limit'));
+      { the suggestion every early refusal carries (ThrowMemoryLimit's) }
+      SetErrorHostSuggestion(RootAt(TempTop - 1), SSuggestMemoryLimitExceeded);
       Exit(Settle([MkInt(P.Id), MkInt(1), RootAt(TempTop - 1)]));
     end;
     PushRoot(MkPtr(NewArray(0, Length(W.Response.Headers))));
