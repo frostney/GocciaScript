@@ -20,7 +20,7 @@ When your change affects behavior visible to users or contributors, update the r
 | New language feature | [docs/language.md](docs/language.md) + [docs/built-ins.md](docs/built-ins.md) if it adds API surface |
 | New built-in type | [docs/built-ins.md](docs/built-ins.md) + follow the [Adding Built-in Types](docs/adding-built-in-types.md) checklist |
 | Architecture change | The relevant `docs/` file ([architecture.md](docs/architecture.md), [bytecode-vm.md](docs/bytecode-vm.md), [core-patterns.md](docs/core-patterns.md), etc.) |
-| New design decision | ADR under [docs/adr/](docs/adr/) |
+| New design decision | ADR under [docs/adr/](docs/adr/), its number taken with `npx tsx scripts/adr.ts new "<title>"` ([Numbering](docs/adr/README.md#numbering)) |
 | User-facing feature | [README.md](README.md) |
 | Workflow or style change | The relevant file under [docs/contributing/](docs/contributing/) |
 

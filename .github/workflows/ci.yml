@@ -147,6 +147,12 @@ jobs:
       - name: Check hand-typed conformance claims
         run: npx tsx scripts/check-conformance-claims.ts
 
+      - name: Self-test ADR numbering
+        run: npx tsx scripts/adr.ts --self-test
+
+      - name: Check ADR numbers
+        run: npx tsx scripts/adr.ts check
+
   test-structure:
     runs-on: ubuntu-latest
     steps:
