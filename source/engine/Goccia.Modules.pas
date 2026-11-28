@@ -2541,12 +2541,14 @@ begin
   for I := Mark to Mods.Count - 1 do
   begin
     M := Mods[I];
-    if M.Errored or not (M.Status in [msNew, msEvaluated]) or ((M.Status = msNew) and (M.RequestsState = 1)) then
-      M.Superseded := True;
+    { msLinked: linked but never started (an import.defer namespace nobody read), so it stays as a loaded one does }
+    if M.Errored or not (M.Status in [msNew, msLinked, msEvaluated]) or ((M.Status = msNew) and (M.RequestsState = 1))
+    then M.Superseded := True;
   end;
   { what this call superseded, and what follows from it until neither rule adds a record: a record only loaded (a
-    source phase import's) ran nothing, so it stays, and with it the identity of its source, unless a record it links
-    went; a cycle member that finished but waits on a cycle root that went (an async cycle the abort left) goes too.
+    source phase import's) or linked and never started ran nothing, so it stays, and with it the identity of its
+    source, unless a record it links went; a cycle member that finished but waits on a cycle root that went (an async
+    cycle the abort left) goes too.
     A root superseded before, by a file that changed (ADR 0139), keeps its members. }
   Fresh := TList<TModRec>.Create;
   try
@@ -2559,9 +2561,11 @@ begin
         M := Mods[I];
         if M.Superseded then Continue;
         if (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then M.Superseded := True
-        else if (I >= Mark) and (M.Status = msNew) then
+        else if (I >= Mark) and (M.Status in [msNew, msLinked]) then
+          { a record this recovery superseded: one an ordinary reload superseded before (a changed file) is not the
+            abort's }
           for D in M.Deps do
-            if (D <> nil) and D.Superseded then
+            if (D <> nil) and Fresh.Contains(D) then
             begin
               M.Superseded := True;
               Break;

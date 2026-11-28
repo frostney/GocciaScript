@@ -552,6 +552,8 @@ begin
   Result := True;
   while AsyncPending > 0 do
   begin
+    { a host's cancellation before the poll's charge: a budget spent by the entry is not the limit that ended it }
+    if (Interrupt <> 0) and RunAbortRequested then Exit(AbortInterrupted);
     if (Interrupt <> 0) and not PollInterrupt then Exit(False);
     Now_ := GetTickCount64;
     Next := High(QWord);
@@ -563,6 +565,8 @@ begin
     Remaining := LimitRemainingMs;
     if (Remaining > 0) and (Remaining < Wait) then Wait := Remaining;
     Done := SharedAsyncPoll(Wait, @WaitForRunEvent);
+    { a host's cancellation before the poll's charge: a budget spent by the entry is not the limit that ended it }
+    if (Interrupt <> 0) and RunAbortRequested then Exit(AbortInterrupted);
     if (Interrupt <> 0) and not PollInterrupt then Exit(False);
     for I := 0 to High(Done) do SettleAsync(Done[I], 'ok');
     Now_ := GetTickCount64;

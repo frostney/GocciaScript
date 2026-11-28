@@ -552,8 +552,10 @@ On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArt
 A request during execution ends it past guest handlers with `Aborted = gaHostAbort`, even when a native function
 that made the request returns an error. The engine interrupts its fetch and Atomics waits, then discards pending guest
 work under the same rules as a timeout. A module evaluation that the run started and the request cut short loads
-again on a later run, where a limit's abort leaves the limit's error in it instead. A module the run only loaded, such
-as a source phase import's, stays, and so does its source object. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
+again on a later run, where a limit's abort leaves the limit's error in it instead. A module the run only loaded or
+linked without starting it, such as a source phase import's or an unread `import.defer` namespace's, stays, and so
+does its source object, unless a module it links loads again; a finished cycle member whose cycle root loads again
+does too. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
 
 The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
 Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do

@@ -75,6 +75,17 @@ var
   AbortAtTop, AbortInTimeZone: Boolean;
   TimeZoneCalls: Integer;
 
+var
+  TouchPath: string;
+
+{ marks TouchPath modified two seconds ahead, so the next import of it loads it again (ADR 0139) }
+function TouchModule(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
+begin
+  FileSetDate(TouchPath, DateTimeToFileDate(Now + 2 / SecsPerDay));
+  AResult := VUndefined;
+  Result := True;
+end;
+
 { waits on an event nobody sets, through WaitForRunEvent, for longer than CheckActiveAbort allows: only the abort
   handle's wake ends the wait in time, not a polling interval of the code that waits }
 function WaitForRunEventNative(AArgs: PValue; AArgc: Integer; var AResult: TValue): Boolean;
@@ -138,6 +149,7 @@ begin
     InjectGlobalBinding('requestAbortAndThrow', NewNativeFunction(@RequestAbortAndThrow, 'requestAbortAndThrow', 0)) and
     InjectGlobalBinding('markEntered', NewNativeFunction(@MarkEntered, 'markEntered', 0)) and
     InjectGlobalBinding('waitForRunEvent', NewNativeFunction(@WaitForRunEventNative, 'waitForRunEvent', 0)) and
+    InjectGlobalBinding('touchModule', NewNativeFunction(@TouchModule, 'touchModule', 0)) and
     InjectGlobalBinding('requestAbortAtTop', NewNativeFunction(@RequestAbortAtTop, 'requestAbortAtTop', 0)) and
     InjectGlobalBinding('requestAbortInTimeZone',
       NewNativeFunction(@RequestAbortInTimeZone, 'requestAbortInTimeZone', 0)), 'could not install abort natives');
@@ -220,6 +232,44 @@ begin
   end;
 end;
 
+{ A request that wakes an Atomics.waitAsync wait whose entry spent exactly its instruction budget: the run is
+  cancelled, not ended at the limit, since no charge failed before the request. The budgets rise from 1: while the
+  run ends at the limit before any request, the entry did not fit; the first one that waits is the entry's cost. }
+procedure CheckCancelAtSpentBudget;
+const
+  Source = 'Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0); console.log("ready");';
+var
+  Engine: TGocciaEngine;
+  Requester: TAbortRequester;
+  RunResult: TGocciaRunResult;
+  Budget: Integer;
+  Requested: Boolean;
+begin
+  for Budget := 1 to 1000 do
+  begin
+    Engine := TGocciaEngine.Create;
+    try
+      Engine.MaxInstructions := Budget;
+      Requester := TAbortRequester.Create(Engine.CaptureAbortHandle);
+      try
+        Engine.OnConsole := Requester.Console;
+        RunResult := Engine.Run('spent-budget.js', Source);
+        Requested := Requester.RequestedAt <> 0;
+      finally
+        Engine.OnConsole := nil;
+        Requester.Free;
+      end;
+    finally
+      Engine.Free;
+    end;
+    if (RunResult.Aborted = gaInstructionLimit) and not Requested then Continue;
+    Check(RunResult.Aborted = gaHostAbort, 'a request at a spent budget ended the run as ' +
+      IntToStr(Ord(RunResult.Aborted)) + ' (budget ' + IntToStr(Budget) + '): ' + RunResult.ErrorMessage);
+    Exit;
+  end;
+  Check(False, 'no budget let the entry finish');
+end;
+
 { A module the cancellation interrupted evaluates again when the same path runs next, as do its imports. }
 procedure CheckCancelledModuleReloads;
 var
@@ -281,6 +331,36 @@ begin
     Check(RunResult.Ok and (RunResult.ResultText = '3'),
       'a record linking a cancelled cycle''s member did not evaluate again: ' + RunResult.ResultText +
       RunResult.ErrorMessage);
+    { a module the cancelled run linked but never started (an import.defer namespace nobody read) stays: reading the
+      saved namespace and importing the unchanged file evaluate it once }
+    WriteModule(Directory, 'deferred.mjs', 'globalThis.deferredRuns = (globalThis.deferredRuns ?? 0) + 1; ' +
+      'export const value = 5;');
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'deferred-entry.mjs',
+      'globalThis.deferred = await import.defer("./deferred.mjs"); requestAbort(); markEntered(); 1;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the deferred run was not cancelled: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'deferred-check.mjs',
+      'const read = globalThis.deferred.value; const { value } = await import("./deferred.mjs"); ' +
+      '`${read} ${value} runs=${globalThis.deferredRuns}`;');
+    Check(RunResult.Ok and (RunResult.ResultText = '5 5 runs=1'),
+      'a linked module the cancelled run never started ran twice: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    { a loaded-only record whose dependency an ordinary reload replaced (its file changed) earlier in the cancelled
+      run keeps its source object: that dependency did not go with the cancellation }
+    WriteModule(Directory, 'reloaded-dep.mjs', 'export const dep = 1;');
+    WriteModule(Directory, 'reloaded-source.mjs', 'import { dep } from "./reloaded-dep.mjs"; export const value = dep;');
+    TouchPath := Directory + PathDelim + 'reloaded-dep.mjs';
+    CurrentAbort := AEngine.CaptureAbortHandle;
+    RunResult := AEngine.Run(Directory + PathDelim + 'reloaded-entry.mjs',
+      'globalThis.reloadedSource = await import.source("./reloaded-source.mjs"); touchModule(); ' +
+      'await import("./reloaded-dep.mjs"); requestAbort(); markEntered(); 1;');
+    CurrentAbort := nil;
+    Check(RunResult.Aborted = gaHostAbort, 'the reload run was not cancelled: ' + RunResult.ErrorMessage);
+    RunResult := AEngine.Run(Directory + PathDelim + 'reloaded-check.mjs',
+      '(await import.source("./reloaded-source.mjs")) === globalThis.reloadedSource;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true'),
+      'a cancellation dropped a source whose dependency an ordinary reload replaced: ' + RunResult.ResultText +
+      RunResult.ErrorMessage);
   finally
     CurrentAbort := nil;
     AEngine.Free;
@@ -290,6 +370,9 @@ begin
     DeleteFile(Directory + PathDelim + 'cycle-a.mjs');
     DeleteFile(Directory + PathDelim + 'cycle-b.mjs');
     DeleteFile(Directory + PathDelim + 'cycle-c.mjs');
+    DeleteFile(Directory + PathDelim + 'deferred.mjs');
+    DeleteFile(Directory + PathDelim + 'reloaded-dep.mjs');
+    DeleteFile(Directory + PathDelim + 'reloaded-source.mjs');
     RemoveDir(Directory);
   end;
 end;
@@ -487,5 +570,6 @@ begin
   Handle.Request;
   CheckProviderAbort;
   CheckCancelledModuleReloads;
+  CheckCancelAtSpentBudget;
   WriteLn('Host run abort tests passed');
 end.

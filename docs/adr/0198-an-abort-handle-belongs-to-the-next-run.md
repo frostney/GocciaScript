@@ -38,5 +38,7 @@ when that run starts and expires when it ends.** There is no `ClearAbort`.
   while the entry waits for a nested sandbox run on another thread takes effect only once that run returns.
 - A module evaluation that the run started and a cancellation cut short, an entry's or its imports', loads again on a
   later run. A limit's abort instead leaves its error in such a module, so a later import rejects with it, as the
-  engine does for a run that fails. A finished one stays, as does a module the run only loaded, such as a source
-  phase import's, with its source object.
+  engine does for a run that fails. A finished one stays unless it is a cycle member whose cycle root went. A module
+  the run only loaded or linked without starting it, such as a source phase import's or an unread `import.defer`
+  namespace's, stays with its source object, unless a module it links went. The recovery covers the module records
+  the run created; a record from an earlier run that the cancelled run started evaluating is #2254.
