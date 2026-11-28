@@ -46,7 +46,15 @@ const
     script parse) is far past the bound, and few enough that the linear
     parse takes a fraction of a second. }
   DECLARATION_COUNT = 10000;
-  TRIALS = 3;
+  { Pairs of a script parse and a module parse run back to back. A slow
+    spell on a shared machine slows both parses of a pair it covers, and
+    only a pair it starts or ends in can come out skewed. A quadratic pass
+    puts every pair far past the bound, unless a pause slows that pair's
+    script parse as much, so the check passes once two pairs are within it:
+    up to four skewed pairs pass, and a quadratic pass needs two such
+    pauses to hide. }
+  TRIAL_PAIRS = 6;
+  LINEAR_PAIRS = 2;
   { The module parse does the script parse's work plus one pass over the
     declarations, so it stays close to the script parse; the slack absorbs
     a busy machine without letting a quadratic pass through. }
@@ -86,29 +94,19 @@ begin
     TestModuleEarlyErrorNamesTheFirstVarInSourceOrder);
 end;
 
-{ The fastest of TRIALS parses, so a pause on a shared machine inflates
-  neither side of a comparison. }
 function TSourcePipelineTests.ParseNanoseconds(const ASource: TStringList;
   const ASourceType: TGocciaSourceType): Int64;
 var
   Options: TGocciaSourcePipelineOptions;
   ParseResult: TGocciaSourcePipelineResult;
-  Elapsed: Int64;
-  I: Integer;
 begin
   Options := TGocciaSourcePipeline.DefaultOptions;
   Options.SourceType := ASourceType;
-  Result := High(Int64);
-  for I := 1 to TRIALS do
-  begin
-    ParseResult := TGocciaSourcePipeline.Parse(ASource, '<test>', Options);
-    try
-      Elapsed := ParseResult.ParseTimeNanoseconds;
-    finally
-      ParseResult.Free;
-    end;
-    if Elapsed < Result then
-      Result := Elapsed;
+  ParseResult := TGocciaSourcePipeline.Parse(ASource, '<test>', Options);
+  try
+    Result := ParseResult.ParseTimeNanoseconds;
+  finally
+    ParseResult.Free;
   end;
 end;
 
@@ -119,19 +117,41 @@ procedure TSourcePipelineTests.ExpectModuleParseLinear(const AModuleLine,
   AScriptLine: string);
 var
   ModuleSource, ScriptSource: TStringList;
-  ModuleTime, ScriptTime: Int64;
+  ModuleTime, ScriptTime, BestModuleTime, BestScriptTime: Int64;
+  Pair, LinearCount: Integer;
 begin
   ModuleSource := DeclarationLines(AModuleLine, DECLARATION_COUNT);
   ScriptSource := DeclarationLines(AScriptLine, DECLARATION_COUNT);
   try
-    ScriptTime := ParseNanoseconds(ScriptSource, stScript);
-    ModuleTime := ParseNanoseconds(ModuleSource, stModule);
-    if ModuleTime > MODULE_TO_SCRIPT_RATIO * ScriptTime + SLACK_NANOSECONDS then
+    LinearCount := 0;
+    BestModuleTime := High(Int64);
+    BestScriptTime := 0;
+    for Pair := 1 to TRIAL_PAIRS do
+    begin
+      ScriptTime := ParseNanoseconds(ScriptSource, stScript);
+      ModuleTime := ParseNanoseconds(ModuleSource, stModule);
+      if ModuleTime <= MODULE_TO_SCRIPT_RATIO * ScriptTime +
+         SLACK_NANOSECONDS then
+      begin
+        Inc(LinearCount);
+        if LinearCount = LINEAR_PAIRS then
+          Break;
+      end
+      { the pair nearest the bound of those past it, for the failure message }
+      else if ModuleTime - MODULE_TO_SCRIPT_RATIO * ScriptTime <
+         BestModuleTime - MODULE_TO_SCRIPT_RATIO * BestScriptTime then
+      begin
+        BestModuleTime := ModuleTime;
+        BestScriptTime := ScriptTime;
+      end;
+    end;
+    if LinearCount < LINEAR_PAIRS then
       Fail(Format('%d declarations parsed in %d ms as a module against ' +
-        '%d ms as a script', [DECLARATION_COUNT, ModuleTime div 1000000,
-        ScriptTime div 1000000]));
-    Expect<Boolean>(ModuleTime <=
-      MODULE_TO_SCRIPT_RATIO * ScriptTime + SLACK_NANOSECONDS).ToBe(True);
+        '%d ms as a script, the nearest of the %d of %d back-to-back pairs ' +
+        'past the bound', [DECLARATION_COUNT, BestModuleTime div 1000000,
+        BestScriptTime div 1000000, TRIAL_PAIRS - LinearCount,
+        TRIAL_PAIRS]));
+    Expect<Integer>(LinearCount).ToBe(LINEAR_PAIRS);
   finally
     ScriptSource.Free;
     ModuleSource.Free;
