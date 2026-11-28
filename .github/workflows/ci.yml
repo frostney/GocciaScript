@@ -425,6 +425,7 @@ jobs:
           persist-credentials: false
 
       - name: Download build
+        id: download-build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: gocciascript-${{ matrix.target }}
@@ -588,45 +589,13 @@ jobs:
             exit 1
           fi
 
-  toml-compliance:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-darwin
-            runner: macos-latest
-          - target: x86_64-darwin
-            runner: macos-15-intel
-          - target: x86_64-linux
-            runner: ubuntu-latest
-          - target: aarch64-linux
-            runner: ubuntu-24.04-arm
-          - target: x86_64-win64
-            runner: windows-latest
-          - target: i386-win32
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: gocciascript-${{ matrix.target }}
-          path: build/
-
-      - name: Make binaries executable
-        if: runner.os != 'Windows'
-        run: chmod +x build/*
-
+      # The TOML, YAML and JSON5 compliance suites take seconds, so they run
+      # here instead of in jobs of their own, which would each wait for a
+      # runner. They run after a failed step above too, so each reports on its
+      # own.
       - name: Run TOML 1.1.0 compliance suite
+        id: toml
+        if: ${{ !cancelled() && steps.download-build.outcome == 'success' }}
         run: |
           set -euo pipefail
           pin="$(tr -d '\r\n' < tests/compliance/toml-test.pin)"
@@ -643,7 +612,7 @@ jobs:
             --output=toml-test-results-${{ matrix.target }}.json
 
       - name: Check TOML compliance summary
-        if: always()
+        if: ${{ !cancelled() && steps.toml.outcome != 'skipped' }}
         run: |
           node - <<'JS'
           const fs = require("fs");
@@ -664,55 +633,20 @@ jobs:
           JS
 
       - name: Upload TOML compliance report
-        if: always()
+        if: ${{ !cancelled() && steps.toml.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: toml-test-results-${{ matrix.target }}
           retention-days: 1
           path: toml-test-results-${{ matrix.target }}.json
 
-  yaml-compliance:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-darwin
-            runner: macos-latest
-          - target: x86_64-darwin
-            runner: macos-15-intel
-          - target: x86_64-linux
-            runner: ubuntu-latest
-          - target: aarch64-linux
-            runner: ubuntu-24.04-arm
-          - target: x86_64-win64
-            runner: windows-latest
-          - target: i386-win32
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          persist-credentials: false
-
-      - name: Download build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: gocciascript-${{ matrix.target }}
-          path: build/
-
-      - name: Make binaries executable
-        if: runner.os != 'Windows'
-        run: chmod +x build/*
-
       - name: Run YAML 1.2.2 compliance suite
+        id: yaml
+        if: ${{ !cancelled() && steps.download-build.outcome == 'success' }}
         run: bash .github/scripts/run-yaml-compliance.sh build "$RUNNER_TEMP" yaml-test-results-${{ matrix.target }}.json
 
       - name: Upload YAML compliance report
-        if: always()
+        if: ${{ !cancelled() && steps.yaml.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: yaml-test-results-${{ matrix.target }}
@@ -720,45 +654,9 @@ jobs:
           retention-days: 1
           path: yaml-test-results-${{ matrix.target }}.json
 
-  json5-compliance:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-darwin
-            runner: macos-latest
-          - target: x86_64-darwin
-            runner: macos-15-intel
-          - target: x86_64-linux
-            runner: ubuntu-latest
-          - target: aarch64-linux
-            runner: ubuntu-24.04-arm
-          - target: x86_64-win64
-            runner: windows-latest
-          - target: i386-win32
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: gocciascript-${{ matrix.target }}
-          path: build/
-
-      - name: Make binaries executable
-        if: runner.os != 'Windows'
-        run: chmod +x build/*
-
       - name: Run JSON5 compliance suite
+        id: json5
+        if: ${{ !cancelled() && steps.download-build.outcome == 'success' }}
         run: |
           set -euo pipefail
           pin="$(tr -d '\r\n' < tests/compliance/json5.pin)"
@@ -775,7 +673,7 @@ jobs:
             --output=json5-test-results-${{ matrix.target }}.json
 
       - name: Check JSON5 compliance summary
-        if: always()
+        if: ${{ !cancelled() && steps.json5.outcome != 'skipped' }}
         run: |
           node - <<'JS'
           const fs = require("fs");
@@ -795,7 +693,7 @@ jobs:
           JS
 
       - name: Upload JSON5 compliance report
-        if: always()
+        if: ${{ !cancelled() && steps.json5.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: json5-test-results-${{ matrix.target }}
@@ -1424,11 +1322,15 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
+      # Nothing reads these timings: the lane shows that every benchmark still
+      # runs on every target, and the PR workflow's same-runner comparison is
+      # what measures. One round does that; calibration is a fixed cost, so it
+      # takes about a third of the time seven did.
       - name: Run benchmarks
         if: "!(github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux')"
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
-          GOCCIA_BENCH_ROUNDS: 7
+          GOCCIA_BENCH_ROUNDS: 1
         run: ./build/GocciaBenchmarkRunner benchmarks --no-progress
 
       # main/x86_64-linux emits JSON so the next step can validate the benchmark
@@ -1438,7 +1340,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
-          GOCCIA_BENCH_ROUNDS: 7
+          GOCCIA_BENCH_ROUNDS: 1
         run: ./build/GocciaBenchmarkRunner benchmarks --no-progress --format=console --format=json --output=benchmark-results.json
 
       - name: Check benchmark CLI behaviour
@@ -1610,33 +1512,6 @@ jobs:
         if: runner.os == 'Windows' && matrix.target != 'i386-win32'
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
-      - name: Check shared CLI test assertions
-        run: bun run scripts/test-cli-assertions.ts
-
-      - name: Check test-cli-apps.ts section selection
-        run: bun run scripts/test-cli-apps-selection.ts
-
-      - name: Check CLI flags across all apps
-        run: bun run scripts/test-cli.ts
-
-      - name: Check heap snapshot round-trip CLI
-        run: bun run scripts/test-cli-heap-snapshots.ts
-
-      - name: Check lexer numeric separator rejection
-        run: bun run scripts/test-cli-lexer.ts
-
-      - name: Check parser error display
-        run: bun run scripts/test-cli-parser.ts
-
-      - name: Check config file loading and per-file config
-        run: bun run scripts/test-cli-config.ts
-
-      - name: Check app-specific CLI features
-        run: bun run scripts/test-cli-apps.ts
-
-      - name: Check sandbox filesystem search against the shared vectors
-        run: bun run scripts/test-cli-sandbox-search.ts
-
       # test-cli-permissions.ts fetches a loopback name only the hosts file
       # lists, which the runner image does not have, to show fetch resolves
       # through the system resolver; GOCCIA_HOSTS_FILE_FIXTURE makes it fail,
@@ -1646,31 +1521,13 @@ jobs:
         if: runner.os != 'Windows'
         run: .github/scripts/add-hosts-file-fixtures.sh
 
-      - name: Check capability flags, limits, and permission defaults
+      # The checks are independent processes, so they run three at a time;
+      # scripts/run-cli-checks.ts lists them.
+      - name: Run CLI behaviour checks
         env:
           GOCCIA_HOSTS_FILE_FIXTURE: ${{ runner.os != 'Windows' && 'goccia-hosts-file.test' || '' }}
-        run: bun run scripts/test-cli-permissions.ts
-
-      - name: Check real fetch redirects and headers
-        if: runner.os != 'Windows'
-        env:
           GOCCIA_FETCH_IPV6_HOST: goccia-hosts-ipv6.test
-        run: bash scripts/fetch-e2e.sh
-
-      - name: Check embedded resource CLI behaviour
-        run: bun run scripts/test-cli-embedded-resources.ts
-
-      - name: Check Intl taint robustness under lazy materialization
-        run: bun run scripts/test-cli-intl-taint.ts
-
-      - name: Check FFI callback slot exhaustion in its own process
-        run: bun run scripts/test-cli-ffi-callback-slots.ts
-
-      - name: Check differential suites against vitest and bun
-        run: bun run scripts/test-cli-differential.ts
-
-      - name: Check benchmark comparison logic
-        run: bun run scripts/test-benchmark-compare.ts
+        run: bun run scripts/run-cli-checks.ts
 
       - name: Check es-toolkit validation runner
         if: matrix.target == 'x86_64-linux'
@@ -1713,7 +1570,7 @@ jobs:
           }
 
   artifacts:
-    needs: [test, toml-compliance, yaml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
+    needs: [test, awfy, jetstream, web-tooling, benchmark, cli]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
@@ -1748,7 +1605,7 @@ jobs:
           path: release-artifacts/*
 
   release:
-    needs: [test, toml-compliance, yaml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
+    needs: [test, awfy, jetstream, web-tooling, benchmark, cli]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

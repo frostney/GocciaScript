@@ -106,10 +106,9 @@ For compiler/VM internals, also run native Pascal tests as described under [Test
 
 The PR workflow builds and tests on ubuntu-latest x64 only. Full CI (`ci.yml`,
 six targets including Windows, macOS and AArch64) runs only on `main`, tags,
-and manual dispatch. Before marking a pull request ready, run
-`gh workflow run ci.yml --ref <branch>` for every stacked branch and for any
-platform-sensitive change: file-system paths, processes, sockets or TLS, FFI,
-time zones, `Int64`/`Double` conversion, `Int64` loop counters or lengths
+and manual dispatch. Run `gh workflow run ci.yml --ref <branch>` for every
+stacked branch and for any platform-sensitive change: file-system paths,
+processes, sockets or TLS, FFI, time zones, `Int64`/`Double` conversion, `Int64` loop counters or lengths
 (32-bit `i386-win32`), byte layout (see
 [Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
 any `{$IFDEF}` platform branch, or a new or changed `scripts/test-cli*.ts` check
@@ -117,6 +116,14 @@ that compares a program's output text or a path it reports. Windows ends lines
 with CRLF, and macOS reports temp directories under `/private/var` while
 `os.tmpdir()` gives `/var`; until the shared harness helpers handle both
 ([#1595](https://github.com/frostney/GocciaScript/issues/1595)), only full CI
-catches these. A dispatched run's checks do not appear on
-the pull request, and it belongs to the commit it started from, so check the
-run for the branch's current head SHA rather than the newest run.
+catches these.
+
+Dispatch it once, on the head that will merge: after the review rounds' fixes
+are pushed. Its macOS jobs wait for runners the whole account shares, five at
+a time, and a run on an earlier head has to be repeated once review fixes
+land. A stacked branch is frozen once it is ready, so its run comes after its
+last review round and before it is marked ready. When the run fails, fix the
+failure on the branch and dispatch again for the new head. A dispatched run's
+checks do not appear on the pull request, and it belongs to the commit it
+started from, so check the run for the branch's current head SHA rather than
+the newest run.

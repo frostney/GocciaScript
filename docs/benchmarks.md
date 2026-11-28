@@ -340,10 +340,12 @@ When a benchmark uses generator setup or teardown, the last line of its block di
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and
-`GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On
-pushes to `main`, the ubuntu-latest x64 runner emits JSON and validates the
-report shape. PR comparison builds and benchmarks `main` on the PR's own runner
+Benchmarks run as part of the CI pipeline. The PR workflow's comparison uses
+`GOCCIA_BENCH_CALIBRATION_MS=100` and `GOCCIA_BENCH_ROUNDS=7` for stable
+measurements with IQR outlier filtering. Full CI (`ci.yml`) runs every
+benchmark on every target for one round, since nothing reads those timings and
+one round shows each benchmark still runs. On pushes to `main`, the
+ubuntu-latest x64 runner emits JSON and validates the report shape. PR comparison builds and benchmarks `main` on the PR's own runner
 rather than reading a cached baseline ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)).
 See [testing.md](testing.md#ci-integration) for the full pipeline overview.
 
