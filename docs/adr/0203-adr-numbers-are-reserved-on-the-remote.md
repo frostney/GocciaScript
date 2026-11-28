@@ -23,8 +23,9 @@ written, and nothing is renamed later.
 
 `scripts/adr.ts check`, run in the docs job of both CI workflows, fails when two ADRs share a number, when an ADR
 after 0202 has no reservation or its reservation names another file, and when the index does not list every ADR once.
-ADRs up to 0202 predate reservations and hold none. `move` renames an ADR its branch reserved, before it merges,
-and moves the reservation with it.
+ADRs up to 0202 predate reservations and hold none. A reservation names the file, not the title, so a title can
+change while the file keeps its name; another file name takes a new number. Moving a reservation to a new file name
+was left out: a branch that merged the old name in the meantime would leave the default branch's file unreserved.
 
 `.gitattributes` merges the index with Git's `union` driver, so two branches' appended entries both stay.
 
