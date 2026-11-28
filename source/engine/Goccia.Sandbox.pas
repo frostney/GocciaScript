@@ -103,6 +103,12 @@ begin
   HeapExternalAdd(ABytes);
 end;
 
+{ native work (a search's) charged to the run as instructions, and its limits and a cancellation checked }
+function ChargeNativeWork(const AUnits: QWord): Boolean;
+begin
+  Result := PollInstructionUnits(AUnits);
+end;
+
 procedure SetSandbox(Ctx: TGocciaSandboxContext);
 begin
   Box := Ctx;
@@ -112,12 +118,14 @@ begin
     SetFileReadHook(ReadVirtualFile);
     SetFileTimeHook(VirtualFileTime);
     NativeBytesHook := ChargeNativeBytes;
+    NativeWorkHook := ChargeNativeWork;
   end
   else
   begin
     SetFileReadHook(nil);
     SetFileTimeHook(nil);
     NativeBytesHook := nil;
+    NativeWorkHook := nil;
   end;
 end;
 
@@ -246,6 +254,9 @@ end;
 { an exception a native met that no case above names: its message as an Error }
 function ThrowOther(E: Exception): Boolean;
 begin
+  { a search's work was refused by the run's poll: its error is pending (an abort that ends the run, or a catchable
+    memory RangeError), and nothing else is thrown }
+  if E is ENativeWorkStopped then Exit(False);
   Result := ThrowError('Error', E.Message);
 end;
 
@@ -556,8 +567,10 @@ type
     procedure Step;
   end;
 
+{ a step of a glob's or a search's walk: a file or a pattern, charged and polled as native work }
 procedure TProgress.Step;
 begin
+  CheckNativeWork;
 end;
 
 var

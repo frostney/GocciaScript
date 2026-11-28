@@ -99,10 +99,39 @@ implementation
 uses
   TextSemantics,
 
+  Goccia.NativeLimits,
   Goccia.NestingLimit,
   Goccia.RegExp.UnicodeData,
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout;
+
+const
+  { an engine's native work hook is charged a unit every this-plus-one PollMatcher calls }
+  POLLS_PER_CHARGE_MASK = 255;
+  { a backreference comparison polls every this many code points it compares }
+  BACKREF_POLL_INTERVAL = 256;
+  { the matcher's dispatch loop polls every this-plus-one steps, its lookarounds' included }
+  DISPATCH_POLL_MASK = 255;
+
+threadvar
+  MatcherPolls: Cardinal;
+
+{ the matcher's checkpoint. Under an engine's native work hook (a sandbox search under the bytecode engine) a unit of
+  native work every 256 polls, with the run's limits and a cancellation checked; otherwise the interpreter's
+  deadline }
+procedure PollMatcher;
+var Polls: Cardinal;
+begin
+  if NativeWorkHooked then
+  begin
+    { the threadvar read and written in statements of their own (docs/core-patterns.md) }
+    Polls := MatcherPolls + 1;
+    MatcherPolls := Polls;
+    if (Polls and POLLS_PER_CHARGE_MASK) = 0 then CheckNativeWork;
+  end
+  else CheckExecutionTimeout;
+end;
+
 
 const
   MIN_STEP_LIMIT = 10000000;
@@ -571,7 +600,7 @@ begin
         Inc(Result);
       Inc(Skipped);
       if (Skipped and 4095) = 0 then
-        CheckExecutionTimeout;
+        PollMatcher;
     end;
     Exit(AInput.Length + 1);
   end;
@@ -583,7 +612,7 @@ begin
     Result := AdvanceInputIndex(AInput, Result, AUnicode);
     Inc(Skipped);
     if (Skipped and 4095) = 0 then
-      CheckExecutionTimeout;
+      PollMatcher;
   end;
   Result := AInput.Length + 1;
 end;
@@ -615,8 +644,12 @@ function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
   AEndPos: PInteger = nil; ABackward: Boolean = False;
-  ALookDepth: Integer = 0): Boolean;
+  ALookDepth: Integer = 0; APollSteps: PInteger = nil): Boolean;
 var
+  { steps since the last dispatch poll, shared with the lookarounds this call runs (APollSteps): their short runs
+    add up to a poll, while each call keeps its own step ceiling }
+  OwnPollSteps: Integer;
+  PollSteps: PInteger;
   PC, InputPos: Integer;
   Instr: UInt32;
   Op: TRegExpOpCode;
@@ -644,6 +677,7 @@ var
   ComparePos: Integer;
   RefCP, InputCP: Cardinal;
   RefByteLen, InputByteLen: Integer;
+  BackrefPollLeft: Integer;
   RepeatStack: array of Integer;
   RepeatDepth: Integer;
 
@@ -910,7 +944,7 @@ var
       Inc(InputPos, ByteLen);
       Inc(Iterations);
       if (Iterations and 4095) = 0 then
-        CheckExecutionTimeout;
+        PollMatcher;
     end;
 
     if not SimpleTail then
@@ -946,6 +980,13 @@ begin
   InputPos := AStartPos;
   StepCount := 0;
   StepLimit := RegExpStepLimit(AInput.Length);
+  if APollSteps = nil then
+  begin
+    OwnPollSteps := 0;
+    PollSteps := @OwnPollSteps;
+  end
+  else
+    PollSteps := APollSteps;
   StackTop := -1;
   RepeatDepth := 0;
   // The memo records that a path failed at an instruction and position, and
@@ -963,9 +1004,16 @@ begin
     // exec/test call; poll the cooperative engine deadline periodically.
     // The 255 mask composes with CheckExecutionTimeout's internal 1/1024
     // throttle: the clock is read once per ~262K steps, bounding deadline
-    // overshoot to low milliseconds at typical step costs.
-    if (StepCount and 255) = 0 then
-      CheckExecutionTimeout;
+    // overshoot to low milliseconds at typical step costs. Under an engine's
+    // native work hook, PollMatcher charges a unit every 256 polls instead:
+    // one per 64K steps here. The count runs on through the lookarounds this
+    // call starts, so their short runs reach a poll too.
+    Inc(PollSteps^);
+    if PollSteps^ > DISPATCH_POLL_MASK then
+    begin
+      PollSteps^ := 0;
+      PollMatcher;
+    end;
 
     Instr := AProgram.Code[PC];
     Op := TRegExpOpCode(Instr and $FF);
@@ -1237,8 +1285,18 @@ begin
           end;
           RefPos := RefStart;
           LookMatched := True;
+          BackrefPollLeft := BACKREF_POLL_INTERVAL;
           while RefPos < RefEnd do
           begin
+            { one step compares the whole capture: a long one is polled as it goes. A countdown, not
+              `Inc(N); if (N and 255) = 0`: FPC 3.3.1's i386 optimizer drops that test's low-byte compare and
+              branches on the add's flags, so the poll never ran }
+            Dec(BackrefPollLeft);
+            if BackrefPollLeft = 0 then
+            begin
+              BackrefPollLeft := BACKREF_POLL_INTERVAL;
+              PollMatcher;
+            end;
             if not ReadInputCodePoint(AInput, RefPos, BackrefUnicode,
                RefCP, RefByteLen) then
             begin
@@ -1373,7 +1431,7 @@ begin
           if ALookDepth >= NESTING_UNCHECKED_DEPTH then
             CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, False, ALookDepth + 1);
+            SlotCount, LookStack, PC + 1, nil, False, ALookDepth + 1, PollSteps);
           if Negated then
           begin
             if LookMatched then
@@ -1403,7 +1461,7 @@ begin
           if ALookDepth >= NESTING_UNCHECKED_DEPTH then
             CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, True, ALookDepth + 1);
+            SlotCount, LookStack, PC + 1, nil, True, ALookDepth + 1, PollSteps);
           if Negated then
           begin
             if LookMatched then
@@ -1564,7 +1622,8 @@ begin
     // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
     // throttles deadlines > 16ms, and the always-check mode for <= 16ms
     // deadlines is self-limiting (the expensive window lasts at most 16ms).
-    CheckExecutionTimeout;
+    // PollMatcher's own 1/256 counter throttles an engine's native work hook.
+    PollMatcher;
     FillChar(ASlots[0], ASlotCount * SizeOf(Integer), $FF);
     if RunVM(AProgram, AInput, StartPos, ASlots, ASlotCount, AStack) then
       Exit(True);
