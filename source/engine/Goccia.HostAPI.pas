@@ -765,9 +765,10 @@ begin
       { the verifier's bound, before the bytes are copied for it }
       if Length(Answer.Bytecode) > GOCCIA_GBC_MAX_FILE_BYTES then
       begin
-        ThrowError('Error', 'Cannot load bytecode module ''' + Key + ''': ' +
-          UnicodeString(Format('bytecode file exceeds the %d byte limit', [GOCCIA_GBC_MAX_FILE_BYTES])));
-        Exit(-1);
+        SetHostModuleArtifactRefusal(UnicodeString(Format('bytecode file exceeds the %d byte limit',
+          [GOCCIA_GBC_MAX_FILE_BYTES])));
+        Exp := VUndefined;
+        Exit(HOST_MODULE_BYTECODE);
       end;
       SetLength(Bytes, Length(Answer.Bytecode));
       if Length(Bytes) > 0 then Move(Answer.Bytecode[0], Bytes[1], Length(Bytes));

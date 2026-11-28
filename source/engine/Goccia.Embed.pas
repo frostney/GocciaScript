@@ -1059,9 +1059,19 @@ begin
 end;
 
 function TGocciaEngine.DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
+var Previous: TArtifactCheck;
 begin
   TakeHostError;
-  Result := HostReady(Err) and Goccia.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
+  if not HostReady(Err) then Exit(False);
+  { a config's JavaScript manifests import as InjectModuleGlobals' module does: their bytecode imports are checked
+    against the engine's settings, and the check in force before (a run's, when a provider calls this) comes back }
+  Previous := CurrentArtifactCheck;
+  SetArtifactCheck(CheckArtifact);
+  try
+    Result := Goccia.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
+  finally
+    SetArtifactCheck(Previous);
+  end;
 end;
 
 function TGocciaEngine.DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
@@ -1077,7 +1087,7 @@ begin
 end;
 
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
-var WeakMark, ModuleMark: Int64;
+var WeakMark, ModuleMark: Int64; Previous: TArtifactCheck;
 begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
@@ -1088,12 +1098,14 @@ begin
   Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   Result := False;
-  { a bytecode module the globals module imports (a provided module's answer) is checked as a run's imports are }
+  { a bytecode module the globals module imports (a provided module's answer) is checked as a run's imports are; the
+    check in force before comes back }
+  Previous := CurrentArtifactCheck;
   SetArtifactCheck(CheckArtifact);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
-    SetArtifactCheck(nil);
+    SetArtifactCheck(Previous);
     case LimitAbortKind of
       1: FSetupAborted := gaTimeout;
       2: FSetupAborted := gaInstructionLimit;
@@ -1108,15 +1120,18 @@ begin
 end;
 
 function TGocciaEngine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var Previous: TArtifactCheck;
 begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
-  { as InjectModuleGlobals: the manifest module's bytecode imports are checked against the engine's settings }
+  { as InjectModuleGlobals: the manifest module's bytecode imports are checked against the engine's settings, and
+    the check in force before comes back }
+  Previous := CurrentArtifactCheck;
   SetArtifactCheck(CheckArtifact);
   try
     Result := Goccia.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
   finally
-    SetArtifactCheck(nil);
+    SetArtifactCheck(Previous);
   end;
 end;
 

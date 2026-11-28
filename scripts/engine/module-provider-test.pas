@@ -20,15 +20,19 @@ uses
 type
   TProvider = class
   public
-    Calls, NeverCalls, FailCalls, CycleCalls: Integer;
+    Calls, NeverCalls, FailCalls, CycleCalls, DamagedCalls: Integer;
     Source: UnicodeString;
     Bytecode: TBytes;
+    { Nested: the engine and a manifest module it defines from inside its provider, during a run }
+    Engine: TGocciaEngine;
+    NestedManifest: UnicodeString;
     function Provide(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Never(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Fail(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Silent(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function ProvideDamaged(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Cyclic(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+    function Nested(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
   end;
 
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
@@ -75,8 +79,21 @@ begin
   Result := True;
 end;
 
+{ defines a manifest module synchronously (a setup call inside a run), then answers with Bytecode }
+function TProvider.Nested(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+var
+  Err: UnicodeString;
+begin
+  if not Engine.DefineModuleManifestVirtualModules(NestedManifest, Err) then
+    raise Exception.Create('the nested manifest failed: ' + string(Err));
+  AAnswer.Kind := mpaBytecode;
+  AAnswer.Bytecode := Bytecode;
+  Result := True;
+end;
+
 function TProvider.ProvideDamaged(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
 begin
+  Inc(DamagedCalls);
   AAnswer.Kind := mpaBytecode;
   AAnswer.Bytecode := Bytecode;
   Result := True;
@@ -135,11 +152,6 @@ var
   ErrorText: UnicodeString;
   RunResult: TGocciaRunResult;
   OtherBytecode, Saved: TBytes;
-  I: Integer;
-  RecordPath: UnicodeString;
-  Tpl: PFuncTemplate;
-  Hash: QWord;
-  Hashed: Boolean;
 begin
   Provider := TProvider.Create;
   Provider.Source := 'import { twice } from "host:bytecode"; export const answer = twice(21);';
@@ -204,16 +216,6 @@ begin
     Check(RunResult.Ok and (Pos('The module provider for host:silent failed without an error', RunResult.ResultText) > 0),
       'a silent failure was not reported: ' + RunResult.ResultText + RunResult.ErrorMessage);
 
-    // the bytecode record's hash is its file's (a heap snapshot's restore compares it with the code it reloads)
-    I := 0;
-    Hashed := False;
-    while ModuleTemplateAt(I, RecordPath, Tpl, Hash) do
-    begin
-      if RecordPath = 'host:bytecode' then Hashed := Hash <> 0;
-      Inc(I);
-    end;
-    Check(Hashed, 'the bytecode record has no hash of its file');
-
     // a load that reaches the provider's module while the provider runs is refused; a later import loads it once
     Check(Engine.DefineModuleProvider('host:cycle', Provider.Cyclic, ErrorText), ErrorText);
     Check(Engine.DefineInlineVirtualModule(
@@ -240,9 +242,13 @@ begin
     Saved := Provider.Bytecode;
     SetLength(Provider.Bytecode, 64 * 1024 * 1024 + 1);
     Check(Engine.DefineModuleProvider('host:huge', Provider.ProvideDamaged, ErrorText), ErrorText);
-    RunResult := Engine.Run('/huge.mjs', 'await import("host:huge").then(() => "loaded", e => e.message);');
+    Provider.DamagedCalls := 0;
+    RunResult := Engine.Run('/huge.mjs', 'const a = await import("host:huge").then(() => "loaded", e => e.message); ' +
+      'const b = await import("host:huge").then(() => "loaded", e => e.message); a === b ? a : a + " / " + b;');
     Check(RunResult.Ok and (Pos('Cannot load bytecode module ''host:huge''', RunResult.ResultText) > 0) and
-      (Pos('byte limit', RunResult.ResultText) > 0), 'an oversized answer was not refused: ' + RunResult.ResultText);
+      (Pos('byte limit', RunResult.ResultText) > 0) and (Provider.DamagedCalls = 1),
+      Format('an oversized answer was not refused once and kept (%d calls): ', [Provider.DamagedCalls]) +
+      RunResult.ResultText);
     Provider.Bytecode := Saved;
 
     // a bytecode file compiled under another profile is refused before any of it runs, never compiled from source
@@ -346,6 +352,128 @@ begin
   end;
 end;
 
+{ a config's JavaScript manifest imports a provided module during setup: another profile's file is refused there too }
+procedure CheckConfigSetupImport;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+  Dir, Manifest, Config: string;
+  Lines: TStringList;
+begin
+  Provider := TProvider.Create;
+  Provider.Bytecode := CompileModule('host:other', 'globalThis.otherRan = true; export const x = 1;', True);
+  Dir := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0))));
+  Manifest := Dir + 'provider-config-manifest.mjs';
+  Config := Dir + 'provider-config.json';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'import { x } from "host:other"; export default { "host:from-config": { content: "export default 1;" } };';
+    Lines.SaveToFile(Manifest);
+    Lines.Text := '{ "modules": "./provider-config-manifest.mjs" }';
+    Lines.SaveToFile(Config);
+    Engine.ResultForm := grfString;
+    Check(Engine.DefineModuleProvider('host:other', Provider.Provide, ErrorText), ErrorText);
+    Check(not Engine.DefineConfigVirtualModules(UnicodeString(Config), ErrorText) and
+      (Pos('Bytecode compile profile does not match the engine', ErrorText) > 0),
+      'a config''s manifest took another profile''s bytecode: ' + ErrorText);
+    RunResult := Engine.Run('/after-config.js', 'globalThis.otherRan === true;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'false'), 'another profile''s bytecode ran during config setup');
+  finally
+    Engine.Free;
+    Provider.Free;
+    Lines.Free;
+    DeleteFile(Manifest);
+    DeleteFile(Config);
+  end;
+end;
+
+{ a provider that makes a setup call during a run (DefineModuleManifestVirtualModules) leaves the run's check in
+  force: its answer of another profile's file is still refused }
+procedure CheckNestedSetup;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+  Manifest: string;
+  Lines: TStringList;
+begin
+  Provider := TProvider.Create;
+  Provider.Bytecode := CompileModule('host:nested', 'globalThis.otherRan = true; export const x = 1;', True);
+  Manifest := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0)))) + 'provider-nested-manifest.mjs';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'export default { "host:from-nested": { content: "export default 1;" } };';
+    Lines.SaveToFile(Manifest);
+    Provider.Engine := Engine;
+    Provider.NestedManifest := UnicodeString(Manifest);
+    Engine.ResultForm := grfString;
+    Engine.SourceKind := gskModule;
+    Check(Engine.DefineModuleProvider('host:nested', Provider.Nested, ErrorText), ErrorText);
+    RunResult := Engine.Run('/nested.mjs',
+      'const r = await import("host:nested").then(() => "loaded", e => e.message); r + ":" + (globalThis.otherRan === true);');
+    Check(RunResult.Ok and (Pos('Bytecode compile profile does not match the engine', RunResult.ResultText) > 0) and
+      (Pos(':false', RunResult.ResultText) > 0),
+      'a setup call inside a provider dropped the run''s check: ' + RunResult.ResultText + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Provider.Free;
+    Lines.Free;
+    DeleteFile(Manifest);
+  end;
+end;
+
+{ the hash a bytecode record keeps is its file's: the same bytes in another engine give the same hash, other code
+  under the same specifier another (a heap snapshot's restore compares them) }
+function RecordHash(const ABytecode: TBytes): QWord;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText, RecordPath: UnicodeString;
+  RunResult: TGocciaRunResult;
+  I: Integer;
+  Tpl: PFuncTemplate;
+  Hash: QWord;
+begin
+  Result := 0;
+  Provider := TProvider.Create;
+  Provider.Bytecode := ABytecode;
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.SourceKind := gskModule;
+    Check(Engine.DefineModuleProvider('host:bytecode', Provider.Provide, ErrorText), ErrorText);
+    RunResult := Engine.Run('/hash.mjs', 'import "host:bytecode";');
+    Check(RunResult.Ok, 'the hashed module did not load: ' + RunResult.ErrorMessage);
+    I := 0;
+    while ModuleTemplateAt(I, RecordPath, Tpl, Hash) do
+    begin
+      if RecordPath = 'host:bytecode' then Result := Hash;
+      Inc(I);
+    end;
+  finally
+    Engine.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure CheckRecordHash;
+var
+  First, Second: TBytes;
+  H1, H2, H3: QWord;
+begin
+  First := CompileModule('host:bytecode', 'export const twice = (n) => n * 2;', False);
+  Second := CompileModule('host:bytecode', 'export const twice = (n) => n + n;', False);
+  H1 := RecordHash(First);
+  H2 := RecordHash(Second);
+  H3 := RecordHash(First);
+  Check((H1 <> 0) and (H1 = H3) and (H1 <> H2),
+    Format('bytecode record hashes do not follow the file: %u, %u, %u', [H1, H2, H3]));
+end;
+
 { a Bare engine (no host modules of its own) takes provided modules too }
 procedure CheckBare;
 var
@@ -375,6 +503,9 @@ begin
   CheckHeapCost;
   CheckBare;
   CheckSetupImport;
+  CheckConfigSetupImport;
+  CheckNestedSetup;
+  CheckRecordHash;
   CheckProviders;
   WriteLn('Module providers: passed');
 end.

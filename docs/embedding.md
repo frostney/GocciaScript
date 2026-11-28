@@ -477,7 +477,7 @@ A definition is `address=source` or `address=` followed by a JSON descriptor; re
 
 ### Custom Content Provider
 
-`TGocciaEngine` reads module files from the host filesystem through `Resolver`'s result, and has no content-provider property. `ModuleContentCheck` sees each module file's bytes before they are compiled and refuses a file by raising. For module text that is not on disk, use virtual modules, or a [provided module](#provided-modules) to supply source text or a bytecode file when it is first imported; to serve a whole tree from memory, use the [sandbox filesystem](#sandbox-filesystem), which installs a thread file reader (`Goccia.Modules` `SetFileReadHook`) and a resolver over the same tree (`TGocciaSandboxModuleResolver`). With `Bare` set no module file is read at all ([Errors](errors.md)); native and provided modules still load.
+`TGocciaEngine` reads module files from the host filesystem through `Resolver`'s result, and has no content-provider property. `ModuleContentCheck` sees each module file's bytes before they are compiled and refuses a file by raising. For module text that is not on disk, use virtual modules, or a [provided module](#provided-modules) to supply source text or a bytecode file when it is first imported; to serve a whole tree from memory, use the [sandbox filesystem](#sandbox-filesystem), which installs a thread file reader (`Goccia.Modules` `SetFileReadHook`) and a resolver over the same tree (`TGocciaSandboxModuleResolver`). With `Bare` set the engine refuses to load a file-backed module ([Errors](errors.md)); registered native and provided modules still load.
 
 ### Bytecode Files
 

@@ -77,6 +77,9 @@ type
 
 { the bytecode file a host module hook answers with (its result 3), taken by the load that called the hook }
 procedure SetHostModuleArtifact(const Bytes: RawByteString);
+{ instead of the bytes: why the host refused the answer before handing it over (the load records it as the file's
+  error, as it records a file that fails verification) }
+procedure SetHostModuleArtifactRefusal(const Reason: UnicodeString);
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil;
   NoSourceHook: THostModuleKeyHook = nil; SupportsFileFormats: Boolean = False);
@@ -170,6 +173,8 @@ type
   TArtifactCheck = function(const A: TGocciaArtifact; var Err: UnicodeString): Boolean of object;
 { this thread's bytecode check (nil: every valid bytecode module is accepted) }
 procedure SetArtifactCheck(Check: TArtifactCheck);
+{ the check in force, for a caller that installs its own for a while and puts this one back }
+function CurrentArtifactCheck: TArtifactCheck;
 { the module record a bytecode file at GbcPath loads as: its directory and name with the extension of the source
   it was compiled from (a .js file for none), so an import of the source and one of the file share it }
 function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
@@ -528,17 +533,27 @@ end;
 threadvar
   { the bytecode file the host module hook answered with (SetHostModuleArtifact), until LoadModule takes it }
   HostModuleArtifact: RawByteString;
+  HostModuleArtifactRefusal: UnicodeString;
 
 procedure SetHostModuleArtifact(const Bytes: RawByteString);
 begin
   HostModuleArtifact := Bytes;
+  HostModuleArtifactRefusal := '';
 end;
 
-{ the bytecode file the hook answered with; the hand-over is cleared }
-function TakeHostModuleArtifact: RawByteString;
+procedure SetHostModuleArtifactRefusal(const Reason: UnicodeString);
+begin
+  HostModuleArtifact := '';
+  HostModuleArtifactRefusal := Reason;
+end;
+
+{ the bytecode file the hook answered with, or the reason it was refused; the hand-over is cleared }
+function TakeHostModuleArtifact(out Refusal: UnicodeString): RawByteString;
 begin
   Result := HostModuleArtifact;
+  Refusal := HostModuleArtifactRefusal;
   HostModuleArtifact := '';
+  HostModuleArtifactRefusal := '';
 end;
 
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook, NoSourceHook: THostModuleKeyHook;
@@ -989,6 +1004,11 @@ begin
   ArtifactCheck := Check;
 end;
 
+function CurrentArtifactCheck: TArtifactCheck;
+begin
+  Result := ArtifactCheck;
+end;
+
 function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
 var Ext: UnicodeString;
 begin
@@ -1114,9 +1134,10 @@ end;
 { a module record keyed Key made from the bytecode file bytes B (read from From): read, verified, checked
   against the run's profile (ArtifactCheck), then its requests loaded }
 function LoadArtifactRecord(const Address: TModuleAddress; const From: UnicodeString; const B: RawByteString;
-  var M: TModRec): Boolean;
+  var M: TModRec; const Refusal: UnicodeString = ''): Boolean;
 var A: TGocciaArtifact; Err: UnicodeString;
 begin
+  A := Default(TGocciaArtifact);
   M := TModRec.Create;
   M.Address := Address;
   M.Id := Mods.Count;
@@ -1126,8 +1147,9 @@ begin
   M.Hash := BytesHashOf(B);
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
-  Err := '';
-  if LoadArtifact(PByte(B), Length(B), Address.Path, M.Id + 1, A, Err) then
+  Err := Refusal;
+  { a refused answer is recorded as the file's error, as a file that fails verification is }
+  if (Refusal = '') and LoadArtifact(PByte(B), Length(B), Address.Path, M.Id + 1, A, Err) then
   begin
     if A.Info = nil then
     begin
@@ -1202,8 +1224,8 @@ end;
 
 function LoadModule(const Address: TModuleAddress; var M: TModRec;
   const CompanionSource: UnicodeString): Boolean;
-var Path, Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
-  Modified: TDateTime;
+var Path, Src, Err, ErrName, Prov, Refusal: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
+  Modified: TDateTime; Bytes: RawByteString;
 begin
   Path := Address.Path;
   if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
@@ -1275,7 +1297,11 @@ begin
       1: Exit(MakeHostModule(Address, V, M));
       2: Src := StrToUnicode(StrOf(V));
       { a bytecode file under the host's key: one record, checked against the run's profile like an imported .gbc }
-      HOST_MODULE_BYTECODE: Exit(LoadArtifactRecord(Address, Path, TakeHostModuleArtifact, M));
+      HOST_MODULE_BYTECODE:
+        begin
+          Bytes := TakeHostModuleArtifact(Refusal);
+          Exit(LoadArtifactRecord(Address, Path, Bytes, M, Refusal));
+        end;
       -1: Exit(False);
     end;
     if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
