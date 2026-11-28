@@ -35,8 +35,14 @@ PASSING_CASES = {
     "DDDD": {"in.yaml": "? [a, b]\n: c\n",
              "test.event": events("+DOC", "+MAP", "+SEQ []", "=VAL :a", "=VAL :b", "-SEQ",
                                   "=VAL :c", "-MAP", "-DOC")},
+    # well-formed, but a repeated key fails the load: the suite gives such a
+    # case no in.json
+    "DUPK": {"in.yaml": "a: 1\na: 2\n",
+             "test.event": events("+DOC", "+MAP", "=VAL :a", "=VAL :1", "=VAL :a", "=VAL :2",
+                                  "-MAP", "-DOC")},
 }
 A_ONE = events("+DOC", "+MAP", "=VAL :a", "=VAL :1", "-MAP", "-DOC")
+A_TWICE = PASSING_CASES["DUPK"]["test.event"]
 FAILING_CASES = {
     "MISM": {"in.yaml": "a: 1\n", "in.json": '{"a": 2}\n', "test.event": A_ONE},
     "EVNT": {"in.yaml": "a: 1\n", "in.json": '{"a": 1}\n', "test.event": A_ONE.replace(":1", ":2")},
@@ -45,9 +51,14 @@ FAILING_CASES = {
     # the events parse, but the documents do not compose: the event parser
     # must find what an error case gets wrong
     "VALS": {"in.yaml": "!!int nope\n", "error": ""},
+    # a repeated key fails the load: wrong where the suite gives values, and
+    # no stand-in for the event parser's rejection of an error case
+    "DUPJ": {"in.yaml": "a: 1\na: 2\n", "in.json": '{"a": 2}\n', "test.event": A_TWICE},
+    "DUPE": {"in.yaml": "a: 1\na: 2\n", "error": ""},
 }
 EXPECTED_FAILURES = {"MISM": "mismatch", "EVNT": "mismatch", "FACC": "false_accept",
-                     "FREJ": "false_reject", "VALS": "false_accept"}
+                     "FREJ": "false_reject", "VALS": "false_accept", "DUPJ": "false_reject",
+                     "DUPE": "false_accept"}
 
 
 def make_suite(root, cases):

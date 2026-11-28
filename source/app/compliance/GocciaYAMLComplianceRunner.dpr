@@ -4,8 +4,9 @@ program GocciaYAMLComplianceRunner;
   branch (github.com/yaml/yaml-test-suite). Each case runs in a worker process
   of this executable. A valid case passes when TGocciaYAMLEventParser gives
   the events of its test.event and, where the case has in.json, when
-  TGocciaYAMLParser's documents equal those JSON values; a case with an error
-  file passes when the event parser rejects it. Any other result fails the
+  TGocciaYAMLParser's documents equal those JSON values; where it has none,
+  the documents may also fail to load on a duplicate mapping key. A case with
+  an error file passes when the event parser rejects it. Any other result fails the
   run. }
 
 {$I Goccia.inc}
@@ -51,6 +52,10 @@ const
   WORKER_EXIT_NO_JSON_FORM = 4;
   { the events parsed, but composing the documents failed }
   WORKER_EXIT_VALUES_REJECTED = 5;
+  { the events parsed, but a mapping has the same key twice, so the
+    documents fail to load (3.3): right for a valid case without in.json,
+    whose values JSON cannot hold }
+  WORKER_EXIT_DUPLICATE_KEY = 6;
 
 type
   EYAMLNoJSONForm = class(Exception);
@@ -439,7 +444,7 @@ begin
     Exit;
   end;
   case ProcessResult.ExitCode of
-    WORKER_EXIT_PARSED, WORKER_EXIT_NO_JSON_FORM:
+    WORKER_EXIT_PARSED, WORKER_EXIT_NO_JSON_FORM, WORKER_EXIT_DUPLICATE_KEY:
       ;
     WORKER_EXIT_REJECTED:
       begin
@@ -495,6 +500,12 @@ begin
       begin
         AResult.Outcome := coPassed;
         AResult.MessageText := '';
+        Exit;
+      end;
+      if ProcessResult.ExitCode = WORKER_EXIT_DUPLICATE_KEY then
+      begin
+        AResult.Outcome := coFalseReject;
+        AResult.MessageText := OutputLines[1];
         Exit;
       end;
       if ProcessResult.ExitCode = WORKER_EXIT_NO_JSON_FORM then
@@ -676,6 +687,12 @@ begin
       begin
         WriteLn(E.Message);
         Halt(WORKER_EXIT_NO_JSON_FORM);
+      end;
+      on E: EGocciaYAMLDuplicateKeyError do
+      begin
+        WriteLn(Events);
+        WriteLn(E.Message);
+        Halt(WORKER_EXIT_DUPLICATE_KEY);
       end;
       { the errors YAML.parse reports for text it cannot read }
       on E: EGocciaYAMLParseError do
