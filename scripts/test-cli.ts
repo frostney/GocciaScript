@@ -308,7 +308,7 @@ console.log("An uncaught failed property read is located at its property name...
   }
 }
 
-console.log("A failed strict-types parameter check is located at its parameter...");
+console.log("A failed strict-types parameter or catch parameter check is located at its parameter...");
 {
   const tmp = mkdtemp("goccia-strict-parameter-");
   try {
@@ -317,6 +317,10 @@ console.log("A failed strict-types parameter check is located at its parameter..
       ['const f = (x: number) => x;\nf("a");\n', 1, 12],
       ['const f = (a: string,\n  x: number) => x;\nf("s", "a");\n', 2, 3],
       ['const o = {\n  set v(x: number) {},\n};\no.v = "a";\n', 2, 9],
+      // a parameter with a default, checked once the default applies
+      ['const f = (a,\n  x: number = 1) => x;\nf(0, "a");\n', 2, 3],
+      // a catch parameter, checked as the clause binds the caught value
+      ['try {\n  throw 1;\n} catch (e: string) {\n}\n', 3, 10],
     ] as const;
     for (const [source, line, column] of cases) {
       writeFileSync(file, source);

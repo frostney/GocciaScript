@@ -82,9 +82,10 @@ test("an optional parameter is not checked on entry", () => {
   expect(new C().opt("a")).toBe("a");
 });
 
-test("a defaulted parameter is not checked on entry", () => {
+test("a defaulted parameter is checked once its default applies", () => {
   class C { def(x: number = 1) { return x; } }
-  expect(new C().def("a")).toBe("a");
+  expect(new C().def()).toBe(1);
+  expect(() => new C().def("a")).toThrow(TypeError);
 });
 
 test("a rest parameter's arguments are not checked on entry", () => {

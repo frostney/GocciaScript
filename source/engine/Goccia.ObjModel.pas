@@ -580,7 +580,7 @@ begin
 end;
 
 function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
-var P: PObj; U: PUpval; Cur, M, D: TPropDesc; Found, Mapped: Boolean; Idx, MappedIdx: Int64; Ext: Boolean; Dbl: Double;
+var P: PObj; Cur, M, D: TPropDesc; Found, Mapped: Boolean; Idx, MappedIdx: Int64; Ext: Boolean; Dbl: Double;
 begin
   D := DIn;
   Ok := False;
@@ -652,9 +652,15 @@ begin
     D.Value := Cur.Value;
   end;
   if not Compatible(Ext, D, Found, Cur) then begin PopRoots(1); Exit(True); end;
-  if Mapped and DIn.HasValue and not ArgsMapCheck(P, MappedIdx, D.Value) then begin PopRoots(1); Exit(False); end;
   { strict-types: a value given to a typed var's property of the global object }
   if DIn.HasValue and not GlobalTypeOK(P, Key, D.Value) then begin PopRoots(1); Exit(False); end;
+  { a value given goes to the parameter too, checked against its strict type before anything changes (nothing
+    between here and the property's store runs code or fails) }
+  if Mapped and DIn.HasValue and not ArgsMapStore(P, ArgsMapCell(P, Key, MappedIdx), MappedIdx, D.Value) then
+  begin
+    PopRoots(1);
+    Exit(False);
+  end;
   if (P^.OKind = okStringObj) and Found and not Cur.Configurable then
   begin
     { a String object's characters and length are immutable: Compatible held, nothing changes }
@@ -668,8 +674,6 @@ begin
   if Mapped then
   begin
     P := ObjOf(RootAt(TempTop - 4));
-    U := ArgsMapCell(P, Key, MappedIdx);
-    if DIn.HasValue then ArgsMapSet(U, RootAt(TempTop - 3));
     if IsAccessorDesc(DIn) or (DIn.HasWritable and not DIn.Writable) then ArgsUnmap(P, MappedIdx);
   end;
   PopRoots(4);
@@ -1097,11 +1101,7 @@ begin
   if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) then
   begin
     U := ArgsMapCell(ObjOf(O), Key, Idx);
-    if U <> nil then
-    begin
-      if not ArgsMapCheck(ObjOf(O), Idx, V) then Exit(False);
-      ArgsMapSet(U, V);
-    end;
+    if (U <> nil) and not ArgsMapStore(ObjOf(O), U, Idx, V) then Exit(False);
   end;
   { 10.4.6.9 a namespace's [[Set]]: false }
   if ObjOf(O)^.OKind = okModuleNS then begin Ok := False; Exit(True); end;

@@ -55,7 +55,7 @@ Bytecode files use the `.gbc` extension (`Goccia.Artifact`).
 - **Exceptions.** `opTry` pushes a `THandler` (frame, handler PC, exception register, kind: catch or finally); `opEndTry` pops it. A throw sets `Pending` and jumps to the unwind code in `Execute`, which drops frames down to the handler's. The dispatch loop has no Pascal `try`.
 - **Generators and async functions.** `opGenStart`, `opYield`, `opAwait`, `opYieldStar` and `opYieldStarAsync` suspend a frame by saving its registers; the compiler records how many are live at each suspension so that only those are kept.
 - **Garbage collection.** The VM shares `Goccia.Core`'s heap with the built-ins. The value stack up to `StackTop` is a root, and the nursery collector moves young cells, so code re-reads a cell pointer from a root after anything that can allocate. See [Garbage Collector](garbage-collector.md) and [design.md](engine/design.md#heap-and-gc).
-- **Strict types.** With strict-types on (`ProfileStrictTypes`), the compiler emits `opCheckType` before a store into an annotated binding or one whose initializer has an evident type, and for an annotated parameter. Return-type annotations are not checked. See [Type Annotations](type-annotations.md).
+- **Strict types.** With strict-types on (`ProfileStrictTypes`), the compiler emits `opCheckType` before a store into an annotated binding or one whose initializer has an evident type, and for an annotated parameter (a parameter with a default once the default applies, a `catch` parameter as the clause binds it). A non-strict function with simple parameters and a mapped `arguments` object also runs `opMapArgTypes`, which attaches its parameters' type codes to the object, so a store through a mapped index (`arguments[0] = v`, `Reflect.set`, `Object.defineProperty` with a value, a public class field) is checked against the parameter it aliases at run time. A Script's typed top-level bindings carry their types at run time instead: `opDeclGlobals` gives each typed `let` its global lexical binding's type, which `GLexSet` checks, and tags each typed `var`'s property of the global object, whose every write `GlobalTypeOK` checks; the global store caches skip both ([ADR 0204](adr/0204-strict-types-keep-a-scripts-top-level-types-on-its-global-bindings.md)). Return-type annotations are not checked. See [Type Annotations](type-annotations.md).
 
 ## Instruction Format
 
@@ -82,7 +82,7 @@ Bytecode files use the `.gbc` extension (`Goccia.Artifact`).
 - object and array literals, class setup, fields, private names and private members
 - iteration (`opGetIter`, `opIterNext`, `opForIn`, the async iterator steps), `yield`, `yield*`, `await`
 - module cells, `import()`, `import.meta`, `with` object environments, direct-eval hints
-- `opIntrinsic` (calls into the `builtins5` prelude for constructs the compiler lowers), `opCheckType`, and the coverage counters `opCovStmt`, `opCovBranch` and `opCovFn`
+- `opIntrinsic` (calls into the `builtins5` prelude for constructs the compiler lowers), `opCheckType`, `opMapArgTypes`, and the coverage counters `opCovStmt`, `opCovBranch` and `opCovFn`
 
 The hot set is a table, not a range: `InitFastOps` marks the 79 opcodes `FastLoop` has fast paths for (`FastOp`). Opcode numbers are the enum's order, so adding, removing or renaming an opcode changes `EngineFingerprint` and every `.gbc` file written before it is refused.
 

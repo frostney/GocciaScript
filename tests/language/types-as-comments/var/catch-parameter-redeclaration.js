@@ -81,4 +81,40 @@ describe("var redeclaring a catch parameter under strict types", () => {
     };
     expect(Number.isNaN(subtract())).toBe(true);
   });
+
+  test("the catch parameter's own annotation wins over a var annotation of its name", () => {
+    const assign = () => {
+      try {
+        throw 1;
+      } catch (x: number) {
+        var x: string = "text";
+      }
+    };
+    expect(assign).toThrow(TypeError);
+
+    const store = () => {
+      try {
+        throw 1;
+      } catch (x: number) {
+        var x: string;
+        x = 2;
+        return x;
+      }
+    };
+    expect(store()).toBe(2);
+  });
+
+  test("a catch parameter with an unenforced annotation takes a same-named var's type, as a parameter does", () => {
+    const store = (next) => {
+      try {
+        throw 1;
+      } catch (x: unknown) {
+        var x: number = 2;
+        x = next;
+        return x;
+      }
+    };
+    expect(store(3)).toBe(3);
+    expect(() => store("text")).toThrow(TypeError);
+  });
 });

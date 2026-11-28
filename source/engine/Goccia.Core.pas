@@ -61,7 +61,10 @@ const
   okArguments = 9;
   okModuleNS = 24;       { a module namespace (10.4.6): Aux1 = [key, cell, ...] sorted by key; Goccia.Modules }
   okSymbolObj = 23;      { a Symbol wrapper (ToObject of a symbol): Aux1 = the symbol }
-  okArgumentsOrd = 22;   { an arguments object turned ordinary: length and indices are shape properties }
+  okArgumentsOrd = 22;   { an arguments object turned ordinary: length and indices are shape properties. A mapped
+                           one's Aux1 is its parameter map (a value array of the parameters' upvalue cells, a
+                           non-pointer for an unmapped index); Aux2, when a string, holds one strict type code per
+                           index (opMapArgTypes, #0 untyped) that a store through a mapped index is checked against }
   okMap = 10; okSet = 11;   { Aux1 = backing table cell }
   okIterator = 12;  { array/string iterator: Aux1 = iterated, Aux2 = index/kind }
   okGenerator = 13;
