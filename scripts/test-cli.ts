@@ -3115,9 +3115,10 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
     "",
   ].join("\n");
 
-  // Include the now-charged native startup storage. The collection count below
-  // still requires all 30 manual collections during the recursive calls.
-  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=800000", "--compat-asi"], { timeout: 30_000 });
+  // Include the now-charged native startup storage: about 1.7 MB with the
+  // engine's own property keys and shapes. The collection count below still
+  // requires all 30 manual collections during the recursive calls.
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=2000000", "--compat-asi"], { timeout: 30_000 });
   if (exitCode !== 0) throw new Error(`Manual GC active-call exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call should return positive bytesAllocated`);
   if ((json.memory?.gc?.collections ?? 0) < 30) throw new Error(`Manual GC active-call should report at least 30 collections, got ${json.memory?.gc?.collections}`);
