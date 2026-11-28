@@ -34,9 +34,9 @@ type
   TGocciaYAMLParser = class
   private
     FAnchors: TGocciaDataNodeMap;
-    { for each mapping of the current stream that has a null, tagged or
-      collection key, those keys' identities (KeyIdentity) by property name:
-      the name alone loses what makes such a key equal to another or not }
+    { for each mapping of the current stream that has a key other than a
+      string, those keys' identities (KeyIdentity) by property name: the name
+      alone loses what makes such a key equal to another or not }
     FKeyIdentities: TObjectDictionary<TGocciaDataNode, TOrderedStringMap<string>>;
     FEvents: TGocciaYAMLEventParser;
     FTree: TGocciaDataTree;
@@ -60,6 +60,7 @@ type
     function KeyIdentity(const AKey: TGocciaDataNode): string;
     procedure RecordKeyIdentity(const AMapping: TGocciaDataNode;
       const AName, AIdentity: string);
+    procedure ForgetKeyIdentity(const AMapping: TGocciaDataNode; const AName: string);
     function ParseStream(const AText: string): TGocciaDataTree;
   public
     constructor Create;
@@ -696,8 +697,7 @@ begin
         Continue;
       end;
       Name := KeyName(KeyEvent, Key);
-      // a null or collection key can equal a key of another property name;
-      // a tagged scalar key equals no key of another property name
+      // a null or collection key can equal a key of another property name
       KeyIsValue := (Key.Kind = dnkNull) or Key.IsContainer or
         ((Key.Kind = dnkTagged) and Key.TaggedValue.IsContainer);
       if KeyIsValue then
@@ -706,14 +706,21 @@ begin
         See(SEEN_NAME + Name)
       else if Mapping.HasProperty(Name) then
         RaiseDuplicateKey(KeyEvent.StartMark, Name);
-      if KeyIsValue then
+      // a string key is told by its property name, which it also takes over
+      // from a merged key of another kind
+      if Key.Kind = dnkString then
+        ForgetKeyIdentity(Mapping, Name)
+      else
       begin
-        Identity := KeyIdentity(Key);
-        See(SEEN_VALUE + Identity);
+        // a number's or a boolean's identity is its property name, unquoted
+        if (Key.Kind = dnkNumber) or (Key.Kind = dnkBoolean) then
+          Identity := Name
+        else
+          Identity := KeyIdentity(Key);
+        if KeyIsValue then
+          See(SEEN_VALUE + Identity);
         RecordKeyIdentity(Mapping, Name, Identity);
-      end
-      else if Key.Kind = dnkTagged then
-        RecordKeyIdentity(Mapping, Name, KeyIdentity(Key));
+      end;
       Value := ComposeNode(NextEvent);
       Mapping.SetProperty(Name, Value);
     end;
@@ -801,7 +808,8 @@ end;
 
 { a key as a string that two keys share only when they are equal (3.2.1.3):
   tags kept, a mapping's entries in sorted order, and each entry's key by
-  its own identity, recorded when its property name does not tell it }
+  its own identity, recorded unless it is a string, whose property name
+  tells it }
 function TGocciaYAMLParser.KeyIdentity(const AKey: TGocciaDataNode): string;
 var
   Entries, KeyNames: TArray<string>;
@@ -858,6 +866,15 @@ begin
     FKeyIdentities.Add(AMapping, Recorded);
   end;
   Recorded.AddOrSetValue(AName, AIdentity);
+end;
+
+procedure TGocciaYAMLParser.ForgetKeyIdentity(const AMapping: TGocciaDataNode;
+  const AName: string);
+var
+  Recorded: TOrderedStringMap<string>;
+begin
+  if FKeyIdentities.TryGetValue(AMapping, Recorded) then
+    Recorded.Remove(AName);
 end;
 
 function TGocciaYAMLParser.ParseStream(const AText: string): TGocciaDataTree;

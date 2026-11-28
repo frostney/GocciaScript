@@ -259,6 +259,9 @@ m:
     expect(() => YAML.parse("? {~: a}\n: 1\n? {: a}\n: 2\n")).toThrow(SyntaxError);
     expect(() => YAML.parse("? {<<: {: a}}\n: 1\n? {~: a}\n: 2\n")).toThrow(SyntaxError);
     expect(() =>
+      YAML.parse("? {<<: {!t a: z}, a: 1, b: 2}\n: x\n? {b: 2, a: 1}\n: y\n"),
+    ).toThrow(SyntaxError);
+    expect(() =>
       YAML.parse("? {? {a: 1, b: 2}: x}\n: 1\n? {? {b: 2, a: 1}: x}\n: 2\n"),
     ).toThrow(SyntaxError);
     expect(() => YAML.parse("? !t {a: 1, b: 2}\n: x\n? !t {b: 2, a: 1}\n: y\n")).toThrow(SyntaxError);
@@ -287,6 +290,14 @@ m:
     expect(
       Object.values(YAML.parse("? {!foo a: 1, b: 2}\n: x\n? {b: 2, !bar a: 1}\n: y\n")),
     ).toEqual(["x", "y"]);
+    // a boolean key is no string, and a key of the mapping's own
+    // replaces a merged one
+    expect(
+      Object.values(YAML.parse("? {false: a, b: 2}\n: x\n? {b: 2, 'false': a}\n: y\n")),
+    ).toEqual(["x", "y"]);
+    expect(Object.values(YAML.parse("? {<<: {: a}, '': b}\n: 1\n? {~: b}\n: 2\n"))).toEqual([
+      1, 2,
+    ]);
     expect(YAML.parse("<<: {a: 1}\n<<: {b: 2}\n")).toEqual({ a: 1, b: 2 });
     // a key of the mapping's own wins over a merged one, before or after it
     expect(YAML.parse("<<: {a: 1}\na: 2\n")).toEqual({ a: 2 });
