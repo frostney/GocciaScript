@@ -277,9 +277,19 @@ finally
 end;
 ```
 
-`AddReadOnlyPath` makes a path and everything under it read-only, whether or not it exists yet: an `fs` call that would change something there fails with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors), [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)). Mark paths after filling them, because the marks refuse the embedder's writes too. `RootCapabilities` is the root run's capability set (`TGocciaCapabilities.None` by default); a nested `runScript` inherits its parent's set and at most the time its parent has left. The `FailureKind` of a `TGocciaSandboxRunResult` tells a script error from a resource ceiling or a timeout (`SandboxFailureKindName`). `OnConfigureEngine` sets up each run's `TGocciaEngine` (profile, settings, audit) before it runs.
+`AddReadOnlyPath` makes a path and everything under it read-only, whether or not it exists yet: an `fs` call that would change something there fails with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors), [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)). Mark paths after filling them, because the marks refuse the embedder's writes too. `RootCapabilities` is the root run's capability set (`TGocciaCapabilities.None` by default); a nested `runScript` inherits its parent's set and at most the time its parent has left. `OnConfigureEngine` sets up each run's `TGocciaEngine` (profile, settings, audit) before it runs, on that run's own thread. [Sandbox run outcomes](#sandbox-run-outcomes) lists how `Run` reports the ways a run ends.
 
 The third constructor argument is an optional `TSandboxFsClock` that stamps every file of the host's filesystem and of every isolated nested run; `nil` reads the wall clock, and the host does not own it. `TGocciaSandboxFsHostClock.Create(TGocciaHostEnvironment.DeterministicClock)` stamps every file with the epoch, in step with an engine that uses the [deterministic profile](host-environment.md#deterministic-profile); `GocciaRunner --deterministic` does this in sandbox mode.
+
+### Sandbox run outcomes
+
+`Run` returns a `TGocciaSandboxRunResult` whose `FailureKind` tells a script error, a resource ceiling, a timeout and a host error apart (`SandboxFailureKindName`). A host error (`sfkHostError`) is a run the host could not carry out, such as one whose `OnConfigureEngine` raised an exception, or a run the embedder stopped. `Run` raises an exception only for an audit the sink could not take.
+
+- **The embedder's abort.** An abort handle that `OnConfigureEngine` captures ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread)) stops that run, which `Run` returns as `sfkHostError` with the abort's message, so the embedder that requested it decides what it was.
+- **The embedder's ceiling.** A native the embedder installs can end the run at a ceiling of its own, such as its native memory budget, with `SandboxCeiling(Msg)` (`Goccia.Sandbox`), as the sandbox's own natives end it at the nesting depth: past every handler, reported as `sfkResourceLimit` with `Msg`.
+- **A failed audit.** An audit sink that cannot take an event makes `Run` raise `EGocciaCapabilityAuditDeliveryError` instead of returning a result, whether the sink is the run's own or a `runScript` or shell child's. The sandbox tells the two apart: `TGocciaEngine.AuditDeliveryFailed` covers only that engine's own sink, and `TakeSandboxAuditFailure` a child's.
+
+The first cause that ends a run stays its cause. A ceiling after a failed audit changes nothing. Neither does an audit or a ceiling while the work of a run that already ended is discarded, whether the run was stopped, even by a request that came after its last check, or failed with a script error.
 
 ## Console Output Capture
 
@@ -564,7 +574,7 @@ one of its limits, which it then reports. A cancelled run has no completion valu
 thread may each release their reference whenever they are done with it.
 A run with an armed handle runs in the interpreter, without the JIT. The handle has expired by the time `RunTests` or
 `RunBenchmarks` runs. A nested sandbox run another thread executes does not see the request; the caller observes it
-when that run returns.
+when that run returns. `TGocciaSandboxHost` returns a cancelled run as a result ([Sandbox run outcomes](#sandbox-run-outcomes)).
 Compilation and custom blocking native functions can reach the abort only when they return or encounter an engine
 checkpoint. [ADR 0198](adr/0198-an-abort-handle-belongs-to-the-next-run.md) records the design.
 
