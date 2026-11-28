@@ -108,6 +108,13 @@ const CROSS_SURFACE_CONTRACT_ALLOWLIST = new Map<string, AllowlistEntry>([
     },
   ],
   [
+    "tests/built-ins/Goccia/gc/native-memory/regexp-patterns.js",
+    {
+      reason:
+        "one memory-limit contract that a compiled RegExp pattern lives exactly as long as something uses it, across construction, compile() and string patterns",
+    },
+  ],
+  [
     "tests/built-ins/Goccia/gc/native-memory/refusals.js",
     {
       reason:
