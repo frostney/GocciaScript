@@ -449,6 +449,7 @@ type
   end;
 
   TVarTypes = TDictionary<UnicodeString, Byte>;
+  TCatchVarTypes = TDictionary<TGocciaTryStatement, Byte>;
   PVarShadow = ^TVarShadow;
   TVarShadow = record
     Statement: TGocciaTryStatement;
@@ -641,6 +642,10 @@ type
     { coverage: the directives of function bodies (`"use strict"`), which Istanbul does not count as statements }
     CovDirectives: array of TGocciaASTNode;
     DeclaringLexical: Boolean;      { HoistBlock's lexical declarations: DeclareInScope marks them }
+    { strict-types: the type a simple catch parameter takes from the first typed var of its name in its block
+      (B.3.4: that var's initializer stores into the parameter), recorded by the typed var walk (CollectVarNames)
+      of the function the try statement is in }
+    CatchVarTypes: TCatchVarTypes;
     { emission }
     function Emit(I: QWord): Integer;
     function EmitJ(Op: TOp; A, B: Integer): Integer;
@@ -1483,6 +1488,7 @@ begin
   FreeAndNil(EvalEnvNames);
   FreeAndNil(EvalSkipLocal);
   FreeAndNil(AnnexBFuncs);
+  FreeAndNil(CatchVarTypes);
   inherited Destroy;
 end;
 
@@ -2292,6 +2298,27 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   SavedTail, SavedLine, SavedCol, MapTypesNop: Integer;
   CovFnIdx: Integer; CovLocBody, CovDecl: TGocciaCoverageLoc; CovHas: Boolean;
   VarTypes: TVarTypes; VarType: Byte;
+
+  { strict-types: a parameter with a default has its annotation's type from its turn on. The value in Reg, the
+    argument or the default, is checked there, and a failed check is located at the parameter }
+  procedure CheckDefaultedParam(Idx, Reg: Integer);
+  var Code, SavedLn, SavedCl: Integer;
+  begin
+    if not ProfileStrictTypes or Params[Idx].IsPattern or Params[Idx].IsOptional then Exit;
+    Code := StrictTypeCode(Params[Idx].TypeAnnotation, nil);
+    if Code = 0 then Exit;
+    SavedLn := FS.CurLine;
+    SavedCl := FS.CurCol;
+    if Params[Idx].Line > 0 then
+    begin
+      FS.CurLine := Params[Idx].Line;
+      FS.CurCol := Params[Idx].Column;
+    end;
+    Emit(Ins(opCheckType, Reg, 0, Code));
+    FS.CurLine := SavedLn;
+    FS.CurCol := SavedCl;
+  end;
+
 begin
   { coverage: the function as the source wrote it (CovFunctionNote), registered with Istanbul's decl and loc }
   CovFnIdx := -1;
@@ -2490,17 +2517,17 @@ begin
       (a default can read it, or replace it), and so is every later store }
     if ProfileStrictTypes then
     begin
-      { an optional parameter or one with a default is not checked; a rest parameter's type applies to later
-        stores only }
+      { an optional parameter is not checked (its type admits undefined); one with a default is checked at its
+        turn, once the default applies (CheckDefaultedParam); a rest parameter's type applies to later stores
+        only }
       J := 0;
       for I := 0 to High(Params) do
       begin
         if not Params[I].IsRest then Inc(J);
-        if Params[I].IsPattern or (Params[I].TypeAnnotation = '') or Params[I].IsOptional or
-           Assigned(Params[I].DefaultValue) then Continue;
+        if Params[I].IsPattern or (Params[I].TypeAnnotation = '') or Params[I].IsOptional then Continue;
         K := StrictTypeCode(Params[I].TypeAnnotation, nil);
         if K = 0 then Continue;
-        if not Params[I].IsRest then
+        if not Params[I].IsRest and not Assigned(Params[I].DefaultValue) then
         begin
           { a failed check is located at the parameter it is for }
           SavedLine := FS.CurLine;
@@ -2607,6 +2634,7 @@ begin
             CovDefaultArg(Params[I].DefaultValue.Span, ParamStart(Params[I]), Params[I].DefaultValue);
           ExprToNamed(Params[I].DefaultValue, ArgKeep[I], Params[I].Name);
           PatchHere(Skip);
+          CheckDefaultedParam(I, ArgKeep[I]);
         end;
         Emit(Ins(opMov, R, ArgKeep[I], 0));
         MarkInitialized(Params[I].Name);
@@ -2620,6 +2648,7 @@ begin
         if Params[I].IsPattern then ExprTo(Params[I].DefaultValue, R)
         else ExprToNamed(Params[I].DefaultValue, R, Params[I].Name);
         PatchHere(Skip);
+        CheckDefaultedParam(I, R);
       end;
       if Params[I].IsPattern then BindPattern(Params[I].Pattern, R, True, False);
       if FS.ParamTDZ <> nil then
@@ -3574,13 +3603,22 @@ var I, K: Integer; VD: TGocciaVariableDeclaration; CatchShadow: TVarShadow;
   var Shadow: PVarShadow; Code: Integer;
   begin
     if Types = nil then Exit;
+    Code := StrictTypeCode(V.TypeAnnotation, V.Initializer);
     Shadow := Shadows;
     while Shadow <> nil do
     begin
-      if Shadow^.Statement.CatchParam = V.Name then Exit;
+      if Shadow^.Statement.CatchParam = V.Name then
+      begin
+        { the innermost catch parameter of the name is the binding the var's initializer stores into }
+        if Code <> 0 then
+        begin
+          if CatchVarTypes = nil then CatchVarTypes := TCatchVarTypes.Create;
+          CatchVarTypes.TryAdd(Shadow^.Statement, Code);
+        end;
+        Exit;
+      end;
       Shadow := Shadow^.Parent;
     end;
-    Code := StrictTypeCode(V.TypeAnnotation, V.Initializer);
     if Code <> 0 then Types.TryAdd(V.Name, Code);
   end;
 
@@ -5622,7 +5660,7 @@ end;
 
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
 var Outer, Inner, ExcReg, JEnd, JEnd2, R, J, K: Integer; HasFinally: Boolean; MissL: TJumpList; PN: TStringList;
-  CatchTypes: TVarTypes; CatchType: Byte;
+  CatchType: Byte; SavedLine, SavedCol: Integer;
 begin
   HasFinally := Assigned(S.FinallyBlock);
   ExcReg := AllocReg;   { kept for the whole statement }
@@ -5665,13 +5703,25 @@ begin
       R := DeclareLocal(S.CatchParam, False);
       if ProfileStrictTypes then
       begin
-        CatchTypes := TVarTypes.Create;
-        try
-          CollectVarNames(S.CatchBlock, nil, CatchTypes);
-          if CatchTypes.TryGetValue(S.CatchParam, CatchType) then SetBindingType(S.CatchParam, CatchType);
-        finally
-          CatchTypes.Free;
-        end;
+        { strict-types: the parameter's own annotation, or else the type of a same-named var in the block; the
+          caught value is checked as it is bound, and so is every later store }
+        CatchType := StrictTypeCode(S.CatchParamType, nil);
+        if CatchType <> 0 then
+        begin
+          { a failed check is located at the parameter }
+          SavedLine := FS.CurLine;
+          SavedCol := FS.CurCol;
+          if S.CatchParamLine > 0 then
+          begin
+            FS.CurLine := S.CatchParamLine;
+            FS.CurCol := S.CatchParamColumn;
+          end;
+          Emit(Ins(opCheckType, ExcReg, 0, CatchType));
+          FS.CurLine := SavedLine;
+          FS.CurCol := SavedCol;
+        end
+        else if CatchVarTypes <> nil then CatchVarTypes.TryGetValue(S, CatchType);
+        if CatchType <> 0 then SetBindingType(S.CatchParam, CatchType);
       end;
       Emit(Ins(opMov, R, ExcReg, 0));
     end

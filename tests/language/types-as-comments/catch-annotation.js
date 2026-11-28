@@ -1,5 +1,5 @@
 /*---
-description: Type annotations on catch parameters are parsed and ignored at runtime
+description: Catch parameter annotations that strict types cannot enforce (names, unions, object types) leave the caught value alone
 features: [types-as-comments]
 ---*/
 
@@ -42,4 +42,19 @@ test("catch without type annotation still works", () => {
     caught = true;
   }
   expect(caught).toBe(true);
+});
+
+test("catch parameter annotated unknown or any accepts any value", () => {
+  const values = [];
+  try {
+    throw 1;
+  } catch (e: unknown) {
+    values.push(e);
+  }
+  try {
+    throw "two";
+  } catch (e: any) {
+    values.push(e);
+  }
+  expect(values).toEqual([1, "two"]);
 });

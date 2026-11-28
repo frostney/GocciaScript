@@ -502,8 +502,9 @@ function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): B
 { a mapped arguments object's parameter map (10.4.4): the upvalue of index Key, nil when unmapped }
 function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
 function ArgsMapGet(U: PUpval): TValue;
-function ArgsMapCheck(O: PObj; Idx: Int64; V: TValue): Boolean;
-procedure ArgsMapSet(U: PUpval; V: TValue);
+{ a store of V into the parameter U that mapped index Idx of O aliases: checked first against the parameter's
+  strict type (opMapArgTypes), False with the TypeError pending when it fails and nothing stored }
+function ArgsMapStore(O: PObj; U: PUpval; Idx: Int64; V: TValue): Boolean;
 procedure ArgsUnmap(O: PObj; Idx: Int64);
 { [[Delete]] on an ordinary object (and the exotic ones the engine models in it): False for a non-configurable property }
 function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
@@ -3176,6 +3177,12 @@ begin
   end;
 end;
 
+function ArgsMapStore(O: PObj; U: PUpval; Idx: Int64; V: TValue): Boolean;
+begin
+  Result := ArgsMapCheck(O, Idx, V);
+  if Result then ArgsMapSet(U, V);
+end;
+
 procedure ArgsUnmap(O: PObj; Idx: Int64);
 begin
   ValueArrayStore(PValueArray(PtrOf(O^.Aux1)), Idx, VUndefined);
@@ -3597,11 +3604,7 @@ begin
   if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 shr 48) = TAG_PTR_HI) then
   begin
     U := ArgsMapCell(O, Key, Idx);
-    if U <> nil then
-    begin
-      if not ArgsMapCheck(O, Idx, V) then Exit(False);
-      ArgsMapSet(U, V);
-    end;
+    if (U <> nil) and not ArgsMapStore(O, U, Idx, V) then Exit(False);
   end;
   if (O^.OKind = okArguments) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx >= O^.Elements^.Len))) then
   begin
