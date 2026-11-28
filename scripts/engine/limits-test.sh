@@ -154,4 +154,12 @@ check mem-reserve --max-memory=32MiB 'RangeError' \
 
 check max-stack --max-stack=100 '100 true' 'let d = 0; function r() { d++; r(); } try { r(); } catch (e) { console.log(d, e instanceof RangeError); }'
 
+# a file that does not exist, or none: an error and its exit status, not an unhandled exception
+got=$("$ENGINE" "$D/missing.js" 2>&1); rc=$?
+[ "$got" = "Error: Path not found: $D/missing.js" ] && [ $rc -eq 1 ] ||
+  { echo "FAIL missing-file: exit $rc, output: $got"; fails=$((fails + 1)); }
+got=$("$ENGINE" 2>&1); rc=$?
+[ "$got" = "Usage: goccia [options] <file>" ] && [ $rc -eq 2 ] ||
+  { echo "FAIL no-file: exit $rc, output: $got"; fails=$((fails + 1)); }
+
 [ $fails -eq 0 ] && echo "limits: all passed" || { echo "limits: $fails failed"; exit 1; }
