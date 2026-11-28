@@ -12,12 +12,12 @@ after an add or a subtract of any amount, and for a local at -O1 and a field or 
 compiles all of these correctly.
 
 This reads assembler listings (fpc -al) and reports each add or subtract whose destination is memory, followed by
-je/jne/jz/jnz with only labels, directives and source comments between, when the statement the jump belongs to has an
-`and`. It reads that statement from the source file the listing names, to its `then`, `do` or `;`, comments removed,
-so the mask's spelling, its parentheses and line breaks do not matter. A correct `Dec(N); if N = 0` compiles to the
-same two instructions and has no `and`, so it is not reported; a logical `and` in such a condition is (rewrite it, or
-test N in a statement of its own). A jump whose source is not in this repository, such as an RTL generic's, is
-reported too, as it cannot be checked.
+je/jne/jz/jnz with only labels, directives and source comments between, when the condition the jump tests has an
+`and`. It reads the first if, while or until condition from the jump's line in the source file the listing names,
+leaving out comments and strings, so the mask's spelling, its parentheses and line breaks do not matter. A correct
+`Dec(N); if N = 0` compiles to the same two instructions and has no `and` in its condition, so it is not reported; a
+logical `and` in such a condition is (rewrite it, or test N in a statement of its own). A jump whose condition cannot
+be read, such as an RTL generic's or one behind a comment left open, is reported too, as it cannot be checked.
 
 `./build.pas flagscan` compiles every engine program for the build's target with listings and runs this on them.
 
@@ -30,9 +30,11 @@ JUMP = re.compile(r'^\t(je|jne|jz|jnz)\t')
 SOURCE = re.compile(r'^# \[(\d+)\] (.*)$')
 SOURCE_FILE = re.compile(r'^# \[([^\]]*[A-Za-z][^\]]*)\]$')
 REGISTER = re.compile(r'^\s*%[a-z0-9]+\s*$')
-AND = re.compile(r'\band\b', re.IGNORECASE)
-COMMENT = re.compile(r'\{[^}]*\}|\(\*.*?\*\)|//[^\n]*', re.DOTALL)
-STATEMENT_END = re.compile(r'\b(then|do)\b|;', re.IGNORECASE)
+# Pascal's tokens, as far as a condition needs them: comments and strings whole, so a word in one is not a token
+TOKEN = re.compile(r"""\{[^}]*\}|\(\*.*?\*\)|\(\*|//[^\n]*|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*|\$[0-9A-Fa-f]+|\d+|<>|<=|>=|:=|\S""", re.DOTALL)
+CONDITION_END = {'if': ('then',), 'while': ('do',), 'until': (';', 'end', 'else')}
+# how far past its line a condition is looked for
+CONDITION_LINES = 200
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SOURCE_DIRS = ('source', os.path.join('build', 'engine', 'gen'))
 
@@ -48,18 +50,29 @@ def source_index(root=ROOT):
     return index
 
 
-def statement(read, file, line):
-    """the source from the line on to the end of its condition (then, do or ;), comments removed; None when the
-    file is not one of ours (an RTL generic's code)"""
+def condition(read, file, line):
+    """the words of the first if, while or until condition from the line on (lower case, comments and strings left
+    out), or None when the file is not one of ours (an RTL generic's code) or no whole condition could be read"""
     lines = read(file)
     if lines is None or not 1 <= line <= len(lines):
         return None
-    text = ''
-    for k in range(line - 1, min(line + 7, len(lines))):
-        text += ' ' + lines[k]
-        if STATEMENT_END.search(COMMENT.sub(' ', text)):
-            break
-    return COMMENT.sub(' ', text)
+    keyword, words = None, []
+    for m in TOKEN.finditer('\n'.join(lines[line - 1:line - 1 + CONDITION_LINES])):
+        t = m.group(0)
+        if t.startswith(('{', '(*', '//', "'")):
+            # a comment or a string is no word of the condition; one left open is not read further
+            if t in ('{', '(*'):
+                return None
+            continue
+        t = t.lower()
+        if keyword is None:
+            if t in CONDITION_END:
+                keyword = t
+        elif t in CONDITION_END[keyword]:
+            return words
+        else:
+            words.append(t)
+    return None
 
 
 def scan(name, lines, read):
@@ -91,11 +104,12 @@ def scan(name, lines, read):
             continue
         if pending and JUMP.match(text):
             at_file, at_line = pending['at']
-            condition = statement(read, at_file, at_line) if at_file and at_line else None
-            if condition is None:
-                found.append((name, at_file, at_line, pending['ins'], stripped, 'its source is not in this repository'))
-            elif AND.search(condition):
-                found.append((name, at_file, at_line, pending['ins'], stripped, ' '.join(condition.split())))
+            words = condition(read, at_file, at_line) if at_file and at_line else None
+            if words is None:
+                found.append((name, at_file, at_line, pending['ins'], stripped,
+                              'its condition could not be read (no source in this repository, or no whole condition)'))
+            elif 'and' in words:
+                found.append((name, at_file, at_line, pending['ins'], stripped, ' '.join(words)))
         pending = None
     return found
 
@@ -143,6 +157,18 @@ begin
   if PollLeft = 0 then { and so on: a comment }
     Exit;
   Inc(Count); if (Count and $FFFF) <> 0 then Exit;
+  Inc(M);
+  if (M // poll now and then; or not
+      and 255) = 0 then Poll;
+  Inc(N);
+  if (N { a; b
+      } and 255) = 0 then Poll;
+  Dec(PollLeft);
+  if PollLeft = 0 then Flags := Flags and 255;
+  Dec(PollLeft);
+  if PollLeft = 0 then WriteLn('and');
+  Inc(Q);
+  if (Q { never closed
 end;"""
 SELF_TEST = [
     # i386-win32 at -O1, StringToBigIntV before the fix: stabs line records between the add and the jump
@@ -186,6 +212,40 @@ SELF_TEST = [
 # [40] Inc(FCount);
 \taddl\t$1,8(%eax)
 \tjne\t.Lj9
+"""),
+    # a line comment inside the condition, which ends at its line
+    ('a line comment in the condition', True, """# [T.pas]
+# [17] Inc(M);
+\taddl\t$1,-8(%ebp)
+# [18] if (M // poll now and then; or not
+\tjne\t.Lj3
+"""),
+    # a block comment with a semicolon inside the condition
+    ('a block comment in the condition', True, """# [T.pas]
+# [20] Inc(N);
+\taddl\t$1,-8(%ebp)
+# [21] if (N { a; b
+\tjne\t.Lj4
+"""),
+    # a comment never closed: the condition cannot be read, which is reported
+    ('an unclosed comment', True, """# [T.pas]
+# [27] Inc(Q);
+\taddl\t$1,-8(%ebp)
+# [28] if (Q { never closed
+\tjne\t.Lj5
+"""),
+    # an `and` after the condition, in its statement: not the condition's
+    ('and in the guarded statement', False, """# [T.pas]
+# [23] Dec(PollLeft);
+\tsubl\t$1,-24(%ebp)
+# [24] if PollLeft = 0 then Flags := Flags and 255;
+\tjne\t.Lj6
+"""),
+    ('and in a string', False, """# [T.pas]
+# [25] Dec(PollLeft);
+\tsubl\t$1,-24(%ebp)
+# [26] if PollLeft = 0 then WriteLn('and');
+\tjne\t.Lj7
 """),
     # the test kept: not reported
     ('test kept', False, """# [T.pas]
