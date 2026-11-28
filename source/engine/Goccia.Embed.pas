@@ -18,6 +18,7 @@ type
   TGocciaConsoleEvent = TConsoleSink;
   TGocciaNativeModuleFactory = TNativeModuleFactory;
   TGocciaEmbedderWork = TEmbedderWork;
+  IGocciaAbortHandle = Goccia.VM.IGocciaAbortHandle;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
@@ -35,7 +36,8 @@ type
   TGocciaAbort = (gaNone, gaTimeout, gaInstructionLimit,
     { eight memory refusals in a row (MaxMemory) freed nothing; ErrorText says how much }
     gaMemoryLimit,
-    { the host ended the run, past every handler: AuditSink could not record a decision (ErrorText says why) }
+    { the host ended the run, past every handler: its abort handle was requested, or AuditSink could not record a
+      decision (ErrorText says which) }
     gaHostAbort);
 
   { the engine's heap now (Memory): what a CLI's JSON report shows under memory.gc }
@@ -101,6 +103,7 @@ type
     FMeasureInstructions: Boolean;
     FInstructionBudget: IGocciaInstructionBudget;
     FSetupAborted: TGocciaAbort;
+    FNextRunAbort: IRunAbortSignal;
     FMaxFrames: Integer;
     FHostReady: Boolean;
     FExposeTimers: Boolean;
@@ -123,6 +126,8 @@ type
       and whether a clock or random export is running (a provider that reads its own source is refused) }
     FHostEnvironment: UnicodeString;
     FEnvLoaded: Boolean;
+    { FEnvFns is a root of the engine (registered once) }
+    FEnvRooted: Boolean;
     FEnvFns: array[0..3] of TValue;
     FEnvStreams: array of UInt64;
     FEnvStreamSet: array of Boolean;
@@ -133,6 +138,8 @@ type
     FWeakCleanupMark: Int64;
     { the asynchronous module evaluations started before the run (Goccia.Modules ModuleEvaluationMark) }
     FModuleEvaluationMark: Int64;
+    { the module records before the run's entry: a cancellation supersedes the unfinished ones after it }
+    FRunModuleMark: Integer;
     FAuditSink: TGocciaCapabilityAuditSink;
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
@@ -170,6 +177,7 @@ type
     function InstallHost(var Err: UnicodeString): Boolean;
     procedure SetHeapSnapshots(V: Boolean);
     procedure SetOnModuleWarning(const Value: TGocciaModuleWarningEvent);
+    function RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
   public
     { builds this thread's engine; one at a time per thread }
     constructor Create;
@@ -179,6 +187,8 @@ type
       ShadowRealm switch and ConfigJson (the host config as a JSON object of strings, goccia.json's keys) are
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
+    { Call on the engine thread before Run or RunArtifact. The returned handle targets that one entry. }
+    function CaptureAbortHandle: IGocciaAbortHandle;
     function Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
     { Run for a bytecode file (a .gbc entry, Goccia.Artifact): its recorded goal unless SourceKind names one (a
       conflicting one is an error), its profile checked against the settings before anything of it runs, a
@@ -703,7 +713,8 @@ end;
 function TGocciaEngine.LoadHostEnvironment: Boolean;
 const NAMES: array[0..3] of UnicodeString = ('epochNanoseconds', 'monotonicNanoseconds', 'timeZoneIdentifier',
   'random');
-var NS, V, R: TValue; I: Integer; Z, C: string;
+var NS, V, R: TValue; I: Integer; Z, C: string; PrevClock: THostClockFn; PrevRandom: THostRandomFn;
+  Committed: Boolean; PrevOriginMs: Double; PrevOriginMonoNs: Int64;
 begin
   Result := False;
   if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(FHostEnvironment))), NS) then Exit;
@@ -719,30 +730,53 @@ begin
   finally
     PopRoots(1);
   end;
-  AddRootRange(@FEnvFns[0], 4);
-  FEnvLoaded := True;
+  if not FEnvRooted then
+  begin
+    AddRootRange(@FEnvFns[0], 4);
+    FEnvRooted := True;
+  end;
   FRandomForks := 0;
   SetLength(FEnvStreams, 0);
   SetLength(FEnvStreamSet, 0);
+  PrevClock := HostClock;
+  PrevRandom := HostRandom;
+  PrevOriginMs := TimeOriginMs;
+  PrevOriginMonoNs := TimeOriginMonoNs;
   HostClock := ProviderClock;
   HostRandom := ProviderRandom;
-  if not TimeOriginInit then Exit;
-  { the default time zone, read once (Date's local time, Temporal.Now, Intl), as GocciaScript canonicalizes it }
-  FEnvClockCalling := True;
+  { the provider counts as loaded only once its setup has finished: a setup an error or an abort stopped in one of its
+    calls is undone, and the next run loads it again }
+  Committed := False;
   try
-    if not CallValue(FEnvFns[2], VUndefined, nil, 0, R) then Exit;
+    if not TimeOriginInit then Exit;
+    { the default time zone, read once (Date's local time, Temporal.Now, Intl), as GocciaScript canonicalizes it }
+    FEnvClockCalling := True;
+    try
+      if not CallValue(FEnvFns[2], VUndefined, nil, 0, R) then Exit;
+    finally
+      FEnvClockCalling := False;
+    end;
+    if not IsString(R) then Exit(ThrowTypeError('Host environment export "timeZoneIdentifier" must return a string'));
+    Z := StrToUnicode(StrOf(R));
+    if TimeZoneIdentifiersEqual(Z, 'UTC') then Z := 'UTC'
+    else if TryCanonicalizeTimeZoneIdentifierCase(Z, C) and IsValidTimeZone(C) then Z := C
+    else if not IsValidTimeZone(Z) then
+      Exit(ThrowError('RangeError', 'Host environment export "timeZoneIdentifier" returned an unsupported time ' +
+        'zone: ' + Z));
+    TimeZoneOverride := Z;
+    FEnvLoaded := True;
+    Committed := True;
+    Result := True;
   finally
-    FEnvClockCalling := False;
+    if not Committed then
+    begin
+      HostClock := PrevClock;
+      HostRandom := PrevRandom;
+      TimeOriginMs := PrevOriginMs;
+      TimeOriginMonoNs := PrevOriginMonoNs;
+      for I := 0 to 3 do FEnvFns[I] := VUndefined;
+    end;
   end;
-  if not IsString(R) then Exit(ThrowTypeError('Host environment export "timeZoneIdentifier" must return a string'));
-  Z := StrToUnicode(StrOf(R));
-  if TimeZoneIdentifiersEqual(Z, 'UTC') then Z := 'UTC'
-  else if TryCanonicalizeTimeZoneIdentifierCase(Z, C) and IsValidTimeZone(C) then Z := C
-  else if not IsValidTimeZone(Z) then
-    Exit(ThrowError('RangeError', 'Host environment export "timeZoneIdentifier" returned an unsupported time ' +
-      'zone: ' + Z));
-  TimeZoneOverride := Z;
-  Result := True;
 end;
 
 procedure TGocciaEngine.ReportSharedCount(var R: TGocciaRunResult);
@@ -1212,11 +1246,86 @@ begin
   end;
 end;
 
+function TGocciaEngine.CaptureAbortHandle: IGocciaAbortHandle;
+begin
+  FNextRunAbort := NewRunAbortSignal;
+  Result := FNextRunAbort;
+end;
+
+{ a run the host cancelled through its abort handle, reported the same whenever the request was observed }
+procedure ReportHostCancellation(var R: TGocciaRunResult);
+begin
+  R.Ok := False;
+  R.Aborted := gaHostAbort;
+  R.ErrorIsError := True;
+  R.ErrorName := 'Error';
+  R.ErrorText := SHostRunCancelled;
+  R.ErrorMessage := R.ErrorText;
+  R.ErrorFile := '';
+  R.ErrorLine := 0;
+  R.ErrorColumn := 0;
+  R.ErrorSuggestion := '';
+  R.ErrorResolvedPath := '';
+  R.HasResult := False;
+  R.ResultText := '';
+end;
+
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
+var Signal: IRunAbortSignal; Requested, Started: Boolean; Err: UnicodeString; WeakMark: Int64;
+begin
+  Signal := FNextRunAbort;
+  if Signal = nil then Exit(RunEntry(FileName, Source));
+  FNextRunAbort := nil;
+  { the engine's own setup runs before the handle binds: a request cannot leave the host half installed, and takes
+    effect when the run starts (RunEntry reports a setup that failed) }
+  Err := '';
+  if not PrepareHost(Err) then
+  begin
+    { a setup that failed is the run's failure, reported as RunEntry reports it, with the handle never bound }
+    Result := Default(TGocciaRunResult);
+    Result.ErrorMessage := Err;
+    DiscardEmbedderWork;
+    ReportSharedCount(Result);
+    Exit;
+  end;
+  WeakMark := WeakCleanupMark;
+  Started := False;
+  BeginRunAbort(Signal);
+  try
+    if not RunAbortRequested then
+    begin
+      Started := True;
+      Result := RunEntry(FileName, Source);
+    end
+    else
+    begin
+      { a run cancelled before it started: nothing ran, and a shared budget's count is the job's so far }
+      Result := Default(TGocciaRunResult);
+      ReportSharedCount(Result);
+    end;
+  finally
+    Requested := EndRunAbort;
+  end;
+  if Requested and (Result.Aborted = gaNone) then
+  begin
+    { a request that came after the run's own last check: the run is reported cancelled, so what it left (a job a
+      throwing entry queued, a timer) is discarded as after any abort, not run by the next entry, and the module
+      evaluations it left unfinished load again, as a cancellation's do. A run cancelled before it started made
+      nothing, and what earlier runs left stays. }
+    if Started then
+    begin
+      DiscardFailedRunWork(WeakMark, FModuleEvaluationMark, VUndefined, SHostRunCancelled, False);
+      SupersedeFailedModulesFrom(FRunModuleMark);
+    end;
+    ReportHostCancellation(Result);
+  end;
+end;
+
+function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn, ScriptId: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled, HasErrorLocation: Boolean; EnvAbort: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
+  Compiled, HasErrorLocation: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1230,6 +1339,7 @@ begin
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
+  FRunModuleMark := ModuleCount;
   FModuleEvaluationMark := ModuleEvaluationMark;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   NurseryFitCeiling;
@@ -1260,6 +1370,7 @@ begin
     begin
       { the provider module's code runs under the run's limits, as the entry's does }
       LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
+      EnvMark := ModuleCount;
       Compiled := False;
       try
         Compiled := LoadHostEnvironment;
@@ -1273,6 +1384,9 @@ begin
         end;
         if (EnvAbort <> 0) or not Compiled then
           DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, Pending);
+        { an abort is not the provider's own failure, and the provider is the host's setup, not the run's code: what
+          the abort cut short loads again on the next run }
+        if EnvAbort <> 0 then SupersedeFailedModulesFrom(EnvMark);
         LimitsDisarm;
       end;
     end
@@ -1306,6 +1420,8 @@ begin
       Pending := VUndefined;
       DescribeThrown(RootAt(TempTop - 1), Result);
     end;
+    { a host environment the abort handle cancelled reads as any cancelled run }
+    if (EnvAbort = 4) and (HostAbortMessage = SHostRunCancelled) then ReportHostCancellation(Result);
     PopRoots(1);
     Pending := VUndefined;
     SetHostResolver(nil);
@@ -1447,6 +1563,13 @@ begin
       Result.HasResult := Result.Ok;
     end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
+    if (AbortKind = 0) and RunAbortRequested then AbortInterrupted;
+    { a cancelled run has no completion value, whenever the request came }
+    if AbortKind = 4 then
+    begin
+      Result.HasResult := False;
+      Result.ResultText := '';
+    end;
     if not Result.Ok or (AbortKind <> 0) then
     begin
       Result.Ok := False;
@@ -1500,12 +1623,18 @@ begin
     begin
       Result.ErrorName := AbortErrorName;
       Result.ErrorText := AbortErrorMessage;
+      { the abort handle's cancellation reads the same however it was observed; a capability audit's keeps its
+        own message (the abort records which came first) }
+      if (AbortKind = 4) and (HostAbortMessage = SHostRunCancelled) then ReportHostCancellation(Result);
     end;
   finally
     { a run that failed or aborted takes the work it left pending with it: the engine's next run is not blamed for
       it, and an aborted script never runs again }
     if (AbortKind <> 0) or not Result.Ok then
       DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, RootAt(TempTop - 1));
+    { the module evaluations a cancellation cut short load again on a later run, finished ones stay; a limit's abort
+      leaves its error in them instead (DiscardFailedRunWork), as their own throw would }
+    if (AbortKind = 4) and (HostAbortMessage = SHostRunCancelled) then SupersedeFailedModulesFrom(FRunModuleMark);
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);

@@ -74,8 +74,11 @@ function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitC
   Token: Integer): TWaitResult;
 { removes this thread's async waiter Token if it is still waiting (its timeout fired first): True if removed }
 function SharedAsyncCancel(Token: Integer): Boolean;
+type
+  TAsyncEventWait = procedure(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+
 { waits up to TimeoutMs for this thread's async waiters to be notified; returns their tokens }
-function SharedAsyncPoll(TimeoutMs: Cardinal): TBoundArray;
+function SharedAsyncPoll(TimeoutMs: Cardinal; AWait: TAsyncEventWait): TBoundArray;
 { drops this thread's async waiters and notifications without settling their promises }
 procedure SharedAsyncDiscard;
 { Atomics.notify: wakes up to Count (negative: all) waiters on (Block, ByteIndex), oldest first, sync and
@@ -426,14 +429,14 @@ begin
   LeaveCriticalSection(WaitLock);
 end;
 
-function SharedAsyncPoll(TimeoutMs: Cardinal): TBoundArray;
+function SharedAsyncPoll(TimeoutMs: Cardinal; AWait: TAsyncEventWait): TBoundArray;
 var M: PMailbox; I: Integer;
 begin
   M := Mailbox;
   EnterCriticalSection(WaitLock);
   I := M^.DoneCount;
   LeaveCriticalSection(WaitLock);
-  if (I = 0) and (TimeoutMs > 0) then RTLEventWaitFor(M^.Event, TimeoutMs);
+  if (I = 0) and (TimeoutMs > 0) then AWait(M^.Event, TimeoutMs);
   EnterCriticalSection(WaitLock);
   SetLength(Result, M^.DoneCount);
   for I := 0 to M^.DoneCount - 1 do Result[I] := M^.Done[I];

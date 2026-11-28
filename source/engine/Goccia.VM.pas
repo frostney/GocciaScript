@@ -237,11 +237,35 @@ procedure VMInit;
 { the JIT compiles on one thread only (its emitter's buffers are shared): the thread that loaded Goccia.VM, until a
   host that runs its engine on another thread hands compiling to that one. Only while no other thread compiles. }
 procedure JitTakeThread;
+type
+  IGocciaAbortHandle = interface
+    { Requests the stop from any thread. A request after this run ends cannot affect a later run. }
+    procedure Request;
+  end;
+  IRunAbortSignal = interface(IGocciaAbortHandle)
+    procedure Bind(AInterrupt, AFrameLimit: PLongInt);
+    function Unbind: Boolean;
+    function Requested: Boolean;
+    procedure Restore;
+    procedure Wait(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+  end;
+
+function NewRunAbortSignal: IRunAbortSignal;
+procedure BeginRunAbort(const ASignal: IRunAbortSignal);
+function EndRunAbort: Boolean;
+function RunAbortRequested: Boolean;
+{ not inline: a threadvar read across units (docs/core-patterns.md) }
+function RunAbortArmed: Boolean; noinline;
+procedure WaitForRunEvent(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+
+const
+  SHostRunCancelled = 'Execution was cancelled by the host';
+
 { Execution limits for the next run: a timeout in milliseconds and an instruction budget, each 0 for none. A spent
   limit aborts the run: a pending Error ('Execution timed out after Nms', 'Execution exceeded instruction limit
-  of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). The memory limit
-  (HeapCeiling) is always in force: a full collection that leaves more live aborts the run the same way, with a
-  RangeError (MemoryLimitMessage) and AbortKind 3. }
+  of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort) but preserves a
+  request on the active run's abort handle. The memory limit (HeapCeiling) is always in force: a full collection
+  that leaves more live aborts the run the same way, with a RangeError (MemoryLimitMessage) and AbortKind 3. }
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64; MeasureInstructions: Boolean = False;
   const SharedBudget: IGocciaInstructionBudget = nil);
 procedure LimitsDisarm;
@@ -660,6 +684,163 @@ threadvar
   MemStrikeBytes: Int64;
   MemStrikes: Integer;
 
+type
+  TRunAbortSignal = class(TInterfacedObject, IRunAbortSignal, IGocciaAbortHandle)
+  private
+    FLock: TRTLCriticalSection;
+    FRequested: LongInt;
+    FInterrupt, FFrameLimit: PLongInt;
+    FWaitEvent: PRTLEvent;
+    procedure Publish;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Request;
+    procedure Bind(AInterrupt, AFrameLimit: PLongInt);
+    function Unbind: Boolean;
+    function Requested: Boolean;
+    procedure Restore;
+    procedure Wait(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+  end;
+
+threadvar
+  ActiveRunAbort: IRunAbortSignal;
+
+constructor TRunAbortSignal.Create;
+begin
+  inherited Create;
+  InitCriticalSection(FLock);
+end;
+
+destructor TRunAbortSignal.Destroy;
+begin
+  DoneCriticalSection(FLock);
+  inherited Destroy;
+end;
+
+procedure TRunAbortSignal.Publish;
+begin
+  if (FInterrupt = nil) or (FRequested = 0) then Exit;
+  { The frame bound is observed before the interrupt, as with the deadline timer. }
+  InterlockedExchange(FInterrupt^, 1);
+  InterlockedExchange(FFrameLimit^, 0);
+  if FWaitEvent <> nil then RTLEventSetEvent(FWaitEvent);
+end;
+
+procedure TRunAbortSignal.Request;
+begin
+  EnterCriticalSection(FLock);
+  try
+    InterlockedExchange(FRequested, 1);
+    Publish;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TRunAbortSignal.Bind(AInterrupt, AFrameLimit: PLongInt);
+begin
+  EnterCriticalSection(FLock);
+  try
+    FInterrupt := AInterrupt;
+    FFrameLimit := AFrameLimit;
+    Publish;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TRunAbortSignal.Unbind: Boolean;
+begin
+  EnterCriticalSection(FLock);
+  try
+    FInterrupt := nil;
+    FFrameLimit := nil;
+    Result := FRequested <> 0;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TRunAbortSignal.Requested: Boolean;
+begin
+  Result := InterlockedCompareExchange(FRequested, 0, 0) <> 0;
+end;
+
+procedure TRunAbortSignal.Restore;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Publish;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TRunAbortSignal.Wait(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+begin
+  EnterCriticalSection(FLock);
+  try
+    if FRequested <> 0 then Exit;
+    FWaitEvent := AEvent;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  try
+    RTLEventWaitFor(AEvent, ATimeoutMs);
+  finally
+    EnterCriticalSection(FLock);
+    try
+      FWaitEvent := nil;
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+  end;
+end;
+
+procedure WaitForRunEvent(AEvent: PRTLEvent; ATimeoutMs: Cardinal);
+begin
+  if ActiveRunAbort = nil then RTLEventWaitFor(AEvent, ATimeoutMs)
+  else ActiveRunAbort.Wait(AEvent, ATimeoutMs);
+end;
+
+function NewRunAbortSignal: IRunAbortSignal;
+begin
+  Result := TRunAbortSignal.Create;
+end;
+
+procedure BeginRunAbort(const ASignal: IRunAbortSignal);
+begin
+  if ActiveRunAbort <> nil then raise Exception.Create('A run abort handle is already active on this thread');
+  ActiveRunAbort := ASignal;
+  ActiveRunAbort.Bind(@Interrupt, @FrameLimit);
+  JitBlocked := True;
+end;
+
+function EndRunAbort: Boolean;
+begin
+  Result := ActiveRunAbort.Unbind;
+  ActiveRunAbort := nil;
+  if Result then LimitsDisarm
+  else JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or
+    InstrCounted or (LimitTimer <> nil);
+end;
+
+function RunAbortArmed: Boolean;
+begin
+  Result := ActiveRunAbort <> nil;
+end;
+
+function RunAbortRequested: Boolean;
+begin
+  Result := (ActiveRunAbort <> nil) and ActiveRunAbort.Requested;
+end;
+
+procedure RestoreRunAbort; inline;
+begin
+  if ActiveRunAbort <> nil then ActiveRunAbort.Restore;
+end;
+
 const
   MEM_STRIKES_MAX = 8;
   { a refusal met at a call this deep is the call stack's: reported as a stack overflow at the call }
@@ -673,6 +854,8 @@ begin
   MemRefusePending := False;
   InterLockedExchange(Interrupt, 0);
   FrameLimit := FrameLimitBase;
+  RestoreRunAbort;
+  if Interrupt <> 0 then Exit(False);
   { the timer's stores: Interrupt is set after the deadline passes, so a deadline past now set it, or is about to }
   if (LimitTimer <> nil) and (GetTickCount64 >= LimitTimer.Deadline) then
   begin
@@ -739,7 +922,15 @@ end;
 procedure XAbort(Kind: Integer); noinline;
 begin
   { a memory refusal is not an abort: the script can catch it }
-  if (Kind = 1) and MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(False) then Exit;
+  if (Kind = 1) and (AbortKind = 0) then
+  begin
+    if not RunAbortRequested and MemRefusePending and DeliverMemoryRefusal(False) then Exit;
+    if RunAbortRequested then
+    begin
+      Kind := 4;
+      HostAbortText := SHostRunCancelled;
+    end;
+  end;
   if AbortKind = 0 then AbortKind := Kind;
   Aborting := True;
   Interrupt := 1;
@@ -1036,7 +1227,7 @@ begin
   if Interrupt <> 0 then
   begin
     { a memory refusal at a call: a deep stack holds what the limit refused }
-    if MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(True) then Exit(False);
+    if not RunAbortRequested and MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(True) then Exit(False);
     XAbort(1);
     Exit(False);
   end;
@@ -1089,7 +1280,8 @@ begin
   MemRefusePending := False;
   MemStrikes := 0;
   MemStrikeBytes := 0;
-  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn;
+  RestoreRunAbort;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or RunAbortArmed;
 end;
 
 procedure LimitsSetDeadline(Ms: Int64);
@@ -1118,7 +1310,7 @@ begin
   if not InstrCounted then Exit;
   InstrCounted := False;
   InstrLeft := 0;
-  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil);
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or (LimitTimer <> nil) or RunAbortArmed;
 end;
 
 procedure LimitsDropTimer;
@@ -1126,7 +1318,7 @@ begin
   if LimitTimer = nil then Exit;
   StopLimitTimer;
   LimitTimeoutMs := 0;
-  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or InstrCounted;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or InstrCounted or RunAbortArmed;
 end;
 
 procedure ClearTimeoutAbort;
@@ -1136,6 +1328,7 @@ begin
   Aborting := False;
   AbortKind := 0;
   FrameLimit := FrameLimitBase;
+  RestoreRunAbort;
 end;
 
 function CallRebased(F, This: TValue; var R: TValue): Boolean;
@@ -1191,7 +1384,10 @@ begin
     the Nth call is pushed at FrameTop N (the entry's frame and N - 1 calls) }
   if (N <= 0) or (N > FRAME_MAX - 3) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 3;
   if Interrupt = 0 then FrameLimit := FrameLimitBase;
-  if (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn then JitBlocked := True
+  { a request another thread published between the test and the write: the signal publishes it again under its
+    lock, so the frame bound stays 0 while the interrupt is set }
+  RestoreRunAbort;
+  if (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or RunAbortArmed then JitBlocked := True
   else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;
 end;
 
@@ -8502,6 +8698,13 @@ LSetPropSlow:
                 InjectThrow := True;
                 Exit(-1);
               end;
+              { as for a direct native call below }
+              if (Interrupt <> 0) and RunAbortRequested then
+              begin
+                XAbort(1);
+                InjectThrow := True;
+                Exit(-1);
+              end;
               Continue;
             end;
           end
@@ -8512,6 +8715,13 @@ LSetPropSlow:
             Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
             if not XFastNative(O, R, A, PQWord(IP)[-1], Fr) then
             begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            { a cancellation the native requested or that arrived while it ran ends the run before the next call }
+            if (Interrupt <> 0) and RunAbortRequested then
+            begin
+              XAbort(1);
               InjectThrow := True;
               Exit(-1);
             end;
@@ -10057,10 +10267,24 @@ LReload:
             StackTop := SavedTop;
             if not Ok then goto LThrow;
             R[A] := V;
+            { a cancellation the native requested or that arrived while it ran ends the run before the next call }
+            if (Interrupt <> 0) and RunAbortRequested then
+            begin
+              Fr^.PC := PC;
+              XAbort(1);
+              goto LThrow;
+            end;
             Continue;
           end;
           if not CallValue(VA, R[A + 1], @R[A + 2], Argc, V) then goto LThrow;
           R[A] := V;
+          { a bound or other callee's native: the checkpoint of a direct native call above }
+          if (Interrupt <> 0) and RunAbortRequested then
+          begin
+            Fr^.PC := PC;
+            XAbort(1);
+            goto LThrow;
+          end;
         end;
 
       opSuperCall, opSuperCallV:
@@ -11081,6 +11305,12 @@ LBackEdge:
     Continue;
 LThrow:
     if ThrowTrace then XTraceThrow;
+    { a host's cancellation requested by a native that then threw is the run's end, not an error a handler takes }
+    if (Interrupt <> 0) and not Aborting and RunAbortRequested then
+    begin
+      Fr^.PC := PC;
+      XAbort(1);
+    end;
     { an abort: no handler of this activation runs }
     if Aborting then
       while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) do

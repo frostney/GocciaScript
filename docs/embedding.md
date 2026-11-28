@@ -61,7 +61,7 @@ end.
 
 | Group | Members |
 |-------|---------|
-| Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact` |
+| Life cycle | `Create`, `Destroy`, `PrepareHost`, `Run`, `RunArtifact`, `CompileArtifact`, `CaptureAbortHandle` |
 | Language | `Profile` (`TLangProfile`, from `RecommendedProfile`), `SourceKind`, `JSModuleSources` |
 | Host surface | `Bare`, `ExposeTimers`, `ConfigJson`, `TestMode`, `BenchMode`, `HeapSnapshots`, `Deterministic`, `RandomRoot`, `HostEnvironment`, [`SetHostWork`](#asynchronous-host-work) |
 | Results and output | `ResultForm`, `OnConsole`, `OnWarning`, `OnModuleWarning`, `FailOnUnhandledRejection`, `Memory` |
@@ -143,7 +143,8 @@ GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor in
 | StartExecutionTimeout, StartInstructionLimit, SetMaxStackDepth, TGarbageCollector.MaxBytes | `TimeoutMs`, `MaxInstructions`, `MaxFrames`, `MaxMemory` |
 | UnhandledRejections | `FailOnUnhandledRejection` |
 | Pascal exceptions from a run | Fields of `TGocciaRunResult` ([Error Handling](#error-handling)) |
-| CaptureAbortHandle, Engine.FetchTransport | None ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread), [Fetch Transport](#fetch-transport)) |
+| CaptureAbortHandle | [TGocciaEngine.CaptureAbortHandle](#aborting-a-run-from-another-thread) |
+| Engine.FetchTransport | None ([Fetch Transport](#fetch-transport)) |
 
 ## Engine Lifecycle & Realm Isolation
 
@@ -494,10 +495,10 @@ Engine.AuditSink := Log.Record_;
 
 ```pascal
 if not R.Ok then
-  if not R.Compiled then
-    WriteLn('syntax error at ', R.ErrorLine, ':', R.ErrorColumn, ': ', UTF8Encode(R.ErrorText))
-  else if R.Aborted <> gaNone then
+  if R.Aborted <> gaNone then
     WriteLn('stopped: ', UTF8Encode(R.ErrorMessage))
+  else if not R.Compiled then
+    WriteLn('syntax error at ', R.ErrorLine, ':', R.ErrorColumn, ': ', UTF8Encode(R.ErrorText))
   else if R.ErrorIsError then
     WriteLn(UTF8Encode(R.ErrorName), ': ', UTF8Encode(R.ErrorText), ' (', UTF8Encode(R.ErrorFile), ':',
       R.ErrorLine, ':', R.ErrorColumn, ')')
@@ -515,7 +516,7 @@ if not R.Ok then
 
 Four limits bound a run. Each is a property read by `Run`; 0 means none (`MaxMemory` 0: the default ceiling). A run with a timeout, an instruction budget or a frame bound runs without the JIT, since compiled code counts no instructions and reaches the timeout's interrupt only at loop back edges, and so does a run with `Coverage` or a profile; the memory limit leaves the JIT on.
 
-When `Run` or `RunArtifact` returns an `Aborted` reason, or fails with an uncaught exception, the engine discards the work pending when the run ends, including work the host queued before it: queued jobs, timers and intervals, finalization work, asynchronous waits and [asynchronous host work](#asynchronous-host-work). It stops waiting for outstanding fetches and drops their completions. A request already dispatched may finish on its worker. A module whose asynchronous evaluation the run started and did not finish records the abort's error, or the uncaught value, as its evaluation error, so a later import rejects with it as it would had the module thrown (ES2026 §16.2.1.6.1.3.5 AsyncModuleExecutionRejected). `InjectModuleGlobals`, `RunTests` and `RunBenchmarks` discard the same work when they fail or abort; a module their failure leaves unfinished records the error they failed with, and their `Err` is the limit's message after an abort. Globals and changes made before the failure remain visible to later runs on the same engine. A nested sandbox run (`runScript`) runs on an engine of its own, so a child that fails leaves its caller's work alone.
+When `Run` or `RunArtifact` returns an `Aborted` reason, or fails with an uncaught exception, the engine discards the work pending when the run ends, including work the host queued before it: queued jobs, timers and intervals, finalization work, asynchronous waits and [asynchronous host work](#asynchronous-host-work). It stops waiting for outstanding fetches and drops their completions. A request already dispatched may finish on its worker. A module whose asynchronous evaluation the run started and did not finish records the abort's error, or the uncaught value, as its evaluation error, so a later import rejects with it as it would had the module thrown (ES2026 §16.2.1.6.1.3.5 AsyncModuleExecutionRejected). A module evaluation the abort handle's cancellation cut short is the exception: it loads again on a later run ([Aborting a Run from Another Thread](#aborting-a-run-from-another-thread)). `InjectModuleGlobals`, `RunTests` and `RunBenchmarks` discard the same work when they fail or abort; a module their failure leaves unfinished records the error they failed with, and their `Err` is the limit's message after an abort. Globals and changes made before the failure remain visible to later runs on the same engine. A nested sandbox run (`runScript`) runs on an engine of its own, so a child that fails leaves its caller's work alone.
 
 `ErrorMessage` of an aborted run is the limit's error (`Error: Execution timed out after 2000ms`), wherever in the run the limit was met, and `ErrorName` and `ErrorText` give its name and message.
 
@@ -546,7 +547,26 @@ path and leave `HasInstructionCount` false. Counter-enabled entries run in the i
 
 ### Aborting a Run from Another Thread
 
-`TGocciaEngine` has no abort handle: another thread cannot stop a run. A host bounds the run with `TimeoutMs`, whose timer thread is the only cross-thread stop. Code the JIT compiled sees the interrupt only at loop back edges and counts no instructions, which is why the limits keep the JIT off; `GocciaFuzzHarness` ends its JIT run, which has no limits, with a watchdog that exits the process.
+On the engine's thread, call `Engine.CaptureAbortHandle` before `Run` or `RunArtifact`. Hold the returned
+`IGocciaAbortHandle` in the thread that may call `Request`. A request made before the run prevents it from starting.
+A request during execution ends it past guest handlers with `Aborted = gaHostAbort`, even when a native function
+that made the request returns an error. The engine interrupts its fetch and Atomics waits, then discards pending guest
+work under the same rules as a timeout. A module evaluation that the run started and the request cut short loads
+again on a later run, where a limit's abort leaves the limit's error in it instead. A module the run only loaded or
+linked without starting it, such as a source phase import's or an unread `import.defer` namespace's, stays, and so
+does its source object, unless a module it links loads again; a finished cycle member whose cycle root loads again
+does too. A run cancelled before it started made nothing, so it leaves what earlier runs queued in place.
+
+The handle targets one entry. A late request cannot affect the next run, even if the same engine is reused.
+Use a fresh handle for every run. Capturing again before the run replaces the earlier handle, whose requests then do
+nothing. A request that lands while the run finishes still reports `gaHostAbort`, unless the run already ended at
+one of its limits, which it then reports. A cancelled run has no completion value. The handle holds nothing of the engine once its run ended, so the requesting thread and the engine's
+thread may each release their reference whenever they are done with it.
+A run with an armed handle runs in the interpreter, without the JIT. The handle has expired by the time `RunTests` or
+`RunBenchmarks` runs. A nested sandbox run another thread executes does not see the request; the caller observes it
+when that run returns.
+Compilation and custom blocking native functions can reach the abort only when they return or encounter an engine
+checkpoint. [ADR 0198](adr/0198-an-abort-handle-belongs-to-the-next-run.md) records the design.
 
 ### Sharing an instruction budget
 

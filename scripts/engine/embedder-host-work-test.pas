@@ -436,27 +436,36 @@ begin
   end;
 end;
 
-{ A host that cannot prepare releases the work its source already holds. }
+{ A host that cannot prepare releases the work its source already holds, with or without an abort handle captured
+  for the run (one nobody requests takes the run's other path to the same failure). }
 procedure CheckFailedPrepare;
 var
   Engine: TGocciaEngine;
   RunResult: TGocciaRunResult;
   PromiseSlots: TPromiseSlots;
+  Handle: IGocciaAbortHandle;
+  WithHandle: Boolean;
 begin
-  PromiseSlots[0] := VUndefined;
-  PromiseSlots[1] := VUndefined;
-  Work := TTestWork.Create(@PromiseSlots);
-  Engine := TGocciaEngine.Create;
-  try
-    Engine.ConfigJson := '{ not json';
-    Engine.SetHostWork(Work);
-    Work.ForcePending := True;
-    RunResult := Engine.Run('external-unprepared.mjs', '42;');
-    Check(not RunResult.Ok and (Work.Discards = 1) and not Work.HasPending,
-      'a host that failed to prepare kept host work: ' + RunResult.ErrorMessage);
-  finally
-    Engine.Free;
-    FreeAndNil(Work);
+  for WithHandle := False to True do
+  begin
+    PromiseSlots[0] := VUndefined;
+    PromiseSlots[1] := VUndefined;
+    Work := TTestWork.Create(@PromiseSlots);
+    Engine := TGocciaEngine.Create;
+    try
+      Engine.ConfigJson := '{ not json';
+      Engine.SetHostWork(Work);
+      Work.ForcePending := True;
+      if WithHandle then Handle := Engine.CaptureAbortHandle;
+      RunResult := Engine.Run('external-unprepared.mjs', '42;');
+      Check(not RunResult.Ok and (RunResult.Aborted = gaNone) and (Work.Discards = 1) and not Work.HasPending,
+        'a host that failed to prepare kept host work (handle ' + BoolToStr(WithHandle, True) + '): ' +
+        RunResult.ErrorMessage);
+    finally
+      Handle := nil;
+      Engine.Free;
+      FreeAndNil(Work);
+    end;
   end;
 end;
 

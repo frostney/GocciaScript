@@ -79,10 +79,12 @@ Native hosts can embed GocciaScript to run portable JavaScript with
 application-specific globals, [native modules](docs/embedding.md#native-modules), capabilities, and limits. A host can
 grant or withhold `fetch` through the `net` capability
 ([Fetch Transport](docs/embedding.md#fetch-transport)), mark sandbox paths
-read-only, and bound a run with a timeout or measure its charged instructions
+read-only, bound a run with a timeout or measure its charged instructions
 ([Execution Limits](docs/embedding.md#execution-limits)), including one
 instruction budget shared by the engines of a job
-([Sharing an instruction budget](docs/embedding.md#sharing-an-instruction-budget)). The timeout takes
+([Sharing an instruction budget](docs/embedding.md#sharing-an-instruction-budget)), and cancel it from
+another thread
+([Aborting a Run from Another Thread](docs/embedding.md#aborting-a-run-from-another-thread)). The timeout takes
 effect at the engine's next check, so a native call blocked outside the engine
 is not interrupted until it returns; give such calls their own deadlines or
 isolate the process. A host can also snapshot the object graphs the snapshot

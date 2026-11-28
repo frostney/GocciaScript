@@ -42,10 +42,11 @@ that found the heap over the limit; only when the script keeps holding the
 memory does the run end with `MemoryLimitError`. An explicit reservation that
 cannot fit, such as an `ArrayBuffer`'s bytes, throws its `RangeError` at once.
 
-`TGocciaEngine` has no abort handle, so another thread cannot stop a run. The one
-host stop is a capability audit sink that cannot record a decision: the run
-ends past every handler (`gaHostAbort`), and GocciaRunner's JSON report names
-it `EGocciaCapabilityAuditDeliveryError`.
+Another thread stops a run through the handle `TGocciaEngine.CaptureAbortHandle`
+returns ([Aborting a Run from Another Thread](embedding.md#aborting-a-run-from-another-thread)):
+the run ends past every handler with `gaHostAbort`. A capability audit sink that
+cannot record a decision ends the run the same way, and GocciaRunner's JSON
+report names that case `EGocciaCapabilityAuditDeliveryError`.
 
 One more class of failure is uncatchable, for a stronger reason and without
 appearing in the table at all: an **engine-integrity fault** -- a virtual call
