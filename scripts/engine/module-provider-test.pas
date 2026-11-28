@@ -25,7 +25,7 @@ type
     Bytecode: TBytes;
     { Nested: the engine and a manifest module it defines from inside its provider, during a run }
     Engine: TGocciaEngine;
-    NestedManifest: UnicodeString;
+    NestedManifest, GlobalsPath, SetupError: UnicodeString;
     function Provide(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Never(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Fail(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
@@ -33,6 +33,8 @@ type
     function ProvideDamaged(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Cyclic(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Nested(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+    function Transitive(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+    function InjectsGlobals(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
   end;
 
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
@@ -88,6 +90,31 @@ begin
     raise Exception.Create('the nested manifest failed: ' + string(Err));
   AAnswer.Kind := mpaBytecode;
   AAnswer.Bytecode := Bytecode;
+  Result := True;
+end;
+
+{ evaluates a module that imports the module whose import it is supplying, whose imports are still loading }
+function TProvider.Transitive(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+var
+  Namespace: TValue;
+begin
+  if EvaluateModuleNamespace('host:loop', Namespace) then
+    raise Exception.Create('a graph still loading its imports was linked');
+  Result := False;
+end;
+
+{ tries InjectModuleGlobals inside the run, then answers }
+function TProvider.InjectsGlobals(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+var
+  Err: UnicodeString;
+begin
+  Err := '';
+  if Engine.InjectModuleGlobals(GlobalsPath, Err) then
+    SetupError := 'accepted'
+  else
+    SetupError := Err;
+  AAnswer.Kind := mpaSource;
+  AAnswer.Source := 'export const ready = true;';
   Result := True;
 end;
 
@@ -427,6 +454,113 @@ begin
   end;
 end;
 
+{ a provider that evaluates a module importing the graph it is supplying a dependency of gets a load error, not a
+  fault; an ordinary cycle still loads }
+procedure CheckTransitiveLoad;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+begin
+  Provider := TProvider.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Engine.ResultForm := grfString;
+    Engine.SourceKind := gskModule;
+    Check(Engine.DefineModuleProvider('host:dep', Provider.Transitive, ErrorText), ErrorText);
+    Check(Engine.DefineInlineVirtualModule('host:parent=import "host:dep"; export const parent = 1;', '', ErrorText),
+      ErrorText);
+    Check(Engine.DefineInlineVirtualModule('host:loop=import { parent } from "host:parent"; export const loop = parent;',
+      '', ErrorText), ErrorText);
+    Check(Engine.DefineInlineVirtualModule('host:a=import { b } from "host:b"; export const a = 1; export const viaB = () => b;',
+      '', ErrorText), ErrorText);
+    Check(Engine.DefineInlineVirtualModule('host:b=import { a } from "host:a"; export const b = 2; export const viaA = () => a;',
+      '', ErrorText), ErrorText);
+    RunResult := Engine.Run('/transitive.mjs',
+      'await import("host:parent").then(() => "loaded", e => e instanceof TypeError && e.message);');
+    Check(RunResult.Ok and (Pos('is still loading its imports', RunResult.ResultText) > 0),
+      'a graph still loading its imports was not refused: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    RunResult := Engine.Run('/cycle-ok.mjs', 'import { a, viaB } from "host:a"; import { b, viaA } from "host:b"; ' +
+      'a + viaB() + b + viaA();');
+    Check(RunResult.Ok and (RunResult.ResultText = '6'), 'an ordinary cycle did not load: ' + RunResult.ResultText +
+      RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Provider.Free;
+  end;
+end;
+
+{ InjectModuleGlobals inside a run (from a provider) is refused before it changes anything: the run's instruction
+  cap still ends it }
+procedure CheckGlobalsInsideRun;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+  Path: string;
+  Lines: TStringList;
+begin
+  Provider := TProvider.Create;
+  Path := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0)))) + 'provider-run-globals.mjs';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'export const injected = true;';
+    Lines.SaveToFile(Path);
+    Provider.Engine := Engine;
+    Provider.GlobalsPath := UnicodeString(Path);
+    Engine.ResultForm := grfString;
+    Engine.SourceKind := gskModule;
+    Engine.MaxInstructions := 5000000;
+    Check(Engine.DefineModuleProvider('host:injects', Provider.InjectsGlobals, ErrorText), ErrorText);
+    RunResult := Engine.Run('/globals-inside.mjs', 'import { ready } from "host:injects"; ' +
+      'const forever = { [Symbol.iterator]() { return { next: () => ({ value: 1, done: false }) }; } }; ' +
+      'for (const x of forever) {} ready;');
+    Check(Pos('cannot be called while the engine runs an entry', Provider.SetupError) > 0,
+      'InjectModuleGlobals inside a run was not refused: ' + Provider.SetupError);
+    Check(RunResult.Aborted = gaInstructionLimit, Format('the run lost its instruction cap (abort %d) %s',
+      [Ord(RunResult.Aborted), RunResult.ErrorMessage]));
+  finally
+    Engine.Free;
+    Provider.Free;
+    Lines.Free;
+    DeleteFile(Path);
+  end;
+end;
+
+{ setup imports follow the engine's JSModuleSources, as its runs do, and leave the setting they found }
+procedure CheckSetupModuleSources;
+var
+  Engine: TGocciaEngine;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+  Path: string;
+  Lines: TStringList;
+begin
+  Path := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0)))) + 'provider-source-globals.mjs';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'import source plain from "host:plain"; export const sourceKind = typeof plain;';
+    Lines.SaveToFile(Path);
+    Engine.ResultForm := grfString;
+    Engine.JSModuleSources := True;
+    Check(Engine.DefineInlineVirtualModule('host:plain=export const v = 1;', '', ErrorText), ErrorText);
+    Check(Engine.InjectModuleGlobals(UnicodeString(Path), ErrorText),
+      'a setup import did not follow JSModuleSources: ' + ErrorText);
+    Check(not JSModuleSourcesEnabled, 'setup left module sources on');
+    RunResult := Engine.Run('/kind.js', 'sourceKind;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'object'), 'the source phase value was not kept: ' +
+      RunResult.ResultText + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Lines.Free;
+    DeleteFile(Path);
+  end;
+end;
+
 { the hash a bytecode record keeps is its file's: the same bytes in another engine give the same hash, other code
   under the same specifier another (a heap snapshot's restore compares them) }
 function RecordHash(const ABytecode: TBytes): QWord;
@@ -506,6 +640,9 @@ begin
   CheckConfigSetupImport;
   CheckNestedSetup;
   CheckRecordHash;
+  CheckTransitiveLoad;
+  CheckGlobalsInsideRun;
+  CheckSetupModuleSources;
   CheckProviders;
   WriteLn('Module providers: passed');
 end.

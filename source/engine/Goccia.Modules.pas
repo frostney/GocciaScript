@@ -102,6 +102,8 @@ procedure SetProvidedSource(const Path, Source: UnicodeString);
 { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source text
   module's source phase import gives one }
 procedure SetJSModuleSources(On: Boolean);
+{ the setting in force, for a caller that sets the engine's own for a while and puts this one back }
+function JSModuleSourcesEnabled: Boolean;
 { this thread's module records so far: a mark ModuleSourcePathSince counts from }
 { heap snapshots (Goccia.HeapSnapshot): module record I's path and compiled code (nil for a host, JSON or source-phase
   record); False past the last }
@@ -1540,13 +1542,19 @@ end;
 
 { ---- 16.2.1.5.2 Link ---- }
 
-procedure CollectGraph(M: TModRec; L: TList<TModRec>);
+{ the graph's records not linked yet, in L; False when one of them is still loading its imports (RequestsState 1: a
+  load a host callback started while an import of that record was being supplied), whose dependency slots are not
+  all filled yet }
+function CollectGraph(M: TModRec; L: TList<TModRec>): Boolean;
 var D: TModRec;
 begin
+  Result := True;
   if (M.Status <> msNew) or (L.IndexOf(M) >= 0) then Exit;
   M.Status := msLinking;
   L.Add(M);
-  for D in M.Deps do CollectGraph(D, L);
+  if M.RequestsState = 1 then Exit(False);
+  for D in M.Deps do
+    if (D = nil) or not CollectGraph(D, L) then Exit(False);
 end;
 
 function LinkFail(L: TList<TModRec>): Boolean;
@@ -1578,7 +1586,11 @@ var L: TList<TModRec>; M: TModRec; I, J: Integer; Clo, Gen, Tbl: TValue; R: TRes
 begin
   L := TList<TModRec>.Create;
   try
-    CollectGraph(Root, L);
+    if not CollectGraph(Root, L) then
+    begin
+      ThrowTypeError('A module of the graph of ' + DiagnosticSource(Root) + ' is still loading its imports');
+      Exit(LinkFail(L));
+    end;
     { every module's InitializeEnvironment start: its table, then its function run to its first suspension }
     for M in L do
     begin
@@ -2726,6 +2738,11 @@ end;
 procedure SetJSModuleSources(On: Boolean);
 begin
   JSModuleSourcesOn := On;
+end;
+
+function JSModuleSourcesEnabled: Boolean;
+begin
+  Result := JSModuleSourcesOn;
 end;
 
 procedure ModulesDone;
