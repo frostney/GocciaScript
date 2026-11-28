@@ -880,7 +880,11 @@ begin
   end;
   PushRoot(Obj);
   try
-    Keys := OwnKeys(ObjOf(RootAt(TempTop - 1)), True);
+    if not OwnKeys(ObjOf(RootAt(TempTop - 1)), True, Keys) then
+    begin
+      Err := TakePendingText;
+      Exit;
+    end;
     PushRoot(Keys);
     try
       N := ArrayLen(ObjOf(Keys));
@@ -1059,7 +1063,7 @@ begin
   PushRoot(V);
   Self_ := TempTop - 1;
   try
-    Keys := OwnKeys(ObjOf(RootAt(Self_)), False);
+    if not OwnKeys(ObjOf(RootAt(Self_)), False, Keys) then begin Pending := VUndefined; Exit('a value that cannot be read'); end;
     PushRoot(Keys);
     N := ArrayLen(ObjOf(Keys));
     for I := 0 to N - 1 do
@@ -1087,7 +1091,11 @@ begin
   end;
   PushRoot(NS);
   try
-    Keys := OwnKeys(ObjOf(RootAt(TempTop - 1)), True);
+    if not OwnKeys(ObjOf(RootAt(TempTop - 1)), True, Keys) then
+    begin
+      Err := TakePendingText;
+      Exit;
+    end;
     PushRoot(Keys);
     try
       N := ArrayLen(ObjOf(Keys));

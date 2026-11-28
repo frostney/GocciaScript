@@ -119,8 +119,6 @@ threadvar
   { no compiled code runs while a limit or a frame bound is set: it has no back-edge poll, and compiled calls
     check FRAME_MAX }
   JitBlocked: Boolean;
-  { set when OwnKeys met a throwing proxy trap: the caller takes it with TakeOwnKeysFailure }
-  OwnKeysFailed: Boolean;
   VStack: PValue;
   StackTop: Integer;          { first value-stack slot not used by any frame }
   Frames: array of TFrame;
@@ -488,7 +486,10 @@ function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
 function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
 { 7.3.21 OrdinaryHasInstance(C, V) }
 function OrdinaryHasInstance(C, V: TValue; var Res: Boolean): Boolean;
-function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;   { array of string keys }
+{ 10.1.11.1 OrdinaryOwnPropertyKeys' string keys (OnlyEnumerable: the enumerable ones) as an array of strings; a
+  proxy's through its traps. Polls the run's limits for each key: False with the abort, the memory refusal or a
+  trap's error pending }
+function OwnKeys(O: PObj; OnlyEnumerable: Boolean; var Keys: TValue): Boolean;
 function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
 function GetIterator(V: TValue; var It: TValue): Boolean;
 function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
@@ -4602,27 +4603,45 @@ begin
   end;
 end;
 
-function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;
-var A: PObj; I, N, NI: Integer; S: PShape; Key: PStr; OV: TValue; Idxs: array of Int64; Idx: Int64;
-  HasShapeIdx: Boolean;
+function OwnKeys(O: PObj; OnlyEnumerable: Boolean; var Keys: TValue): Boolean;
+var A: PObj; I, NI, J: Integer; S: PShape; Key: PStr; OV: TValue; Idxs: array of Int64; Idx, D, Limit: Int64;
+  HasElements: Boolean;
   procedure AddIdx(X: Int64);
   begin
     if NI >= Length(Idxs) then SetLength(Idxs, NI * 2 + 16);
     Idxs[NI] := X;
     Inc(NI);
   end;
-  procedure SortIdx;
-  var J, K: Integer; T: Int64;
+  procedure SiftDown(Root, Last: Integer);
+  var Child: Integer; T: Int64;
   begin
-    for J := 1 to NI - 1 do
+    while Root * 2 + 1 <= Last do
     begin
-      T := Idxs[J];
-      K := J - 1;
-      while (K >= 0) and (Idxs[K] > T) do begin Idxs[K + 1] := Idxs[K]; Dec(K); end;
-      Idxs[K + 1] := T;
+      Child := Root * 2 + 1;
+      if (Child < Last) and (Idxs[Child] < Idxs[Child + 1]) then Inc(Child);
+      if Idxs[Root] >= Idxs[Child] then Exit;
+      T := Idxs[Root]; Idxs[Root] := Idxs[Child]; Idxs[Child] := T;
+      Root := Child;
+    end;
+  end;
+  { the shape's index keys ascending, in O(n log n) whatever their creation order: a heap sort, which needs no
+    buffer, skipped when they were made ascending }
+  procedure SortIdx;
+  var K: Integer; T: Int64; Sorted: Boolean;
+  begin
+    Sorted := True;
+    for K := 1 to NI - 1 do
+      if Idxs[K - 1] > Idxs[K] then begin Sorted := False; Break; end;
+    if Sorted then Exit;
+    for K := NI div 2 - 1 downto 0 do SiftDown(K, NI - 1);
+    for K := NI - 1 downto 1 do
+    begin
+      T := Idxs[0]; Idxs[0] := Idxs[K]; Idxs[K] := T;
+      SiftDown(0, K - 1);
     end;
   end;
 begin
+  Result := False;
   { a function's prototype property is made on first use: it exists for key listing too }
   if (O^.OKind = okFunction) and not OnlyEnumerable and (ShapeLookup(O^.Shape, AtomPrototype) < 0) then
   begin
@@ -4638,62 +4657,80 @@ begin
     { a deferred namespace's keys evaluate its module first }
     if ((O^.OFlags and 16) <> 0) and not NSDeferHook(RootAt(TempTop - 1)) then
     begin
-      OwnKeysFailed := True;
       PopRoots(1);
-      Exit(MkPtr(NewArray(0, 0)));
+      Exit;
     end;
     A := NewArray(0, 8);
     PushRoot(MkPtr(A));
     for I := 0 to ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Len div 2 - 1 do
-      ArrayPush(ObjOf(RootAt(TempTop - 1)), ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Data[I * 2]);
-    Result := RootAt(TempTop - 1);
-    PopRoots(2);
-    Exit;
-  end;
-  if O^.OKind = okProxy then
-  begin
-    { the keys through the traps; a throwing trap yields no keys and sets OwnKeysFailed for the caller }
-    if not ProxyCheckHook(5 + Ord(OnlyEnumerable), MkPtr(O), nil, OV) then
     begin
-      OwnKeysFailed := True;
-      OV := MkPtr(NewArray(0, 0));
+      if not PollInterrupt then begin PopRoots(2); Exit; end;
+      ArrayPush(ObjOf(RootAt(TempTop - 1)), ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Data[I * 2]);
     end;
-    Exit(OV);
+    Keys := RootAt(TempTop - 1);
+    PopRoots(2);
+    Exit(True);
   end;
+  { the keys through the traps: a throwing trap's error is pending }
+  if O^.OKind = okProxy then Exit(ProxyCheckHook(5 + Ord(OnlyEnumerable), MkPtr(O), nil, Keys));
   OV := MkPtr(O);
   PushRoot(OV);
   A := NewArray(0, 8);
   PushRoot(MkPtr(A));
   { 10.1.11.1 OrdinaryOwnPropertyKeys: the array indices ascending (elements, a String object's characters, a typed
-    array's elements and index keys kept in the shape), then the other strings in creation order }
+    array's elements and index keys kept in the shape), then the other strings in creation order. The first three
+    come ascending already, as 0 to Limit - 1 (the elements' holes left out), and are merged with the shape's, so a
+    String object's millions of characters need no list of their indices. Each key added polls the run's limits: a
+    script sets how many there are, and an index's atom is charged to the memory limit for good }
   O := ObjOf(RootAt(TempTop - 2));
   SetLength(Idxs, 0);
   NI := 0;
-  if O^.OKind = okStringObj then
-    for I := 0 to StrOf(O^.Aux1)^.Len - 1 do AddIdx(I)
-  else if O^.OKind = okTypedArray then
-    for I := 0 to TALength(O) - 1 do AddIdx(I)
-  else if O^.Elements <> nil then
-    for I := 0 to O^.Elements^.Len - 1 do
-      if O^.Elements^.Data[I] <> VHole then AddIdx(I);
   S := O^.Shape;
-  HasShapeIdx := False;
   for I := 0 to S^.Count - 1 do
     if (S^.Keys[I]^.Hdr.Extra = 0) and IndexFromString(S^.Keys[I], Idx) and
        (not OnlyEnumerable or ((S^.PFlags[I] and pfEnumerable) <> 0)) then
-    begin
       AddIdx(Idx);
-      HasShapeIdx := True;
-    end;
-  if HasShapeIdx then SortIdx;
-  for I := 0 to NI - 1 do
+  if NI > 1 then SortIdx;
+  HasElements := False;
+  if O^.OKind = okStringObj then Limit := StrOf(O^.Aux1)^.Len
+  else if O^.OKind = okTypedArray then Limit := TALength(O)
+  else if O^.Elements <> nil then
   begin
-    Key := IntAtom(Idxs[I]);
+    Limit := O^.Elements^.Len;
+    HasElements := True;
+  end
+  else Limit := 0;
+  D := 0;
+  J := 0;
+  while True do
+  begin
+    if HasElements then
+    begin
+      { the elements stay where they are while the result grows: no script runs, and a collection only moves them }
+      O := ObjOf(RootAt(TempTop - 2));
+      while (D < Limit) and (O^.Elements^.Data[D] = VHole) do Inc(D);
+    end;
+    if (D < Limit) and ((J >= NI) or (D < Idxs[J])) then
+    begin
+      Idx := D;
+      Inc(D);
+    end
+    else if J < NI then
+    begin
+      Idx := Idxs[J];
+      Inc(J);
+    end
+    else Break;
+    if not PollInterrupt then begin PopRoots(2); Exit; end;
+    Key := IntAtom(Idx);
     ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(Key));
   end;
   O := ObjOf(RootAt(TempTop - 2));
   if not OnlyEnumerable and (O^.OKind in [okArray, okStringObj, okArguments]) then
+  begin
+    if not PollInterrupt then begin PopRoots(2); Exit; end;
     ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(AtomLength));
+  end;
   O := ObjOf(RootAt(TempTop - 2));
   S := O^.Shape;
   for I := 0 to S^.Count - 1 do
@@ -4702,11 +4739,13 @@ begin
     if Key^.Hdr.Extra <> 0 then Continue;   { symbol, private and internal keys }
     if IndexFromString(Key, Idx) then Continue;
     if OnlyEnumerable and ((S^.PFlags[I] and pfEnumerable) = 0) then Continue;
+    if not PollInterrupt then begin PopRoots(2); Exit; end;
     ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(Key));
     S := ObjOf(RootAt(TempTop - 2))^.Shape;
   end;
-  Result := RootAt(TempTop - 1);
+  Keys := RootAt(TempTop - 1);
   PopRoots(2);
+  Result := True;
 end;
 
 { ---------------- iteration ---------------- }
@@ -6602,12 +6641,12 @@ begin
   for I := 0 to S^.Count - 1 do
     if (S^.Keys[I]^.Hdr.Extra and kfSymbol) <> 0 then Exit(CopyDataPropsHook(Target, Src));
   PushRoot(Target); PushRoot(Src);
-  Keys := OwnKeys(ObjOf(Src), True);
-  if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(2); Exit(False); end;
+  if not OwnKeys(ObjOf(Src), True, Keys) then begin PopRoots(2); Exit(False); end;
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
     if not GetV(RootAt(TempTop - 2), K, V) then begin PopRoots(3); Exit(False); end;
     DefineOwn(RootAt(TempTop - 3), K, V, pfDefault);
@@ -6643,8 +6682,7 @@ begin
     Exit(True);
   end;
   PushRoot(V);
-  A := OwnKeys(ObjOf(V), True);
-  if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(1); Exit(False); end;
+  if not OwnKeys(ObjOf(V), True, A) then begin PopRoots(1); Exit(False); end;
   PushRoot(A);
   { a namespace's [[GetOwnProperty]] reads each export: an uninitialized one is a ReferenceError }
   if ObjOf(RootAt(TempTop - 2))^.OKind = okModuleNS then
@@ -6656,14 +6694,14 @@ begin
   while IsObject(P) do
   begin
     PushRoot(P);
-    K := OwnKeys(ObjOf(P), True);
-    if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(3); Exit(False); end;
+    if not OwnKeys(ObjOf(P), True, K) then begin PopRoots(3); Exit(False); end;
     N := ArrayLen(ObjOf(K));
     if N > 0 then
     begin
       PushRoot(K);
       for I := 0 to N - 1 do
       begin
+        if not PollInterrupt then begin PopRoots(4); Exit(False); end;
         Key := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
         Shadow := False;
         Q := RootAt(TempTop - 4);

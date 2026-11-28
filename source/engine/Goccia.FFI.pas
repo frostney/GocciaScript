@@ -1788,7 +1788,7 @@ begin
   if not IsObject(Def) or (ObjOf(Def)^.OKind = okArray) or IsCallable(Def) then
     Exit(ThrowTypeError(SErrorFFIAggregateDefinitionObject));
   PushRoot(Def);
-  Keys := OwnKeys(ObjOf(Def), True);
+  if not OwnKeys(ObjOf(Def), True, Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
   Len := ArrayLength(ObjOf(Keys));
   N := Len;
