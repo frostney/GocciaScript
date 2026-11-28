@@ -1264,6 +1264,7 @@ begin
   end;
   for I := 0 to J - 1 do
   begin
+    if not PollInterrupt then begin PopRoots(3 + J * 3); Exit; end;
     Descs[I].Value := RootAt(TempTop - (J - I) * 3);
     Descs[I].Get := RootAt(TempTop - (J - I) * 3 + 1);
     Descs[I].Set_ := RootAt(TempTop - (J - I) * 3 + 2);

@@ -106,8 +106,9 @@ written back. `scripts/engine/limits-test.sh` checks all of this.
 A built-in whose loop runs as often as the script says (an array-like's `length` up to 2^53 - 1, a `split` or a
 spread, an object's own keys) polls the same `Interrupt` each step (`PollInterrupt`), since it takes no back edge or
 call and may allocate nothing the memory limit counts: `Array.prototype.join.call({ length: 2 ** 53 - 1 })` ends at
-the deadline instead of running on. Listing own keys polls once per key, and so does each built-in that then walks
-them (`Object.keys`, `values`, `entries`, `assign`, `getOwnPropertyDescriptors`, `freeze`, spread, `for-in`): a
+the deadline instead of running on. Listing own keys (`Object.keys`, `Reflect.ownKeys`) polls once per key, and so
+does each built-in that then walks them (`Object.values`, `entries`, `assign`, `getOwnPropertyDescriptors`,
+`defineProperties`, `freeze`, `isFrozen`, spread, rest, `for-in`): a
 String object's millions of characters are millions of keys, whose index atoms count against the memory limit for
 as long as the engine lives. Strings that `join`, `JSON.stringify`, `padStart`, `padEnd` and `repeat` build stop at V8's
 length bound, 536,870,888 code units, with `RangeError: Invalid string length`. The timer thread is joined by

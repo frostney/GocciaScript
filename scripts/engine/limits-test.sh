@@ -82,6 +82,21 @@ check own-array-spread-budget --max-instructions=25000 'Fatal error: Execution e
   'const a = new Array(10000).fill(0); ({ ...a }); console.log(42);'
 check own-freeze-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
   'const a = new Array(10000).fill(0); Object.freeze(a); console.log(42);'
+# measured: a for-in over a prototype's keys 20,025, object rest 20,020, a proxy's keys 20,022 (names too) and its
+# JSON 30,022, defineProperties' two loops 40,023 and isFrozen 50,024, each with fill's 10,000 where it has one
+check own-for-in-proto-budget "$K_CAP" "$K_LIMIT" \
+  'for (const k in Object.create(new String("x".repeat(10000)))) break; console.log(42);'
+check own-rest-budget "$K_CAP" "$K_LIMIT" 'const { a, ...r } = "x".repeat(10000); console.log(42);'
+check own-proxy-keys-budget "$K_CAP" "$K_LIMIT" \
+  'Object.keys(new Proxy(new String("x".repeat(10000)), {})); console.log(42);'
+check own-proxy-names-budget "$K_CAP" "$K_LIMIT" \
+  'Object.getOwnPropertyNames(new Proxy(new String("x".repeat(10000)), {})); console.log(42);'
+check own-proxy-json-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
+  'JSON.stringify(new Proxy(new String("x".repeat(10000)), {})); console.log(42);'
+check own-define-properties-budget --max-instructions=35000 'Fatal error: Execution exceeded instruction limit of 35000' \
+  'const d = new Array(10000).fill({}); Object.defineProperties({}, d); console.log(42);'
+check own-is-frozen-budget --max-instructions=45000 'Fatal error: Execution exceeded instruction limit of 45000' \
+  'const a = Object.freeze(new Array(10000).fill(0)); Object.isFrozen(a); console.log(42);'
 
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
