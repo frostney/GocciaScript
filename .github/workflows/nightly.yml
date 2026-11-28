@@ -105,30 +105,29 @@ jobs:
             exit 0
           fi
 
-          if ! LAST="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/nightly" --jq .object.sha 2>lookup.err)"; then
+          # What is published is read from the release itself, which names
+          # its full commit in its notes, not from the `nightly` tag: the
+          # publish step moves the tag before it replaces the release, so a
+          # run that stopped in between leaves a tag ahead of the binaries.
+          if ! BODY="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" --jq .body 2>lookup.err)"; then
             if grep -q 'HTTP 404' lookup.err; then
-              echo "No nightly yet: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "::error::Could not read the nightly tag: $(cat lookup.err)"
-            exit 1
-          fi
-          # A tag without its release is a publish that stopped between
-          # deleting the old release and creating the new one: publish again.
-          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" --jq .id >/dev/null 2>lookup.err; then
-            if grep -q 'HTTP 404' lookup.err; then
-              echo "The nightly tag has no release: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
+              echo "No nightly release: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
               echo "skip=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "::error::Could not read the nightly release: $(cat lookup.err)"
             exit 1
           fi
+          LAST="$(printf '%s\n' "$BODY" | grep -oE '/commit/[0-9a-f]{40}' | head -n 1 | cut -d/ -f3 || true)"
+          if [ -z "$LAST" ]; then
+            echo "The nightly release names no full commit: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${LAST}...${HEAD_SHA}" --jq .status)"
           # `diverged` is main rewritten since the last nightly (a force
-          # push): the tag's commit is no longer an ancestor, and would never
-          # be again, so that counts as new too.
+          # push): the published commit is no longer an ancestor, and would
+          # never be again, so that counts as new too.
           if [ "$STATUS" = "ahead" ] || [ "$STATUS" = "diverged" ]; then
             echo "The newest passing commit (${HEAD_SHA::8}) is ${STATUS} relative to the last nightly (${LAST::8}): publishing from CI run ${RUN_ID}."
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -224,13 +223,21 @@ jobs:
           git -c "http.https://github.com/.extraheader=${AUTH}" \
             push --force origin "${TARGET_SHA}:refs/tags/nightly"
 
-          gh release delete nightly --yes 2>/dev/null || true
+          # Only a missing release may be skipped here; any other failure to
+          # delete stops the step, and the next run sees the old release's
+          # commit and publishes again.
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" --jq .id >/dev/null 2>lookup.err; then
+            gh release delete nightly --yes
+          elif ! grep -q 'HTTP 404' lookup.err; then
+            echo "::error::Could not read the nightly release: $(cat lookup.err)"
+            exit 1
+          fi
 
           gh release create nightly \
             --verify-tag \
             --title "Nightly Build (${DATE})" \
             --notes "$(cat <<EOF
-          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
+          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${TARGET_SHA}).
 
           Built on ${DATE}. This pre-release is replaced by each new nightly build.
           EOF
