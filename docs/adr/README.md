@@ -21,8 +21,8 @@ It reserves the next free number by creating the ref `refs/adr/<NNNN>` on `origi
 branches never hold the same number and an ADR is never renumbered ([ADR 0203](0203-adr-numbers-are-reserved-on-the-remote.md)).
 Do not take the highest number in your checkout plus one: another open branch may already hold it.
 
-- **Renaming an ADR** — `npx tsx scripts/adr.ts move docs/adr/<NNNN>-<old>.md "<new title>"` keeps the number and
-  moves the reservation to the new file name.
+- **Renaming an ADR** — before it merges, `npx tsx scripts/adr.ts move docs/adr/<NNNN>-<old>.md "<new title>"` keeps
+  the number and moves the reservation to the new file name. A merged ADR keeps its name.
 - **Without push access** — write the ADR and ask a maintainer to reserve its number.
 - **The check** — `npx tsx scripts/adr.ts check` runs in CI and fails when two ADRs share a number, when an ADR after
   0202 has no reservation or its reservation names another file, and when this list does not have every ADR once.

@@ -21,6 +21,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,6 +39,7 @@ const MAX_ATTEMPTS = 50;
 
 type Context = { root: string; remote: string };
 type Adr = { number: number; file: string };
+type Reservation = { file: string; commit: string };
 
 function git(ctx: Context, args: string[], input?: string): string {
   return execFileSync("git", args, { cwd: ctx.root, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -86,21 +88,36 @@ function remoteReservations(ctx: Context): Map<number, string> {
   return out;
 }
 
-/** the reservations with the file each names, fetched from the remote */
-function fetchReservations(ctx: Context): Map<number, string> {
+/** the reservations, each with the file it names and its commit, fetched from the remote in one snapshot */
+function fetchReservations(ctx: Context): Map<number, Reservation> {
   git(ctx, ["fetch", "--quiet", "--no-tags", "--prune", ctx.remote, `+${RESERVATIONS}/*:${RESERVATIONS}/*`]);
-  const out = new Map<number, string>();
-  const listing = git(ctx, ["for-each-ref", "--format=%(refname) %(contents:subject)", RESERVATIONS]);
+  const out = new Map<number, Reservation>();
+  const listing = git(ctx, ["for-each-ref", "--format=%(refname) %(objectname) %(contents:subject)", RESERVATIONS]);
   for (const line of listing.split("\n")) {
-    const m = /^refs\/adr\/(\d+) ADR \d+ (\S+)$/.exec(line);
-    if (m) out.set(Number(m[1]), m[2]);
+    const m = /^refs\/adr\/(\d+) ([0-9a-f]+) ADR \d+ (\S+)$/.exec(line);
+    if (m) out.set(Number(m[1]), { commit: m[2], file: m[3] });
   }
   return out;
 }
 
+/** a commit naming the file, unique to this attempt: an identical commit already on the remote would push as "up to
+    date" and pass for a second create of the same ref */
 function reservationCommit(ctx: Context, n: number, file: string): string {
   const emptyTree = git(ctx, ["mktree"], "");
-  return git(ctx, ["commit-tree", emptyTree, "-m", `ADR ${pad(n)} ${file}`]);
+  const nonce = randomBytes(16).toString("hex");
+  return git(ctx, ["commit-tree", emptyTree, "-m", `ADR ${pad(n)} ${file}`, "-m", `attempt ${nonce}`]);
+}
+
+function checkSlug(slug: string): void {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error(`"${slug}" is not a slug: lower-case words joined by -`);
+}
+
+/** whether the remote's default branch already has the file: the ADR has merged */
+function published(ctx: Context, file: string): boolean {
+  const head = /^ref: (refs\/heads\/\S+)\s+HEAD$/m.exec(git(ctx, ["ls-remote", "--symref", ctx.remote, "HEAD"]));
+  if (!head) throw new Error(`${ctx.remote} has no default branch`);
+  git(ctx, ["fetch", "--quiet", "--no-tags", ctx.remote, head[1]]);
+  return spawnSync("git", ["cat-file", "-e", `FETCH_HEAD:${file}`], { cwd: ctx.root }).status === 0;
 }
 
 /** creates refs/adr/<n> on the remote when nobody holds it (expected undefined), or moves it from expected */
@@ -114,7 +131,8 @@ function pushReservation(ctx: Context, n: number, commit: string, expected?: str
   );
   if (push.status === 0) return true;
   const holder = remoteReservations(ctx).get(n);
-  if (holder !== undefined && holder !== commit && holder !== expected) return false;
+  if (holder === commit) return true;
+  if (holder !== undefined && holder !== expected) return false;
   throw new Error(`could not push ${ref}:\n${push.stdout}${push.stderr}`);
 }
 
@@ -161,7 +179,7 @@ function parseSlug(args: string[]): string | undefined {
 
 function create(ctx: Context, title: string, slugOption?: string): string {
   const slug = slugOption ?? slugify(title);
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error(`"${slug}" is not a slug: lower-case words joined by -`);
+  checkSlug(slug);
   const highestFile = Math.max(0, ...adrFiles(ctx).adrs.map((a) => a.number));
   const highestReserved = Math.max(0, ...remoteReservations(ctx).keys());
   let n = Math.max(highestFile, highestReserved, LAST_UNRESERVED) + 1;
@@ -182,12 +200,16 @@ function move(ctx: Context, oldFile: string, title: string, slugOption?: string)
   if (!m || !existsSync(join(ctx.root, ADR_DIR, name))) throw new Error(`${oldFile} is not an ADR in ${ADR_DIR}`);
   const n = Number(m[1]);
   const from = `${ADR_DIR}/${name}`;
-  if (fetchReservations(ctx).get(n) !== from) throw new Error(`ADR ${pad(n)} is not reserved for ${from}`);
   const slug = slugOption ?? slugify(title);
+  checkSlug(slug);
   const toName = `${pad(n)}-${slug}.md`;
   const to = `${ADR_DIR}/${toName}`;
-  const held = remoteReservations(ctx).get(n);
-  if (!pushReservation(ctx, n, reservationCommit(ctx, n, to), held)) {
+  const held = fetchReservations(ctx).get(n);
+  if (held?.file !== from) throw new Error(`ADR ${pad(n)} is not reserved for ${from}`);
+  // a merged ADR is a record: renaming it would leave the default branch's file without its reservation
+  if (published(ctx, from)) throw new Error(`${from} has merged; an ADR is renamed only before it merges`);
+  // the lease is the commit just validated, so a move by another branch since then refuses this one
+  if (!pushReservation(ctx, n, reservationCommit(ctx, n, to), held.commit)) {
     throw new Error(`ADR ${pad(n)}'s reservation changed while it was being moved`);
   }
   if (to !== from) renameSync(join(ctx.root, from), join(ctx.root, to));
@@ -238,7 +260,7 @@ function check(ctx: Context, offline: boolean): string[] {
     const reserved = fetchReservations(ctx);
     for (const adr of adrs) {
       if (adr.number <= LAST_UNRESERVED) continue;
-      const holder = reserved.get(adr.number);
+      const holder = reserved.get(adr.number)?.file;
       if (holder === undefined) {
         problems.push(`${adr.file}: ADR ${pad(adr.number)} was never reserved; take a number with ` +
           `\`npx tsx scripts/adr.ts new "<title>"\` (docs/adr/README.md#numbering)`);
@@ -322,6 +344,44 @@ function selfTest(): number {
       refused = true;
     }
     expect(refused, "a branch moved a reservation it does not hold");
+    const throws = (f: () => unknown): boolean => {
+      try {
+        f();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    // a move to an invalid slug fails before the reservation changes
+    const heldBefore = remoteReservations(a).get(LAST_UNRESERVED + 1);
+    expect(throws(() => move(a, moved, "Whatever", "bad_slug")), "a move to an invalid slug was accepted");
+    expect(remoteReservations(a).get(LAST_UNRESERVED + 1) === heldBefore, "an invalid move changed the reservation");
+
+    // two attempts with one file name, identity and second still push different commits, so only one takes it
+    const same = LAST_UNRESERVED + 20;
+    const pinned = { GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
+    Object.assign(process.env, pinned);
+    const sameFile = `${ADR_DIR}/${pad(same)}-same.md`;
+    const one = pushReservation(a, same, reservationCommit(a, same, sameFile));
+    const two = pushReservation(b, same, reservationCommit(b, same, sameFile));
+    for (const key of Object.keys(pinned)) delete process.env[key];
+    expect(one && !two, `two identical attempts both took refs/adr/${pad(same)}`);
+
+    // a move leased on a reservation another move has replaced since is refused
+    const nB = LAST_UNRESERVED + 2;
+    const stale = fetchReservations(b).get(nB)?.commit;
+    const movedB = move(b, fileB, "Lane B decides again");
+    expect(!pushReservation(b, nB, reservationCommit(b, nB, fileB), stale), "a move on a stale lease was accepted");
+    expect(check(b, false).length === 0, `after lane B's move: ${check(b, false).join("; ")}`);
+
+    // once an ADR has merged, it keeps its name: a move would leave the default branch's file unreserved
+    git(b, ["add", "-A"]);
+    git(b, ["commit", "--quiet", "-m", "lane B merges"]);
+    git(b, ["push", "--quiet", "origin", "HEAD:main"]);
+    const mergedHeld = remoteReservations(b).get(nB);
+    expect(throws(() => move(b, movedB, "Lane B renames a record")), "a merged ADR was moved");
+    expect(remoteReservations(b).get(nB) === mergedHeld, "a refused move of a merged ADR changed its reservation");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
