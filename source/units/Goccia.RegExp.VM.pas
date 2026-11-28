@@ -108,8 +108,8 @@ uses
 const
   { an engine's native work hook is charged a unit every this-plus-one PollMatcher calls }
   POLLS_PER_CHARGE_MASK = 255;
-  { a backreference comparison polls every this-plus-one code points it compares }
-  BACKREF_POLL_MASK = 255;
+  { a backreference comparison polls every this many code points it compares }
+  BACKREF_POLL_INTERVAL = 256;
   { the matcher's dispatch loop polls every this-plus-one steps, its lookarounds' included }
   DISPATCH_POLL_MASK = 255;
 
@@ -677,7 +677,7 @@ var
   ComparePos: Integer;
   RefCP, InputCP: Cardinal;
   RefByteLen, InputByteLen: Integer;
-  BackrefCompared: Integer;
+  BackrefPollLeft: Integer;
   RepeatStack: array of Integer;
   RepeatDepth: Integer;
 
@@ -1285,13 +1285,18 @@ begin
           end;
           RefPos := RefStart;
           LookMatched := True;
-          BackrefCompared := 0;
+          BackrefPollLeft := BACKREF_POLL_INTERVAL;
           while RefPos < RefEnd do
           begin
-            { one step compares the whole capture: a long one is polled as it goes }
-            Inc(BackrefCompared);
-            if (BackrefCompared and BACKREF_POLL_MASK) = 0 then
+            { one step compares the whole capture: a long one is polled as it goes. A countdown, not
+              `Inc(N); if (N and 255) = 0`: FPC 3.3.1's i386 optimizer drops that test's low-byte compare and
+              branches on the add's flags, so the poll never ran }
+            Dec(BackrefPollLeft);
+            if BackrefPollLeft = 0 then
+            begin
+              BackrefPollLeft := BACKREF_POLL_INTERVAL;
               PollMatcher;
+            end;
             if not ReadInputCodePoint(AInput, RefPos, BackrefUnicode,
                RefCP, RefByteLen) then
             begin
