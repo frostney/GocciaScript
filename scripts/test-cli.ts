@@ -2040,6 +2040,7 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
 {
   const dir = mkdtemp("goccia-regexp-budget-");
   const pattern = "a".repeat(32 * 1024);
+  const fitsBy: Record<string, number> = {};
   const expressions = {
     control: `pattern === ${JSON.stringify(pattern)}`,
     constructor: "new RegExp(pattern).test(pattern)",
@@ -2052,19 +2053,27 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
 const pattern = ${JSON.stringify(pattern)};
 if (!(${match})) throw new Error('expected a match');
 Goccia.gc();
-// Leave room for a small allocation and the call itself. A compiled RegExp
-// also holds native storage, which is outside bytesAllocated.
-const available = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;
-new ArrayBuffer(available - 256 * 1024);
-console.log('buffer allocated');
+// The largest buffer that fits now, to 16 KiB. A compiled RegExp holds native
+// storage outside bytesAllocated, and so do the engine's own keys and shapes,
+// so the room is measured rather than read from bytesAllocated.
+let lo = 0;
+let hi = Goccia.gc.maxBytes;
+for (const _ of Array.from({ length: 40 })) {
+  if (hi - lo <= 16 * 1024) break;
+  const mid = Math.floor((lo + hi) / 2);
+  try { new ArrayBuffer(mid); lo = mid; } catch { hi = mid; }
+}
+console.log('fits', lo);
 `);
       const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
-      if (name === "control") {
-        if (run.exitCode !== 0 || !containsLine(run.output, "buffer allocated"))
-          throw new Error(`The buffer should fit without a compiled RegExp: ${run.output}`);
-      } else {
-        if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
-          throw new Error(`The buffer should be refused while the ${name} program is cached: ${run.output}`);
+      const fits = Number(/^fits (\d+)$/m.exec(run.output)?.[1]);
+      if (run.exitCode !== 0 || !Number.isFinite(fits) || fits <= 0)
+        throw new Error(`The ${name} run should measure the room left: ${run.output}`);
+      fitsBy[name] = fits;
+      if (name !== "control") {
+        // the cached program's storage counts: less room than without it
+        if (fits > fitsBy.control - 64 * 1024)
+          throw new Error(`The ${name} program's storage should count against the limit: ${fits} bytes fit, ${fitsBy.control} without it`);
         assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
       }
     }
