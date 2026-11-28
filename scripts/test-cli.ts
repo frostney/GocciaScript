@@ -1928,8 +1928,8 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
   // for fresh string keys, permanent symbols, and the text buffers of native
   // string builders; or asks for one allocation larger than the limit (an
   // array's elements, a built string, a sparse copy). Each must be refused
-  // with a catchable RangeError while the process stays under twice the
-  // ceiling: before the fix they peaked at 3 to 30 times it.
+  // with a catchable RangeError while the process stays within twice the
+  // ceiling above an idle run: before the fix they peaked at 3 to 30 times it.
   const ceiling = 64 * 1024 * 1024;
   const cases: Record<string, string> = {
     "sparse fill": "new Array(2e8).fill(0);",
@@ -1951,6 +1951,14 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
   const dir = mkdtemp("goccia-native-charge-");
   try {
     const path = join(dir, "grow.js");
+    // The bound is above an idle run of the same binary, so that it does not
+    // depend on how much a platform's runtime and allocator hold before the
+    // script starts: on Linux x64 the cases measure 1.0 to 1.5 times the
+    // ceiling above an idle run's ~20 MB.
+    writeFileSync(path, "console.log('idle');\n");
+    const idleRun = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, path]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    const bound = (idleRun.peakRssBytes ?? 0) + 2 * ceiling;
     for (const [label, body] of Object.entries(cases)) {
       writeFileSync(path, `let caught = 'none';\ntry {\n${body}\n} catch (e) { caught = e.name; }\nconsole.log('caught', caught);\n`);
       const run = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
@@ -1961,7 +1969,7 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
         run.output.includes("Allocation failed: GC heap size exceeds the configured memory limit");
       if (!refusedAgain && (run.exitCode !== 0 || !run.output.includes("caught RangeError")))
         throw new Error(`${label} should be refused with a catchable RangeError: exit ${run.exitCode}, ${run.output}`);
-      assertPeakRssBelow(run, label, 2 * ceiling);
+      assertPeakRssBelow(run, `${label}, above an idle run`, bound);
     }
     // Retrying with fresh keys after each refusal: the keys live as long as
     // the engine, so a later refusal can come inside a catch handler, even the
@@ -1980,7 +1988,7 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     if (![0, 1].includes(retry.exitCode) ||
         !retry.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
       throw new Error(`Retries with fresh sparse keys should each be refused: exit ${retry.exitCode}, ${retry.output}`);
-    assertPeakRssBelow(retry, "retry with fresh sparse keys", 2 * ceiling);
+    assertPeakRssBelow(retry, "retry with fresh sparse keys, above an idle run", bound);
     // Freezing a wide object changes each attribute in turn, a new shape each
     // time and no heap cell: it completes, and the shapes it drops are
     // collected on the way instead of piling up (543 MB at 16 MiB before).
@@ -1988,7 +1996,7 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     const freeze = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--timeout=60000", path]);
     if (freeze.exitCode !== 0 || !freeze.output.includes("frozen true"))
       throw new Error(`Freezing a wide object should complete: exit ${freeze.exitCode}, ${freeze.output}`);
-    assertPeakRssBelow(freeze, "freezing a wide object", 2 * ceiling);
+    assertPeakRssBelow(freeze, "freezing a wide object, above an idle run", bound);
     // A refusal made before the allocation carries the suggestion the refusal
     // at a safe point does.
     writeFileSync(path, "''.padEnd(5e8, 'ab');\n");
