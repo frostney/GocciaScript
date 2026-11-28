@@ -3148,6 +3148,8 @@ end;
 
 initialization
   RegisterThreadvarCleanup(@GocciaHostAPIThreadvarCleanup);
+  { a module load failure records the path its missing module resolved to }
+  TakeLoadFailureResolved := @TakeResolveCandidate;
   { SysUtils fills TrueBoolStrs and FalseBoolStrs on the first BoolToStr(B, True), without a lock: fill them here, on
     the main thread before any engine thread starts, so every later call only reads them }
   BoolToStr(True, True);
