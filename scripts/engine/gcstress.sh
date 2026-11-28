@@ -18,7 +18,7 @@ run() {
   f=$1; n=$(basename $f .js)
   # AWFY without --gc-verify: verifying after every collection walks the whole heap, and Havlak's takes hours
   case $n in awfy-*) v=;; *) v=--gc-verify;; esac
-  out=$(GOCCIA_NURSERY_KB=$KB timeout 3600 $ENGINE $v $f 2>&1)
+  out=$(GOCCIA_NURSERY_KB=$KB timeout 3600 "$ENGINE" $v $f 2>&1)
   case $n in
     web-tooling-*) d=$(echo "$out" | grep -a DIGEST | head -1); r=$(grep "^$n |" $ref | cut -d'|' -f2 | xargs); [ "$d" = "$r" ] && echo "OK $n" || echo "BAD $n: $(echo "$out" | grep -av '^\s*$' | tail -1 | cut -c1-120)";;
     *) if echo "$out" | grep -q '"verificationPassed":true' || { echo "$out" | grep -q '"verificationKind":"execution' && ! echo "$out" | grep -q Uncaught; }; then echo "OK $n"; else echo "BAD $n: $(echo "$out" | grep -av '^\s*$' | tail -1 | cut -c1-120)"; fi;;
@@ -30,7 +30,7 @@ regress() {
   flags=$(sed -n '1s|^// goccia-flags: ||p' $f)
   for kb in 16 64 128; do
     # 1800 s: overflow-add takes ~920 s under --gc-verify at 16 KB on a loaded machine
-    r=$(GOCCIA_HOST=1 GOCCIA_NURSERY_KB=$kb timeout 1800 $ENGINE --gc-verify $flags $f 2>&1; echo "__rc=$?")
+    r=$(GOCCIA_HOST=1 GOCCIA_NURSERY_KB=$kb timeout 1800 "$ENGINE" --gc-verify $flags $f 2>&1; echo "__rc=$?")
     rc=$(echo "$r" | sed -n 's/^__rc=//p'); r=$(echo "$r" | grep -av '^__rc=' | grep -av '^\s*$' | tail -1)
     # a timeout is not a failure, but it hides the sizes after it: say so, so it is rerun rather than written off
     [ "$rc" = 124 ] && { echo "TIMEOUT regress-$n ($kb KB): rerun it at 16, 64 and 128 KB"; return; }
