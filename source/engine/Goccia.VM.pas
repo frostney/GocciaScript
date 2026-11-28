@@ -3452,7 +3452,9 @@ begin
 end;
 
 function StringToBigIntV(const S0: UnicodeString; var B: TValue): Boolean;
-var S: UnicodeString; I, Radix, D, L, H: Integer; Neg: Boolean; R: TBigInteger;
+const
+  DIGITS_PER_POLL = 256;
+var S: UnicodeString; I, Radix, D, L, H, PollLeft: Integer; Neg: Boolean; R: TBigInteger;
 begin
   L := 1;
   H := Length(S0);
@@ -3480,6 +3482,7 @@ begin
   end;
   if I > Length(S) then Exit;
   R := TBigInteger.Zero;
+  PollLeft := DIGITS_PER_POLL;
   while I <= Length(S) do
   begin
     case S[I] of
@@ -3492,8 +3495,15 @@ begin
     R := R.Multiply(TBigInteger.FromInt64(Radix)).Add(TBigInteger.FromInt64(D));
     Inc(I);
     { each digit costs the length of the value so far: a long string stops at a spent limit, False as for no
-      literal, and the caller polls before it reads False as one }
-    if ((I and 255) = 0) and (Interrupt <> 0) then Exit;
+      literal, and the caller polls before it reads False as one. A countdown, not `if (I and 255) = 0`: FPC 3.3.1
+      drops that test after an add to the same variable in memory and branches on the add's flags
+      (frostney/fpc-toolchain#23), so the i386 build never polled here. ./build.pas flagscan finds the pattern }
+    Dec(PollLeft);
+    if PollLeft = 0 then
+    begin
+      PollLeft := DIGITS_PER_POLL;
+      if Interrupt <> 0 then Exit;
+    end;
   end;
   if Neg then R := R.Negate;
   B := BigToValue(R);

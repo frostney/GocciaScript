@@ -275,6 +275,43 @@ anything past `MAX_NATIVE_ALLOCATION_BYTES`, the most one allocation may ask
 for on the target; the heap snapshot reader refuses such a count, and an
 input that large, before it reserves anything.
 
+### FPC 3.3.1 Drops a Masked Test After an Add
+
+FPC 3.3.1 compiles
+
+```pascal
+Inc(N);
+if (N and 255) = 0 then
+  Poll;
+```
+
+to `addl $1,N` followed directly by `jne` when `N` is in memory: the peephole
+optimizer drops the masked test and branches on the add's flags, so `Poll`
+runs only when `N` wraps to 0
+([frostney/fpc-toolchain#23](https://github.com/frostney/fpc-toolchain/issues/23)).
+It happens for byte and word masks, for `<> 0` as well as `= 0`, after an add
+or a subtract of any amount, for a local at `-O1` (the `i386-win32` build) and
+for a field or a global at `-O2` and above (every other x86 build). FPC 3.2.4
+compiles it correctly. Count down instead:
+
+```pascal
+Dec(PollLeft);
+if PollLeft = 0 then
+begin
+  PollLeft := POLL_INTERVAL;
+  Poll;
+end;
+```
+
+`./build.pas flagscan` compiles every engine program for the build's target
+with assembler listings and fails when `scripts/engine/flagscan.py` finds an
+add or subtract on memory followed directly by a conditional jump whose
+condition, read from the source, has an `and`: however the mask is spelled or
+broken over lines. A logical `and` in such a condition is reported too; test
+the counter in a statement of its own. The Engine workflow runs it for each x86 target; with
+`FPC_TARGET_CPU=i386 FPC_TARGET_OS=win32` it checks the `-O1` build locally
+without a Windows toolchain, since it neither assembles nor links.
+
 ### `WideChar in [set]` Allocates
 
 Under `{$mode delphiunicode}` a set test on a `WideChar` (`Ch in ['0'..'9']`)

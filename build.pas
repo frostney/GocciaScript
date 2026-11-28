@@ -21,13 +21,13 @@ type
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner,
     btYAMLComplianceRunner,
-    btBenchmarkRunner, btBundler, btREPL, btEngine);
+    btBenchmarkRunner, btBundler, btREPL, btEngine, btFlagScan);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
     'test262runner', 'tomlcompliancerunner', 'yamlcompliancerunner',
-    'benchmarkrunner', 'bundler', 'repl', 'engine');
+    'benchmarkrunner', 'bundler', 'repl', 'engine', 'flagscan');
 
   { The JS preludes compiled into the engine, as (source in source/engine/prelude, include, constant) }
   GOCCIA_PRELUDES: array[0..23, 0..2] of string = (
@@ -1125,6 +1125,71 @@ begin
   BuildEngineProgram('source/app/GocciaScriptLoaderBare.dpr', 'loaderbare', 'build' + DirectorySeparator + 'GocciaScriptLoaderBare');
 end;
 
+{ flagscan: FPC 3.3.1's peephole optimizer drops the test in `Inc(N); if (N and 255) = 0` when N is in memory and
+  branches on the add's own flags, so the guarded code runs only when N wraps (frostney/fpc-toolchain#23). This
+  compiles every engine program for the build's target as its build does, with assembler listings (-al) and without
+  assembling or linking (-s), and fails when scripts/engine/flagscan.py finds such a jump in them. }
+procedure ScanFlagReuse;
+const
+  PROGRAMS: array[0..8, 0..1] of string = (
+    ('source/engine/goccia.dpr', 'engine'),
+    ('source/app/GocciaRunner.dpr', 'runner'),
+    ('source/app/GocciaTestRunner.dpr', 'testrunner'),
+    ('source/app/GocciaREPL.dpr', 'repl'),
+    ('source/app/GocciaBenchmarkRunner.dpr', 'benchmarkrunner'),
+    ('source/app/GocciaBundler.dpr', 'bundler'),
+    ('source/app/GocciaTest262Runner.dpr', 'test262runner'),
+    ('source/app/GocciaFuzzHarness.dpr', 'fuzzharness'),
+    ('source/app/GocciaScriptLoaderBare.dpr', 'loaderbare'));
+var
+  UnitDir, Output: string;
+  Args: TStringArray;
+  Listings: TStringList;
+  K, N: Integer;
+begin
+  CheckEngineCompiler;
+  GenerateEnginePreludes;
+  UnitDir := TargetUnitOutputDirectory('flagscan');
+  if BuildMode <> bmProd then
+    UnitDir := UnitDir + '-dev';
+  if GetEnvironmentVariable('FPC_TARGET_CPU') <> '' then
+    UnitDir := UnitDir + '-' + LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU')) + '-' +
+      LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
+  { every unit compiled afresh, so each listing is this compiler's and these options' }
+  RemoveCompiledArtifacts(UnitDir);
+  Listings := TStringList.Create;
+  try
+    AddFoundFiles(Listings, UnitDir, '.s');
+    for K := 0 to Listings.Count - 1 do
+      DeleteFile(Listings[K]);
+  finally
+    Listings.Free;
+  end;
+  CopyEngineResources(UnitDir);
+  for K := 0 to High(PROGRAMS) do
+  begin
+    WriteLn('Listing ', PROGRAMS[K, 0], '...');
+    EnsureEngineSnapshot(PROGRAMS[K, 1]);
+    Args := GocciaArgs(PROGRAMS[K, 0], UnitDir,
+      UnitDir + DirectorySeparator + ChangeFileExt(ExtractFileName(PROGRAMS[K, 0]), ''), PROGRAMS[K, 1]);
+    { -s and -al before the source, which stays last }
+    N := Length(Args);
+    SetLength(Args, N + 2);
+    Args[N + 1] := Args[N - 1];
+    Args[N - 1] := '-s';
+    Args[N] := '-al';
+    if not RunCommand('fpc', Args, Output, [poRunIdle]) then
+      PrintBuildFailureAndExit(Output, PROGRAMS[K, 0] + ' did not compile for the flag scan');
+  end;
+  if not RunCommand('python3', ['scripts/engine/flagscan.py', UnitDir], Output) then
+  begin
+    WriteLn(Output);
+    WriteLn('A masked test FPC compiled away; rewrite it as a countdown (Goccia.VM''s StringToBigIntV does)');
+    Halt(1);
+  end;
+  Write(Output);
+end;
+
 { Worker threads only compile. The coordinator joins every started worker and
   reports its output before propagating failure, so no compiler is abandoned. }
 type
@@ -1400,6 +1465,7 @@ begin
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;
     btEngine: BuildEngine;
+    btFlagScan: ScanFlagReuse;
   end;
 end;
 
@@ -1481,7 +1547,9 @@ begin
     so engine signature changes cannot leave the nightly harness broken. }
   if BuildTriggers.Count = 0 then
     for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
-      BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
+      { flagscan checks the compiler's output and builds nothing: CI and ./build.pas flagscan run it }
+      if TBuildTarget(I) <> btFlagScan then
+        BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
 
   { Resolve and validate the complete selection before removing any cache. }
   for I := 0 to BuildTriggers.Count - 1 do
