@@ -507,12 +507,16 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
         'var loose: number = 2;',
         'delete globalThis.loose; globalThis.loose = "free"; console.log("loose:" + loose);',
         'text = "b"; count = 2; console.log("kept:" + text + count);',
-        'let held = 1; Object.defineProperty(globalThis, "viaSetter", { configurable: true, get() { return held; }, set(v) { held = v; } });',
+        // the setter's backing store is untyped, so only the typed var's check can refuse a value; a refused
+        // value never reaches the setter (calls stays at 1, from the initializer)
+        'let held; let calls = 0; Object.defineProperty(globalThis, "viaSetter", { configurable: true, get() { return held; }, set(v) { calls++; held = v; } });',
         'var viaSetter: number = 2;',
-        'try { viaSetter = "x"; } catch (e) { console.log("setter:" + e.name); }',
-        'try { Reflect.set(globalThis, "viaSetter", "x"); } catch (e) { console.log("reflect-setter:" + e.name + held); }',
-        'try { new Proxy(globalThis, {}).viaSetter = "x"; } catch (e) { console.log("proxy-setter:" + e.name + held); }',
-        'try { Object.create(globalThis).viaSetter = "x"; } catch (e) { console.log("inherited-setter:" + e.name + held); }',
+        'try { viaSetter = "x"; } catch (e) { console.log("setter:" + e.name + calls); }',
+        'try { Reflect.set(globalThis, "viaSetter", "x"); } catch (e) { console.log("reflect-setter:" + e.name + calls); }',
+        'try { new Proxy(globalThis, {}).viaSetter = "x"; } catch (e) { console.log("proxy-setter:" + e.name + calls); }',
+        'try { Object.create(globalThis).viaSetter = "x"; } catch (e) { console.log("inherited-setter:" + e.name + calls + typeof held); }',
+        // the setter itself takes any value: called directly, it stores the string
+        'Object.getOwnPropertyDescriptor(globalThis, "viaSetter").set.call(globalThis, "direct"); console.log("direct:" + calls + held);',
         "",
       ].join("\n"),
     ),
@@ -526,10 +530,11 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
     "prop:TypeError",
     "loose:free",
     "kept:b2",
-    "setter:TypeError",
-    "reflect-setter:TypeError2",
-    "proxy-setter:TypeError2",
-    "inherited-setter:TypeError2",
+    "setter:TypeError1",
+    "reflect-setter:TypeError1",
+    "proxy-setter:TypeError1",
+    "inherited-setter:TypeError1number",
+    "direct:2direct",
   ])
     if (!output.includes(expected))
       throw new Error(`REPL strict-types across inputs expected ${expected}, got: ${output}`);

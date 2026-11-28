@@ -43,7 +43,8 @@ global-writing entry points. In the specification each of these writes is one [[
 - Without `--strict-types` nothing changes: no type is recorded, so every check finds none.
 - Under `--strict-types`, a top-level `var` with a literal initializer now has the inferred type a function's
   `var` and a top-level `let` already had.
-- Direct `eval`, which only an embedding host can enable, still compiles its caller's function-local bindings
-  without their types, so eval code's stores into them are unchecked; its stores into global bindings are checked
-  like any other code's.
+- Direct `eval`, which no `TGocciaEngine` host installs (only the test262 conformance host has it), still compiles
+  the bindings its caller reaches without their types, so eval code's stores into them are unchecked, a Script's
+  top-level `let` that a closure captured included. Its other stores into global bindings (`opSetGlobal`, property
+  writes) are checked like any other code's.
 - Writes made by the host's own API (globals injection) are not stores of script code and are not checked.
