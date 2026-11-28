@@ -1884,7 +1884,9 @@ begin
     Def(RootAt(TempTop - 1), 'deleteProperty', Reflect_DeleteProperty2, 2);
     Def(RootAt(TempTop - 1), 'has', Reflect_Has2, 2);
     Def(RootAt(TempTop - 1), 'ownKeys', Reflect_OwnKeys2, 1);
-    DefineOwn(RootAt(TempTop - 1), SymKey(SymToStringTagW), StrFromUnicode('Reflect'), pfConfigurable);
+    PushRoot(StrFromUnicode('Reflect'));
+    DefineOwn(RootAt(TempTop - 2), SymKey(SymToStringTagW), RootAt(TempTop - 1), pfConfigurable);
+    PopRoots(1);
     PopRoots(1);
   end;
 end;

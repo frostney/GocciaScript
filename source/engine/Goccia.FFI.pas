@@ -610,7 +610,9 @@ begin
   end;
   PushRoot(MkPtr(NewPlainObject(TypeProto, 6)));
   DefineOwn(RootAt(TempTop - 1), KType, MkInt(Id), pfHidden);
-  DefineOwn(RootAt(TempTop - 1), AtomOf('kind'), StrFromUnicode(KindNames[D.Kind]), pfEnumerable);
+  PushRoot(StrFromUnicode(KindNames[D.Kind]));
+  DefineOwn(RootAt(TempTop - 2), AtomOf('kind'), RootAt(TempTop - 1), pfEnumerable);
+  PopRoots(1);
   DefineOwn(RootAt(TempTop - 1), AtomOf('size'), MkInt(D.Size), pfEnumerable);
   DefineOwn(RootAt(TempTop - 1), AtomOf('alignment'), MkInt(D.Alignment), pfEnumerable);
   if D.Kind = ftkArray then DefineOwn(RootAt(TempTop - 1), AtomOf('length'), MkInt(D.ElementCount), pfEnumerable);

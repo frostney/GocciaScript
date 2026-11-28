@@ -1178,8 +1178,12 @@ begin
   begin
     { its capability and scope, as GocciaScript's PermissionDenied carries them }
     PushRoot(E);
-    DefineOwn(RootAt(TempTop - 1), AtomOf('capability'), StrFromUnicode(Capability), pfDefault);
-    DefineOwn(RootAt(TempTop - 1), AtomOf('scope'), StrFromUnicode(Scope), pfDefault);
+    PushRoot(StrFromUnicode(Capability));
+    DefineOwn(RootAt(TempTop - 2), AtomOf('capability'), RootAt(TempTop - 1), pfDefault);
+    PopRoots(1);
+    PushRoot(StrFromUnicode(Scope));
+    DefineOwn(RootAt(TempTop - 2), AtomOf('scope'), RootAt(TempTop - 1), pfDefault);
+    PopRoots(1);
     SetErrorHostSuggestion(RootAt(TempTop - 1), Suggestion);
     E := RootAt(TempTop - 1);
     PopRoots(1);
@@ -2635,7 +2639,9 @@ begin
   if not IsObject(E) or (Text = '') then Exit;
   K := SuggestionKeyNow;
   PushRoot(E);
-  DefineOwn(RootAt(TempTop - 1), K, StrFromUnicode(Text), pfHidden);
+  PushRoot(StrFromUnicode(Text));
+  DefineOwn(RootAt(TempTop - 2), K, RootAt(TempTop - 1), pfHidden);
+  PopRoots(1);
   PopRoots(1);
 end;
 

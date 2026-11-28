@@ -405,7 +405,11 @@ begin
   if (Rec <> nil) and SameValueV(ObjOf(TempRoots[RecVals])^.Elements^.Data[Rec.ValIdx], RootAt(TempTop - 2)) then
   begin
     if not IsObject(RootAt(TempTop - 2)) then
-      DefineOwn(RootAt(TempTop - 1), AtomOf('source'), StrFromUnicode(Copy(JSrc, Rec.SrcStart, Rec.SrcLen)), pfDefault);
+    begin
+      PushRoot(StrFromUnicode(Copy(JSrc, Rec.SrcStart, Rec.SrcLen)));
+      DefineOwn(RootAt(TempTop - 2), AtomOf('source'), RootAt(TempTop - 1), pfDefault);
+      PopRoots(1);
+    end;
     Elems := Rec.Elements;
     Ents := Rec.Entries;
     EKeys := Rec.Keys;

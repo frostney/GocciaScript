@@ -698,8 +698,12 @@ begin
     for I := 0 to High(W.Response.Headers) do
     begin
       PushRoot(MkPtr(NewArray(0, 2)));
-      DefineElemRaw(RootAt(TempTop - 1), 0, StrFromUnicode(W.Response.Headers[I].Name));
-      DefineElemRaw(RootAt(TempTop - 1), 1, StrFromUnicode(W.Response.Headers[I].Value));
+      PushRoot(StrFromUnicode(W.Response.Headers[I].Name));
+      DefineElemRaw(RootAt(TempTop - 2), 0, RootAt(TempTop - 1));
+      PopRoots(1);
+      PushRoot(StrFromUnicode(W.Response.Headers[I].Value));
+      DefineElemRaw(RootAt(TempTop - 2), 1, RootAt(TempTop - 1));
+      PopRoots(1);
       Pair := RootAt(TempTop - 1);
       DefineElemRaw(RootAt(TempTop - 2), I, Pair);
       PopRoots(1);

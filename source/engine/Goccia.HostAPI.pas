@@ -978,7 +978,9 @@ begin
     else
     begin
       PushRoot(MkPtr(NewPlainObject(ObjectProto, 1)));
-      DefineOwn(RootAt(TempTop - 1), AtomOf('content'), StrFromUnicode(Content), pfDefault);
+      PushRoot(StrFromUnicode(Content));
+      DefineOwn(RootAt(TempTop - 2), AtomOf('content'), RootAt(TempTop - 1), pfDefault);
+      PopRoots(1);
       D := RootAt(TempTop - 1);
       PopRoots(1);
     end;
@@ -2375,7 +2377,9 @@ function SnapshotOutcome(Passed: Boolean; const Message: string; var Res: TValue
 begin
   PushRoot(MkPtr(NewArray(0, 2)));
   ArrayPush(ObjOf(RootAt(TempTop - 1)), MkBool(Passed));
-  ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(UTF8Decode(Message)));
+  PushRoot(StrFromUnicode(UTF8Decode(Message)));
+  ArrayPush(ObjOf(RootAt(TempTop - 2)), RootAt(TempTop - 1));
+  PopRoots(1);
   Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
@@ -2466,7 +2470,11 @@ begin
       end;
     PushRoot(MkPtr(NewArray(0, Errors.Count)));
     for I := 0 to Errors.Count - 1 do
-      ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(UTF8Decode(Errors[I])));
+    begin
+      PushRoot(StrFromUnicode(UTF8Decode(Errors[I])));
+      ArrayPush(ObjOf(RootAt(TempTop - 2)), RootAt(TempTop - 1));
+      PopRoots(1);
+    end;
     Res := RootAt(TempTop - 1);
     PopRoots(1);
   finally
@@ -2538,7 +2546,9 @@ begin
     else LimitsSetDeadline(1);
   PushRoot(E);
   PushRoot(MkPtr(NewArray(0, 2)));
-  ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(Status));
+  PushRoot(StrFromUnicode(Status));
+  ArrayPush(ObjOf(RootAt(TempTop - 2)), RootAt(TempTop - 1));
+  PopRoots(1);
   if Status = 'ok' then ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 3))
   else if Status = 'threw' then ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 2));
   Res := RootAt(TempTop - 1);

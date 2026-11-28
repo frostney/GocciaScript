@@ -83,3 +83,6 @@ Peak resident memory before the `RangeError`, Linux x86-64, `GocciaRunner` (abou
   bound. A refusal can then arrive inside the handler of the previous one.
 - Function templates, bytecode, the WeakMap and WeakSet tables and the parser's AST remain outside the limit.
 - An object's dictionary shapes, and proxies' shapes, no longer accumulate for the engine's lifetime.
+- Property growth spread across many objects past 64 properties each is refused like any other growth. For this engine
+  that supersedes the aggregate caveat of [ADR 0106](0106-sandbox-hardening-scope.md)'s Amendment 1, which measured it
+  running to completion at about five times the limit.
