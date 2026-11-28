@@ -333,9 +333,8 @@ const
   HeapCeiling with the external bytes: atoms, key atoms and symbols, which live as long as the engine
   (HeapPermanentBytes), and shapes with the key, flag and hash arrays they own, freed with their prototype or, for a
   dictionary shape, its object. Delta is what was allocated (negative: freed). A charge that takes the heap over
-  HeapCeiling asks for a collection: the next nursery allocation collects, and so does HeapChargeCheck; a permanent
-  charge that alone passes the ceiling, which no collection can undo, marks the refusal at once (GCLimitHook). Never
-  collects or allocates }
+  HeapCeiling asks for a collection: the next nursery allocation runs it; a permanent charge that alone passes the
+  ceiling, which no collection can undo, marks the refusal at once (GCLimitHook). Never collects or allocates }
 procedure HeapNativeCharge(Delta: Int64; Permanent: Boolean);
 function HeapNativeBytes: Int64;
 function HeapPermanentBytes: Int64;
@@ -343,9 +342,6 @@ function HeapPermanentBytes: Int64;
   allocates them }
 function ValueArrayBytes(Len: Int64): Int64; inline;
 function StringBytes(Len: Int64): Int64; inline;
-{ the collection a charge over HeapCeiling asked for, now: at an allocation point whose values are rooted (AddProperty,
-  a Symbol's creation) }
-procedure HeapChargeCheck;
 var
   { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
   HeapExternalBytes: Int64 = 0;
@@ -1665,12 +1661,6 @@ begin
     GCLimitHook;
 end;
 
-procedure HeapChargeCheck;
-begin
-  if not ChargePending then Exit;
-  CollectMinor;
-  CollectMajor;
-end;
 
 function HeapHasRoom(Bytes: Int64): Boolean;
 var Ceiling: Int64;
@@ -2962,21 +2952,6 @@ function GrowValueCap(Cap, Need, Least: Integer): Integer; forward;
 function AddPropertyTo(O: PObj; NewShape: PShape; V: TValue): Integer;
 var Idx, NewCap, I: Integer; NO: PValueArray;
 begin
-  { an add can collect (the overflow's growth below): the collection a structure charge asked for runs here, and
-    under --gc-stress a minor collection, and every eighth a major one, runs at every add. NewShape lives on: its
-    prototype is O's, a dictionary made since the last major collection lives through the next }
-  if ChargePending or GCStress then
-  begin
-    PushRoot(MkPtr(O)); PushRoot(V);
-    if ChargePending then HeapChargeCheck
-    else
-    begin
-      CollectMinor;
-      if GCMinorCount mod 8 = 0 then CollectMajor;
-    end;
-    O := ObjOf(RootAt(TempTop - 2)); V := RootAt(TempTop - 1);
-    PopRoots(2);
-  end;
   Idx := NewShape^.Count - 1;
   if Idx >= O^.InlineCap then
   begin

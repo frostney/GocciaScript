@@ -2798,9 +2798,6 @@ begin
     Res := NewSymbol('');
     PCell(PtrOf(Res))^.Extra := 1;   { [[Description]] undefined }
   end;
-  { a symbol lives as long as the engine: the collection its charge asked for runs here (Res is a permanent cell,
-    which no collection moves) }
-  HeapChargeCheck;
   Result := True;
 end;
 

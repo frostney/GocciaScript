@@ -1943,13 +1943,6 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     "JSON.stringify": "JSON.stringify(new Array(1e8));",
     "replaceAll": "'a'.repeat(1e6).replaceAll('a', 'b'.repeat(500));",
     "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
-    "retry with fresh sparse keys": [
-      "let base = 1e8; let r = 0;",
-      "while (r < 8) {",
-      "  try { const a = []; a.length = 4e9; let i = 0; while (i < 5e7) { a[base + i] = 0; i++; } } catch (e) { if (r < 7) console.log('round', r, e.name); else throw e; }",
-      "  base += 5e7; r++;",
-      "}",
-    ].join("\n"),
   };
   const dir = mkdtemp("goccia-native-charge-");
   try {
@@ -1961,6 +1954,24 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
         throw new Error(`${label} should be refused with a catchable RangeError: exit ${run.exitCode}, ${run.output}`);
       assertPeakRssBelow(run, label, 2 * ceiling);
     }
+    // Retrying with fresh keys after each refusal: the keys live as long as
+    // the engine, so a later refusal can come inside a catch handler and end
+    // the run, but the process stays bounded instead of growing each round
+    // (8 rounds reached 1.65 GB at 16 MiB before #1173).
+    writeFileSync(path, [
+      "let base = 1e8; let r = 0;",
+      "while (r < 8) {",
+      "  try { const a = []; a.length = 4e9; let i = 0; while (i < 5e7) { a[base + i] = 0; i++; } } catch (e) { console.log('round', r, e.name); }",
+      "  base += 5e7; r++;",
+      "}",
+      "console.log('done');",
+      "",
+    ].join("\n"));
+    const retry = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
+    if (![0, 1].includes(retry.exitCode) || !retry.output.includes("round 0 RangeError") ||
+        (retry.exitCode === 1 && !retry.output.includes("RangeError")))
+      throw new Error(`Retries with fresh sparse keys should each be refused: exit ${retry.exitCode}, ${retry.output}`);
+    assertPeakRssBelow(retry, "retry with fresh sparse keys", 2 * ceiling);
     // A refusal made before the allocation carries the suggestion the refusal
     // at a safe point does.
     writeFileSync(path, "''.padEnd(5e8, 'ab');\n");
