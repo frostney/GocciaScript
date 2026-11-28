@@ -195,8 +195,8 @@ type
     Charged: Int64;
     { Keys and PFlags are its parent's, lent (KeysLent there): charged to the parent until a growth copies them }
     KeysShared: Boolean;
-    { a dictionary's: the last major collection that found an object with it, or the next one for a shape made
-      since the last; a dictionary no object has is retired (RetireDeadShapes) }
+    { a dictionary's: the last major collection that found an object with it; a dictionary no object has is
+      retired (RetireDeadShapes), but for the one made last (FreshDict), which its object may not hold yet }
     LiveMajor: Integer;
   end;
 
@@ -2225,6 +2225,9 @@ end;
 threadvar
   { the last version a shape took (TShape.Version) }
   ShapeVersionNext: Cardinal;
+  { the dictionary shape made last: its object takes it after an allocation that can collect (a proxy's NewObject,
+    AddPropertyTo's overflow growth), so a major collection in between keeps it although no object has it yet }
+  FreshDict: PShape;
 
 const
   { a shape record and its entry in AllShapes }
@@ -2273,9 +2276,6 @@ begin
   Result^.HashMask := -1;
   Inc(ShapeVersionNext);
   Result^.Version := ShapeVersionNext;
-  { a dictionary made now has no object yet: it lives through the next major collection, which the object's mark
-    then carries on }
-  Result^.LiveMajor := GCMajorCount + 1;
   if ShapeCount >= Length(AllShapes) then SetLength(AllShapes, ShapeCount * 2 + 1024);
   AllShapes[ShapeCount] := Result;
   Inc(ShapeCount);
@@ -2287,12 +2287,14 @@ function NewDictShape(Proto: TValue): PShape;
 begin
   Result := NewShape(nil, Proto);
   Result^.IsDict := True;
+  FreshDict := Result;
 end;
 
 function ShapeFork(S: PShape): PShape;
 begin
   Result := NewShape(nil, S^.Proto);
   Result^.IsDict := S^.IsDict;
+  if S^.IsDict then FreshDict := Result;
   Result^.Count := S^.Count;
   Result^.Keys := Copy(S^.Keys, 0, S^.Count);
   Result^.PFlags := Copy(S^.PFlags, 0, S^.Count);
@@ -2478,7 +2480,7 @@ begin
     P := S^.Proto;
     { its prototype died, or it is a dictionary no live object has: its object died, or moved on to another shape }
     if (((P shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(P))^.Flags and (cfMark or cfPermanent)) = 0)) or
-       (S^.IsDict and (S^.LiveMajor < GCMajorCount)) then
+       (S^.IsDict and (S^.LiveMajor < GCMajorCount) and (S <> FreshDict)) then
     begin
       S^.Proto := VRetiredProto;
       if RetiredCount >= Length(RetiredShapes) then SetLength(RetiredShapes, RetiredCount * 2 + 1024);
@@ -2782,7 +2784,10 @@ begin
     N^.HasAccessors := S^.HasAccessors;
     N^.HasIndexKeys := S^.HasIndexKeys;
     if MakeDict then
-      N^.IsDict := True   { unregistered: no other object can reach it }
+    begin
+      N^.IsDict := True;   { unregistered: no other object can reach it }
+      FreshDict := N;
+    end
     else
     begin
       if S^.EdgeCount >= Length(S^.Edges) then SetLength(S^.Edges, S^.EdgeCount * 2 + 2);
@@ -3017,6 +3022,7 @@ begin
     N^.HasAccessors := Old^.HasAccessors or ((Flags and pfAccessor) <> 0);
     N^.HasIndexKeys := Old^.HasIndexKeys;
     N^.IsDict := True;
+    FreshDict := N;
     ShapeRecharge(N);
     O^.Shape := N;
     Exit;
@@ -3330,7 +3336,7 @@ begin
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
   GCAllocatedBytes := 0; GCPeakBytes := 0;
   { the atoms, symbols and shapes charged were freed above }
-  StructBytes := 0; PermBytes := 0; ChargeCheckAt := 0; ChargePending := False;
+  StructBytes := 0; PermBytes := 0; ChargeCheckAt := 0; ChargePending := False; FreshDict := nil;
 end;
 
 

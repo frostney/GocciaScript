@@ -37,7 +37,7 @@ The allocator still cannot fail (ADR 0185): an allocation cannot be refused wher
   delivered at the next safe point, as ADR 0185 decided.
 - **A dictionary shape dies with its object.** A major collection records, on each dictionary shape, that a live
   object has it, and retires the dictionaries no live object has through the same path as shapes whose prototype
-  died. A new dictionary lives through the next major collection, so it is safe until an object holds it. Every
+  died, except the one made last, which its object takes after an allocation that can collect. Every
   shape, and every in-place add to a dictionary, takes a version no earlier shape had, and the caches that keep a
   shape's address check its version too, so a freed shape's address cannot be mistaken for a later shape.
 - **Allocations whose size the script chose are reserved first.** `ArrayCreate`, `new Array(n)` and a longer

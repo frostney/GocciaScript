@@ -90,8 +90,8 @@ count trigger above covers that. [Engine design — Heap and GC](engine/design.m
 
 A dictionary shape (an object past 64 properties, or a proxy) belongs to one object and is retired the same way once
 no live object has it: a major collection notes the dictionaries the objects it marks have (`TShape.LiveMajor`), and
-retires the others, those of dead objects and those an object left when its attributes changed. A dictionary made
-since the last major collection lives through the next one, which an object made with it reaches first. Every shape,
+retires the others, those of dead objects and those an object left when its attributes changed. The dictionary made
+last is kept (`FreshDict`): its object takes it after an allocation that can collect. Every shape,
 and every in-place add to a dictionary, takes a version no earlier shape had (`TShape.Version`), so a cache that keeps
 a shape's address and version never matches a later shape at a freed shape's address.
 
