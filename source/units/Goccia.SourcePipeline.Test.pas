@@ -48,10 +48,13 @@ const
   DECLARATION_COUNT = 10000;
   { Pairs of a script parse and a module parse run back to back. A slow
     spell on a shared machine slows both parses of a pair it covers, and
-    only a pair it starts or ends in can come out skewed, so one pair within
-    the bound shows the module parse is linear. A quadratic pass puts every
-    pair far past it. }
-  TRIAL_PAIRS = 5;
+    only a pair it starts or ends in can come out skewed. A quadratic pass
+    puts every pair far past the bound, unless a pause slows that pair's
+    script parse as much, so the check passes once two pairs are within it:
+    up to four skewed pairs pass, and a quadratic pass needs two such
+    pauses to hide. }
+  TRIAL_PAIRS = 6;
+  LINEAR_PAIRS = 2;
   { The module parse does the script parse's work plus one pass over the
     declarations, so it stays close to the script parse; the slack absorbs
     a busy machine without letting a quadratic pass through. }
@@ -115,13 +118,12 @@ procedure TSourcePipelineTests.ExpectModuleParseLinear(const AModuleLine,
 var
   ModuleSource, ScriptSource: TStringList;
   ModuleTime, ScriptTime, BestModuleTime, BestScriptTime: Int64;
-  Pair: Integer;
-  Linear: Boolean;
+  Pair, LinearCount: Integer;
 begin
   ModuleSource := DeclarationLines(AModuleLine, DECLARATION_COUNT);
   ScriptSource := DeclarationLines(AScriptLine, DECLARATION_COUNT);
   try
-    Linear := False;
+    LinearCount := 0;
     BestModuleTime := High(Int64);
     BestScriptTime := 0;
     for Pair := 1 to TRIAL_PAIRS do
@@ -131,23 +133,25 @@ begin
       if ModuleTime <= MODULE_TO_SCRIPT_RATIO * ScriptTime +
          SLACK_NANOSECONDS then
       begin
-        Linear := True;
-        Break;
-      end;
-      { the pair nearest the bound, for the failure message }
-      if ModuleTime - MODULE_TO_SCRIPT_RATIO * ScriptTime <
+        Inc(LinearCount);
+        if LinearCount = LINEAR_PAIRS then
+          Break;
+      end
+      { the pair nearest the bound of those past it, for the failure message }
+      else if ModuleTime - MODULE_TO_SCRIPT_RATIO * ScriptTime <
          BestModuleTime - MODULE_TO_SCRIPT_RATIO * BestScriptTime then
       begin
         BestModuleTime := ModuleTime;
         BestScriptTime := ScriptTime;
       end;
     end;
-    if not Linear then
+    if LinearCount < LINEAR_PAIRS then
       Fail(Format('%d declarations parsed in %d ms as a module against ' +
-        '%d ms as a script, the nearest of %d back-to-back pairs',
-        [DECLARATION_COUNT, BestModuleTime div 1000000,
-        BestScriptTime div 1000000, TRIAL_PAIRS]));
-    Expect<Boolean>(Linear).ToBe(True);
+        '%d ms as a script, the nearest of the %d of %d back-to-back pairs ' +
+        'past the bound', [DECLARATION_COUNT, BestModuleTime div 1000000,
+        BestScriptTime div 1000000, TRIAL_PAIRS - LinearCount,
+        TRIAL_PAIRS]));
+    Expect<Integer>(LinearCount).ToBe(LINEAR_PAIRS);
   finally
     ScriptSource.Free;
     ModuleSource.Free;
