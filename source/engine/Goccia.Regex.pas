@@ -14,7 +14,8 @@ unit Goccia.Regex;
   - character classes test Latin-1 code points with a bitmap.
 
   The subject pointer is only used while Exec runs, which allocates nothing on the engine's heap, so a moving
-  collection cannot invalidate it. }
+  collection cannot invalidate it. For the same reason a match never collects: when its storage cannot grow without a
+  collection, Exec stops with GrowthRefused, and the caller collects for GrowthWanted bytes and matches again. }
 {$mode delphiunicode}{$H+}
 {$I Goccia.Checks.inc}
 {$MINFPCONSTPREC 64}
@@ -85,6 +86,7 @@ type
     FStepLimit: Int64;
     FMatchIndex, FMatchEnd: Integer;
     FErr: Integer;                   { 0, or why the last Exec stopped (step limit, backtrack cap, stack, bytecode) }
+    FGrowthWanted: Int64;            { the bytes a growth the last Exec was refused asked for (FErr 6) }
     { ^(?:lit|lit|...)$ (no capture, no m flag, literal code units only): a match is the whole subject equal to
       one of FLits, which are sorted by length (FLitFrom[L] .. FLitFrom[L + 1] - 1 those of length L) }
     FLitOn: Boolean;
@@ -120,6 +122,10 @@ type
     { the match ran out of native stack (nested groups or lookarounds on a nearly exhausted stack) }
     function StackExhausted: Boolean;
     function MemoryExhausted: Boolean;
+    { the last Exec stopped because its storage could not grow without a collection, which a match cannot run: a
+      collection that leaves GrowthWanted bytes free lets the same match go further }
+    function GrowthRefused: Boolean; inline;
+    property GrowthWanted: Int64 read FGrowthWanted;
     function ErrorMessage: UnicodeString;
   end;
 
@@ -149,15 +155,26 @@ begin
   raise EHeapExternalMemoryLimit.Create(SErrorMemoryLimitExceeded);
 end;
 
+threadvar
+  { what the last growth refused without a collection asked for (ChargeMatchGrowth): Exec hands it to its caller }
+  GrowthRefusedBytes: Int64;
+
+procedure RefuseMatchGrowth(const Bytes: Int64);
+begin
+  GrowthRefusedBytes := Bytes;
+  RaiseRegExpMemoryLimit;
+end;
+
 procedure CheckRegExpWorkspace(const Bytes: Int64);
 begin
   if not HeapReserve(Bytes) then RaiseRegExpMemoryLimit;
 end;
 
-{ The old block may remain live while the RTL copies it. Matching reads the subject directly, so no GC can run here. }
+{ The old block may remain live while the RTL copies it. Matching reads the subject directly, so no GC can run here:
+  a refusal stops the match (GrowthRefused), and its caller collects and matches again. }
 procedure ChargeMatchGrowth(var Charge: THeapExternalCharge; OldCount, NewCount, ItemSize: SizeInt);
 begin
-  if not Charge.TryGrow(Int64(NewCount) * ItemSize, False) then RaiseRegExpMemoryLimit;
+  if not Charge.TryGrow(Int64(NewCount) * ItemSize, False) then RefuseMatchGrowth(Int64(NewCount) * ItemSize);
   Charge.Release(Int64(OldCount) * ItemSize);
 end;
 
@@ -537,7 +554,8 @@ begin
   Result := FCtx[Depth];
   if Result = nil then
   begin
-    if not FCharge.TryGrow(SizeOf(TDepthCtx) + (256 + 8) * SizeOf(Integer), False) then RaiseRegExpMemoryLimit;
+    if not FCharge.TryGrow(SizeOf(TDepthCtx) + (256 + 8) * SizeOf(Integer), False) then
+      RefuseMatchGrowth(SizeOf(TDepthCtx) + (256 + 8) * SizeOf(Integer));
     New(Result);
     FCtx[Depth] := Result;
     Result^.Charge := @FCharge;
@@ -1695,6 +1713,11 @@ begin
   Result := FErr = 6;
 end;
 
+function TRegexMatcher.GrowthRefused: Boolean;
+begin
+  Result := (FErr = 6) and (FGrowthWanted > 0);
+end;
+
 function TRegexMatcher.ErrorMessage: UnicodeString;
 begin
   case FErr of
@@ -1708,12 +1731,15 @@ end;
 
 function TRegexMatcher.Exec(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
 begin
+  FGrowthWanted := 0;
+  GrowthRefusedBytes := 0;
   try
     Result := Execute(Chars, Len, Start, RequireStart);
   except
     on EHeapExternalMemoryLimit do
     begin
       FErr := 6;
+      FGrowthWanted := GrowthRefusedBytes;
       Result := False;
     end;
   end;
