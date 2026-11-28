@@ -104,6 +104,19 @@ type
   TNativeModuleFactory = function(var ExportList: TValue): Boolean of object;
 function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
   var Err: UnicodeString): Boolean;
+type
+  { what a module provider answers with: the module's JavaScript source text, or a bytecode file (CompileArtifact's
+    bytes, loaded and checked against the engine's settings as an imported .gbc file is) }
+  TModuleProviderAnswerKind = (mpaSource, mpaBytecode);
+  TModuleProviderAnswer = record
+    Kind: TModuleProviderAnswerKind;
+    Source: UnicodeString;
+    Bytecode: TBytes;
+  end;
+  { Specifier's module, asked for when it is first imported. False with a pending error. }
+  TModuleProvider = function(const Specifier: UnicodeString; var Answer: TModuleProviderAnswer): Boolean of object;
+function DefineModuleProvider(const Specifier: UnicodeString; Provider: TModuleProvider;
+  var Err: UnicodeString): Boolean;
 { a JavaScript or TypeScript module's exports: each named export a global (a globals module), or its default
   export the module map (a module manifest); the module is evaluated in this engine }
 function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
@@ -653,18 +666,24 @@ end;
 
 type
   TNativeModuleFactories = TDictionary<UnicodeString, TNativeModuleFactory>;
+  TModuleProviders = TDictionary<UnicodeString, TModuleProvider>;
 
 threadvar
   NativeModuleFactories: TNativeModuleFactories;
+  { the modules embedders supply on first import (DefineModuleProvider): only the callback until then }
+  ModuleProviders: TModuleProviders;
   { realm and key of each native factory still running: a load that reaches the same module again before the
     factory returned is refused, because its record is published only after the factory succeeds }
   ActiveNativeFactories: TList<UnicodeString>;
 
+{ a native factory's or a module provider's key: a host module with no source phase (a provider's answer is not
+  asked for a source or typed lookup) }
 function NativeModuleRegistered(const Key: UnicodeString): Boolean;
-var Factories: TNativeModuleFactories;
+var Factories: TNativeModuleFactories; Providers: TModuleProviders;
 begin
   Factories := NativeModuleFactories;
-  Result := (Factories <> nil) and Factories.ContainsKey(Key);
+  Providers := ModuleProviders;
+  Result := ((Factories <> nil) and Factories.ContainsKey(Key)) or ((Providers <> nil) and Providers.ContainsKey(Key));
 end;
 
 function NativeModuleWithoutSource(const Key: UnicodeString): Boolean;
@@ -675,7 +694,8 @@ end;
 { Goccia.Modules's host hook: native factories and shared.loadHostModule(Key, FilePath) }
 function HostModule(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
 var A: array[0..1] of TValue; I: Integer; Factory: TNativeModuleFactory; Factories: TNativeModuleFactories;
-  Marker: UnicodeString;
+  Marker: UnicodeString; Provider: TModuleProvider; Providers: TModuleProviders; Answer: TModuleProviderAnswer;
+  Bytes: RawByteString;
 begin
   if (FilePath = '') and Assigned(MockModules) then
   begin
@@ -712,6 +732,29 @@ begin
       if I >= 0 then ActiveNativeFactories.Delete(I);
     end;
     Exit;
+  end;
+  Providers := ModuleProviders;
+  if (FilePath = '') and (Providers <> nil) and Providers.TryGetValue(Key, Provider) then
+  begin
+    { a typed or source lookup does not ask the provider (NativeModuleWithoutSource) }
+    if SourceOnly then Exit(0);
+    Answer := Default(TModuleProviderAnswer);
+    if not Provider(Key, Answer) then
+    begin
+      if Pending = VUndefined then
+        ThrowTypeError('The module provider for ' + Key + ' failed without an error');
+      Exit(-1);
+    end;
+    if Answer.Kind = mpaBytecode then
+    begin
+      SetLength(Bytes, Length(Answer.Bytecode));
+      if Length(Bytes) > 0 then Move(Answer.Bytecode[0], Bytes[1], Length(Bytes));
+      SetHostModuleArtifact(Bytes);
+      Exp := VUndefined;
+      Exit(3);
+    end;
+    Exp := StrFromUnicode(Answer.Source);
+    Exit(2);
   end;
   if not IsObject(LoadHostModuleV) then Exit(0);
   PushRoot(StrFromUnicode(Key));
@@ -771,6 +814,7 @@ begin
   SetEmbedderWork(nil);
   RealmHostInit := nil;
   FreeAndNil(NativeModuleFactories);
+  FreeAndNil(ModuleProviders);
   FreeAndNil(ActiveNativeFactories);
   FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
@@ -1342,26 +1386,22 @@ begin
   Result := FindHostModuleKey(Key, Registered);
 end;
 
-function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
-  var Err: UnicodeString): Boolean;
+{ whether an embedder may register Specifier (a native module or a provided one, What in the messages): a virtual
+  address outside the runtime's goccia: namespace that no module uses yet }
+function CanRegisterHostModule(const Specifier, What: UnicodeString; var Err: UnicodeString): Boolean;
 var Registered: UnicodeString;
 begin
   Result := False;
   if IsAbsoluteFilePath(UTF8Encode(Specifier)) or not IsVirtualModuleURI(UTF8Encode(Specifier)) or
     (Pos(#0, Specifier) > 0) or (Pos(#1, Specifier) > 0) then
   begin
-    Err := 'Native module specifier must be a virtual address';
-    Exit;
-  end;
-  if not Assigned(Factory) then
-  begin
-    Err := 'Native module factory is required';
+    Err := What + ' specifier must be a virtual address';
     Exit;
   end;
   { the goccia: namespace is the runtime's, including modules a test or bench host installs later }
   if Copy(Specifier, 1, 7) = 'goccia:' then
   begin
-    Err := 'Native module specifier must not use the runtime''s goccia: namespace';
+    Err := What + ' specifier must not use the runtime''s goccia: namespace';
     Exit;
   end;
   if FindHostModuleKey(Specifier, Registered, True) then
@@ -1369,8 +1409,38 @@ begin
     Err := 'Module is already registered: ' + Registered;
     Exit;
   end;
+  Result := True;
+end;
+
+function DefineNativeModule(const Specifier: UnicodeString; Factory: TNativeModuleFactory;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := False;
+  if not Assigned(Factory) then
+  begin
+    Err := 'Native module factory is required';
+    Exit;
+  end;
+  if not CanRegisterHostModule(Specifier, 'Native module', Err) then Exit;
   if NativeModuleFactories = nil then NativeModuleFactories := TNativeModuleFactories.Create;
   NativeModuleFactories.Add(Specifier, Factory);
+  SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
+  Err := '';
+  Result := True;
+end;
+
+function DefineModuleProvider(const Specifier: UnicodeString; Provider: TModuleProvider;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := False;
+  if not Assigned(Provider) then
+  begin
+    Err := 'Module provider is required';
+    Exit;
+  end;
+  if not CanRegisterHostModule(Specifier, 'Provided module', Err) then Exit;
+  if ModuleProviders = nil then ModuleProviders := TModuleProviders.Create;
+  ModuleProviders.Add(Specifier, Provider);
   SetHostModuleHook(@HostModule, @IsHostModuleKey, @NativeModuleWithoutSource, IsObject(LoadHostModuleV));
   Err := '';
   Result := True;

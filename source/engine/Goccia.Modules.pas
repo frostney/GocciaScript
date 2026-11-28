@@ -58,9 +58,10 @@ function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue)
 type
   { a host's modules: for a request key, try only the host registry when FilePath is empty and only the
     file at FilePath otherwise. 1 with Exp an array of the module's export names and values, interleaved (a
-    synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
-    has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly lookup
-    asks for source text for a typed import and must not initialize a native factory. }
+    synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 3 with the module's
+    bytecode file handed over through SetHostModuleArtifact (loaded and checked as an imported .gbc file is), 0
+    when the host has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly
+    lookup asks for source text for a typed import and must not initialize a native factory or ask a provider. }
   THostModuleHook = function(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
   THostModuleKeyHook = function(const Key: UnicodeString): Boolean;
 
@@ -70,6 +71,8 @@ type
   THostResolveHook = function(const Spec, Referrer: UnicodeString; out Resolved, RealPath: UnicodeString;
     out VirtualKey: Boolean): Integer;
 
+{ the bytecode file a host module hook answers with (its result 3), taken by the load that called the hook }
+procedure SetHostModuleArtifact(const Bytes: RawByteString);
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook: THostModuleKeyHook = nil;
   NoSourceHook: THostModuleKeyHook = nil; SupportsFileFormats: Boolean = False);
@@ -506,6 +509,22 @@ begin
     end;
   end;
   Result := True;
+end;
+
+threadvar
+  { the bytecode file the host module hook answered with (SetHostModuleArtifact), until LoadModule takes it }
+  HostModuleArtifact: RawByteString;
+
+procedure SetHostModuleArtifact(const Bytes: RawByteString);
+begin
+  HostModuleArtifact := Bytes;
+end;
+
+{ the bytecode file the hook answered with; the hand-over is cleared }
+function TakeHostModuleArtifact: RawByteString;
+begin
+  Result := HostModuleArtifact;
+  HostModuleArtifact := '';
 end;
 
 procedure SetHostModuleHook(Hook: THostModuleHook; KeyHook, NoSourceHook: THostModuleKeyHook;
@@ -1240,6 +1259,8 @@ begin
     case I of
       1: Exit(MakeHostModule(Address, V, M));
       2: Src := StrToUnicode(StrOf(V));
+      { a bytecode file under the host's key: one record, checked against the run's profile like an imported .gbc }
+      3: Exit(LoadArtifactRecord(Address, Path, TakeHostModuleArtifact, M));
       -1: Exit(False);
     end;
     if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));

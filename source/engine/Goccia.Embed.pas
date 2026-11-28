@@ -17,6 +17,9 @@ type
   { a console line and the method that wrote it (Goccia.HostAPI TConsoleSink) }
   TGocciaConsoleEvent = TConsoleSink;
   TGocciaNativeModuleFactory = TNativeModuleFactory;
+  { a module an embedder supplies when it is first imported: its source text or a bytecode file (DefineModuleProvider) }
+  TGocciaModuleProvider = TModuleProvider;
+  TGocciaModuleProviderAnswer = TModuleProviderAnswer;
   TGocciaEmbedderWork = TEmbedderWork;
   IGocciaAbortHandle = Goccia.VM.IGocciaAbortHandle;
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
@@ -246,6 +249,10 @@ type
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
     { Registers a native factory for an import, with the same lifetime as this engine. }
     function DefineNativeModule(const Specifier: UnicodeString; Factory: TGocciaNativeModuleFactory;
+      var Err: UnicodeString): Boolean;
+    { Registers a provider asked for an import's source text or bytecode file when it is first imported, with the same
+      lifetime as this engine; until then the registration holds nothing in the engine's heap. }
+    function DefineModuleProvider(const Specifier: UnicodeString; Provider: TGocciaModuleProvider;
       var Err: UnicodeString): Boolean;
     { Installs a work source for this engine. The caller keeps it alive until it is removed or the engine ends. }
     procedure SetHostWork(Work: TGocciaEmbedderWork);
@@ -717,6 +724,12 @@ function TGocciaEngine.DefineNativeModule(const Specifier: UnicodeString; Factor
   var Err: UnicodeString): Boolean;
 begin
   Result := HostReady(Err) and Goccia.HostAPI.DefineNativeModule(Specifier, Factory, Err);
+end;
+
+function TGocciaEngine.DefineModuleProvider(const Specifier: UnicodeString; Provider: TGocciaModuleProvider;
+  var Err: UnicodeString): Boolean;
+begin
+  Result := HostReady(Err) and Goccia.HostAPI.DefineModuleProvider(Specifier, Provider, Err);
 end;
 
 { the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
