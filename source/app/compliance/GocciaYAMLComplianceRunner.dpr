@@ -652,6 +652,8 @@ begin
       WriteLn(E.Message);
       Halt(WORKER_EXIT_REJECTED);
     end;
+    { fault-guard: a case's worker process, whose status WORKER_EXIT_UNEXPECTED_EXCEPTION the coordinator records as
+      an infrastructure result naming the exception's class }
     on E: Exception do
     begin
       WriteLn(E.ClassName, ': ', E.Message);
