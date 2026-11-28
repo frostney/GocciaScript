@@ -69,7 +69,7 @@
     return args[0];
   };
 
-  // YAML.parse(text): null for no document, the document for one without a "---" marker, otherwise the documents
+  // YAML.parse(text), as Bun.YAML.parse: null for no document, the document itself for one, the documents for more
   function parse(text) {
     return rebuild(n.dataParse(KIND_YAML, stringArgument(arguments, 'YAML.parse')));
   }

@@ -35,9 +35,8 @@ unit Goccia.YAML.Scanner;
   JSON-style pair spells its character; "%xx" escapes in a tag decode as
   UTF-8; a block-level key goes stale inside a flow collection too
   (StaleSimpleKeys); and the rules saphyr leaves out are kept: a flow
-  collection's lines are deeper than the block node that holds it, except a
-  closing bracket, which may sit at that node's indentation as other parsers
-  allow; after a tab only a flow node follows "?" or ":" on the line; an empty
+  collection's lines, its closing bracket's included, are deeper than the
+  block node that holds it; after a tab only a flow node follows "?" or ":" on the line; an empty
   key's value is no block collection on the same line; "|" and ">" start no
   plain scalar in a flow collection; and %TAG separates handle and prefix. }
 
@@ -1124,13 +1123,13 @@ begin
 
   C := Peek;
   NextCharacter := Peek(1);
-  // a closing "]" or "}" may sit at the indentation of the block node that
-  // holds the collection, as libyaml, PyYAML, js-yaml and the yaml package
-  // accept though 8.2.3 does not
-  if (FFlowLevel > 0) and (FMark.Column < FlowContentIndent) and
-     not (((C = ']') or (C = '}')) and (FMark.Column = FlowContentIndent - 1)) then
+  // every line of a flow collection, its closing bracket's too, is deeper
+  // than the block node that holds it (7.4, s-flow-line-prefix(n)), though
+  // PyYAML and the yaml package accept a closing bracket at that node's
+  // indentation
+  if (FFlowLevel > 0) and (FMark.Column < FlowContentIndent) then
     RaiseError(FMark, 'invalid indentation in flow construct');
-  if (FMark.Column < FIndent) and not ((FFlowLevel > 0) and ((C = ']') or (C = '}'))) then
+  if FMark.Column < FIndent then
     RaiseError(FMark, 'invalid indentation');
 
   case C of

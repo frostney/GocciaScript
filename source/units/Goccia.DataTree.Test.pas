@@ -182,13 +182,13 @@ begin
     Tree := Parser.Parse('%TAG !e! tag:example.com,2026:' + #10 + '---' + #10 +
       'a: !e!widget 1' + #10 + 'b: !!binary SGk=' + #10);
     try
-      // an explicit "---" makes the stream an array of its documents
-      Expect<Integer>(Ord(Tree.Root.Kind)).ToBe(Ord(dnkArray));
-      Node := Tree.Root.Items[0].GetProperty('a');
+      // one document is the value itself, "---" or not
+      Expect<Integer>(Ord(Tree.Root.Kind)).ToBe(Ord(dnkObject));
+      Node := Tree.Root.GetProperty('a');
       Expect<Integer>(Ord(Node.Kind)).ToBe(Ord(dnkTagged));
       Expect<string>(Node.TagName).ToBe('tag:example.com,2026:widget');
       Expect<Double>(Node.TaggedValue.NumberValue).ToBe(1);
-      Node := Tree.Root.Items[0].GetProperty('b');
+      Node := Tree.Root.GetProperty('b');
       // !!binary keeps its base64 text
       Expect<string>(Node.TaggedValue.StringValue).ToBe('SGk=');
     finally

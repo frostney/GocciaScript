@@ -17,6 +17,7 @@ unit Goccia.YAML;
 interface
 
 uses
+  Generics.Collections,
   SysUtils,
 
   OrderedStringMap,
@@ -27,14 +28,21 @@ uses
 
 type
   EGocciaYAMLParseError = Goccia.YAML.Scanner.EGocciaYAMLParseError;
+  { well-formed YAML that fails to load: a mapping has the same key twice }
+  EGocciaYAMLDuplicateKeyError = class(EGocciaYAMLParseError);
 
   TGocciaYAMLParser = class
   private
     FAnchors: TGocciaDataNodeMap;
+    { for each mapping of the current stream that has a key other than a
+      string, those keys' identities (KeyIdentity) by property name: the name
+      alone loses what makes such a key equal to another or not }
+    FKeyIdentities: TObjectDictionary<TGocciaDataNode, TOrderedStringMap<string>>;
     FEvents: TGocciaYAMLEventParser;
     FTree: TGocciaDataTree;
 
     procedure RaiseError(const AMark: TGocciaYAMLMarker; const AMessage: string);
+    procedure RaiseDuplicateKey(const AMark: TGocciaYAMLMarker; const AName: string);
     function NextEvent: TGocciaYAMLEvent;
     procedure RegisterAnchor(const AEvent: TGocciaYAMLEvent;
       const ANode: TGocciaDataNode);
@@ -49,14 +57,17 @@ type
       const AMark: TGocciaYAMLMarker);
     function KeyName(const AEvent: TGocciaYAMLEvent;
       const AKey: TGocciaDataNode): string;
-    function ParseStream(const AText: string;
-      out AExplicitDocumentStart: Boolean): TGocciaDataTree;
+    function KeyIdentity(const AKey: TGocciaDataNode): string;
+    procedure RecordKeyIdentity(const AMapping: TGocciaDataNode;
+      const AName, AIdentity: string);
+    procedure ForgetKeyIdentity(const AMapping: TGocciaDataNode; const AName: string);
+    function ParseStream(const AText: string): TGocciaDataTree;
   public
     constructor Create;
     destructor Destroy; override;
 
-    { the stream's value: null for no document, the document for one without a
-      "---" marker, otherwise an array of the documents }
+    { the stream's value, as Bun.YAML.parse gives it: null for no document,
+      the document itself for one, and an array of the documents for more }
     function Parse(const AText: string): TGocciaDataTree;
     { an array of the stream's documents }
     function ParseDocuments(const AText: string): TGocciaDataTree;
@@ -446,10 +457,13 @@ constructor TGocciaYAMLParser.Create;
 begin
   inherited Create;
   FAnchors := TGocciaDataNodeMap.Create;
+  FKeyIdentities := TObjectDictionary<TGocciaDataNode, TOrderedStringMap<string>>.Create(
+    [doOwnsValues]);
 end;
 
 destructor TGocciaYAMLParser.Destroy;
 begin
+  FKeyIdentities.Free;
   FAnchors.Free;
   inherited;
 end;
@@ -459,6 +473,14 @@ procedure TGocciaYAMLParser.RaiseError(const AMark: TGocciaYAMLMarker;
 begin
   raise EGocciaYAMLParseError.CreateFmt('Line %d, column %d: %s',
     [AMark.Line, AMark.Column + 1, AMessage]);
+end;
+
+procedure TGocciaYAMLParser.RaiseDuplicateKey(const AMark: TGocciaYAMLMarker;
+  const AName: string);
+begin
+  raise EGocciaYAMLDuplicateKeyError.CreateFmt(
+    'Line %d, column %d: duplicate mapping key %s',
+    [AMark.Line, AMark.Column + 1, EscapeCompositeKeyString(AName)]);
 end;
 
 function TGocciaYAMLParser.NextEvent: TGocciaYAMLEvent;
@@ -615,31 +637,97 @@ begin
   end;
 end;
 
+{ a mapping's keys are unique (3.2.1.3), and a mapping that has the same
+  key twice fails to load (3.3). Two keys are the same when they become the
+  same property name, which equal scalars always do, or when they are equal
+  nulls ("" and "~") or equal collections. Keys the spec counts as different
+  but that share a property name, such as 1 and "1", fail too: an object
+  cannot hold both, and 3.3 lets loading fail on that. "<<" may repeat, and a
+  key of the mapping's own wins over a merged one. }
 function TGocciaYAMLParser.ComposeMapping(const AEvent: TGocciaYAMLEvent): TGocciaDataNode;
+const
+  SEEN_NAME = 'n:';
+  SEEN_VALUE = 'v:';
 var
   KeyEvent: TGocciaYAMLEvent;
-  Key, Value: TGocciaDataNode;
+  Key, Mapping, Value: TGocciaDataNode;
+  KeyIsValue: Boolean;
+  Identity, Name: string;
+  // until a merge key, a null key or a collection key needs it, the
+  // mapping's own properties are its keys so far
+  Seen: TOrderedStringMap<Boolean>;
+
+  procedure StartSeen;
+  var
+    OwnName: string;
+  begin
+    if Assigned(Seen) then
+      Exit;
+    Seen := TOrderedStringMap<Boolean>.Create;
+    for OwnName in Mapping.OwnKeys do
+      Seen.Add(SEEN_NAME + OwnName, True);
+  end;
+
+  procedure See(const AEntry: string);
+  begin
+    StartSeen;
+    if Seen.ContainsKey(AEntry) then
+      RaiseDuplicateKey(KeyEvent.StartMark, Name);
+    Seen.Add(AEntry, True);
+  end;
+
 begin
   EnterDataDepth(DATA_DEPTH_OPERATION);
+  Seen := nil;
   try
-    Result := FTree.NewObject;
-    RegisterAnchor(AEvent, Result);
+    Mapping := FTree.NewObject;
+    RegisterAnchor(AEvent, Mapping);
     while True do
     begin
       KeyEvent := NextEvent;
       if KeyEvent.Kind = yekMappingEnd then
         Break;
       Key := ComposeNode(KeyEvent);
-      Value := ComposeNode(NextEvent);
       if (KeyEvent.Kind = yekScalar) and (KeyEvent.Style = yssPlain) and
          not KeyEvent.HasTag and (KeyEvent.Value = MERGE_KEY) then
-        MergeMappingValue(Result, Value, KeyEvent.StartMark)
+      begin
+        // a merged key is no key of the mapping's own
+        StartSeen;
+        MergeMappingValue(Mapping, ComposeNode(NextEvent), KeyEvent.StartMark);
+        Continue;
+      end;
+      Name := KeyName(KeyEvent, Key);
+      // a null or collection key can equal a key of another property name
+      KeyIsValue := (Key.Kind = dnkNull) or Key.IsContainer or
+        ((Key.Kind = dnkTagged) and Key.TaggedValue.IsContainer);
+      if KeyIsValue then
+        StartSeen;
+      if Assigned(Seen) then
+        See(SEEN_NAME + Name)
+      else if Mapping.HasProperty(Name) then
+        RaiseDuplicateKey(KeyEvent.StartMark, Name);
+      // a string key is told by its property name, which it also takes over
+      // from a merged key of another kind
+      if Key.Kind = dnkString then
+        ForgetKeyIdentity(Mapping, Name)
       else
-        Result.SetProperty(KeyName(KeyEvent, Key), Value);
+      begin
+        // a number's or a boolean's identity is its property name, unquoted
+        if (Key.Kind = dnkNumber) or (Key.Kind = dnkBoolean) then
+          Identity := Name
+        else
+          Identity := KeyIdentity(Key);
+        if KeyIsValue then
+          See(SEEN_VALUE + Identity);
+        RecordKeyIdentity(Mapping, Name, Identity);
+      end;
+      Value := ComposeNode(NextEvent);
+      Mapping.SetProperty(Name, Value);
     end;
-    Result := ApplyCollectionTag(AEvent, Result);
+    Result := ApplyCollectionTag(AEvent, Mapping);
     RegisterAnchor(AEvent, Result);
   finally
+    Seen.Free;
     LeaveDataDepth;
   end;
 end;
@@ -672,7 +760,8 @@ procedure TGocciaYAMLParser.MergeMappingValue(const ATarget, AValue: TGocciaData
 
   procedure MergeMapping(const AMapping: TGocciaDataNode);
   var
-    Key: string;
+    Identity, Key: string;
+    Recorded: TOrderedStringMap<string>;
     Source: TGocciaDataNode;
   begin
     Source := AMapping;
@@ -680,9 +769,16 @@ procedure TGocciaYAMLParser.MergeMappingValue(const ATarget, AValue: TGocciaData
       Source := Source.TaggedValue;
     if Source.Kind <> dnkObject then
       RaiseError(AMark, 'Merge keys must reference a mapping or a sequence of mappings.');
+    if not FKeyIdentities.TryGetValue(Source, Recorded) then
+      Recorded := nil;
     for Key in Source.OwnKeys do
       if not ATarget.HasProperty(Key) then
+      begin
         ATarget.SetProperty(Key, Source.GetProperty(Key));
+        // the key keeps what it is
+        if Assigned(Recorded) and Recorded.TryGetValue(Key, Identity) then
+          RecordKeyIdentity(ATarget, Key, Identity);
+      end;
   end;
 
 var
@@ -710,12 +806,81 @@ begin
   Result := CanonicalizeKeyValue(AKey);
 end;
 
-function TGocciaYAMLParser.ParseStream(const AText: string;
-  out AExplicitDocumentStart: Boolean): TGocciaDataTree;
+{ a key as a string that two keys share only when they are equal (3.2.1.3):
+  tags kept, a mapping's entries in sorted order, and each entry's key by
+  its own identity, recorded unless it is a string, whose property name
+  tells it }
+function TGocciaYAMLParser.KeyIdentity(const AKey: TGocciaDataNode): string;
+var
+  Entries, KeyNames: TArray<string>;
+  EntryKey: string;
+  I: Integer;
+  Recorded: TOrderedStringMap<string>;
+begin
+  case AKey.Kind of
+    dnkTagged:
+      Exit('!' + EscapeCompositeKeyString(AKey.TagName) + ' ' +
+        KeyIdentity(AKey.TaggedValue));
+    dnkArray, dnkObject:
+      ;
+  else
+    Exit(CanonicalizeKeyValue(AKey, True));
+  end;
+
+  // a key that contains itself has no identity: the depth guard stops it
+  EnterDataDepth(DATA_DEPTH_OPERATION);
+  try
+    if AKey.Kind = dnkArray then
+    begin
+      SetLength(Entries, AKey.Count);
+      for I := 0 to AKey.Count - 1 do
+        Entries[I] := KeyIdentity(AKey.Items[I]);
+      Result := '[' + string.Join(', ', Entries) + ']';
+      Exit;
+    end;
+    if not FKeyIdentities.TryGetValue(AKey, Recorded) then
+      Recorded := nil;
+    KeyNames := AKey.OwnKeys;
+    SetLength(Entries, Length(KeyNames));
+    for I := 0 to Length(KeyNames) - 1 do
+    begin
+      if not (Assigned(Recorded) and Recorded.TryGetValue(KeyNames[I], EntryKey)) then
+        EntryKey := EscapeCompositeKeyString(KeyNames[I]);
+      Entries[I] := EntryKey + ': ' + KeyIdentity(AKey.GetProperty(KeyNames[I]));
+    end;
+    TArrayHelper<string>.Sort(Entries);
+    Result := '{' + string.Join(', ', Entries) + '}';
+  finally
+    LeaveDataDepth;
+  end;
+end;
+
+procedure TGocciaYAMLParser.RecordKeyIdentity(const AMapping: TGocciaDataNode;
+  const AName, AIdentity: string);
+var
+  Recorded: TOrderedStringMap<string>;
+begin
+  if not FKeyIdentities.TryGetValue(AMapping, Recorded) then
+  begin
+    Recorded := TOrderedStringMap<string>.Create;
+    FKeyIdentities.Add(AMapping, Recorded);
+  end;
+  Recorded.AddOrSetValue(AName, AIdentity);
+end;
+
+procedure TGocciaYAMLParser.ForgetKeyIdentity(const AMapping: TGocciaDataNode;
+  const AName: string);
+var
+  Recorded: TOrderedStringMap<string>;
+begin
+  if FKeyIdentities.TryGetValue(AMapping, Recorded) then
+    Recorded.Remove(AName);
+end;
+
+function TGocciaYAMLParser.ParseStream(const AText: string): TGocciaDataTree;
 var
   Event: TGocciaYAMLEvent;
 begin
-  AExplicitDocumentStart := False;
   Result := TGocciaDataTree.Create;
   try
     Result.Root := Result.NewArray;
@@ -728,8 +893,6 @@ begin
         Event := NextEvent;
         if Event.Kind = yekStreamEnd then
           Break;
-        if Event.Explicit then
-          AExplicitDocumentStart := True;
         // anchors name nodes of their own document only
         FAnchors.Clear;
         Result.Root.Add(ComposeNode(NextEvent));
@@ -741,6 +904,7 @@ begin
       // the last document's anchors would otherwise name nodes of a tree the
       // caller may free
       FAnchors.Clear;
+      FKeyIdentities.Clear;
     end;
   except
     Result.Free;
@@ -751,21 +915,18 @@ end;
 function TGocciaYAMLParser.Parse(const AText: string): TGocciaDataTree;
 var
   Documents: TGocciaDataNode;
-  ExplicitDocumentStart: Boolean;
 begin
-  Result := ParseStream(AText, ExplicitDocumentStart);
+  Result := ParseStream(AText);
   Documents := Result.Root;
   if Documents.Count = 0 then
     Result.Root := Result.NewNull
-  else if not ExplicitDocumentStart then
+  else if Documents.Count = 1 then
     Result.Root := Documents.Items[0];
 end;
 
 function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaDataTree;
-var
-  ExplicitDocumentStart: Boolean;
 begin
-  Result := ParseStream(AText, ExplicitDocumentStart);
+  Result := ParseStream(AText);
 end;
 
 end.
