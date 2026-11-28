@@ -10566,10 +10566,15 @@ await section("Runner sandbox mode: nested engines created back to back get unre
       { path: "/child.js", text: "Math.random();" },
     ]);
 
-    const proc = Bun.spawnSync([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    // a config of the fixture's own, so a goccia.json the working directory has (deterministic: true would fork
+    // seeded streams) cannot take the run off the default seeding this checks
+    const configDir = join(tmp, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "goccia.json"), JSON.stringify({ deterministic: false }));
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--config=${configDir}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
     const output = proc.stdout.toString().trim();
     let values: unknown[] = [];
     try {
