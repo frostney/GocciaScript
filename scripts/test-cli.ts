@@ -1862,10 +1862,13 @@ console.log("--max-memory (override)...");
 console.log("--max-memory (OOM triggers RangeError)...");
 {
   // Leave room for the live heap, native startup storage and the result's
-  // element slots. The mapped element objects should exhaust the budget.
-  const ELEMENTS = 5000;
+  // element slots. The native storage includes the engine's own atoms and
+  // shapes, which count against the limit (about 1.5 MB at startup) but not
+  // in bytesAllocated. The mapped element objects, about 48 bytes each past
+  // their slots, exhaust the margin.
+  const ELEMENTS = 200_000;
   const POINTER_BYTES = 8;
-  const MARGIN_BYTES = 256 * 1024;
+  const MARGIN_BYTES = 4 * 1024 * 1024;
   const probe = await $`echo 'Goccia.gc(); console.log(Goccia.gc.bytesAllocated);' | ${RUNNER} --compat-asi 2>/dev/null`.quiet().nothrow();
   const liveBytes = Number.parseInt(probe.text().trim().split("\n")[0], 10);
   if (probe.exitCode !== 0 || !Number.isFinite(liveBytes) || liveBytes <= 0) {
@@ -1913,6 +1916,59 @@ ${copy};
         assertPeakRssBelow(run, label, 40 * 1024 * 1024);
       }
     }
+  } finally {
+    clean(dir);
+  }
+}
+
+console.log("--max-memory (memory outside the heap is charged; sized allocations are refused before they are made)...");
+{
+  // Each script grows memory the collected heap did not count before #1173:
+  // atoms and dictionary shapes for array indices past the dense limit and
+  // for fresh string keys, permanent symbols, and the text buffers of native
+  // string builders; or asks for one allocation larger than the limit (an
+  // array's elements, a built string, a sparse copy). Each must be refused
+  // with a catchable RangeError while the process stays under twice the
+  // ceiling: before the fix they peaked at 3 to 30 times it.
+  const ceiling = 64 * 1024 * 1024;
+  const cases: Record<string, string> = {
+    "sparse fill": "new Array(2e8).fill(0);",
+    "fresh string keys": "const o = {}; let i = 0; while (i < 5e7) { o['k' + i] = 0; i++; }",
+    "symbols": "const a = []; let i = 0; while (i < 5e7) { a.push(Symbol()); i++; }",
+    "dense holes": "new Array(6e7);",
+    "length setter": "const a = []; a.length = 6e7;",
+    "padEnd": "''.padEnd(5e8, 'ab');",
+    "repeat": "'ab'.repeat(2.5e8);",
+    "join": "new Array(2e8).join('ab');",
+    "JSON.stringify": "JSON.stringify(new Array(1e8));",
+    "replaceAll": "'a'.repeat(1e6).replaceAll('a', 'b'.repeat(500));",
+    "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
+    "retry with fresh sparse keys": [
+      "let base = 1e8; let r = 0;",
+      "while (r < 8) {",
+      "  try { const a = []; a.length = 4e9; let i = 0; while (i < 5e7) { a[base + i] = 0; i++; } } catch (e) { if (r < 7) console.log('round', r, e.name); else throw e; }",
+      "  base += 5e7; r++;",
+      "}",
+    ].join("\n"),
+  };
+  const dir = mkdtemp("goccia-native-charge-");
+  try {
+    const path = join(dir, "grow.js");
+    for (const [label, body] of Object.entries(cases)) {
+      writeFileSync(path, `let caught = 'none';\ntry {\n${body}\n} catch (e) { caught = e.name; }\nconsole.log('caught', caught);\n`);
+      const run = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--compat-while-loops", "--timeout=60000", path]);
+      if (run.exitCode !== 0 || !run.output.includes("caught RangeError"))
+        throw new Error(`${label} should be refused with a catchable RangeError: exit ${run.exitCode}, ${run.output}`);
+      assertPeakRssBelow(run, label, 2 * ceiling);
+    }
+    // A refusal made before the allocation carries the suggestion the refusal
+    // at a safe point does.
+    writeFileSync(path, "''.padEnd(5e8, 'ab');\n");
+    const early = Bun.spawnSync([RUNNER, `--max-memory=${ceiling}`, path], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const earlyOut = early.stdout.toString() + early.stderr.toString();
+    if (early.exitCode !== 1 || !earlyOut.includes("Allocation failed: GC heap size exceeds the configured memory limit") ||
+        !earlyOut.includes("Suggestion: call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory"))
+      throw new Error(`An early refusal should print the memory limit's suggestion: exit ${early.exitCode}, ${earlyOut}`);
   } finally {
     clean(dir);
   }
