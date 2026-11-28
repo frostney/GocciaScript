@@ -70,6 +70,10 @@ check typed-of-budget --max-instructions=3000 'Fatal error: Execution exceeded i
 check own-keys-control "$TA_CAP" '42' 'Object.keys("x"); console.log(42);'
 check own-keys-budget "$TA_CAP" "$TA_LIMIT" 'Object.keys("x".repeat(100000)); console.log(42);'
 check own-names-budget "$TA_CAP" "$TA_LIMIT" 'Object.getOwnPropertyNames("x".repeat(100000)); console.log(42);'
+# a module namespace's keys are its exports: 1,000 names of one binding cost one step each (measured: 1,021)
+printf 'const x = 0;\nexport { %s };\n' "$(seq 0 999 | sed 's/.*/x as a&/' | paste -sd, -)" > "$D/own-exports.js"
+check own-namespace-budget "$TA_CAP" "$TA_LIMIT" \
+  'import("./own-exports.js").then((ns) => { Object.getOwnPropertyNames(ns); console.log(42); });'
 check for-in-keys-budget "$TA_CAP" "$TA_LIMIT" 'for (const k in "x".repeat(100000)) break; console.log(42);'
 K_CAP=--max-instructions=15000
 K_LIMIT='Fatal error: Execution exceeded instruction limit of 15000'

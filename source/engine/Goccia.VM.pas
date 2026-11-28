@@ -4663,7 +4663,10 @@ begin
     A := NewArray(0, 8);
     PushRoot(MkPtr(A));
     for I := 0 to ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Len div 2 - 1 do
+    begin
+      if not PollInterrupt then begin PopRoots(2); Exit; end;
       ArrayPush(ObjOf(RootAt(TempTop - 1)), ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Data[I * 2]);
+    end;
     Keys := RootAt(TempTop - 1);
     PopRoots(2);
     Exit(True);
@@ -4724,7 +4727,10 @@ begin
   end;
   O := ObjOf(RootAt(TempTop - 2));
   if not OnlyEnumerable and (O^.OKind in [okArray, okStringObj, okArguments]) then
+  begin
+    if not PollInterrupt then begin PopRoots(2); Exit; end;
     ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(AtomLength));
+  end;
   O := ObjOf(RootAt(TempTop - 2));
   S := O^.Shape;
   for I := 0 to S^.Count - 1 do
