@@ -1322,10 +1322,10 @@ begin
 end;
 
 function TGocciaEngine.RunEntry(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
-var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn, ScriptId: Integer; T: PFuncTemplate;
-  Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
+var Kind, Phase, I, ScriptId: Integer; T: PFuncTemplate;
+  Err, EntryKey: UnicodeString; LoadFailed: TModuleLoadFailure;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled, HasErrorLocation: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
+  Compiled, HasErrorLocation, FailedToLoad: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1360,7 +1360,6 @@ begin
   SetModuleContentCheck(FModuleContentCheck);
   SetProviderGraphCheck(FProviderGraph);
   SetArtifactCheck(CheckArtifact);
-  ClearLoadFailure;
   TakeResolveCandidate;
   { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
   if FHostEnvironmentGuest then SetGuestLoads(True);
@@ -1583,32 +1582,33 @@ begin
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
       HasErrorLocation := (AbortKind = 0) and DescribeThrown(RootAt(TempTop - 1), Result);
+      { a module load failure's error carries its record, so another error is never located at it }
+      FailedToLoad := DescribeLoadFailure(RootAt(TempTop - 1), LoadFailed);
       { the value the run failed with, kept in the completion's root for the finally's discard }
       TempRoots[TempTop - 2] := RootAt(TempTop - 1);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
-      if not HasErrorLocation and LoadFailure(FailPath, FailLine, FailColumn) then
+      if not HasErrorLocation and FailedToLoad then
       begin
         Result.ErrorIsError := True;
-        if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
+        if LoadFailed.Parse then
         begin
           { an imported module that did not parse: its SyntaxError where it is, as GocciaRunner reports it }
-          Result.ErrorName := ParseName;
-          Result.ErrorFile := ParsePath;
-          Result.ErrorLine := ParseLine;
-          Result.ErrorColumn := ParseColumn;
-          Result.ErrorSuggestion := ParseSuggestion;
-          TakeResolveCandidate;
+          Result.ErrorName := LoadFailed.Name;
+          Result.ErrorFile := LoadFailed.Path;
+          Result.ErrorLine := LoadFailed.Line;
+          Result.ErrorColumn := LoadFailed.Column;
+          Result.ErrorSuggestion := LoadFailed.Suggestion;
         end
         else
         begin
           { a refused read stays the PermissionDenied it is, located at the declaration }
           if Result.ErrorName <> 'PermissionDenied' then Result.ErrorName := 'RuntimeError';
-          Result.ErrorFile := FailPath;
-          Result.ErrorLine := FailLine;
-          Result.ErrorColumn := FailColumn;
-          Result.ErrorResolvedPath := TakeResolveCandidate;
+          Result.ErrorFile := LoadFailed.Path;
+          Result.ErrorLine := LoadFailed.Line;
+          Result.ErrorColumn := LoadFailed.Column;
+          Result.ErrorResolvedPath := LoadFailed.Resolved;
         end;
       end;
     end;
