@@ -2059,7 +2059,6 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
 {
   const dir = mkdtemp("goccia-regexp-budget-");
   const pattern = "a".repeat(32 * 1024);
-  const fitsBy: Record<string, number> = {};
   const expressions = {
     control: `pattern === ${JSON.stringify(pattern)}`,
     constructor: "new RegExp(pattern).test(pattern)",
@@ -2067,14 +2066,13 @@ console.log("--max-memory (compiled RegExp storage shares the allocation budget)
   };
   try {
     const path = join(dir, "regexp.js");
-    for (const [name, match] of Object.entries(expressions)) {
-      writeFileSync(path, `
+    // The room left with no compiled RegExp, measured: the largest buffer that
+    // fits, to 16 KiB. The engine's own keys and shapes count against the
+    // limit beside bytesAllocated, so it is not read from that.
+    writeFileSync(path, `
 const pattern = ${JSON.stringify(pattern)};
-if (!(${match})) throw new Error('expected a match');
+if (!(${expressions.control})) throw new Error('expected a match');
 Goccia.gc();
-// The largest buffer that fits now, to 16 KiB. A compiled RegExp holds native
-// storage outside bytesAllocated, and so do the engine's own keys and shapes,
-// so the room is measured rather than read from bytesAllocated.
 let lo = 0;
 let hi = Goccia.gc.maxBytes;
 for (const _ of Array.from({ length: 40 })) {
@@ -2084,17 +2082,26 @@ for (const _ of Array.from({ length: 40 })) {
 }
 console.log('fits', lo);
 `);
+    const control = Bun.spawnSync([RUNNER, "--max-memory=16MiB", "--timeout=10000", path], { stdout: "pipe", stderr: "pipe" });
+    const controlOut = control.stdout.toString() + control.stderr.toString();
+    const fits = Number(/^fits (\d+)$/m.exec(controlOut)?.[1]);
+    if (control.exitCode !== 0 || !Number.isFinite(fits) || fits <= 0)
+      throw new Error(`The control run should measure the room left: ${controlOut}`);
+    // A buffer that fits without a compiled RegExp is refused while one is
+    // cached, before its bytes are committed.
+    for (const [name, match] of Object.entries(expressions)) {
+      if (name === "control") continue;
+      writeFileSync(path, `
+const pattern = ${JSON.stringify(pattern)};
+if (!(${match})) throw new Error('expected a match');
+Goccia.gc();
+new ArrayBuffer(${fits});
+console.log('buffer allocated');
+`);
       const run = await runWithPeakRss([RUNNER, "--max-memory=16MiB", "--timeout=10000", path]);
-      const fits = Number(/^fits (\d+)$/m.exec(run.output)?.[1]);
-      if (run.exitCode !== 0 || !Number.isFinite(fits) || fits <= 0)
-        throw new Error(`The ${name} run should measure the room left: ${run.output}`);
-      fitsBy[name] = fits;
-      if (name !== "control") {
-        // the cached program's storage counts: less room than without it
-        if (fits > fitsBy.control - 64 * 1024)
-          throw new Error(`The ${name} program's storage should count against the limit: ${fits} bytes fit, ${fitsBy.control} without it`);
-        assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
-      }
+      if (run.exitCode !== 1 || !run.output.includes("RangeError") || !run.output.includes("memory limit of"))
+        throw new Error(`The buffer should be refused while the ${name} program is cached: ${run.output}`);
+      assertPeakRssBelow(run, `RegExp ${name} budget refusal`, 40 * 1024 * 1024);
     }
     const operations = {
       compile: 'const re = new RegExp("a".repeat(64 * 1024)); console.log(re.source.length);',
