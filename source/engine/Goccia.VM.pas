@@ -253,6 +253,9 @@ procedure StopInstructionMeasurement;
 function LimitAbortKind: Integer;
 { the spent memory limit's message: the live bytes the collection left and the limit }
 function MemoryLimitMessage: UnicodeString;
+{ the error the spent limit or host abort throws (LimitAbortKind not 0): its name and its message }
+function AbortErrorName: UnicodeString;
+function AbortErrorMessage: UnicodeString;
 { a host ends the run as a spent limit does (AbortKind 4), past every handler, with an Error of message Msg;
   False, with that error pending, for the native that asked to return }
 function HostAbort(const Msg: UnicodeString): Boolean;
@@ -731,17 +734,27 @@ begin
   Aborting := True;
   Interrupt := 1;
   FrameLimit := 0;
-  case AbortKind of
-    2: ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax));
-    3: ThrowError('RangeError', MemoryLimitMessage);
-    4: ThrowError('Error', HostAbortText);
-  else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
-  end;
+  ThrowError(AbortErrorName, AbortErrorMessage);
 end;
 
 function LimitAbortKind: Integer;
 begin
   Result := AbortKind;
+end;
+
+function AbortErrorName: UnicodeString;
+begin
+  if AbortKind = 3 then Result := 'RangeError' else Result := 'Error';
+end;
+
+function AbortErrorMessage: UnicodeString;
+begin
+  case AbortKind of
+    2: Result := 'Execution exceeded instruction limit of ' + IntToStr(InstrMax);
+    3: Result := MemoryLimitMessage;
+    4: Result := HostAbortText;
+  else Result := 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms';
+  end;
 end;
 
 function AbortInterrupted: Boolean;
@@ -11047,19 +11060,30 @@ end;
 
 { ---------------- entry ---------------- }
 
-{ Release the engine's compiled code and clear the instanceof cache before HeapDone frees its shapes.
-  The compiling thread keeps the shared executable stubs for the next engine. }
-procedure JitEngineDone;
 {$IFDEF GOCCIA_JIT}
+{ unmaps the code this thread's engine published, and empties its list. At process exit the registry's cleanup runs
+  after the RTL released the main thread's managed threadvars: the list is gone while its count is not, and the
+  kernel takes the mappings with the process }
+procedure JitReleaseCodeMappings;
 var I: Integer; Mapping: TJitCodeMapping;
 begin
-  for I := 0 to JitCodeMappingCount - 1 do
+  for I := 0 to Min(JitCodeMappingCount, Length(JitCodeMappings)) - 1 do
   begin
     Mapping := JitCodeMappings[I];
     Fpmunmap(Mapping.Address, Mapping.Size);
   end;
   JitCodeMappings := nil;
   JitCodeMappingCount := 0;
+end;
+{$ENDIF}
+
+{ Release the engine's compiled code and clear the instanceof cache before HeapDone frees its shapes.
+  The compiling thread keeps the shared executable stubs for the next engine. }
+procedure JitEngineDone;
+{$IFDEF GOCCIA_JIT}
+var I: Integer;
+begin
+  JitReleaseCodeMappings;
   if GetCurrentThreadId <> JitMainThread then Exit;
   FillChar(InstOfCache, SizeOf(InstOfCache), 0);
   { the define and private-member caches of the engine's templates }
@@ -11265,6 +11289,8 @@ procedure GocciaVMThreadvarCleanup;
 begin
   { FPC does not finalize managed threadvars: the budget reference goes, with what it holds back to the job }
   ReleaseSharedBudget;
+  { the code a thread's engine published, when the thread ends without freeing the engine }
+  {$IFDEF GOCCIA_JIT}JitReleaseCodeMappings;{$ENDIF}
   Frames := nil;
   Handlers := nil;
   ExtraRoots := nil;

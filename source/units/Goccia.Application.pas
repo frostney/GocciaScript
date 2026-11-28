@@ -85,7 +85,7 @@ begin
     on E: Exception do
     begin
       { a fault the application's own handlers did not stop at: raised on the
-        main thread, outside any file (ADR 0199) }
+        main thread, outside any file (ADR 0201) }
       if IsEngineFault(E) then
         AbortOnEngineFault(FName, E);
       HandleError(E);
@@ -101,7 +101,7 @@ var
 begin
   Result := 1;
   { Run stops on a fault inside Execute; this handler stops on one in the
-    application's construction, its ending and its destruction (ADR 0199) }
+    application's construction, its ending and its destruction (ADR 0201) }
   try
     App := AClass.Create(AName);
     try

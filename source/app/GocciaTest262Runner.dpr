@@ -1297,7 +1297,7 @@ var
   UsesAgents: Boolean;
 begin
   { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
-    end the thread silently in FatalException (ADR 0199) }
+    end the thread silently in FatalException (ADR 0201) }
   try
     try
       try
@@ -1979,7 +1979,7 @@ var
   SnapshotErr: UnicodeString;
 begin
   { a fault anywhere in the coordinator's own lifetime, its construction and
-    destruction and the build's snapshot stage included, stops it (ADR 0199) }
+    destruction and the build's snapshot stage included, stops it (ADR 0201) }
   try
     { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
       take them }
@@ -2019,7 +2019,7 @@ begin
         end;
         on E: Exception do
         begin
-          { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0199 }
+          { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0201 }
           if IsEngineFault(E) then
             AbortOnEngineFault('GocciaTest262Runner', E);
           WriteLn(ErrOutput, 'Error: ', E.Message);

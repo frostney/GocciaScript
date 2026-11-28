@@ -6,7 +6,7 @@
 
 - **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`) and `MemoryLimitError` (`--max-memory`)
 - **`--max-memory` refuses at the next safe point** -- a full collection that leaves more live than the limit makes the next back edge or call throw a **catchable** `RangeError`, so a script can drop what it holds and go on; eight refusals in a row that free nothing end the run with the **uncatchable** `MemoryLimitError`. An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, is a `RangeError` at once ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md))
-- **Engine-integrity faults** -- Not an error type at all: an access violation, a failed internal assertion or another engine fault is never turned into a JavaScript error; it unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one, and the application stops with an `Engine fault:` diagnostic and exit code `70`. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) and [ADR 0199](adr/0199-every-application-stops-on-an-engine-fault.md)
+- **Engine-integrity faults** -- Not an error type at all: an access violation, a failed internal assertion or another engine fault is never turned into a JavaScript error; it unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one, and the application stops with an `Engine fault:` diagnostic and exit code `70`. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) and [ADR 0201](adr/0201-every-application-stops-on-an-engine-fault.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`. A promise left rejected with no handler is reported as an uncaught error and fails the run
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -57,7 +57,7 @@ allocation is deliberately *not* one of them: it leaves the heap intact, so
 catching it and retrying with less remains valid. [ADR
 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) records the decision.
 Every application stops on one with the `Engine fault:` diagnostic and exit
-code `70` ([ADR 0199](adr/0199-every-application-stops-on-an-engine-fault.md),
+code `70` ([ADR 0201](adr/0201-every-application-stops-on-an-engine-fault.md),
 [CLI conventions](contributing/cli-conventions.md#exit-codes)).
 `TGocciaEngine.Run` catches no Pascal exception, so one raised inside the engine
 reaches the host as itself, and the process should not resume the engine.

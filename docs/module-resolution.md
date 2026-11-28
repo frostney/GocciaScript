@@ -43,10 +43,14 @@ implicit data or text format. A symlink or junction, a different spelling of
 the same name on a case-insensitive filesystem, and a specifier resolved
 through an import map or package can all reach the same module record. This
 also applies to the entry module. Relative imports resolve from the file's
-canonical directory.
-Diagnostics, coverage, and `import.meta.url` use the path the module was first
-loaded under. `import.meta.resolve` computes its result lexically. The loader
-can reload an on-disk source module when it detects a newer version.
+canonical directory, and so do the imports and `import()` calls of a Script
+entry reached through a symlink, and a ShadowRealm's `importValue`.
+`import.meta.url` names the canonical path and `import.meta.resolve` resolves
+against it, as in Node, whichever spelling loaded the module first; it computes
+its result lexically, without following symlinks in the result. Coverage
+records use the canonical path too. Diagnostics and stack traces name the path
+the module was first loaded under. The loader can reload an on-disk source
+module when it detects a newer version.
 
 Read permissions are checked for each import before the module cache is
 consulted. The check follows symlinks to the file being imported.

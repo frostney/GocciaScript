@@ -767,7 +767,8 @@ begin
       PrevSrc := CurLazySource;
       PrevModule := CompilingModuleId;
       CurLazySource := LS;
-      if LS.IsModule then CompilingModuleId := LS.ModuleId else CompilingModuleId := 0;
+      { a Script's functions keep the stub's ModuleId (Goccia.Modules MarkScriptTemplates) }
+      if LS.IsModule then CompilingModuleId := LS.ModuleId else CompilingModuleId := T^.ModuleId;
       try
         NT := CompileLazyFunction(Finder.Params, Finder.Body, St, LS.FileName);
       finally

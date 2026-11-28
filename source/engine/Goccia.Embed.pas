@@ -131,6 +131,8 @@ type
     FModuleMark: Integer;
     { registrations made during the entry and its test or benchmark suites }
     FWeakCleanupMark: Int64;
+    { the asynchronous module evaluations started before the run (Goccia.Modules ModuleEvaluationMark) }
+    FModuleEvaluationMark: Int64;
     FAuditSink: TGocciaCapabilityAuditSink;
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
@@ -1013,13 +1015,15 @@ begin
 end;
 
 function TGocciaEngine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
-var WeakMark: Int64;
+var WeakMark, ModuleMark: Int64;
 begin
   TakeHostError;
   if not HostReady(Err) then Exit(False);
   { a globals module's code runs under the run's limits, as the entry's does }
   FSetupAborted := gaNone;
   WeakMark := WeakCleanupMark;
+  ModuleMark := ModuleEvaluationMark;
+  Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   Result := False;
   try
@@ -1031,8 +1035,9 @@ begin
       3: FSetupAborted := gaMemoryLimit;
       4: FSetupAborted := gaHostAbort;
     end;
-    if FSetupAborted <> gaNone then DiscardAbortedRunWork(WeakMark)
-    else if not Result then DiscardEmbedderWork;
+    if FSetupAborted <> gaNone then Err := AbortErrorMessage;
+    { the work a globals module that failed left goes with it; a module that loads leaves its jobs to the entry }
+    if (FSetupAborted <> gaNone) or not Result then DiscardFailedRunWork(WeakMark, ModuleMark, VUndefined, Err, False);
     LimitsDisarm;
   end;
 end;
@@ -1208,10 +1213,10 @@ begin
 end;
 
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
-var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
+var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn, ScriptId: Integer; T: PFuncTemplate;
   Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
-  Compiled, HasErrorLocation: Boolean; EnvAbort: Integer;
+  Compiled, HasErrorLocation: Boolean; EnvAbort: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
   EntryKey := EntryKeyOf(FileName);
@@ -1225,6 +1230,7 @@ begin
     Exit;
   end;
   FWeakCleanupMark := WeakCleanupMark;
+  FModuleEvaluationMark := ModuleEvaluationMark;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   NurseryFitCeiling;
   SetActiveProfile(FProfile);
@@ -1259,8 +1265,14 @@ begin
         Compiled := LoadHostEnvironment;
       finally
         EnvAbort := AbortKind;
-        if EnvAbort <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
-        else if not Compiled then DiscardEmbedderWork;
+        { the abort's error, read while the limits are still in force }
+        if EnvAbort <> 0 then
+        begin
+          EnvAbortName := AbortErrorName;
+          EnvAbortMessage := AbortErrorMessage;
+        end;
+        if (EnvAbort <> 0) or not Compiled then
+          DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, Pending);
         LimitsDisarm;
       end;
     end
@@ -1273,9 +1285,6 @@ begin
   begin
     PushRoot(Pending);
     Pending := VUndefined;
-    Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
-    if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
-    Pending := VUndefined;
     case EnvAbort of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;
@@ -1283,7 +1292,20 @@ begin
       4: Result.Aborted := gaHostAbort;
     end;
     ReportSharedCount(Result);
-    DescribeThrown(RootAt(TempTop - 1), Result);
+    { an abort reports its own error, as the entry's does }
+    if EnvAbort <> 0 then
+    begin
+      Result.ErrorMessage := EnvAbortName + ': ' + EnvAbortMessage;
+      Result.ErrorName := EnvAbortName;
+      Result.ErrorText := EnvAbortMessage;
+    end
+    else
+    begin
+      Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
+      if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
+      Pending := VUndefined;
+      DescribeThrown(RootAt(TempTop - 1), Result);
+    end;
     PopRoots(1);
     Pending := VUndefined;
     SetHostResolver(nil);
@@ -1342,6 +1364,14 @@ begin
     Exit;
   end;
   Result.Compiled := True;
+  { a Script's code resolves its imports from its real file, a bytecode file's as a bytecode module would }
+  ScriptId := 0;
+  if not Result.IsModule then
+  begin
+    if FArtifactEntry then ScriptId := NewScriptReferrer(EntryKey, EntryKeyOf(FileName))
+    else ScriptId := NewScriptReferrer(EntryKey, '');
+    MarkScriptTemplates(T, ScriptId);
+  end;
   if FHeapSnapshots then
     if Result.IsModule then SnapshotSetEntry(UnicodeString(FileName), Source, Kind)
     else SnapshotNoteEntry(T, UnicodeString(FileName), Source, Kind);
@@ -1380,7 +1410,7 @@ begin
       { an explicit Script's imports: their graph linked and evaluated first, then bound as its globals }
       if ScriptImportSource <> '' then
       begin
-        Result.Ok := StartScriptImports(EntryKey, ScriptImportSource, Imports);
+        Result.Ok := StartScriptImports(EntryKey, ScriptId, ScriptImportSource, Imports);
         if Result.Ok then
         begin
           PushRoot(Imports);
@@ -1422,11 +1452,16 @@ begin
       Result.Ok := False;
       Thrown := Pending;
       PushRoot(Thrown);
-      Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
+      { an abort reports its own error: a job that met the limit may have taken the one it threw (its reaction
+        rejects with it), leaving nothing pending }
+      if AbortKind <> 0 then Result.ErrorMessage := AbortErrorName + ': ' + AbortErrorMessage
+      else Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
       HasErrorLocation := (AbortKind = 0) and DescribeThrown(RootAt(TempTop - 1), Result);
+      { the value the run failed with, kept in the completion's root for the finally's discard }
+      TempRoots[TempTop - 2] := RootAt(TempTop - 1);
       PopRoots(1);
       Pending := VUndefined;
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
@@ -1458,22 +1493,19 @@ begin
     case AbortKind of
       1: Result.Aborted := gaTimeout;
       2: Result.Aborted := gaInstructionLimit;
-      3:
-        begin
-          Result.Aborted := gaMemoryLimit;
-          Result.ErrorName := 'RangeError';
-          Result.ErrorText := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Result.Aborted := gaHostAbort;
-          Result.ErrorName := 'Error';
-          Result.ErrorText := HostAbortMessage;
-        end;
+      3: Result.Aborted := gaMemoryLimit;
+      4: Result.Aborted := gaHostAbort;
+    end;
+    if AbortKind <> 0 then
+    begin
+      Result.ErrorName := AbortErrorName;
+      Result.ErrorText := AbortErrorMessage;
     end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
-    else if not Result.Ok then DiscardEmbedderWork;
+    { a run that failed or aborted takes the work it left pending with it: the engine's next run is not blamed for
+      it, and an aborted script never runs again }
+    if (AbortKind <> 0) or not Result.Ok then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, RootAt(TempTop - 1));
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
@@ -1489,6 +1521,7 @@ end;
 
 function TGocciaEngine.RunTests(var Json, Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
+  TakeHostError;
   Aborted := gaNone;
   Json := '';
   Err := '';
@@ -1503,21 +1536,20 @@ begin
     case AbortKind of
       1: Aborted := gaTimeout;
       2: Aborted := gaInstructionLimit;
-      3:
-        begin
-          Aborted := gaMemoryLimit;
-          Err := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Aborted := gaHostAbort;
-          Err := HostAbortMessage;
-        end;
+      3: Aborted := gaMemoryLimit;
+      4: Aborted := gaHostAbort;
     end;
-    if Aborted <> gaNone then Result := False;
+    { an abort's own error: a job that met the limit may have taken the one it threw }
+    if Aborted <> gaNone then
+    begin
+      Err := AbortErrorMessage;
+      Result := False;
+    end
+    else if not Result and (Err = '') then Err := 'the test suites did not finish';
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
-    else if not Result then DiscardEmbedderWork;
+    { suites that did not finish take their pending work with them, as a failed run does }
+    if (AbortKind <> 0) or not Result then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err, False);
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
     SetArtifactCheck(nil);
@@ -1528,7 +1560,7 @@ end;
 
 procedure TGocciaEngine.EndTests;
 begin
-  if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark);
+  if AbortKind <> 0 then DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined);
   LimitsDisarm;
 end;
 
@@ -1552,6 +1584,7 @@ end;
 function TGocciaEngine.RunBenchmarks(Deterministic: Boolean; out Entries: TGocciaBenchEntries; out Total: Integer;
   out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TGocciaAbort): Boolean;
 begin
+  TakeHostError;
   BenchDescribeThrown := @DescribeBenchThrown;
   Aborted := gaNone;
   Err := '';
@@ -1567,21 +1600,18 @@ begin
     case AbortKind of
       1: Aborted := gaTimeout;
       2: Aborted := gaInstructionLimit;
-      3:
-        begin
-          Aborted := gaMemoryLimit;
-          Err := MemoryLimitMessage;
-        end;
-      4:
-        begin
-          Aborted := gaHostAbort;
-          Err := HostAbortMessage;
-        end;
+      3: Aborted := gaMemoryLimit;
+      4: Aborted := gaHostAbort;
     end;
-    if Aborted <> gaNone then Result := False;
+    { an abort's own error: a job that met the limit may have taken the one it threw }
+    if Aborted <> gaNone then
+    begin
+      Err := AbortErrorMessage;
+      Result := False;
+    end;
   finally
-    if AbortKind <> 0 then DiscardAbortedRunWork(FWeakCleanupMark)
-    else if not Result then DiscardEmbedderWork;
+    if (AbortKind <> 0) or not Result then
+      DiscardFailedRunWork(FWeakCleanupMark, FModuleEvaluationMark, VUndefined, Err, False);
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);

@@ -92,7 +92,7 @@ type
 
 procedure TBundleThread.Execute;
 begin
-  { a file that would start while another thread reports a fault does not (ADR 0199) }
+  { a file that would start while another thread reports a fault does not (ADR 0201) }
   StopIfEngineFaultReported;
   try
     try
@@ -100,7 +100,7 @@ begin
     except
       on E: Exception do
       begin
-        { the run stops here, on this file's thread (ADR 0199) }
+        { the run stops here, on this file's thread (ADR 0201) }
         if IsEngineFault(E) then
           AbortOnEngineFault(FApp.FPlan[FIndex].InputFile, E);
         FErrorClass := ExceptClass(E.ClassType);

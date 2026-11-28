@@ -180,6 +180,23 @@ jobs:
           timeout 20 strace -o build/jit-permissions.strace -e trace=mmap,mprotect,munmap build/jit-permissions-test
           python3 scripts/engine/check-jit-publication.py build/jit-permissions.strace
 
+      - name: The optimizing tier's code is read-execute and released too
+        env:
+          GOCCIA_JIT: "1"
+          GOCCIA_OPT: "1"
+          GOCCIA_JITMAP: "1"
+        run: |
+          mkdir -p build/jit-permissions-opt
+          # the jitmap is the fixture's stderr: show it when the fixture fails
+          timeout 20 strace -ff -o build/jit-permissions-opt/trace -e trace=mmap,mprotect,munmap \
+            build/jit-permissions-test 2> build/jit-permissions-opt/jitmap || {
+            status=$?
+            grep -v '^jitmap ' build/jit-permissions-opt/jitmap >&2 || true
+            exit "$status"
+          }
+          python3 scripts/engine/check-jit-publication.py build/jit-permissions-opt/trace.* \
+            --jitmap build/jit-permissions-opt/jitmap
+
       - name: Capped and measured uncapped entries report the same instruction units
         run: |
           fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
@@ -220,6 +237,9 @@ jobs:
           fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/engine \
             "-o$fixture/link-diagnostics-test" scripts/engine/artifact-link-diagnostics-test.pas
           timeout 20 "$fixture/link-diagnostics-test" "$fixture"
+
+      - name: A symlinked bytecode Script resolves import() from the real directory across runs
+        run: bash scripts/engine/script-artifact-imports-test.sh
 
       - name: Bytecode files round-trip every test file
         run: python3 scripts/engine/artifact-roundtrip-tests.py build/engine/goccia 4 tests

@@ -76,7 +76,7 @@ begin
       on E: Exception do
       begin
         { the session ends here, on its own thread: the next input must not run on the state the fault calls into
-          question (ADR 0199) }
+          question (ADR 0201) }
         if IsEngineFault(E) then
           AbortOnEngineFault(REPL_FILE_NAME, E);
         FErrorClass := ExceptClass(E.ClassType);

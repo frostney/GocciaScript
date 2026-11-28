@@ -286,7 +286,7 @@ Side-effect imports (`import "module";`) are supported and evaluate the dependen
 
 `import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. The [entry source type policy](#modules) determines whether an entry is Module source; in a script-source entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
-- **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the absolute path (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
+- **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the file's real path, with symlinks resolved (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
 - **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module through the ordinary module loader. Filesystem targets return `file://` URLs, while virtual targets preserve their canonical configured addresses. Throws `TypeError` if called without arguments.
 
 ```javascript
