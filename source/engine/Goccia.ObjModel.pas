@@ -1091,6 +1091,8 @@ function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Bool
 var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64; U: PUpval;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  { strict-types: a typed var's property of a global object as its own receiver, a setter's value included }
+  if (O = Receiver) and not GlobalTypeOK(ObjOf(O), Key, V) then Exit(False);
   { 10.4.4.4 a mapped arguments object as its own receiver: a mapped index's parameter too }
   if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) then
   begin

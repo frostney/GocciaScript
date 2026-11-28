@@ -503,6 +503,10 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
         'var loose: number = 2;',
         'delete globalThis.loose; globalThis.loose = "free"; console.log("loose:" + loose);',
         'text = "b"; count = 2; console.log("kept:" + text + count);',
+        'let held = 1; Object.defineProperty(globalThis, "viaSetter", { configurable: true, get() { return held; }, set(v) { held = v; } });',
+        'var viaSetter: number = 2;',
+        'try { viaSetter = "x"; } catch (e) { console.log("setter:" + e.name); }',
+        'try { Reflect.set(globalThis, "viaSetter", "x"); } catch (e) { console.log("reflect-setter:" + e.name + held); }',
         "",
       ].join("\n"),
     ),
@@ -510,7 +514,7 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
     stderr: "pipe",
   });
   const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
-  for (const expected of ["let:TypeError", "var:TypeError", "prop:TypeError", "loose:free", "kept:b2"])
+  for (const expected of ["let:TypeError", "var:TypeError", "prop:TypeError", "loose:free", "kept:b2", "setter:TypeError", "reflect-setter:TypeError2"])
     if (!output.includes(expected))
       throw new Error(`REPL strict-types across inputs expected ${expected}, got: ${output}`);
   // a later var of the name keeps the first type (its initializer is checked against it), and a function

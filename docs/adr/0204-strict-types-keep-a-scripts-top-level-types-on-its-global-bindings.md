@@ -23,9 +23,9 @@ global-writing entry points. In the specification each of these writes is one [[
 
 - **A typed top-level `var` tags its global object property.** The compiler records each typed var of a Script's
   top level (annotated, or with a type its initializer implies) on the template (`GdiTypedVars`,
-  `GdiTypedVarCodes`); `GlobalDeclInst` adds them to the realm's table of typed global properties. Every write of
+  `GdiTypedVarCodes`); `GlobalDeclInst` adds them to the thread's table of typed global properties, keyed by the property's name and the realm whose global object has it, so a write is checked whichever realm's code makes it. Every write of
   the property's value is checked against the tag (`GlobalTypeOK`): the own data store of ordinary [[Set]]
-  (`SetOnObjectOk`), which `opSetGlobal`, property and element stores, `Reflect.set` and `Object.assign` reach;
+  (`SetOnObjectOk`, before a setter of an accessor the var was declared over runs), which `opSetGlobal`, property and element stores, `Reflect.set` and `Object.assign` reach;
   [[DefineOwnProperty]] with a value; and `CreateDataPropertyOrThrow`.
 - **A typed top-level `let` keeps its type on its global lexical binding** (`GdiLexTypes`, `GLexTypes`), checked
   in `GLexSet`, the one store into the binding's cell from code compiled apart from it.

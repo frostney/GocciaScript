@@ -164,11 +164,13 @@ threadvar
   GVarCount: Integer;
   { strict-types: the type code (TYPE_*) of global lexical binding I, 0 untyped; GLexSet checks every store }
   GLexTypes: array of Byte;
-  { strict-types: the global object's typed var properties (a Script's `var x: T`), open addressing on the atom
-    with each one's type code beside it (0 once the property is deleted); every write of the property's value
-    is checked (GlobalTypeOK). GTypeCount counts the keys }
+  { strict-types: the global objects' typed var properties (a Script's `var x: T`), open addressing on the atom,
+    with each one's type code (0 once the property is deleted) and the realm whose global object has it; every
+    write of the property's value is checked (GlobalTypeOK). One table for every realm of the thread, so a write
+    made while another realm runs is checked too. GTypeCount counts the entries }
   GTypeKeys: array of PStr;
   GTypeCodes: array of Byte;
+  GTypeRealms: array of Integer;
   GTypeCount: Integer;
   EvalHintMode, EvalHintFrame, EvalHintPC, EvalHintDesc: Integer;
   EvalDesc: TValue;   { TakeEvalHint: a direct eval's description of its caller's bindings (an atom), else undefined }
@@ -1464,9 +1466,6 @@ type
     GVarHash: array of PStr;
     GVarCount: Integer;
     GLexTypes: array of Byte;
-    GTypeKeys: array of PStr;
-    GTypeCodes: array of Byte;
-    GTypeCount: Integer;
   end;
 
 threadvar
@@ -1535,7 +1534,6 @@ begin
   Realms[R].GLexHash := GLexHash; Realms[R].GLexCount := GLexCount;
   Realms[R].GVarHash := GVarHash; Realms[R].GVarCount := GVarCount;
   Realms[R].GLexTypes := GLexTypes;
-  Realms[R].GTypeKeys := GTypeKeys; Realms[R].GTypeCodes := GTypeCodes; Realms[R].GTypeCount := GTypeCount;
 end;
 
 procedure LoadRealm(R: Integer);
@@ -1551,11 +1549,10 @@ begin
   GLexHash := Realms[R].GLexHash; GLexCount := Realms[R].GLexCount;
   GVarHash := Realms[R].GVarHash; GVarCount := Realms[R].GVarCount;
   GLexTypes := Realms[R].GLexTypes;
-  GTypeKeys := Realms[R].GTypeKeys; GTypeCodes := Realms[R].GTypeCodes; GTypeCount := Realms[R].GTypeCount;
   { the running realm's state is in the threadvars only (a second reference would make SetLength copy) }
   Realms[R].GLexCells := nil; Realms[R].GLexNames := nil; Realms[R].GLexConst := nil;
   Realms[R].GLexHash := nil; Realms[R].GVarHash := nil;
-  Realms[R].GLexTypes := nil; Realms[R].GTypeKeys := nil; Realms[R].GTypeCodes := nil;
+  Realms[R].GLexTypes := nil;
 end;
 
 procedure SwitchRealm(R: Integer);
@@ -1625,7 +1622,7 @@ begin
   for I := 0 to High(RealmIntSlots) do RealmIntSlots[I]^ := 0;
   GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
   GVarHash := nil; GVarCount := 0;
-  GLexTypes := nil; GTypeKeys := nil; GTypeCodes := nil; GTypeCount := 0;
+  GLexTypes := nil;
   FunctionShape := RootShapeFor(VNull);   { as VMInit: replaced once Function.prototype exists }
   CurRealm := NewR;
   MultiRealm := True;
@@ -1874,48 +1871,82 @@ begin
   else Result := XThrowTypeMismatchOf(TypeOfStr(V), Code);
 end;
 
-{ strict-types: the type code of the global object's var property Key, 0 for none }
+{ strict-types: the type codes of the global objects' typed var properties. One table for the thread, keyed by the
+  atom and the realm whose global object has the property (GTypeRealms), so a write is checked whichever realm's
+  code makes it }
+function RealmGlobal(R: Integer): TValue;
+var I: Integer;
+begin
+  if R = CurRealm then Exit(GlobalObj);
+  for I := 0 to High(RealmValSlots) do
+    if RealmValSlots[I] = @GlobalObj then Exit(Realms[R].Vals[I]);
+  Result := VUndefined;
+end;
+
+{ the table slot of Key for realm R, -1 for none }
+function GTypeSlot(Key: PStr; R: Integer): Integer;
+var J: Integer;
+begin
+  Result := -1;
+  if GTypeCount = 0 then Exit;
+  J := AtomSlot(Key, High(GTypeKeys));
+  while GTypeKeys[J] <> nil do
+  begin
+    if (GTypeKeys[J] = Key) and (GTypeRealms[J] = R) then Exit(J);
+    J := (J + 1) and High(GTypeKeys);
+  end;
+end;
+
+{ the type code of the running realm's global var property Key, 0 for none }
 function GlobalVarType(Key: PStr): Byte;
 var J: Integer;
+begin
+  J := GTypeSlot(Key, CurRealm);
+  if J < 0 then Result := 0 else Result := GTypeCodes[J];
+end;
+
+{ the type code of property Key of O when O is a realm's global object, 0 for none }
+function GlobalTypeCodeOf(O: PObj; Key: PStr): Byte;
+var J: Integer; G: TValue;
 begin
   Result := 0;
   if GTypeCount = 0 then Exit;
   J := AtomSlot(Key, High(GTypeKeys));
   while GTypeKeys[J] <> nil do
   begin
-    if GTypeKeys[J] = Key then Exit(GTypeCodes[J]);
+    if (GTypeKeys[J] = Key) and (GTypeCodes[J] <> 0) then
+    begin
+      G := RealmGlobal(GTypeRealms[J]);
+      if IsObject(G) and (ObjOf(G) = O) then Exit(GTypeCodes[J]);
+    end;
     J := (J + 1) and High(GTypeKeys);
   end;
 end;
 
-{ a Script's typed var Key (GlobalDeclInst): the first type a name is declared with stays, as within one Script,
-  until its property is deleted }
+{ a Script's typed var Key in the running realm (GlobalDeclInst): the first type a name is declared with stays, as
+  within one Script, until its property is deleted }
 procedure GlobalVarTypeAdd(Key: PStr; Code: Byte);
-var I, J, N: Integer; OldKeys: array of PStr; OldCodes: array of Byte;
+var I, J, N: Integer; OldKeys: array of PStr; OldCodes: array of Byte; OldRealms: array of Integer;
 begin
-  if GTypeCount > 0 then
+  J := GTypeSlot(Key, CurRealm);
+  if J >= 0 then
   begin
-    J := AtomSlot(Key, High(GTypeKeys));
-    while GTypeKeys[J] <> nil do
-    begin
-      if GTypeKeys[J] = Key then
-      begin
-        if GTypeCodes[J] = 0 then GTypeCodes[J] := Code;
-        Exit;
-      end;
-      J := (J + 1) and High(GTypeKeys);
-    end;
+    if GTypeCodes[J] = 0 then GTypeCodes[J] := Code;
+    Exit;
   end;
   if (GTypeCount + 1) * 2 > Length(GTypeKeys) then
   begin
     OldKeys := GTypeKeys;
     OldCodes := GTypeCodes;
+    OldRealms := GTypeRealms;
     N := 16;
     while N < (GTypeCount + 1) * 4 do N := N * 2;
     GTypeKeys := nil;
     GTypeCodes := nil;
+    GTypeRealms := nil;
     SetLength(GTypeKeys, N);
     SetLength(GTypeCodes, N);
+    SetLength(GTypeRealms, N);
     for I := 0 to High(OldKeys) do
       if OldKeys[I] <> nil then
       begin
@@ -1923,18 +1954,20 @@ begin
         while GTypeKeys[J] <> nil do J := (J + 1) and High(GTypeKeys);
         GTypeKeys[J] := OldKeys[I];
         GTypeCodes[J] := OldCodes[I];
+        GTypeRealms[J] := OldRealms[I];
       end;
   end;
   J := AtomSlot(Key, High(GTypeKeys));
   while GTypeKeys[J] <> nil do J := (J + 1) and High(GTypeKeys);
   GTypeKeys[J] := Key;
   GTypeCodes[J] := Code;
+  GTypeRealms[J] := CurRealm;
   Inc(GTypeCount);
 end;
 
-{ the global object's property Key was deleted: a var of the name declared later starts with its own type }
-procedure GlobalVarTypeDrop(Key: PStr);
-var J: Integer;
+{ the global object O's property Key was deleted: a var of the name declared later starts with its own type }
+procedure GlobalVarTypeDrop(O: PObj; Key: PStr);
+var J: Integer; G: TValue;
 begin
   if GTypeCount = 0 then Exit;
   J := AtomSlot(Key, High(GTypeKeys));
@@ -1942,8 +1975,8 @@ begin
   begin
     if GTypeKeys[J] = Key then
     begin
-      GTypeCodes[J] := 0;
-      Exit;
+      G := RealmGlobal(GTypeRealms[J]);
+      if IsObject(G) and (ObjOf(G) = O) then GTypeCodes[J] := 0;
     end;
     J := (J + 1) and High(GTypeKeys);
   end;
@@ -1953,8 +1986,8 @@ function GlobalTypeOK(O: PObj; Key: PStr; V: TValue): Boolean;
 var Code: Byte;
 begin
   Result := True;
-  if (GTypeCount = 0) or not IsObject(GlobalObj) or (O <> ObjOf(GlobalObj)) then Exit;
-  Code := GlobalVarType(Key);
+  if GTypeCount = 0 then Exit;
+  Code := GlobalTypeCodeOf(O, Key);
   if (Code <> 0) and not XTypeOK(V, Code) then Result := XThrowTypeMismatch(V, Code);
 end;
 
@@ -3349,10 +3382,10 @@ begin
   if (Key = AtomLength) and (O^.Hdr.Extra <> 0) then TAWatchedChanged(O);
   { strict-types: a deleted typed var property loses its type (a configurable one: a var of non-strict eval code,
     or a property the var was declared over) }
-  if (GTypeCount <> 0) and IsObject(GlobalObj) and (O = ObjOf(GlobalObj)) then
+  if (GTypeCount <> 0) and (GlobalTypeCodeOf(O, Key) <> 0) then
   begin
     Result := DeleteIfConfigurable0(O, Key);
-    if Result then GlobalVarTypeDrop(Key);
+    if Result then GlobalVarTypeDrop(O, Key);
     Exit;
   end;
   U := ArgsMapCell(O, Key, Idx);
@@ -3724,6 +3757,9 @@ begin
   O := ObjOf(Obj);
   if O^.OKind = okProxy then Exit(ProxySetHook(Obj, Key, V, Obj, Ok));
   if O^.OKind = okModuleNS then begin Ok := False; Exit(True); end;   { 10.4.6.9 [[Set]]: false }
+  { strict-types: a typed var's property of a global object, whether a data property or an accessor whose setter
+    would take the value }
+  if (GTypeCount <> 0) and not GlobalTypeOK(O, Key, V) then Exit(False);
   { 10.4.3: a String object's characters and length are non-writable own properties }
   if (O^.OKind = okStringObj) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then
   begin Ok := False; Exit(True); end;
@@ -3768,7 +3804,6 @@ begin
       Exit(CallValue(Acc^.Setter, Obj, @V, 1, Dummy));
     end;
     if (Flags and pfWritable) = 0 then begin Ok := False; Exit(True); end;
-    if (GTypeCount <> 0) and not GlobalTypeOK(O, Key, V) then Exit(False);
     SetSlot(O, S, V);
     Exit(True);
   end;
@@ -7925,7 +7960,7 @@ begin
   end;
   CI := ShapeLookup(O^.Shape, IC^.Key);
   if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and not O^.Shape^.IsDict and
-     ((GTypeCount = 0) or (VA <> GlobalObj) or (GlobalVarType(IC^.Key) = 0)) then
+     ((GTypeCount = 0) or (GlobalTypeCodeOf(O, IC^.Key) = 0)) then
   begin
     IC^.Shape := O^.Shape; IC^.Slot := CI; IC^.NewShape := nil;
     SetSlot(O, CI, V);
@@ -11591,7 +11626,7 @@ begin
   RealmValSlots := nil; RealmPtrSlots := nil; RealmIntSlots := nil;
   GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
   GVarHash := nil; GVarCount := 0;
-  GLexTypes := nil; GTypeKeys := nil; GTypeCodes := nil; GTypeCount := 0;
+  GLexTypes := nil; GTypeKeys := nil; GTypeCodes := nil; GTypeRealms := nil; GTypeCount := 0;
 end;
 
 procedure VMInit;
@@ -11776,6 +11811,7 @@ begin
   GLexTypes := nil;
   GTypeKeys := nil;
   GTypeCodes := nil;
+  GTypeRealms := nil;
   GTypeCount := 0;
   HostAbortText := '';
   AuditSiteSource := '';

@@ -755,6 +755,15 @@ begin
   for I := 0 to High(T^.GdiTypedVarCodes) do
     if (T^.GdiTypedVarCodes[I] < TYPE_NUMBER) or (T^.GdiTypedVarCodes[I] > TYPE_OBJECT) then
       Reject(T, -1, Format('global var type %d invalid', [T^.GdiTypedVarCodes[I]]));
+  { every global declaration names its binding (declaring one with no name would look up a nil key) }
+  for I := 0 to High(T^.GdiLex) do
+    if T^.GdiLex[I] = nil then Reject(T, -1, 'global lexical binding without a name');
+  for I := 0 to High(T^.GdiVars) do
+    if T^.GdiVars[I] = nil then Reject(T, -1, 'global var without a name');
+  for I := 0 to High(T^.GdiFuncs) do
+    if T^.GdiFuncs[I] = nil then Reject(T, -1, 'global function without a name');
+  for I := 0 to High(T^.GdiTypedVars) do
+    if T^.GdiTypedVars[I] = nil then Reject(T, -1, 'typed global var without a name');
   if ((Length(T^.GdiLexTypes) <> 0) or (Length(T^.GdiTypedVars) <> 0)) and (T^.GdiKind = 0) then
     Reject(T, -1, 'global declaration types without global declarations');
   if (T^.GdiKind <> 0) and not (IsTop and T^.TopLevel) then Reject(T, -1, 'global declarations outside a top level');
