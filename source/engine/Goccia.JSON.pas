@@ -512,6 +512,9 @@ type
     HasPropList: Boolean;
     Gap, Indent: UnicodeString;
     Depth: Integer;
+    { Buf is outside the heap: the bytes of it charged against the memory limit (OutOk) }
+    Charge: THeapExternalCharge;
+    Charged: Int64;
   end;
 
 procedure Put(var O: TJOut; const S: UnicodeString); inline;
@@ -591,11 +594,28 @@ end;
 
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean; forward;
 
-{ before each element or member: the text so far within MAX_STRING_LENGTH (the buffer is a UnicodeString, which the
-  memory limit does not count) and no limit spent (an array's length is the script's, up to 2^53 - 1) }
+{ before each element or member: the text so far within MAX_STRING_LENGTH, the buffer's growth since the last one
+  charged against the memory limit (a UnicodeString outside the heap; after a collection when it does not fit: the
+  serializers hold their values in roots here) and no limit spent (an array's length is the script's, up to
+  2^53 - 1) }
 function OutOk(var O: TJOut): Boolean;
+var Grown: Int64;
 begin
   if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+  Grown := Int64(Length(O.Buf)) * SizeOf(WideChar) - O.Charged;
+  if Grown > 0 then
+  begin
+    if not O.Charge.TryGrow(Grown) then
+    begin
+      { the text is given up: its buffer goes before the error is made }
+      O.Buf := '';
+      O.Len := 0;
+      O.Charge.Clear;
+      O.Charged := 0;
+      Exit(ThrowMemoryLimit);
+    end;
+    Inc(O.Charged, Grown);
+  end;
   Result := PollInterrupt;
 end;
 
@@ -680,8 +700,14 @@ begin
     if not OutOk(O) then begin PopRoots(1); Exit(False); end;
     if I > 0 then PutC(O, ',');
     if O.Gap <> '' then NewLine(O);
-    if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
-    if Skip then Put(O, 'null');
+    { an index no atom names and no object on the chain can have (a sparse array's hole): undefined, so null, with
+      no atom made for it }
+    if (O.Replacer < 0) and IdxAbsent(RootAt(TempTop - 1), I) then Put(O, 'null')
+    else
+    begin
+      if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
+      if Skip then Put(O, 'null');
+    end;
     Inc(I);
   end;
   if (Len > 0) and (O.Gap <> '') then
@@ -764,17 +790,10 @@ begin
 end;
 
 { 25.5.2 JSON.stringify(value, replacer, space) }
-function JSON_Stringify(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O: TJOut; R, Sp, V: TValue; IsArr, Skip, Dup: Boolean; Len, I: Int64; D: Double; K: PStr;
-  X, N: Integer; S: UnicodeString;
+function StringifyTo(var O: TJOut; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var R, Sp, V: TValue; IsArr, Skip, Dup: Boolean; Len, I: Int64; D: Double; K: PStr;
+  X, N: Integer; S: UnicodeString; P: PStr;
 begin
-  O.Len := 0;
-  O.Replacer := -1;
-  O.HasPropList := False;
-  O.Gap := '';
-  O.Indent := '';
-  O.Depth := 0;
-  SetLength(O.Buf, 64);
   R := Arg(Args, Argc, 2);
   PushRoot(Arg(Args, Argc, 1));
   PushRoot(R);
@@ -851,8 +870,37 @@ begin
   PopRoots(N);
   if Skip then Res := VUndefined
   else if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'))
-  else Res := StrFromUnicode(Copy(O.Buf, 1, O.Len));
+  else
+  begin
+    { the text as a heap string: refused before it is made when it does not fit }
+    if not HeapReserve(StringBytes(O.Len)) then
+    begin
+      O.Buf := '';
+      O.Charge.Clear;
+      O.Charged := 0;
+      Exit(ThrowMemoryLimit);
+    end;
+    P := NewString(O.Len);
+    if O.Len > 0 then Move(O.Buf[1], StrChars(P)[0], O.Len * SizeOf(WideChar));
+    Res := MkPtr(P);
+  end;
   Result := True;
+end;
+
+function JSON_Stringify(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var O: TJOut;
+begin
+  O.Len := 0;
+  O.Replacer := -1;
+  O.HasPropList := False;
+  O.Gap := '';
+  O.Indent := '';
+  O.Depth := 0;
+  O.Charge := Default(THeapExternalCharge);
+  O.Charged := 0;
+  SetLength(O.Buf, 64);
+  Result := StringifyTo(O, Args, Argc, Res);
+  O.Charge.Clear;
 end;
 
 { ---------------- rawJSON / isRawJSON ---------------- }

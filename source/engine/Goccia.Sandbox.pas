@@ -261,7 +261,7 @@ function BufferOf(const Bytes: TBytes; var Res: TValue): Boolean;
 var B: PObj; Proto: TValue;
 begin
   if not HeapReserve(Length(Bytes)) then
-    Exit(ThrowError('RangeError', 'Allocation failed: GC heap size exceeds the configured memory limit'));
+    Exit(ThrowMemoryLimit);
   if GetV(GlobalObj, AtomOf('ArrayBuffer'), Proto) and GetV(Proto, AtomPrototype, Proto) then
   else
   begin
@@ -338,7 +338,7 @@ begin
     begin
       Text := Box.Fs.ReadAllText(Path);
       if not HeapReserve(Int64(Length(Text)) * 2) then
-        Exit(ThrowError('RangeError', 'Allocation failed: GC heap size exceeds the configured memory limit'));
+        Exit(ThrowMemoryLimit);
       Res := StrFromUnicode(Text);
       Exit(True);
     end;

@@ -141,7 +141,7 @@ begin
   if not HeapReserve(Trunc(NumOf(M))) then
   begin
     PopRoots(1);
-    Exit(ThrowError('RangeError', 'SharedArrayBuffer allocation of ' + IntToStr(Trunc(NumOf(M))) +
+    Exit(ThrowMemoryLimit('SharedArrayBuffer allocation of ' + IntToStr(Trunc(NumOf(M))) +
       ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
   end;
   B := NewSharedBlock(Len, MaxLen);

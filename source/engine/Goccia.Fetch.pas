@@ -500,7 +500,7 @@ begin
     Col := 0;
   end;
   { collects when the entry does not fit yet; nothing below reads Args }
-  if not Charge.TryGrow(Bytes) then Exit(ThrowError('RangeError', SErrorMemoryLimitExceeded));
+  if not Charge.TryGrow(Bytes) then Exit(ThrowMemoryLimit);
   if Owner = nil then Owner := TFetchOwner.Create;
   Id := NextId;
   Inc(NextId);

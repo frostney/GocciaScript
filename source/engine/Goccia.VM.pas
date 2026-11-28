@@ -416,6 +416,16 @@ function StackFramesNow: UnicodeString;
 { a host's suggestion for an error it throws (a PermissionDenied's grant to ask for), kept in an internal slot the
   script cannot see or change; E rooted by the caller }
 procedure SetErrorHostSuggestion(E: TValue; const Text: UnicodeString);
+{ the memory limit's RangeError for an allocation refused before it is made (Msg, the limit's own message when
+  empty), with the suggestion a refusal at a safe point carries (Goccia.gc() or a higher --max-memory); False }
+function ThrowMemoryLimit(const Msg: UnicodeString = ''): Boolean;
+{ HeapReserve(Bytes), else ThrowMemoryLimit: the check before an allocation whose size the script chose (an array's
+  elements, a built string). Collects: the caller's values are rooted, as for the allocation itself }
+function ReserveHeap(Bytes: Int64): Boolean;
+{ an array's length set to any valid one (ArraySetLengthAny, the caller removed what lies at or past it), the
+  elements a longer length allocates reserved first (ReserveHeap): False with the RangeError when they do not fit.
+  Collects }
+function ArraySetLengthReserved(A: TValue; NewLen: Int64): Boolean;
 function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
 function ErrorSourceLocation(E: TValue; out Source: UnicodeString; out Line, Column: Integer): Boolean;
 function ValidErrorStackProvenance(V: TValue): Boolean;
@@ -1974,9 +1984,11 @@ begin
 end;
 
 { Array.prototype[@@iterator] and %ArrayIteratorPrototype%.next are the intrinsics: array iteration may skip
-  the lookups. Slots are cached by shape; the values are read every time (an assignment keeps the shape). }
+  the lookups. Slots are cached by shape and its version (a dictionary shape a collection freed can come back at
+  the same address, never with the same version); the values are read every time (an assignment keeps the shape). }
 threadvar
   AIShapeA, AIShapeB: PShape;
+  AIVerA, AIVerB: Cardinal;
   AISlotA, AISlotB: Integer;
 
 function ArrayIterNextFnOf: TValue; noinline;
@@ -1985,7 +1997,8 @@ begin
 end;
 
 threadvar
-  SIShapeA, SIShapeB: PShape; SISlotA, SISlotB: Integer;   { StringIterationIntact's cached lookups }
+  { StringIterationIntact's cached lookups, by shape and version as ArrayIterationIntact's }
+  SIShapeA, SIShapeB: PShape; SIVerA, SIVerB: Cardinal; SISlotA, SISlotB: Integer;
 
 { String.prototype[@@iterator] and %StringIteratorPrototype%.next are the intrinsics (data properties): a string
   iterates without a call }
@@ -1993,8 +2006,14 @@ function StringIterationIntact: Boolean;
 var A, B: PObj;
 begin
   A := ObjOf(StringProto); B := ObjOf(StringIterProto);
-  if A^.Shape <> SIShapeA then begin SIShapeA := A^.Shape; SISlotA := ShapeLookup(A^.Shape, SymKey(SymIterator)); end;
-  if B^.Shape <> SIShapeB then begin SIShapeB := B^.Shape; SISlotB := ShapeLookup(B^.Shape, AtomNext); end;
+  if (A^.Shape <> SIShapeA) or (A^.Shape^.Version <> SIVerA) then
+  begin
+    SIShapeA := A^.Shape; SIVerA := A^.Shape^.Version; SISlotA := ShapeLookup(A^.Shape, SymKey(SymIterator));
+  end;
+  if (B^.Shape <> SIShapeB) or (B^.Shape^.Version <> SIVerB) then
+  begin
+    SIShapeB := B^.Shape; SIVerB := B^.Shape^.Version; SISlotB := ShapeLookup(B^.Shape, AtomNext);
+  end;
   Result := (SISlotA >= 0) and (SISlotB >= 0) and ((A^.Shape^.PFlags[SISlotA] and pfAccessor) = 0) and
     ((B^.Shape^.PFlags[SISlotB] and pfAccessor) = 0) and (GetSlot(A, SISlotA) = StringIterFnPublic) and
     (GetSlot(B, SISlotB) = StringIterNextFn);
@@ -2004,8 +2023,14 @@ function ArrayIterationIntact: Boolean;
 var A, B: PObj;
 begin
   A := ObjOf(ArrayProto); B := ObjOf(ArrayIteratorProto);
-  if A^.Shape <> AIShapeA then begin AIShapeA := A^.Shape; AISlotA := ShapeLookup(A^.Shape, SymKey(SymIterator)); end;
-  if B^.Shape <> AIShapeB then begin AIShapeB := B^.Shape; AISlotB := ShapeLookup(B^.Shape, AtomNext); end;
+  if (A^.Shape <> AIShapeA) or (A^.Shape^.Version <> AIVerA) then
+  begin
+    AIShapeA := A^.Shape; AIVerA := A^.Shape^.Version; AISlotA := ShapeLookup(A^.Shape, SymKey(SymIterator));
+  end;
+  if (B^.Shape <> AIShapeB) or (B^.Shape^.Version <> AIVerB) then
+  begin
+    AIShapeB := B^.Shape; AIVerB := B^.Shape^.Version; AISlotB := ShapeLookup(B^.Shape, AtomNext);
+  end;
   Result := (AISlotA >= 0) and (AISlotB >= 0) and ((A^.Shape^.PFlags[AISlotA] and pfAccessor) = 0) and
     ((B^.Shape^.PFlags[AISlotB] and pfAccessor) = 0) and (GetSlot(A, AISlotA) = ArrayValuesFnPublic) and
     (GetSlot(B, AISlotB) = ArrayIterNextFn);
@@ -2416,6 +2441,41 @@ begin
   PushRoot(E);
   DefineOwn(RootAt(TempTop - 1), K, StrFromUnicode(Text), pfHidden);
   PopRoots(1);
+end;
+
+function ThrowMemoryLimit(const Msg: UnicodeString): Boolean;
+begin
+  { as DeliverMemoryRefusal's: making the error does not refuse again (the refused request's caller may still hold
+    what took the heap to the limit, a builder's buffer) }
+  MemDelivering := True;
+  try
+    if Msg = '' then ThrowError('RangeError', SErrorMemoryLimitExceeded) else ThrowError('RangeError', Msg);
+    SetErrorHostSuggestion(Pending, SSuggestMemoryLimitExceeded);
+  finally
+    MemDelivering := False;
+  end;
+  Result := False;
+end;
+
+function ReserveHeap(Bytes: Int64): Boolean;
+begin
+  Result := HeapReserve(Bytes) or ThrowMemoryLimit;
+end;
+
+function ArraySetLengthReserved(A: TValue; NewLen: Int64): Boolean;
+var P: PObj;
+begin
+  P := ObjOf(A);
+  if ((P^.OFlags and ofBigLen) = 0) and (NewLen > Int64(P^.Elements^.Cap)) and (NewLen <= ArrayDenseMax) then
+  begin
+    PushRoot(A);
+    Result := ReserveHeap(ValueArrayBytes(NewLen));
+    A := RootAt(TempTop - 1);
+    PopRoots(1);
+    if not Result then Exit;
+  end;
+  ArraySetLengthAny(ObjOf(A), NewLen);
+  Result := True;
 end;
 
 function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
@@ -3376,8 +3436,7 @@ begin
           Exit(True);
         end;
       end;
-      ArraySetLengthAny(O, Trunc(D2));
-      Exit(True);
+      Exit(ArraySetLengthReserved(MkPtr(O), Trunc(D2)));
     end;
   end;
   { setters and read-only properties on the prototype chain }
@@ -3969,7 +4028,8 @@ begin
   Result := False;
   if (O^.Shape^.Proto <> FunctionProto) or not IsPtr(SymHasInstance) then Exit;
   FP := ObjOf(FunctionProto);
-  if (FP^.Shape <> HIFPShape) or (FP^.Shape^.IsDict and (FP^.Shape^.Version <> HIFPVer)) then
+  { the version too: no later shape at a freed shape's address has its version }
+  if (FP^.Shape <> HIFPShape) or (FP^.Shape^.Version <> HIFPVer) then
   begin
     K := SymKey(SymHasInstance);
     S := ShapeLookup(FP^.Shape, K);

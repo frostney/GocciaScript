@@ -186,8 +186,18 @@ type
     { baked into machine code (Goccia.Jit.inc JitPin): once retired, its record is kept (its prototype reads
       VRetiredProto there), not freed }
     Pinned: Boolean;
-    Version: Cardinal;      { a dictionary's in-place adds: an inline cache that passed it records this }
+    { a dictionary's in-place adds: an inline cache that passed it records this. Every shape and every in-place
+      add takes a version no shape of this engine has had (ShapeVersionNext), so a cache that holds a shape's
+      address and version never matches a later shape at the same address }
+    Version: Cardinal;
     ProtoChild: array of record P: TValue; S: PShape; end;  { root shapes per prototype }
+    { the bytes this shape is charged against HeapCeiling for (ShapeRecharge): its record and the arrays it owns }
+    Charged: Int64;
+    { Keys and PFlags are its parent's, lent (KeysLent there): charged to the parent until a growth copies them }
+    KeysShared: Boolean;
+    { a dictionary's: the last major collection that found an object with it, or the next one for a shape made
+      since the last; a dictionary no object has is retired (RetireDeadShapes) }
+    LiveMajor: Integer;
   end;
 
   { native function: Args points at the this slot (Args[0] = this, Args[1..Argc] = arguments).
@@ -312,6 +322,30 @@ type
   PHeapExternalCharge = ^THeapExternalCharge;
   EHeapExternalMemoryLimit = class(Exception);
 function HeapChargedExternalBytes: Int64;
+const
+  { what the native allocator adds to each block it hands out (FPC's heap manager: its size word, rounded up) }
+  NATIVE_BLOCK_OVERHEAD = 16;
+  { the least an array index stored past ArrayDenseMax costs, charged as it is added: its slot in the object's
+    overflow array (8), its key and flags in the dictionary shape (9) and its entry in the shape's hash at half
+    load (24); the index's atom comes on top the first time the index is used anywhere }
+  SPARSE_INDEX_BYTES = 41;
+{ The engine's native memory for property keys and object layouts, held outside the heap and charged against
+  HeapCeiling with the external bytes: atoms, key atoms and symbols, which live as long as the engine
+  (HeapPermanentBytes), and shapes with the key, flag and hash arrays they own, freed with their prototype or, for a
+  dictionary shape, its object. Delta is what was allocated (negative: freed). A charge that takes the heap over
+  HeapCeiling asks for a collection: the next nursery allocation collects, and so does HeapChargeCheck; a permanent
+  charge that alone passes the ceiling, which no collection can undo, marks the refusal at once (GCLimitHook). Never
+  collects or allocates }
+procedure HeapNativeCharge(Delta: Int64; Permanent: Boolean);
+function HeapNativeBytes: Int64;
+function HeapPermanentBytes: Int64;
+{ the bytes of a value array of Len slots (an array's elements), and of a string of Len code units, as the heap
+  allocates them }
+function ValueArrayBytes(Len: Int64): Int64; inline;
+function StringBytes(Len: Int64): Int64; inline;
+{ the collection a charge over HeapCeiling asked for, now: at an allocation point whose values are rooted (AddProperty,
+  a Symbol's creation) }
+procedure HeapChargeCheck;
 var
   { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
   HeapExternalBytes: Int64 = 0;
@@ -1010,6 +1044,10 @@ threadvar
   RememberedList: array of PCell;
   RememberedTop: Integer;
   InMinor: Boolean;
+  { HeapNativeCharge's: every structure's bytes, the permanent ones among them; ChargeCheckAt the heap and charged
+    bytes past which a charge asks for a collection (ChargePending), set by each major collection }
+  StructBytes, PermBytes, ChargeCheckAt: Int64;
+  ChargePending: Boolean;
 
 { a major collection runs when old space has grown by the larger of this and its size after the last one }
 var GCMajorFloor: Int64 = 64 * 1024 * 1024; GCMajorGrowthPct: Int64 = 100;
@@ -1355,7 +1393,11 @@ begin
         GCVisit(O^.Aux2);
         for I := 0 to Min(O^.InlineCap, O^.Shape^.Count) - 1 do GCVisit(O^.Slots[I]);
         if not InMinor then
+        begin
           GCVisit(O^.Shape^.Proto);
+          { a dictionary lives while its object does (RetireDeadShapes) }
+          if O^.Shape^.IsDict then O^.Shape^.LiveMajor := GCMajorCount;
+        end;
       end;
   end;
 end;
@@ -1455,6 +1497,9 @@ begin
   Used := NurseryTop - NurseryStart;
   Inc(GCAllocatedBytes, Used);
   if GCOldBytes + Used > GCPeakBytes then GCPeakBytes := GCOldBytes + Used;
+  { the collection a structure charge asked for: the major one it needs follows when the heap stays over the
+    ceiling (OverCeiling) }
+  ChargePending := False;
   Inc(GCMinorCount);
   Inc(GCEpoch);
   if GCVerify then VerifyHeap('barrier');   { every old cell pointing into the nursery is remembered }
@@ -1572,10 +1617,59 @@ threadvar
   EngineExternalBytes: Int64;
 
 function HeapChargedExternalBytes: Int64; noinline;
-var EngineBytes: Int64;
+var EngineBytes, Struct: Int64;
 begin
   EngineBytes := EngineExternalBytes;
-  Result := EngineBytes + HeapExternalBytes;
+  Struct := StructBytes;
+  Result := EngineBytes + Struct + HeapExternalBytes;
+end;
+
+function ValueArrayBytes(Len: Int64): Int64; inline;
+begin
+  if Len < 1 then Len := 1;
+  Result := SizeOf(TValueArray) - SizeOf(TValue) + Len * SizeOf(TValue);
+end;
+
+function StringBytes(Len: Int64): Int64; inline;
+begin
+  Result := SizeOf(TStr) - SizeOf(WideChar) + Len * SizeOf(WideChar);
+end;
+
+function HeapNativeBytes: Int64;
+begin
+  Result := StructBytes;
+end;
+
+function HeapPermanentBytes: Int64;
+begin
+  Result := PermBytes;
+end;
+
+procedure HeapNativeCharge(Delta: Int64; Permanent: Boolean);
+var Ceiling, Now: Int64; Top: PByte;
+begin
+  Inc(StructBytes, Delta);
+  if Permanent then Inc(PermBytes, Delta);
+  Ceiling := HeapCeiling;
+  if (Delta <= 0) or (Ceiling <= 0) or (AbortKind = 3) then Exit;
+  Now := HeapUsedBytes + HeapChargedExternalBytes;
+  if (Now > Ceiling) and (Now > ChargeCheckAt) and not ChargePending then
+  begin
+    { the next nursery allocation runs the collection (as one over NurseryFitCeiling's bound would) }
+    ChargePending := True;
+    Top := NurseryTop;
+    NurseryLimit := Top;
+  end;
+  { what lives as long as the engine already fills the ceiling: no collection can make room }
+  if Permanent and (PermBytes + HeapExternalBytes > Ceiling) and Assigned(GCLimitHook) then
+    GCLimitHook;
+end;
+
+procedure HeapChargeCheck;
+begin
+  if not ChargePending then Exit;
+  CollectMinor;
+  CollectMajor;
 end;
 
 function HeapHasRoom(Bytes: Int64): Boolean;
@@ -1631,7 +1725,7 @@ begin
 end;
 
 procedure CollectMajor;
-var I: Integer;
+var I: Integer; Left: Int64;
 begin
   { called right after a minor collection: the nursery is empty }
   Inc(GCMajorCount);
@@ -1653,8 +1747,17 @@ begin
   RememberedTop := 0;
   GCOldBytesAtMajor := GCOldBytes;
   if GCVerify then VerifyHeap('major');
+  { a structure charge asks for the next collection once the heap and the charges pass the ceiling, or, when this
+    one leaves them past it, once they have grown by a sixteenth of it more: a charge after each property added
+    while a refusal is on its way to a safe point does not collect each time }
+  ChargePending := False;
+  Left := GCOldBytesAtMajor + HeapChargedExternalBytes;
+  if (HeapCeiling > 0) and (Left > HeapCeiling) then
+    ChargeCheckAt := Left + Max(Int64(NURSERY_MIN_ROOM), HeapCeiling div 16)
+  else
+    ChargeCheckAt := HeapCeiling;
   { what survived does not fit: the run ends (the nursery is empty, so the old space is the heap) }
-  if (HeapCeiling > 0) and Assigned(GCLimitHook) and (GCOldBytesAtMajor + HeapChargedExternalBytes > HeapCeiling) then
+  if (HeapCeiling > 0) and Assigned(GCLimitHook) and (Left > HeapCeiling) then
     GCLimitHook
   else if Assigned(GCLimitClearHook) then
     GCLimitClearHook;
@@ -1767,6 +1870,8 @@ var Old: array of PStr; I, J: Integer;
 begin
   Old := AtomTable;
   if Length(Old) = 0 then SetLength(AtomTable, 4096) else SetLength(AtomTable, Length(Old) * 2);
+  { the table only grows: its new slots are the atoms' too }
+  HeapNativeCharge(Int64(Length(AtomTable) - Length(Old)) * SizeOf(PStr), True);
   AtomTable := Copy(AtomTable, 0, Length(AtomTable));
   for I := 0 to High(AtomTable) do AtomTable[I] := nil;
   AtomMask := High(AtomTable);
@@ -1801,6 +1906,7 @@ begin
   Size := (SizeOf(TStr) - SizeOf(WideChar) + Len * 2 + 7) and not 7;
   if Size < 16 then Size := 16;
   Result := GetMem(Size);
+  HeapNativeCharge(Size + NATIVE_BLOCK_OVERHEAD, True);
   Result^.Hdr.Size := Size;
   Result^.Hdr.Kind := ckString;
   Result^.Hdr.Flags := cfPermanent or cfOld;
@@ -1823,7 +1929,11 @@ threadvar
 
 procedure AddPermanentCell(P: Pointer);
 begin
-  if PermanentCellCount >= Length(PermanentCells) then SetLength(PermanentCells, PermanentCellCount * 2 + 64);
+  if PermanentCellCount >= Length(PermanentCells) then
+  begin
+    HeapNativeCharge(Int64(PermanentCellCount + 64) * SizeOf(Pointer), True);
+    SetLength(PermanentCells, PermanentCellCount * 2 + 64);
+  end;
   PermanentCells[PermanentCellCount] := P;
   Inc(PermanentCellCount);
 end;
@@ -1851,6 +1961,7 @@ begin
   Size := KeyPayloadOffset(Length(Text)) + 8;
   if Size < 16 then Size := 16;
   Result := GetMem(Size);
+  HeapNativeCharge(Size + NATIVE_BLOCK_OVERHEAD, True);
   Result^.Hdr.Size := Size;
   Result^.Hdr.Kind := ckString;
   Result^.Hdr.Flags := cfPermanent or cfOld;
@@ -1861,7 +1972,11 @@ begin
   if Result^.Hash = 0 then Result^.Hash := 1;
   Result^.Atom := Result;
   PValue(PByte(Result) + KeyPayloadOffset(Length(Text)))^ := VUndefined;
-  if KeyAtomCount >= Length(KeyAtoms) then SetLength(KeyAtoms, KeyAtomCount * 2 + 64);
+  if KeyAtomCount >= Length(KeyAtoms) then
+  begin
+    HeapNativeCharge(Int64(KeyAtomCount + 64) * SizeOf(PStr), True);
+    SetLength(KeyAtoms, KeyAtomCount * 2 + 64);
+  end;
   KeyAtoms[KeyAtomCount] := Result;
   Inc(KeyAtomCount);
 end;
@@ -1923,6 +2038,7 @@ begin
     begin
       New(SmallIntAtoms);
       FillChar(SmallIntAtoms^, SizeOf(TIntAtoms), 0);
+      HeapNativeCharge(SizeOf(TIntAtoms) + NATIVE_BLOCK_OVERHEAD, True);
     end;
     Result := SmallIntAtoms^[I];
     if Result <> nil then Exit;
@@ -2116,8 +2232,39 @@ begin
   ShapesMadeAtMajor := ShapesMade;
 end;
 
+threadvar
+  { the last version a shape took (TShape.Version) }
+  ShapeVersionNext: Cardinal;
+
+const
+  { a shape record and its entry in AllShapes }
+  SHAPE_RECORD_BYTES = SizeOf(TShape) + NATIVE_BLOCK_OVERHEAD + SizeOf(PShape);
+  { a dynamic array's header (its reference count and length) and its block }
+  DYN_ARRAY_BYTES = 2 * SizeOf(PtrInt) + NATIVE_BLOCK_OVERHEAD;
+
+function DynBytes(Len, ElemSize: SizeInt): Int64; inline;
+begin
+  if Len = 0 then Result := 0 else Result := Int64(Len) * ElemSize + DYN_ARRAY_BYTES;
+end;
+
+{ charges S for what it holds now: its record and the arrays it owns (not Keys and PFlags while its parent lends them) }
+procedure ShapeRecharge(S: PShape);
+var N: Int64;
+begin
+  N := SHAPE_RECORD_BYTES + DynBytes(Length(S^.Edges), SizeOf(TShapeEdge)) + DynBytes(Length(S^.EdgeHash), SizeOf(Integer)) +
+    DynBytes(Length(S^.HashKeys), SizeOf(PStr)) + DynBytes(Length(S^.HashSlots), SizeOf(Integer)) +
+    DynBytes(Length(S^.ProtoChild), SizeOf(TValue) + SizeOf(PShape));
+  if not S^.KeysShared then N := N + DynBytes(Length(S^.Keys), SizeOf(PStr)) + DynBytes(Length(S^.PFlags), 1);
+  if N <> S^.Charged then
+  begin
+    HeapNativeCharge(N - S^.Charged, False);
+    S^.Charged := N;
+  end;
+end;
+
 procedure ShapeRecFree(S: PShape); inline;
 begin
+  HeapNativeCharge(-S^.Charged, False);
   Dispose(S);
 end;
 
@@ -2134,9 +2281,15 @@ begin
   Result^.Proto := Proto;
   Result^.Parent := Parent;
   Result^.HashMask := -1;
+  Inc(ShapeVersionNext);
+  Result^.Version := ShapeVersionNext;
+  { a dictionary made now has no object yet: it lives through the next major collection, which the object's mark
+    then carries on }
+  Result^.LiveMajor := GCMajorCount + 1;
   if ShapeCount >= Length(AllShapes) then SetLength(AllShapes, ShapeCount * 2 + 1024);
   AllShapes[ShapeCount] := Result;
   Inc(ShapeCount);
+  ShapeRecharge(Result);
 end;
 
 { a dictionary shape: unique to one object and changed in place by adds (see TShape.Version) }
@@ -2155,6 +2308,7 @@ begin
   Result^.PFlags := Copy(S^.PFlags, 0, S^.Count);
   Result^.HasAccessors := S^.HasAccessors;
   Result^.HasIndexKeys := S^.HasIndexKeys;
+  ShapeRecharge(Result);
 end;
 
 function ValidPtr(P: Pointer): Boolean; forward;
@@ -2332,7 +2486,9 @@ begin
   begin
     S := AllShapes[I];
     P := S^.Proto;
-    if ((P shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(P))^.Flags and (cfMark or cfPermanent)) = 0) then
+    { its prototype died, or it is a dictionary no live object has: its object died, or moved on to another shape }
+    if (((P shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(P))^.Flags and (cfMark or cfPermanent)) = 0)) or
+       (S^.IsDict and (S^.LiveMajor < GCMajorCount)) then
     begin
       S^.Proto := VRetiredProto;
       if RetiredCount >= Length(RetiredShapes) then SetLength(RetiredShapes, RetiredCount * 2 + 1024);
@@ -2383,6 +2539,7 @@ begin
       S^.EdgeCount := 0; S^.Edges := nil; S^.EdgeHash := nil;
       S^.HashKeys := nil; S^.HashSlots := nil; S^.HashMask := -1;
       S^.ProtoChild := nil;
+      ShapeRecharge(S);
       RetiredShapes[N] := S;
       Inc(N);
     end
@@ -2529,6 +2686,7 @@ begin
     S^.HashKeys[J] := S^.Keys[I];
     S^.HashSlots[J] := I;
   end;
+  ShapeRecharge(S);
 end;
 
 function ShapeLookup(S: PShape; Key: PStr): Integer;
@@ -2611,7 +2769,9 @@ begin
   if S^.IsDict then
   begin
     N := S;
-    Inc(N^.Version);   { a key added in place can shadow a prototype's: caches that passed this object check it }
+    { a key added in place can shadow a prototype's: caches that passed this object check it }
+    Inc(ShapeVersionNext);
+    N^.Version := ShapeVersionNext;
   end
   else
   begin
@@ -2622,6 +2782,7 @@ begin
       N^.Keys := S^.Keys;
       N^.PFlags := S^.PFlags;
       S^.KeysLent := True;
+      N^.KeysShared := True;
     end
     else
     begin
@@ -2644,8 +2805,10 @@ begin
   end;
   if N^.Count >= Length(N^.Keys) then
   begin
+    { a lent array is copied by the growth (its parent still holds it): N's own from now on }
     SetLength(N^.Keys, N^.Count * 2 + 4);
     SetLength(N^.PFlags, N^.Count * 2 + 4);
+    N^.KeysShared := False;
   end;
   N^.Keys[N^.Count] := Key;
   N^.PFlags[N^.Count] := Flags;
@@ -2663,6 +2826,8 @@ begin
   end
   else
     N^.HashMask := -1;
+  ShapeRecharge(N);
+  if S <> N then ShapeRecharge(S);
   Result := N;
 end;
 
@@ -2792,16 +2957,33 @@ begin
   Result := AddPropertyTo(O, ShapeAdd(O^.Shape, Key, Flags), V);
 end;
 
+function GrowValueCap(Cap, Need, Least: Integer): Integer; forward;
+
 function AddPropertyTo(O: PObj; NewShape: PShape; V: TValue): Integer;
 var Idx, NewCap, I: Integer; NO: PValueArray;
 begin
+  { an add can collect (the overflow's growth below): the collection a structure charge asked for runs here, and
+    under --gc-stress a minor collection, and every eighth a major one, runs at every add. NewShape lives on: its
+    prototype is O's, a dictionary made since the last major collection lives through the next }
+  if ChargePending or GCStress then
+  begin
+    PushRoot(MkPtr(O)); PushRoot(V);
+    if ChargePending then HeapChargeCheck
+    else
+    begin
+      CollectMinor;
+      if GCMinorCount mod 8 = 0 then CollectMajor;
+    end;
+    O := ObjOf(RootAt(TempTop - 2)); V := RootAt(TempTop - 1);
+    PopRoots(2);
+  end;
   Idx := NewShape^.Count - 1;
   if Idx >= O^.InlineCap then
   begin
     I := Idx - O^.InlineCap;
     if (O^.Overflow = nil) or (I >= Integer(O^.Overflow^.Cap)) then
     begin
-      if O^.Overflow = nil then NewCap := 4 else NewCap := O^.Overflow^.Cap * 2;
+      if O^.Overflow = nil then NewCap := 4 else NewCap := GrowValueCap(O^.Overflow^.Cap, I + 1, 4);
       PushRoot(MkPtr(O)); PushRoot(V);
       NO := NewValueArray(NewCap);
       O := ObjOf(RootAt(TempTop - 2)); V := RootAt(TempTop - 1);
@@ -2860,6 +3042,7 @@ begin
     N^.HasAccessors := Old^.HasAccessors or ((Flags and pfAccessor) <> 0);
     N^.HasIndexKeys := Old^.HasIndexKeys;
     N^.IsDict := True;
+    ShapeRecharge(N);
     O^.Shape := N;
     Exit;
   end;
@@ -2973,14 +3156,27 @@ begin
   A^.Aux2 := MkDouble(NewLen);
 end;
 
+{ a value array's next capacity past Cap that holds Need: twice Cap, or, when that would not fit under HeapCeiling,
+  Need and a sixteenth more (Need alone when not even that fits), so the last growth before the limit does not
+  allocate twice what is used }
+function GrowValueCap(Cap, Need, Least: Integer): Integer;
+var Snug: Int64;
+begin
+  Result := Cap * 2;
+  if Result < Need then Result := Need;
+  if Result < Least then Result := Least;
+  if (HeapCeiling <= 0) or (Result <= Need + Need div 16) or HeapHasRoom(ValueArrayBytes(Result)) then Exit;
+  Snug := Int64(Need) + Need div 16;
+  if not HeapHasRoom(ValueArrayBytes(Snug)) then Snug := Need;
+  if Snug < Result then Result := Snug;
+end;
+
 procedure EnsureElementsCap(A: PObj; Need: Integer);
 var E, NE: PValueArray; NewCap: Integer;
 begin
   E := A^.Elements;
   if Need <= Integer(E^.Cap) then Exit;
-  NewCap := Integer(E^.Cap) * 2;
-  if NewCap < Need then NewCap := Need;
-  if NewCap < 8 then NewCap := 8;
+  NewCap := GrowValueCap(Integer(E^.Cap), Need, 8);
   PushRoot(MkPtr(A));
   NE := NewValueArray(NewCap);
   A := ObjOf(RootAt(TempTop - 1));
@@ -3158,6 +3354,8 @@ begin
   TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
   GCAllocatedBytes := 0; GCPeakBytes := 0;
+  { the atoms, symbols and shapes charged were freed above }
+  StructBytes := 0; PermBytes := 0; ChargeCheckAt := 0; ChargePending := False;
 end;
 
 

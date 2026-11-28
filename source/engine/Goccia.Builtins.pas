@@ -836,7 +836,12 @@ begin
       A := NewArray(0, 0);
       ArraySetLengthAny(A, Trunc(D));
     end
-    else A := NewArray(Trunc(D), Trunc(D));
+    else
+    begin
+      { the elements (holes) are allocated at once: refused before they are when they do not fit }
+      if not ReserveHeap(ValueArrayBytes(Trunc(D))) then Exit(False);
+      A := NewArray(Trunc(D), Trunc(D));
+    end;
   end
   else
   begin
@@ -1882,7 +1887,7 @@ end;
 
 { 22.1.3.19 String.prototype.repeat ( count ) }
 function StrProto_Repeat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; D: Double; N, L: Int64; I: SizeInt; U: UnicodeString;
+var S, R: PStr; D: Double; N, L: Int64; I: SizeInt;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if Arg(Args, Argc, 1) = VUndefined then D := 0
@@ -1894,20 +1899,23 @@ begin
   L := S^.Len;
   if (N = 0) or (L = 0) then begin Res := MkPtr(AtomOf('')); Exit(True); end;
   if L * N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-  SetLength(U, L * N);
-  for I := 0 to N - 1 do Move(StrChars(S)[0], U[I * L + 1], L * SizeOf(WideChar));
-  Res := StrFromUnicode(U);
+  { built in the heap string itself, refused before it is made when it does not fit }
+  if not ReserveHeap(StringBytes(L * N)) then Exit(False);
+  R := NewString(L * N);
+  S := StrOf(Args[0]);
+  for I := 0 to N - 1 do Move(StrChars(S)[0], StrChars(R)[I * L], L * SizeOf(WideChar));
+  Res := MkPtr(R);
   Result := True;
 end;
 
 function StrProto_Pad(Args: TArgs; Argc: Integer; var Res: TValue; AtStart: Boolean): Boolean;
-var S, F: PStr; N: Int64; I: SizeInt; T, Fill, P: UnicodeString;
+var S, F, R: PStr; N: Int64; I: SizeInt; TL, PL, At: Integer; Fill: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
-  T := StrToUnicode(StrOf(Args[0]));
+  TL := StrOf(Args[0])^.Len;
   { 22.1.3.17.1 StringPaddingBuiltinsImpl steps 4-5: nothing to pad returns S before fillString is coerced }
-  if N <= Length(T) then begin Res := Args[0]; Exit(True); end;
+  if N <= TL then begin Res := Args[0]; Exit(True); end;
   if (Argc >= 2) and (Args[2] <> VUndefined) then
   begin
     if not StrArg(Args, Argc, 2, F) then Exit(False);
@@ -1916,10 +1924,17 @@ begin
   else Fill := ' ';
   if Fill = '' then begin Res := Args[0]; Exit(True); end;
   if N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-  { the filler repeated and truncated to N - Length(T) code units }
-  SetLength(P, N - Length(T));
-  for I := 0 to Length(P) - 1 do P[I + 1] := Fill[I mod Length(Fill) + 1];
-  if AtStart then Res := StrFromUnicode(P + T) else Res := StrFromUnicode(T + P);
+  { built in the heap string itself, refused before it is made when it does not fit: the filler repeated and
+    truncated to N - TL code units, before or after the string }
+  if not ReserveHeap(StringBytes(N)) then Exit(False);
+  R := NewString(N);
+  S := StrOf(Args[0]);
+  PL := N - TL;
+  if AtStart then At := 0 else At := TL;
+  for I := 0 to PL - 1 do StrChars(R)[At + I] := Fill[I mod Length(Fill) + 1];
+  if AtStart then At := PL else At := 0;
+  if TL > 0 then Move(StrChars(S)[0], StrChars(R)[At], TL * SizeOf(WideChar));
+  Res := MkPtr(R);
   Result := True;
 end;
 function StrProto_PadStart(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2019,7 +2034,28 @@ end;
 { String.prototype.replace / replaceAll with a string pattern }
 function StrProto_Replace(Args: TArgs; Argc: Integer; var Res: TValue; All: Boolean): Boolean;
 var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv: Integer;
-  F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean;
+  F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
+  Charged, Grown: Int64;
+  { before each replacement: U within MAX_STRING_LENGTH, and its growth charged against the memory limit (U is
+    outside the heap; after a collection when it does not fit: the values are rooted here) }
+  function Grow: Boolean;
+  begin
+    if Length(U) > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+    Grown := Int64(Length(U)) * SizeOf(WideChar) - Charged;
+    if Grown > 0 then
+    begin
+      if not Charge.TryGrow(Grown) then
+      begin
+        { the result is given up: its buffer goes before the error is made }
+        U := '';
+        Charge.Clear;
+        Charged := 0;
+        Exit(ThrowMemoryLimit);
+      end;
+      Inc(Charged, Grown);
+    end;
+    Result := True;
+  end;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not StrArg(Args, Argc, 1, Pat) then Exit(False);
@@ -2053,25 +2089,46 @@ begin
   if N = 0 then begin Res := Args[0]; Exit(True); end;
   U := '';
   Last := 0;
+  Charge := Default(THeapExternalCharge);
+  Charged := 0;
+  Result := False;
   PushRoot(F); PushRoot(Args[0]);
-  for I := 0 to N - 1 do
+  I := 0;
+  while I < N do
   begin
+    if not Grow then Break;
     U := U + Copy(T, Last + 1, Positions[I] - Last);
     if Functional then
     begin
       M := StrFromUnicode(P);
       CallArgs[0] := M; CallArgs[1] := MkInt(Positions[I]); CallArgs[2] := RootAt(TempTop - 1);
-      if not CallValue(RootAt(TempTop - 2), VUndefined, @CallArgs[0], 3, CR) then begin PopRoots(2); Exit(False); end;
-      if not ToStringV(CR, M) then begin PopRoots(2); Exit(False); end;
+      if not CallValue(RootAt(TempTop - 2), VUndefined, @CallArgs[0], 3, CR) then Break;
+      if not ToStringV(CR, M) then Break;
       U := U + StrToUnicode(StrOf(M));
     end
     else U := U + StringSubstitution(P, T, Positions[I], R);
     Last := Positions[I] + Length(P);
+    Inc(I);
   end;
   PopRoots(2);
-  U := U + Copy(T, Last + 1, MaxInt);
-  Res := StrFromUnicode(U);
-  Result := True;
+  if I >= N then
+  begin
+    U := U + Copy(T, Last + 1, MaxInt);
+    { the result is a heap string as long as U: refused before it is made when it does not fit }
+    if Grow then
+      if HeapReserve(StringBytes(Length(U))) then
+      begin
+        Res := StrFromUnicode(U);
+        Result := True;
+      end
+      else
+      begin
+        U := '';
+        Charge.Clear;
+        ThrowMemoryLimit;
+      end;
+  end;
+  Charge.Clear;
 end;
 
 function StrProto_ReplaceOne(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2709,6 +2766,7 @@ function NewSymbol(const Desc: UnicodeString): TValue;
 var C: PByte;
 begin
   C := GetMem(24);
+  HeapNativeCharge(24 + NATIVE_BLOCK_OVERHEAD, True);
   PCell(C)^.Size := 24;
   PCell(C)^.Kind := ckSymbol;
   PCell(C)^.Flags := cfPermanent or cfOld;
@@ -2740,6 +2798,9 @@ begin
     Res := NewSymbol('');
     PCell(PtrOf(Res))^.Extra := 1;   { [[Description]] undefined }
   end;
+  { a symbol lives as long as the engine: the collection its charge asked for runs here (Res is a permanent cell,
+    which no collection moves) }
+  HeapChargeCheck;
   Result := True;
 end;
 
