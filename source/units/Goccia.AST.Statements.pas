@@ -260,6 +260,8 @@ type
     FFinallyBlock: TGocciaBlockStatement;
     FCatchParamType: string;
     FCatchParamTypeRanges: TGocciaTypeRangeArray;
+    FCatchParamLine: Integer;
+    FCatchParamColumn: Integer;
     FCatchPattern: TGocciaMatchPattern;
     FCatchBindingPattern: TGocciaDestructuringPattern;
   public
@@ -275,6 +277,9 @@ type
     property CatchParamType: string read FCatchParamType write FCatchParamType;
     property CatchParamTypeRanges: TGocciaTypeRangeArray
       read FCatchParamTypeRanges write FCatchParamTypeRanges;
+    // Where a simple catch parameter's name is (0 when there is none)
+    property CatchParamLine: Integer read FCatchParamLine write FCatchParamLine;
+    property CatchParamColumn: Integer read FCatchParamColumn write FCatchParamColumn;
     property CatchPattern: TGocciaMatchPattern read FCatchPattern;
     property CatchBindingPattern: TGocciaDestructuringPattern read FCatchBindingPattern;
   end;

@@ -8726,7 +8726,8 @@ function TGocciaParser.TryStatement: TGocciaStatement;
 var
   Block, CatchBlock, FinallyBlock: TGocciaBlockStatement;
   CatchParam: string;
-  Line, Column: Integer;
+  Line, Column, CatchLine, CatchColumn: Integer;
+  ParamToken: TGocciaToken;
   TryStmt: TGocciaTryStatement;
   CatchType: string;
   CatchTypeRanges: TGocciaTypeRangeArray;
@@ -8740,6 +8741,8 @@ begin
     SSuggestOpenBraceTryBlock);
   Block := BlockStatement;
   CatchParam := '';
+  CatchLine := 0;
+  CatchColumn := 0;
   CatchBlock := nil;
   FinallyBlock := nil;
   CatchType := '';
@@ -8756,8 +8759,11 @@ begin
         CatchBindingPattern := ParsePattern
       else
       begin
-        CatchParam := ConsumeVarBindingName('Expected catch parameter',
-          SSuggestProvideCatchParameter).Lexeme;
+        ParamToken := ConsumeVarBindingName('Expected catch parameter',
+          SSuggestProvideCatchParameter);
+        CatchParam := ParamToken.Lexeme;
+        CatchLine := ParamToken.Line;
+        CatchColumn := ParamToken.Column;
         if Check(gttColon) then
         begin
           Advance;
@@ -8797,6 +8803,8 @@ begin
     FinallyBlock, SourceSpanAtPosition(Line, Column), CatchPattern, CatchBindingPattern);
   TryStmt.CatchParamType := CatchType;
   TryStmt.CatchParamTypeRanges := CatchTypeRanges;
+  TryStmt.CatchParamLine := CatchLine;
+  TryStmt.CatchParamColumn := CatchColumn;
   Result := TryStmt;
 end;
 

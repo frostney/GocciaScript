@@ -103,4 +103,18 @@ describe("var redeclaring a catch parameter under strict types", () => {
     };
     expect(store()).toBe(2);
   });
+
+  test("a catch parameter with an unenforced annotation takes a same-named var's type, as a parameter does", () => {
+    const store = (next) => {
+      try {
+        throw 1;
+      } catch (x: unknown) {
+        var x: number = 2;
+        x = next;
+        return x;
+      }
+    };
+    expect(store(3)).toBe(3);
+    expect(() => store("text")).toThrow(TypeError);
+  });
 });

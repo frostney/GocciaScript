@@ -5660,7 +5660,7 @@ end;
 
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
 var Outer, Inner, ExcReg, JEnd, JEnd2, R, J, K: Integer; HasFinally: Boolean; MissL: TJumpList; PN: TStringList;
-  CatchType: Byte;
+  CatchType: Byte; SavedLine, SavedCol: Integer;
 begin
   HasFinally := Assigned(S.FinallyBlock);
   ExcReg := AllocReg;   { kept for the whole statement }
@@ -5706,7 +5706,20 @@ begin
         { strict-types: the parameter's own annotation, or else the type of a same-named var in the block; the
           caught value is checked as it is bound, and so is every later store }
         CatchType := StrictTypeCode(S.CatchParamType, nil);
-        if CatchType <> 0 then Emit(Ins(opCheckType, ExcReg, 0, CatchType))
+        if CatchType <> 0 then
+        begin
+          { a failed check is located at the parameter }
+          SavedLine := FS.CurLine;
+          SavedCol := FS.CurCol;
+          if S.CatchParamLine > 0 then
+          begin
+            FS.CurLine := S.CatchParamLine;
+            FS.CurCol := S.CatchParamColumn;
+          end;
+          Emit(Ins(opCheckType, ExcReg, 0, CatchType));
+          FS.CurLine := SavedLine;
+          FS.CurCol := SavedCol;
+        end
         else if CatchVarTypes <> nil then CatchVarTypes.TryGetValue(S, CatchType);
         if CatchType <> 0 then SetBindingType(S.CatchParam, CatchType);
       end;
