@@ -1088,9 +1088,12 @@ begin
   Result := False;
   LimitsArm(FTimeoutMs, FMaxInstructions, False, FInstructionBudget);
   Result := False;
+  { a bytecode module the globals module imports (a provided module's answer) is checked as a run's imports are }
+  SetArtifactCheck(CheckArtifact);
   try
     Result := Goccia.HostAPI.InjectModuleGlobals(Path, Err);
   finally
+    SetArtifactCheck(nil);
     case LimitAbortKind of
       1: FSetupAborted := gaTimeout;
       2: FSetupAborted := gaInstructionLimit;
@@ -1107,7 +1110,14 @@ end;
 function TGocciaEngine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   TakeHostError;
-  Result := HostReady(Err) and Goccia.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
+  if not HostReady(Err) then Exit(False);
+  { as InjectModuleGlobals: the manifest module's bytecode imports are checked against the engine's settings }
+  SetArtifactCheck(CheckArtifact);
+  try
+    Result := Goccia.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
+  finally
+    SetArtifactCheck(nil);
+  end;
 end;
 
 function TGocciaEngine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;

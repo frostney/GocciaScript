@@ -322,6 +322,9 @@ An engine without a module content provider (`TGocciaEngine.Bare`, which
 `import()` rejects with it and source can catch it, and a static import — which
 no `try`/`catch` in the importing module can wrap — fails the run with the same
 error value.
+Modules the embedder registers on the engine, [native](embedding.md#native-modules)
+or [provided](embedding.md#provided-modules), are not retrieved through it and
+still load.
 
 Loading a module is resolution followed by retrieval, and only retrieval reaches
 the provider. A specifier the resolver rejects fails first, and that is a

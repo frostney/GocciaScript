@@ -13,13 +13,14 @@ uses
   Goccia.Core,
   Goccia.Embed,
   Goccia.HostAPI,
+  Goccia.Instructions,
   Goccia.Modules,
   Goccia.VM;
 
 type
   TProvider = class
   public
-    Calls, NeverCalls, FailCalls: Integer;
+    Calls, NeverCalls, FailCalls, CycleCalls: Integer;
     Source: UnicodeString;
     Bytecode: TBytes;
     function Provide(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
@@ -27,6 +28,7 @@ type
     function Fail(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function Silent(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
     function ProvideDamaged(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+    function Cyclic(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
   end;
 
 procedure Check(ACondition: Boolean; const AMessage: UnicodeString);
@@ -80,6 +82,24 @@ begin
   Result := True;
 end;
 
+{ loads a module that imports this same one while the provider runs: the first call sees that load refused and
+  fails with it; later calls answer }
+function TProvider.Cyclic(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
+var
+  Namespace: TValue;
+begin
+  Inc(CycleCalls);
+  if CycleCalls = 1 then
+  begin
+    if EvaluateModuleNamespace('host:cycle-dependency', Namespace) then
+      raise Exception.Create('a recursive load reached the module provider again');
+    Exit(False);
+  end;
+  AAnswer.Kind := mpaSource;
+  AAnswer.Source := 'export const answer = 42;';
+  Result := True;
+end;
+
 function TProvider.Silent(const ASpecifier: UnicodeString; var AAnswer: TGocciaModuleProviderAnswer): Boolean;
 begin
   Result := False;
@@ -114,7 +134,12 @@ var
   Provider: TProvider;
   ErrorText: UnicodeString;
   RunResult: TGocciaRunResult;
-  OtherBytecode: TBytes;
+  OtherBytecode, Saved: TBytes;
+  I: Integer;
+  RecordPath: UnicodeString;
+  Tpl: PFuncTemplate;
+  Hash: QWord;
+  Hashed: Boolean;
 begin
   Provider := TProvider.Create;
   Provider.Source := 'import { twice } from "host:bytecode"; export const answer = twice(21);';
@@ -178,6 +203,47 @@ begin
       'await import("host:silent").then(() => "loaded", e => e instanceof TypeError && e.message);');
     Check(RunResult.Ok and (Pos('The module provider for host:silent failed without an error', RunResult.ResultText) > 0),
       'a silent failure was not reported: ' + RunResult.ResultText + RunResult.ErrorMessage);
+
+    // the bytecode record's hash is its file's (a heap snapshot's restore compares it with the code it reloads)
+    I := 0;
+    Hashed := False;
+    while ModuleTemplateAt(I, RecordPath, Tpl, Hash) do
+    begin
+      if RecordPath = 'host:bytecode' then Hashed := Hash <> 0;
+      Inc(I);
+    end;
+    Check(Hashed, 'the bytecode record has no hash of its file');
+
+    // a load that reaches the provider's module while the provider runs is refused; a later import loads it once
+    Check(Engine.DefineModuleProvider('host:cycle', Provider.Cyclic, ErrorText), ErrorText);
+    Check(Engine.DefineInlineVirtualModule(
+      'host:cycle-dependency=import { answer } from "host:cycle"; export const value = answer;', '', ErrorText),
+      ErrorText);
+    RunResult := Engine.Run('/cycle.mjs',
+      'await import("host:cycle").then(() => "loaded", e => e instanceof TypeError && e.message);');
+    Check(RunResult.Ok and (Pos('host:cycle is still being supplied', RunResult.ResultText) > 0) and
+      (Provider.CycleCalls = 1), 'a recursive load was not refused: ' + RunResult.ResultText + RunResult.ErrorMessage);
+    RunResult := Engine.Run('/cycle-retry.mjs',
+      'import * as first from "host:cycle"; const second = await import("host:cycle"); (first === second) + ":" + first.answer;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'true:42') and (Provider.CycleCalls = 2),
+      'a retried provider did not publish one module: ' + RunResult.ResultText + RunResult.ErrorMessage);
+
+    // with module sources on, a provided module still has no source phase, even when the same entry evaluates it
+    Engine.JSModuleSources := True;
+    RunResult := Engine.Run('/mixed.mjs',
+      'import source original from "host:never"; import { unused } from "host:never"; unused;');
+    Check(not RunResult.Ok and (RunResult.ErrorName = 'SyntaxError'),
+      'a provided module had a source phase: ' + RunResult.ErrorName + ': ' + RunResult.ErrorText);
+    Engine.JSModuleSources := False;
+
+    // an answer past the bytecode file bound is refused before it is copied
+    Saved := Provider.Bytecode;
+    SetLength(Provider.Bytecode, 64 * 1024 * 1024 + 1);
+    Check(Engine.DefineModuleProvider('host:huge', Provider.ProvideDamaged, ErrorText), ErrorText);
+    RunResult := Engine.Run('/huge.mjs', 'await import("host:huge").then(() => "loaded", e => e.message);');
+    Check(RunResult.Ok and (Pos('Cannot load bytecode module ''host:huge''', RunResult.ResultText) > 0) and
+      (Pos('byte limit', RunResult.ResultText) > 0), 'an oversized answer was not refused: ' + RunResult.ResultText);
+    Provider.Bytecode := Saved;
 
     // a bytecode file compiled under another profile is refused before any of it runs, never compiled from source
     Provider.Bytecode := OtherBytecode;
@@ -247,6 +313,39 @@ begin
   end;
 end;
 
+{ a globals module the engine imports during setup, before any run, checks a provided bytecode file's profile too }
+procedure CheckSetupImport;
+var
+  Engine: TGocciaEngine;
+  Provider: TProvider;
+  ErrorText: UnicodeString;
+  RunResult: TGocciaRunResult;
+  Path: string;
+  Lines: TStringList;
+begin
+  Provider := TProvider.Create;
+  Provider.Bytecode := CompileModule('host:other', 'globalThis.otherRan = true; export const x = 1;', True);
+  Path := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0)))) + 'provider-setup-globals.mjs';
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Lines.Text := 'import { x } from "host:other"; export const fromSetup = x;';
+    Lines.SaveToFile(Path);
+    Engine.ResultForm := grfString;
+    Check(Engine.DefineModuleProvider('host:other', Provider.Provide, ErrorText), ErrorText);
+    Check(not Engine.InjectModuleGlobals(UnicodeString(Path), ErrorText) and
+      (Pos('Bytecode compile profile does not match the engine', ErrorText) > 0),
+      'a setup import took another profile''s bytecode: ' + ErrorText);
+    RunResult := Engine.Run('/after-setup.js', 'globalThis.otherRan === true;');
+    Check(RunResult.Ok and (RunResult.ResultText = 'false'), 'another profile''s bytecode ran during setup');
+  finally
+    Engine.Free;
+    Provider.Free;
+    Lines.Free;
+    DeleteFile(Path);
+  end;
+end;
+
 { a Bare engine (no host modules of its own) takes provided modules too }
 procedure CheckBare;
 var
@@ -275,6 +374,7 @@ end;
 begin
   CheckHeapCost;
   CheckBare;
+  CheckSetupImport;
   CheckProviders;
   WriteLn('Module providers: passed');
 end.

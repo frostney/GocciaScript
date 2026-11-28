@@ -63,6 +63,10 @@ type
     when the host has no such module (a file is then read as JavaScript), -1 with an error pending. A SourceOnly
     lookup asks for source text for a typed import and must not initialize a native factory or ask a provider. }
   THostModuleHook = function(const Key, FilePath: UnicodeString; SourceOnly: Boolean; var Exp: TValue): Integer;
+const
+  { THostModuleHook's answer of a bytecode file (SetHostModuleArtifact) }
+  HOST_MODULE_BYTECODE = 3;
+type
   THostModuleKeyHook = function(const Key: UnicodeString): Boolean;
 
   { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
@@ -400,6 +404,16 @@ begin
   {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
   Result := 14695981039346656037;
   for I := 1 to Length(S) do Result := (Result xor Ord(S[I])) * 1099511628211;
+  {$POP}
+end;
+
+{ SourceHashOf's FNV-1a over a bytecode file's bytes }
+function BytesHashOf(const B: RawByteString): QWord;
+var I: Integer;
+begin
+  {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+  Result := 14695981039346656037;
+  for I := 1 to Length(B) do Result := (Result xor Ord(B[I])) * 1099511628211;
   {$POP}
 end;
 
@@ -1108,7 +1122,8 @@ begin
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
   M.HasModified := False;
-  M.Hash := 0;
+  { the file's own bytes identify its code, as a source module's text does (a heap snapshot's restore compares them) }
+  M.Hash := BytesHashOf(B);
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   Err := '';
@@ -1260,7 +1275,7 @@ begin
       1: Exit(MakeHostModule(Address, V, M));
       2: Src := StrToUnicode(StrOf(V));
       { a bytecode file under the host's key: one record, checked against the run's profile like an imported .gbc }
-      3: Exit(LoadArtifactRecord(Address, Path, TakeHostModuleArtifact, M));
+      HOST_MODULE_BYTECODE: Exit(LoadArtifactRecord(Address, Path, TakeHostModuleArtifact, M));
       -1: Exit(False);
     end;
     if (I = 0) and Address.VirtualKey then Exit(ModuleReadFailed(Path));
@@ -2676,8 +2691,10 @@ end;
 
 function HasModuleSource(M: TModRec): Boolean;
 begin
-  { the host's source module, and with experimental JavaScript module sources every source text module }
-  Result := Assigned(M) and ((M.Address.Path = HostSourceSpecifier) or (JSModuleSourcesOn and (M.Tpl <> nil)));
+  { the host's source module, and with experimental JavaScript module sources every source text module except a host
+    module that has none (a native or provided module, even once an evaluation request loaded it) }
+  Result := Assigned(M) and ((M.Address.Path = HostSourceSpecifier) or
+    (JSModuleSourcesOn and (M.Tpl <> nil) and not NativeModuleHasNoSource(M.Address)));
 end;
 
 procedure SetJSModuleSources(On: Boolean);

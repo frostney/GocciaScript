@@ -210,7 +210,7 @@ function CurrentResolver: TModuleResolver;
 implementation
 
 uses
-  Math, MemoryDetection, Generics.Collections, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
+  Math, MemoryDetection, Generics.Collections, Goccia.Artifact, Goccia.Builtins, Goccia.Instructions, Goccia.VM, Goccia.Typed, Goccia.Modules, Goccia.Snapshot, Goccia.Promise, Goccia.Atomics, Goccia.Eval, Goccia.Weak, Goccia.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, TextEncoding, Goccia.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -738,20 +738,43 @@ begin
   begin
     { a typed or source lookup does not ask the provider (NativeModuleWithoutSource) }
     if SourceOnly then Exit(0);
-    Answer := Default(TModuleProviderAnswer);
-    if not Provider(Key, Answer) then
+    { a load that reaches the same module in the same realm while its provider runs is refused, as a native
+      factory's is: the record is published only after the answer }
+    Marker := IntToStr(CurRealm) + #0 + Key;
+    if ActiveNativeFactories = nil then ActiveNativeFactories := TList<UnicodeString>.Create;
+    if ActiveNativeFactories.IndexOf(Marker) >= 0 then
     begin
-      if Pending = VUndefined then
-        ThrowTypeError('The module provider for ' + Key + ' failed without an error');
+      ThrowTypeError('The provided module ' + Key + ' is still being supplied');
       Exit(-1);
+    end;
+    ActiveNativeFactories.Add(Marker);
+    try
+      Answer := Default(TModuleProviderAnswer);
+      if not Provider(Key, Answer) then
+      begin
+        if Pending = VUndefined then
+          ThrowTypeError('The module provider for ' + Key + ' failed without an error');
+        Exit(-1);
+      end;
+    finally
+      I := ActiveNativeFactories.IndexOf(Marker);
+      if I >= 0 then ActiveNativeFactories.Delete(I);
     end;
     if Answer.Kind = mpaBytecode then
     begin
+      { the verifier's bound, before the bytes are copied for it }
+      if Length(Answer.Bytecode) > GOCCIA_GBC_MAX_FILE_BYTES then
+      begin
+        ThrowError('Error', 'Cannot load bytecode module ''' + Key + ''': ' +
+          UnicodeString(Format('bytecode file exceeds the %d byte limit', [GOCCIA_GBC_MAX_FILE_BYTES])));
+        Exit(-1);
+      end;
       SetLength(Bytes, Length(Answer.Bytecode));
       if Length(Bytes) > 0 then Move(Answer.Bytecode[0], Bytes[1], Length(Bytes));
+      Answer.Bytecode := nil;
       SetHostModuleArtifact(Bytes);
       Exp := VUndefined;
-      Exit(3);
+      Exit(HOST_MODULE_BYTECODE);
     end;
     Exp := StrFromUnicode(Answer.Source);
     Exit(2);
