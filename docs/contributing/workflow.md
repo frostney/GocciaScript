@@ -121,13 +121,14 @@ catches these.
 Dispatch it once, on the head that will merge: after the review rounds' fixes
 are pushed. Its macOS jobs wait for runners the whole account shares, five at
 a time, and a run on an earlier head has to be repeated once review fixes
-land. A stacked branch runs it after its last review round and before it is
-marked ready. When the run fails, fix the failure and dispatch again for the
-new head. Fix it on the branch itself only while neither that branch nor any
-stack layer above it is frozen; otherwise the fix goes in the stack's top fix
-layer, an unfrozen one or a new one, which is dispatched on its own head and
-merged with the stack, as the
+land. On a stack, the run is part of each layer's required CI: dispatch every
+layer at once when the stack is pushed after its last review round, before any
+is marked ready, so no layer freezes before its own run passes. When a run
+fails, fix the failure on that branch and dispatch again for the new head. A
+frozen layer above it cannot take the changed base, so the stack is then
+blocked rather than routed to a fix layer, whose run would leave the failed
+layer's own run failed; the
 [stack reference](https://github.com/frostney/known-good-route/blob/main/address-feedback/references/stack.md)
-describes. A dispatched run's checks do not appear on the pull request, and it
-belongs to the commit it started from, so check the run for the branch's
-current head SHA rather than the newest run.
+owns what happens next. A dispatched run's checks do not appear on the pull
+request, and it belongs to the commit it started from, so check the run for
+the branch's current head SHA rather than the newest run.
