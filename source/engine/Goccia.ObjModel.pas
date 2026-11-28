@@ -1159,6 +1159,9 @@ begin
     Exit;
   end;
   if not IsCallable(D.Set_) then begin PopRoots(3); Exit(True); end;
+  { strict-types: the setter of a typed var's accessor on a global object takes only a value of the var's type,
+    whatever the receiver (a proxy forwarding to the global object, an object inheriting from it) }
+  if not GlobalTypeOK(ObjOf(RootAt(TempTop - 3)), Key, RootAt(TempTop - 2)) then begin PopRoots(3); Exit(False); end;
   V := RootAt(TempTop - 2);
   Result := CallValue(D.Set_, RootAt(TempTop - 1), @V, 1, R);
   Ok := Result;

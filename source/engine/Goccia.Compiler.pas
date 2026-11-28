@@ -5079,6 +5079,10 @@ begin
       if not V.HasInitializer then Continue;
       T := AllocReg;
       CompileFieldValue(V.Initializer, T, V.Name);
+      { strict-types: the value is checked against the declaration's own type first; the global property's type
+        (the first declaration's) is checked by the store }
+      Own := StrictTypeCode(V.TypeAnnotation, V.Initializer);
+      if Own <> 0 then Emit(Ins(opCheckType, T, 0, Own));
       StoreIdent(V.Name, T, True);
       FreeTo(T);
       Continue;

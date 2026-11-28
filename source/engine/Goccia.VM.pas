@@ -3880,6 +3880,8 @@ begin
         begin
           Acc := PAccessor(PtrOf(GetSlot(W, S)));
           if Acc^.Setter = VUndefined then begin Ok := False; Exit(True); end;
+          { strict-types: a typed var's accessor on a global object the receiver inherits from }
+          if (GTypeCount <> 0) and not GlobalTypeOK(W, Key, V) then Exit(False);
           Exit(CallValue(Acc^.Setter, Obj, @V, 1, Dummy));
         end;
         { an inherited read-only data property: the assignment fails (10.1.9.2 step 2.a) }

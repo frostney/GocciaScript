@@ -15,10 +15,23 @@ try {
   lateError = error;
 }
 
+var redeclared: number = 1;
+let redeclaredError;
+try {
+  var redeclared: string = 2;
+} catch (error) {
+  redeclaredError = error;
+}
+
 describe("top-level var under strict types", () => {
   test("a rejected initializer throws and leaves the var undefined", () => {
     expect(lateError).toBeInstanceOf(TypeError);
     expect(late).toBe(undefined);
+  });
+
+  test("a redeclaration's initializer is checked against its own annotation too", () => {
+    expect(redeclaredError).toBeInstanceOf(TypeError);
+    expect(redeclared).toBe(1);
   });
 
   test("an assignment of the annotated type is stored", () => {
@@ -52,6 +65,7 @@ describe("top-level var under strict types", () => {
     expect(() => Reflect.set(globalThis, "count", "text")).toThrow(TypeError);
     expect(() => Object.defineProperty(globalThis, "count", { value: "text" })).toThrow(TypeError);
     expect(() => Object.assign(globalThis, { count: "text" })).toThrow(TypeError);
+    expect(() => { new Proxy(globalThis, {}).count = "text"; }).toThrow(TypeError);
     expect(count).toBe(5);
     expect(Reflect.set(globalThis, "count", 6)).toBe(true);
     expect(count).toBe(6);

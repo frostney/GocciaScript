@@ -507,6 +507,8 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
         'var viaSetter: number = 2;',
         'try { viaSetter = "x"; } catch (e) { console.log("setter:" + e.name); }',
         'try { Reflect.set(globalThis, "viaSetter", "x"); } catch (e) { console.log("reflect-setter:" + e.name + held); }',
+        'try { new Proxy(globalThis, {}).viaSetter = "x"; } catch (e) { console.log("proxy-setter:" + e.name + held); }',
+        'try { Object.create(globalThis).viaSetter = "x"; } catch (e) { console.log("inherited-setter:" + e.name + held); }',
         "",
       ].join("\n"),
     ),
@@ -514,7 +516,17 @@ console.log("REPL strict-types checks writes to typed top-level bindings from la
     stderr: "pipe",
   });
   const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
-  for (const expected of ["let:TypeError", "var:TypeError", "prop:TypeError", "loose:free", "kept:b2", "setter:TypeError", "reflect-setter:TypeError2"])
+  for (const expected of [
+    "let:TypeError",
+    "var:TypeError",
+    "prop:TypeError",
+    "loose:free",
+    "kept:b2",
+    "setter:TypeError",
+    "reflect-setter:TypeError2",
+    "proxy-setter:TypeError2",
+    "inherited-setter:TypeError2",
+  ])
     if (!output.includes(expected))
       throw new Error(`REPL strict-types across inputs expected ${expected}, got: ${output}`);
   // a later var of the name keeps the first type (its initializer is checked against it), and a function
