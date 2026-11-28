@@ -134,33 +134,103 @@ begin
   end;
 end;
 
-{ A load failure the script caught does not locate a later error: the run's own throw is reported where it is. An
-  uncaught one still names the declaration that did not load. }
-procedure CheckCaughtLoadFailure(const AEntry, AFailurePath: UnicodeString);
+type
+  { a native module whose factory fails with a primitive: its error cannot carry a record }
+  TPrimitiveFailure = class
+    function Make(var ExportList: TValue): Boolean;
+  end;
+
+function TPrimitiveFailure.Make(var ExportList: TValue): Boolean;
+begin
+  Pending := MkInt(17);
+  Result := False;
+end;
+
+procedure CheckRun(AEngine: TGocciaEngine; const AMode, AEntry, ASource, AName, APath: UnicodeString;
+  ALine, AColumn: Integer);
+var RunResult: TGocciaRunResult;
+begin
+  RunResult := AEngine.Run(AEntry, ASource);
+  Check(not RunResult.Ok and (RunResult.ErrorName = AName), AMode + ': read ' + RunResult.ErrorName + ': ' +
+    RunResult.ErrorText);
+  Check((RunResult.ErrorFile = APath) and (RunResult.ErrorLine = ALine) and (RunResult.ErrorColumn = AColumn),
+    AMode + ': located at ' + RunResult.ErrorFile + ':' + IntToStr(RunResult.ErrorLine) + ':' +
+    IntToStr(RunResult.ErrorColumn));
+end;
+
+{ A module load failure is reported at its declaration only when the run fails with that failure's own error: a
+  failure the script caught locates no later error, a later failure is reported as itself, and a failure whose error
+  is a primitive carries no record. }
+procedure CheckCaughtLoadFailure(const ADirectory: UnicodeString);
 var
   Engine: TGocciaEngine;
   RunResult: TGocciaRunResult;
+  Factory: TPrimitiveFailure;
+  Failure, Entry, Err: UnicodeString;
+  Files: TStringList;
 begin
+  Failure := ADirectory + 'load-failure.mjs';
+  Entry := ADirectory + 'caught.mjs';
+  Files := TStringList.Create;
+  try
+    Files.Text := 'export const = ;';
+    Files.SaveToFile(ADirectory + 'malformed.mjs');
+    Files.Text := 'import "test:primitive";';
+    Files.SaveToFile(ADirectory + 'primitive-wrapper.mjs');
+  finally
+    Files.Free;
+  end;
   Engine := TGocciaEngine.Create;
   try
-    RunResult := Engine.Run(AEntry,
-      'await import("./load-failure.mjs").catch(() => {});'#10 + 'throw new Error("x");');
-    Check(not RunResult.Ok and (RunResult.ErrorName = 'Error') and (RunResult.ErrorText = 'x'),
-      'caught load failure: the later error read ' + RunResult.ErrorName + ': ' + RunResult.ErrorText);
-    Check((RunResult.ErrorFile = AEntry) and (RunResult.ErrorLine = 2) and (RunResult.ErrorColumn = 7),
-      'caught load failure: the later error was located at ' + RunResult.ErrorFile + ':' +
-      IntToStr(RunResult.ErrorLine) + ':' + IntToStr(RunResult.ErrorColumn));
+    CheckRun(Engine, 'a throw after a caught load failure', Entry,
+      'await import("./load-failure.mjs").catch(() => {});'#10 + 'throw new Error("x");', 'Error', Entry, 2, 7);
   finally
     Engine.Free;
   end;
   Engine := TGocciaEngine.Create;
   try
-    RunResult := Engine.Run(AEntry, 'await import("./load-failure.mjs");');
-    Check(not RunResult.Ok and (RunResult.ErrorFile = AFailurePath) and (RunResult.ErrorLine = 1) and
-      (RunResult.ErrorColumn = 1), 'uncaught load failure: located at ' + RunResult.ErrorFile + ':' +
-      IntToStr(RunResult.ErrorLine) + ':' + IntToStr(RunResult.ErrorColumn) + ' (' + RunResult.ErrorName + ')');
+    CheckRun(Engine, 'an uncaught load failure', Entry, 'await import("./load-failure.mjs");', 'RuntimeError',
+      Failure, 1, 1);
   finally
     Engine.Free;
+  end;
+  Engine := TGocciaEngine.Create;
+  try
+    CheckRun(Engine, 'an uncaught retry of a caught load failure', Entry,
+      'await import("./load-failure.mjs").catch(() => {});'#10 + 'await import("./load-failure.mjs");',
+      'RuntimeError', Failure, 1, 1);
+  finally
+    Engine.Free;
+  end;
+  Engine := TGocciaEngine.Create;
+  try
+    CheckRun(Engine, 'a load failure after a caught parse failure', Entry,
+      'await import("./malformed.mjs").catch(() => {});'#10 + 'await import("./load-failure.mjs");',
+      'RuntimeError', Failure, 1, 1);
+  finally
+    Engine.Free;
+  end;
+  Factory := TPrimitiveFailure.Create;
+  Engine := TGocciaEngine.Create;
+  try
+    Err := '';
+    Check(Engine.DefineNativeModule('test:primitive', Factory.Make, Err), 'could not define the module: ' + Err);
+    CheckRun(Engine, 'a throw after a caught primitive load failure', Entry,
+      'await import("./primitive-wrapper.mjs").catch(() => {});'#10 + 'throw new Error("x");', 'Error', Entry, 2, 7);
+  finally
+    Engine.Free;
+  end;
+  { an engine of its own: a failed run records its error in the module evaluations it started }
+  Engine := TGocciaEngine.Create;
+  try
+    Err := '';
+    Check(Engine.DefineNativeModule('test:primitive', Factory.Make, Err), 'could not define the module: ' + Err);
+    RunResult := Engine.Run(Entry, 'await import("./primitive-wrapper.mjs");');
+    Check(not RunResult.Ok and (RunResult.ErrorMessage = '17'),
+      'an uncaught primitive load failure read ' + RunResult.ErrorName + ' ' + RunResult.ErrorMessage);
+  finally
+    Engine.Free;
+    Factory.Free;
   end;
 end;
 
@@ -315,7 +385,7 @@ begin
   CheckCase(Directory + 'script.jsx', 'const x = <x/>; ' + MissingImport, 1, 17, gskScript);
   CheckDynamic(Directory + 'dynamic-entry.mjs', Directory + 'dynamic.mjs');
   CheckLinkFailurePrecedence(Directory + 'precedence.mjs', Directory + 'dynamic.mjs');
-  CheckCaughtLoadFailure(Directory + 'caught.mjs', Directory + 'load-failure.mjs');
+  CheckCaughtLoadFailure(Directory);
   CheckSnapshot(Directory + 'snapshot.mjs', Directory + 'dynamic.mjs');
   CheckCompanionIsolation(Directory + 'collides.mjs', Directory + 'collides.mjs#script-imports');
   CheckDuplicateScriptBinding(Directory + 'repeated.mjs');

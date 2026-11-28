@@ -112,17 +112,21 @@ procedure SetEntryModuleMark(Mark: Integer);
 { the provided entry's completion value (a host's --print): Wanted compiles it to keep the value, which
   EntryCompletion returns once it ran (undefined before) }
 procedure SetEntryCompletionWanted(Wanted: Boolean);
-{ the import declaration a static import failed to load at (the innermost importer's), for a host's diagnostic;
-  False when no import failed since ClearLoadFailure }
-procedure ClearLoadFailure;
-function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
-{ whether V is the error the recorded load failure (LoadFailure) failed with: a run's uncaught value is located at
-  that failure only when it is, so a load failure the script caught (a dynamic import's) does not locate another }
-function LoadFailureIs(V: TValue): Boolean;
-{ the first imported module of the run that did not parse: its path, the error's name, line, column and suggestion;
-  False when none failed (the host reports it where it is, as GocciaRunner does) }
-function ModuleParseFailure(out Path, Name: UnicodeString; out Line, Column: Integer;
-  out Suggestion: UnicodeString): Boolean;
+type
+  { what a module load failure's error records about it (DescribeLoadFailure) }
+  TModuleLoadFailure = record
+    Parse: Boolean;          { an imported module that did not parse: Name, Path, Line, Column and Suggestion are its }
+    Path: UnicodeString;     { otherwise the import declaration that did not load (the innermost importer's) }
+    Line, Column: Integer;
+    Name, Suggestion: UnicodeString;
+    Resolved: UnicodeString; { the path a missing module resolved to, '' when none }
+  end;
+{ what the module loader recorded on V, the error a module load failed with, for a host's diagnostic: False for any
+  other value. The record goes with the error, so a failure the script caught locates nothing else. }
+function DescribeLoadFailure(V: TValue; out Failure: TModuleLoadFailure): Boolean;
+var
+  { the host's resolution candidate (Goccia.HostAPI's TakeResolveCandidate), taken when a load failure is recorded }
+  TakeLoadFailureResolved: function: UnicodeString = nil;
 { the static import whose specifier the host is resolving now (while a module links): the importing module's path
   and the declaration's line and column; False otherwise }
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -265,6 +269,8 @@ threadvar
   JSModSources: TValue;
   JSModSourceProto: TValue;
   JSModSourceKey: PStr;
+  { the internal key a module load failure's record is kept under on its error (RecordLoadFailure) }
+  LoadFailureKey: PStr;
   JSModuleSourcesOn: Boolean;
   { the evaluation promise of the entry RunModuleFile ran last }
   EntryEvalPromise: TValue;
@@ -576,13 +582,6 @@ end;
 
 threadvar
   ProvidedPath, ProvidedSrc: UnicodeString;
-  LoadFailPath: UnicodeString;
-  { the error the recorded load failure failed with (rooted) }
-  LoadFailError: TValue;
-  { the first imported module that did not parse (ModuleParseFailure) }
-  ParseFailPath, ParseFailName, ParseFailSuggestion: UnicodeString;
-  ParseFailLine, ParseFailColumn: Integer;
-  LoadFailLine, LoadFailColumn: Integer;
   { ImportSiteNow }
   SitePath: UnicodeString;
   SiteLine, SiteColumn: Integer;
@@ -591,40 +590,60 @@ threadvar
   Completion: TValue;
   CompletionRootedGen: Integer;
 
-procedure ClearLoadFailure;
+const
+  { the fields of a load failure's record, in this order }
+  LOAD_FAILURE_FIELD = #1;
+
+{ V's own record of a load failure, '' when it has none }
+function LoadFailureRecord(V: TValue): UnicodeString;
+var R, Saved: TValue;
 begin
-  ParseFailPath := '';
-  LoadFailPath := '';
-  LoadFailError := VUndefined;
-  LoadFailLine := 0;
-  LoadFailColumn := 0;
+  Result := '';
+  { an internal key, which a script cannot define or reach: only a record the loader made is found, and nothing of
+    the script's runs (no proxy is asked) }
+  if (LoadFailureKey = nil) or not IsObject(V) or (ObjOf(V)^.OKind in [okProxy, okModuleNS]) then Exit;
+  { the lookup allocates nothing; a failed one leaves the error pending as it was (it may be the very error being
+    recorded) }
+  Saved := Pending;
+  if not GetV(V, LoadFailureKey, R) then
+  begin
+    Pending := Saved;
+    Exit;
+  end;
+  if IsString(R) then Result := StrToUnicode(StrOf(R));
 end;
 
-function ModuleParseFailure(out Path, Name: UnicodeString; out Line, Column: Integer;
-  out Suggestion: UnicodeString): Boolean;
+{ records a load failure on the pending error, when it is an object without one: the innermost failure's stays }
+procedure RecordLoadFailure(Parse: Boolean; const Path: UnicodeString; Line, Column: Integer;
+  const Name, Suggestion: UnicodeString);
+var Resolved, Text: UnicodeString;
 begin
-  Path := ParseFailPath;
-  Name := ParseFailName;
-  Line := ParseFailLine;
-  Column := ParseFailColumn;
-  Suggestion := ParseFailSuggestion;
-  Result := Path <> '';
+  if (LoadFailureKey = nil) or not IsObject(Pending) or (LoadFailureRecord(Pending) <> '') then Exit;
+  Resolved := '';
+  if not Parse and Assigned(TakeLoadFailureResolved) then Resolved := TakeLoadFailureResolved();
+  Text := BoolToStr(Parse, '1', '0') + LOAD_FAILURE_FIELD + Path + LOAD_FAILURE_FIELD + IntToStr(Line) +
+    LOAD_FAILURE_FIELD + IntToStr(Column) + LOAD_FAILURE_FIELD + Name + LOAD_FAILURE_FIELD + Suggestion +
+    LOAD_FAILURE_FIELD + Resolved;
+  { the text allocated and rooted first: Pending is read after it, so a moving collection cannot leave it stale }
+  PushRoot(StrFromUnicode(Text));
+  DefineOwn(Pending, LoadFailureKey, RootAt(TempTop - 1), pfHidden);
+  PopRoots(1);
 end;
 
-function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+function DescribeLoadFailure(V: TValue; out Failure: TModuleLoadFailure): Boolean;
+var Fields: TUnicodeStringArray;
 begin
-  Path := LoadFailPath;
-  Line := LoadFailLine;
-  Column := LoadFailColumn;
-  Result := Path <> '';
-end;
-
-function LoadFailureIs(V: TValue): Boolean;
-begin
-  if LoadFailPath = '' then Exit(False);
-  { a failure recorded without an error object (none pending) locates as before }
-  if not IsObject(LoadFailError) then Exit(True);
-  Result := IsObject(V) and (ObjOf(V) = ObjOf(LoadFailError));
+  Failure := Default(TModuleLoadFailure);
+  Fields := LoadFailureRecord(V).Split([LOAD_FAILURE_FIELD]);
+  Result := Length(Fields) = 7;
+  if not Result then Exit;
+  Failure.Parse := Fields[0] = '1';
+  Failure.Path := UnicodeString(Fields[1]);
+  Failure.Line := StrToIntDef(Fields[2], 0);
+  Failure.Column := StrToIntDef(Fields[3], 0);
+  Failure.Name := UnicodeString(Fields[4]);
+  Failure.Suggestion := UnicodeString(Fields[5]);
+  Failure.Resolved := UnicodeString(Fields[6]);
 end;
 
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -1022,13 +1041,8 @@ begin
     end;
     if not LoadModule(Resolved, D) then
     begin
-      if (LoadFailPath = '') and (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
-      begin
-        LoadFailPath := Path;
-        LoadFailLine := M.Info.RequestLines[I];
-        LoadFailColumn := M.Info.RequestColumns[I];
-        LoadFailError := Pending;
-      end;
+      if (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
+        RecordLoadFailure(False, Path, M.Info.RequestLines[I], M.Info.RequestColumns[I], '', '');
       M.RequestsState := 0;
       Exit(False);
     end;
@@ -1227,15 +1241,9 @@ begin
   if not Compiled then
   begin
     M.Errored := True;
-    if (ParseFailPath = '') and (ParseErrorLine > 0) then
-    begin
-      ParseFailPath := DiagnosticSource(M);
-      ParseFailName := ErrName;
-      ParseFailLine := ParseErrorLine;
-      ParseFailColumn := ParseErrorColumn;
-      ParseFailSuggestion := ParseErrorSuggestion;
-    end;
     ThrowError(ErrName, Err);
+    if ParseErrorLine > 0 then
+      RecordLoadFailure(True, DiagnosticSource(M), ParseErrorLine, ParseErrorColumn, ErrName, ParseErrorSuggestion);
     SetRoot(M, rError, Pending);
     Exit(False);
   end;
@@ -2646,6 +2654,7 @@ begin
   AddRoot(@AMSCtor); AddRoot(@HostModSource); AddRoot(@JSModSourceProto);
   RealmVals([@AMSCtor, @HostModSource, @JSModSourceProto]);
   JSModSourceKey := NewKeyAtom('%moduleSource', kfInternal);
+  LoadFailureKey := NewKeyAtom('%loadFailure', kfInternal);
   { the module map and the pending dynamic imports belong to the agent's first realm }
   if RealmInit then Exit;
   Mods := TList<TModRec>.Create;
@@ -2654,8 +2663,6 @@ begin
   EntryEvalPromise := VUndefined;
   AddRoot(@ResolveErrorV);
   ResolveErrorV := VUndefined;
-  AddRoot(@LoadFailError);
-  LoadFailError := VUndefined;
   AddRoot(@JSModSources);
   JSModSources := MkPtr(NewArray(0, 0));
   AddRoot(@PendingImports);
@@ -2675,10 +2682,6 @@ begin
   ImportStacks := nil;
   ProvidedPath := '';
   ProvidedSrc := '';
-  LoadFailPath := '';
-  ParseFailPath := '';
-  ParseFailName := '';
-  ParseFailSuggestion := '';
   SitePath := '';
   ProvidedArtifactPath := '';
   ProvidedArtifactRealPath := '';
