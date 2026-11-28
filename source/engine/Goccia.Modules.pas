@@ -101,6 +101,9 @@ function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTempl
   pending }
 function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 function ModuleCount: Integer;
+{ the records made since Mark that did not finish evaluating, superseded: the next request for one loads it again
+  (a load an abort cut short, which is not the module's own failure) }
+procedure SupersedeFailedModulesFrom(Mark: Integer);
 { the file eligible for a code frame at Path, if a guest module loaded after Mark records came from it }
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
 { the entry's first module record (ModuleCount when the run starts): the records before it are the host's, and a
@@ -2526,6 +2529,59 @@ end;
 function ModuleCount: Integer;
 begin
   if Mods = nil then Result := 0 else Result := Mods.Count;
+end;
+
+procedure SupersedeFailedModulesFrom(Mark: Integer);
+var I: Integer; M, D: TModRec; Changed: Boolean; Fresh: TList<TModRec>; WasSuperseded: array of Boolean;
+begin
+  if Mods = nil then Exit;
+  if Mark < 0 then Mark := 0;
+  if Mark > Mods.Count then Mark := Mods.Count;
+  SetLength(WasSuperseded, Mods.Count - Mark);
+  for I := Mark to Mods.Count - 1 do WasSuperseded[I - Mark] := Mods[I].Superseded;
+  for I := Mark to Mods.Count - 1 do
+  begin
+    M := Mods[I];
+    { msLinked: linked but never started (an import.defer namespace nobody read), so it stays as a loaded one does }
+    if M.Errored or not (M.Status in [msNew, msLinked, msEvaluated]) or ((M.Status = msNew) and (M.RequestsState = 1))
+    then M.Superseded := True;
+  end;
+  { what this call superseded, and what follows from it until neither rule adds a record: a record only loaded (a
+    source phase import's) or linked and never started ran nothing, so it stays, and with it the identity of its
+    source, unless a record it links went; a cycle member that finished but waits on a cycle root that went (an async
+    cycle the abort left) goes too.
+    A root superseded before, by a file that changed (ADR 0139), keeps its members. }
+  Fresh := TList<TModRec>.Create;
+  try
+    for I := Mark to Mods.Count - 1 do
+      if Mods[I].Superseded and not WasSuperseded[I - Mark] then Fresh.Add(Mods[I]);
+    repeat
+      Changed := False;
+      for I := 0 to Mods.Count - 1 do
+      begin
+        M := Mods[I];
+        if M.Superseded then Continue;
+        if (M.CycleRoot <> nil) and Fresh.Contains(M.CycleRoot) then M.Superseded := True
+        else if M.Status in [msNew, msLinked] then
+          { a record this recovery superseded: one an ordinary reload superseded before (a changed file) is not the
+            abort's. An older record counts too: the cancelled run may have linked its requests anew (a source phase
+            import that failed earlier for a missing dependency) }
+          for D in M.Deps do
+            if (D <> nil) and Fresh.Contains(D) then
+            begin
+              M.Superseded := True;
+              Break;
+            end;
+        if M.Superseded then
+        begin
+          Fresh.Add(M);
+          Changed := True;
+        end;
+      end;
+    until not Changed;
+  finally
+    Fresh.Free;
+  end;
 end;
 
 function ModuleSourcePathSince(const Path: UnicodeString; Mark: Integer): UnicodeString;
