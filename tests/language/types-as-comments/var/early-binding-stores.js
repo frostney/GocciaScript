@@ -41,6 +41,16 @@ describe("stores compiled before a typed var declaration", () => {
     expect(run).toThrow(TypeError);
   });
 
+  test("a store before an unannotated var uses the type its initializer implies", () => {
+    const run = (initial) => {
+      value = initial;
+      var value = 1;
+      return value;
+    };
+    expect(run(5)).toBe(1);
+    expect(() => run("text")).toThrow(TypeError);
+  });
+
   test("a typed catch redeclaration applies to the catch binding alone", () => {
     const run = () => {
       try {
