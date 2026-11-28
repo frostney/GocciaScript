@@ -45,6 +45,7 @@ uses
   Goccia.TextFiles,
 
   Goccia.Embed,
+  Goccia.EngineFault,
   Goccia.HostAPI,
   Goccia.VM,
   Goccia.ThreadCleanupRegistry;
@@ -155,6 +156,8 @@ procedure TGocciaBenchThread.Execute;
 var
   OwnsJit: Boolean;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0201) }
+  StopIfEngineFaultReported;
   try
     OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
@@ -171,13 +174,16 @@ begin
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread (ADR 0201) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FResults[FIndex].Result.FileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FApp.FResults[FIndex].Result.FileName);
   end;
 end;
 
@@ -452,6 +458,9 @@ begin
       raise;
     on E: Exception do
     begin
+      { an engine fault is no verdict on the file: it stops the run (ADR 0201) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FileName, E);
       { a file the host could not set up is one failed file (GocciaBenchmarkRunner's "Error loading") }
       if not FParallel then
         WriteLn(ErrOutput, 'Error: ', E.Message);
@@ -499,6 +508,7 @@ begin
       if Running = FJobCount then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         Dec(Running);
         Inc(Oldest);
       end;
@@ -524,6 +534,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
       begin
         ErrorClass := Workers[I].FErrorClass;

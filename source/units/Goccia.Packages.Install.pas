@@ -219,6 +219,7 @@ uses
   SHA256,
   TextEncoding,
 
+  Goccia.EngineFault,
   Goccia.FileExtensions,
   Goccia.JSON.Utils,
   Goccia.Packages.ImportMapEdit;
@@ -472,6 +473,8 @@ var
         except
           on E: Exception do
           begin
+            if IsEngineFault(E) then
+              raise;
             if Assigned(ALog) then
               ALog('Skipped ' + Path + ': ' + E.Message);
             Continue;
@@ -658,7 +661,11 @@ begin
     FImportMap.Text := ReadUTF8FileText(FImportMapPath);
   except
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
       FailUsage(Format('cannot read %s: %s', [FImportMapPath, E.Message]));
+    end;
   end;
   if not TryReadImportMapEntries(FImportMap.Text, Entries, Error) then
     FailUsage(Format('%s is not an import map install mode can read: %s',

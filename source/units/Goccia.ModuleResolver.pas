@@ -153,6 +153,7 @@ implementation
 uses
   FileUtils,
 
+  Goccia.EngineFault,
   Goccia.FileExtensions,
   Goccia.Modules.NodeResolution;
 
@@ -517,8 +518,12 @@ begin
       and reach script as an uncatchable host error. }
     on EModuleNotFound do
       raise;
-    on Exception do
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
       raise EModuleNotFound.CreateNotFound(AModulePath, ManifestPath);
+    end;
   end;
 
   if not ResolvePackageSubpath(Manifest, Subpath, Target) then

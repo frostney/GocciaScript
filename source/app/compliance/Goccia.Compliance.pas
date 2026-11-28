@@ -110,6 +110,7 @@ uses
   StringBuffer,
   TextEncoding,
 
+  Goccia.EngineFault,
   Goccia.JSON.Utils;
 
 procedure DrainPipe(const APipe: TInputPipeStream; const ATarget: TStream);
@@ -187,7 +188,11 @@ begin
       Result.ExitCode := ProcessRunner.ExitCode;
     except
       on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          raise;
         Result.ErrorMessage := E.Message;
+      end;
     end;
     Result.DurationMilliseconds := GetTickCount64 - StartedAt;
     Result.StdOutText := StreamAsUTF8Text(StdOutStream);
@@ -469,6 +474,9 @@ begin
     except
       on E: Exception do
       begin
+        { a worker thread: re-raised, the fault would end the thread silently and leave the case unreported }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(CaseID, E);
         FResults[Index].ID := CaseID;
         FResults[Index].Outcome := coInfrastructure;
         FResults[Index].MessageText := E.ClassName + ': ' + E.Message;

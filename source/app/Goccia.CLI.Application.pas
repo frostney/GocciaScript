@@ -302,6 +302,7 @@ uses
   Goccia.CLI.Help,
   Goccia.Coverage,
   Goccia.DataTree,
+  Goccia.EngineFault,
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
@@ -948,7 +949,11 @@ begin
     except
       { A config error belongs to that file's own run, which reports it. }
       on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          raise;
         Continue;
+      end;
     end;
 end;
 
@@ -1596,9 +1601,14 @@ begin
       try
         RawSource := ReadUTF8FileText(FileName);
       except
-        // Fall through to the runner's own load-error handling.
-        Result.Add(FileName);
-        Continue;
+        on E: Exception do
+        begin
+          if IsEngineFault(E) then
+            raise;
+          // Fall through to the runner's own load-error handling.
+          Result.Add(FileName);
+          Continue;
+        end;
       end;
 
       FullSource := CreateFileTextLines(RawSource);

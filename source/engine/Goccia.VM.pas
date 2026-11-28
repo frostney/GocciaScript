@@ -566,7 +566,7 @@ implementation
 
 uses
   {$IFDEF LINUX}Syscall, {$ENDIF}Classes, NumericText, NativeStackBounds, Goccia.Coverage, Goccia.Error.Messages,
-  Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry;
+  Goccia.Error.Suggestions, Goccia.ThreadCleanupRegistry, Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1411,6 +1411,7 @@ begin
     except
       on E: Exception do
       begin
+        if IsEngineFault(E) then raise;
         NativeStackReturn(Loan);
         AbandonRealm(Old, NewR);
         Pending := VUndefined;
@@ -2618,8 +2619,11 @@ end;
   exception frame) }
 procedure XBadClosure(T: PFuncTemplate; C: PObj); noinline;
 begin
+  {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+  BeginEngineCheckReport;
   WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', TEMP_ROOTS_MAX);
-  Halt(9);
+  StopOnEngineCheck('closure upvalue');
+  {$POP}
 end;
 
 function NewClosure(T: PFuncTemplate; Upvals: TValue): PObj;
@@ -6979,16 +6983,22 @@ end;
 
 procedure XReportRootImbalance(O: PObj; Delta: Integer; Ok: Boolean; Tpl: PFuncTemplate); noinline;
 begin
+  {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+  BeginEngineCheckReport;
   if IsString(O^.Aux1) then WriteLn(ErrOutput, 'root imbalance ', Delta, ' after native ',
     UTF8Encode(StrToUnicode(StrOf(O^.Aux1))), ' ok=', Ok, ' in ', DescribeTemplate(Tpl))
   else WriteLn(ErrOutput, 'root imbalance ', Delta, ' after an unnamed native ok=', Ok, ' in ', DescribeTemplate(Tpl));
+  {$POP}
 end;
 
 procedure XReportBadUps(J, GcBefore, Reg, Base: Integer; Tpl: PFuncTemplate); noinline;
 begin
+  {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+  BeginEngineCheckReport;
   WriteLn(ErrOutput, 'opClosure: ups went bad at J=', J, ' gc before ', GcBefore, ' after ', GCMinorCount,
     ' StackTop ', StackTop, ' reg ', Reg, ' base ', Base, ' maxregs ', Tpl^.MaxRegs, ' frames ', FrameTop,
     ' fn ', DescribeTemplate(Tpl));
+  {$POP}
 end;
 
 procedure XTraceThrow; noinline;
@@ -7345,7 +7355,7 @@ begin
   if RootCheck and (TempTop <> NP) then
   begin
     XReportRootImbalance(O, TempTop - NP, Result, Fr^.Tpl);
-    Halt(9);
+    StopOnEngineCheck('native root balance');
   end;
   CurNewTarget := RootAt(TempTop - 1);
   PopRoots(1);
@@ -7385,7 +7395,7 @@ begin
       if GCVerify and not NurseryCellOK(R[A]) then
       begin
         XReportBadUps(J, NP2, Fr^.Base + A, Fr^.Base, Fr^.Tpl);
-        Halt(9);
+        StopOnEngineCheck('captured register');
       end;
       ValueArrayStore(PValueArray(PtrOf(R[A])), J, V);
     end;
@@ -7592,7 +7602,7 @@ begin
   if RootCheck and (TempTop <> NP) then
   begin
     XReportRootImbalance(O, TempTop - NP, Result, nil);
-    Halt(9);
+    StopOnEngineCheck('native root balance');
   end;
   CurNewTarget := RootAt(TempTop - 1);
   PopRoots(1);
@@ -9979,7 +9989,7 @@ LReload:
             if RootCheck and (TempTop <> NP2) then
             begin
               XReportRootImbalance(O, TempTop - NP2, Ok, Tpl);
-              Halt(9);
+              StopOnEngineCheck('native root balance');
             end;
             CurNewTarget := RootAt(TempTop - 1);
             PopRoots(1);
@@ -10305,7 +10315,7 @@ LReload:
               if GCVerify and not NurseryCellOK(R[A]) then
               begin
                 XReportBadUps(J, NP2, Fr^.Base + A, Fr^.Base, Tpl);
-                Halt(9);
+                StopOnEngineCheck('captured register');
               end;
               ValueArrayStore(PValueArray(PtrOf(R[A])), J, V);
             end;

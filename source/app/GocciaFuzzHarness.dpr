@@ -553,6 +553,7 @@ begin
       Exit(False);
     end;
   except
+    { fault-guard: an input the harness cannot read ends it nonzero, as a fault does }
     on E: Exception do
     begin
       ADetail := E.Message;
@@ -771,7 +772,9 @@ begin
     AOutcome := RunOnce(ASource, AFileName, ABounded, AExecutor, Detail);
   except
     { anything that escapes the engine is by definition not an outcome it
-      models; the backtrace is captured here, before the handler unwinds }
+      models; the backtrace is captured here, before the handler unwinds.
+      fault-guard: the harness reports every one as a finding and exits 1,
+      which AFL counts as a crash (scripts/afl/fuzz.sh AFL_CRASH_EXITCODE) }
     on E: Exception do
     begin
       AOutcome := foUnexpected;
@@ -798,6 +801,7 @@ begin
   try
     AOutcome := RunOnce(ASource, AFileName, ABounded, AExecutor, ADetail);
   except
+    { fault-guard: reported as a finding, exit 1 (AFL_CRASH_EXITCODE) }
     on E: Exception do
     begin
       AOutcome := foUnexpected;
@@ -970,6 +974,7 @@ begin
     try
       raise Exception.Create('injected self-test fault');
     except
+      { fault-guard: reported as a finding, exit 1 (AFL_CRASH_EXITCODE) }
       on E: Exception do
         ReportFault('the bytecode run', E.ClassName + ': ' + E.Message,
           CaptureBackTrace);
@@ -1000,6 +1005,7 @@ begin
     try
       Outcome := RestoreOnce(FileName, Detail);
     except
+      { fault-guard: reported as a finding, exit 1 (AFL_CRASH_EXITCODE) }
       on E: Exception do
       begin
         Outcome := foUnexpected;

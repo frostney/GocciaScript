@@ -1273,32 +1273,59 @@ begin
     end;
 end;
 
-procedure BuildTOMLComplianceRunner;
+{ A compliance runner (source/app/compliance/AProgram.dpr, build.pas target ATarget). GOCCIA_VARIANT builds a
+  variant of it, as it does of an engine program (BuildEngineProgram): build/AProgram<variant>, compiled in a unit
+  cache of its own with GOCCIA_FPC_FLAGS after the defaults. CI's fault build makes
+  GocciaTOMLComplianceRunnerFaultInjection and GocciaYAMLComplianceRunnerFaultInjection that way. }
+procedure BuildComplianceRunner(const AProgram, ATarget: string);
 var
-  Output: string;
+  Output, Source, Variant, Extra, Word: string;
+  Args: TStringArray;
+  J: Integer;
 begin
-  WriteLn('Building GocciaTOMLComplianceRunner...');
-  if not CompileWithStaleRetry(
-      'source/app/compliance/GocciaTOMLComplianceRunner.dpr',
-      TargetUnitOutputDirectory('tomlcompliancerunner'),
-      'tomlcompliancerunner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaTOMLComplianceRunner build failed');
+  Source := 'source/app/compliance/' + AProgram + '.dpr';
+  Variant := GetEnvironmentVariable('GOCCIA_VARIANT');
+  WriteLn('Building ', AProgram, Variant, '...');
+  if Variant = '' then
+  begin
+    if not CompileWithStaleRetry(Source, TargetUnitOutputDirectory(ATarget), ATarget, Output) then
+      PrintBuildFailureAndExit(Output, AProgram + ' build failed');
+  end
+  else
+  begin
+    Args := FPCArgs(Source, EnsureUnitOutputDirectory(TargetUnitOutputDirectory(ATarget) + '-' +
+      LowerCase(Variant)));
+    SetLength(Args, Length(Args) + 1);
+    Args[High(Args)] := '-o' + GocciaExecutable('build' + DirectorySeparator + AProgram + Variant, False);
+    Extra := GetEnvironmentVariable('GOCCIA_FPC_FLAGS') + ' ';
+    Word := '';
+    for J := 1 to Length(Extra) do
+      if Extra[J] = ' ' then
+      begin
+        if Word <> '' then
+        begin
+          SetLength(Args, Length(Args) + 1);
+          Args[High(Args)] := Word;
+        end;
+        Word := '';
+      end
+      else
+        Word := Word + Extra[J];
+    if not CompileProgram(Args, Output) then
+      PrintBuildFailureAndExit(Output, AProgram + Variant + ' build failed');
+  end;
   WriteLn(Output);
-  WriteLn('GocciaTOMLComplianceRunner built successfully');
+  WriteLn(AProgram, Variant, ' built successfully');
+end;
+
+procedure BuildTOMLComplianceRunner;
+begin
+  BuildComplianceRunner('GocciaTOMLComplianceRunner', 'tomlcompliancerunner');
 end;
 
 procedure BuildYAMLComplianceRunner;
-var
-  Output: string;
 begin
-  WriteLn('Building GocciaYAMLComplianceRunner...');
-  if not CompileWithStaleRetry(
-      'source/app/compliance/GocciaYAMLComplianceRunner.dpr',
-      TargetUnitOutputDirectory('yamlcompliancerunner'),
-      'yamlcompliancerunner', Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaYAMLComplianceRunner build failed');
-  WriteLn(Output);
-  WriteLn('GocciaYAMLComplianceRunner built successfully');
+  BuildComplianceRunner('GocciaYAMLComplianceRunner', 'yamlcompliancerunner');
 end;
 
 procedure BuildFFIFixture;

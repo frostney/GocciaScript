@@ -35,6 +35,10 @@ uses
   Goccia.VM,
   Goccia.Embed,
   Goccia.Engine,
+  Goccia.EngineFault,
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  Goccia.FaultInjection,
+  {$ENDIF}
   Goccia.Profile,
   Goccia.Test262,
   Goccia.ThreadCleanupRegistry;
@@ -837,8 +841,12 @@ begin
           if ParseTest(ReadUTF8FileText(FileCase.Path), Metadata) then
             Modes := RunModesFor(Metadata);
         except
-          on Exception do
+          on E: Exception do
+          begin
+            if IsEngineFault(E) then
+              raise;
             Modes := [trmNonStrict];
+          end;
         end;
       finally
         Metadata.Free;
@@ -1232,6 +1240,7 @@ begin
         string(Test262PrintText), AResult.Status, AResult.Message,
         AResult.Diagnostic);
     except
+      { fault-guard: a wrapper-infrastructure result, which CI gates at zero (docs/test262.md) }
       on E: Exception do
       begin
         AResult.Status := toWrapperInfra;
@@ -1247,6 +1256,7 @@ begin
       try
         WriteProfileJSON(TGocciaProfiler.Instance, ProfilePath);
       except
+        { fault-guard: a wrapper-infrastructure result, which CI gates at zero (docs/test262.md) }
         on E: Exception do
         begin
           AResult.Status := toWrapperInfra;
@@ -1286,24 +1296,41 @@ procedure TTest262Worker.Execute;
 var
   UsesAgents: Boolean;
 begin
+  { a fault anywhere in the thread's body, its teardown included, stops the process: escaping Execute it would
+    end the thread silently in FatalException (ADR 0201) }
   try
     try
-      UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
-    except
-      UsesAgents := False;
-    end;
-    if UsesAgents then
-      EnterCriticalSection(AgentRunLock);
-    try
-      FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
-    finally
+      try
+        UsesAgents := Pos('$262.agent', ReadUTF8FileText(FApp.FCases[FIndex].Path)) > 0;
+      except
+        on E: Exception do
+        begin
+          { a case thread: re-raised, the fault would end the thread silently }
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
+          UsesAgents := False;
+        end;
+      end;
       if UsesAgents then
-        LeaveCriticalSection(AgentRunLock);
+        EnterCriticalSection(AgentRunLock);
+      try
+        FApp.ExecuteOne(FApp.FCases[FIndex], FApp.FResults[FIndex]);
+      finally
+        if UsesAgents then
+          LeaveCriticalSection(AgentRunLock);
+      end;
+      FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
+    finally
+      { this thread's engine state: FPC does not finalize managed threadvars }
+      RunThreadvarCleanupsOrAbort(FApp.FCases[FIndex].Path);
     end;
-    FApp.FResults[FIndex].Mode := FApp.FCases[FIndex].Mode;
-  finally
-    { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FApp.FCases[FIndex].Path, E);
+      raise;
+    end;
   end;
 end;
 
@@ -1411,6 +1438,8 @@ begin
           WriteWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
           fpExit(0);
         except
+          { fault-guard: the forked worker's status 2 is recorded as a wrapper-infrastructure result, which CI gates
+            at zero (docs/test262.md) }
           fpExit(2);
         end;
       end;
@@ -1476,7 +1505,11 @@ begin
           ReadWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
         except
           on E: Exception do
+          begin
+            if IsEngineFault(E) then
+              raise;
             WorkerMessage := 'Invalid worker result: ' + E.Message;
+          end;
         end
       else
         WorkerMessage := Format(
@@ -1848,8 +1881,12 @@ begin
         Parsed.Free;
       end;
     except
-      on Exception do
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          raise;
         Result := False;
+      end;
     end;
   finally
     Lines.Free;
@@ -1941,46 +1978,63 @@ var
   SnapshotEngine: TGocciaEngine;
   SnapshotErr: UnicodeString;
 begin
-  { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
-    take them }
-  if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
-  begin
-    SnapshotEngine := TGocciaEngine.Create;
-    SnapshotErr := '';
-    if not SnapshotEngine.PrepareHost(SnapshotErr) then
-    begin
-      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
-      Halt(1);
-    end;
-    Halt(0);
-  end;
-  App := TTest262App.Create;
+  { a fault anywhere in the coordinator's own lifetime, its construction and
+    destruction and the build's snapshot stage included, stops it (ADR 0201) }
   try
-    try
-      ExitCode := App.Run;
-    except
-      { ParseArguments raises TCLIUsageError for an unusable invocation (a
-        missing or unknown argument, a rejected combination), which exits 2,
-        and TParseError for an invalid value, which exits 1. Anything else is
-        a failure of the run itself, such as a report it could not write,
-        and exits 1. }
-      on E: TCLIUsageError do
+    { build.pas snapshots the compiled preludes from a run with GOCCIA_SNAPSHOT_OUT set: a host's, as the other apps
+      take them }
+    if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
+    begin
+      SnapshotEngine := TGocciaEngine.Create;
+      SnapshotErr := '';
+      if not SnapshotEngine.PrepareHost(SnapshotErr) then
       begin
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := EXIT_CODE_USAGE;
+        WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
+        Halt(1);
       end;
-      on E: TParseError do
-      begin
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := 1;
-      end;
-      on E: Exception do
-      begin
-        WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := 1;
-      end;
+      Halt(0);
     end;
-  finally
-    App.Free;
+    App := TTest262App.Create;
+    try
+      try
+        {$IFDEF GOCCIA_FAULT_INJECTION}
+        InjectFaultAt('startup');
+        {$ENDIF}
+        ExitCode := App.Run;
+      except
+        { ParseArguments raises TCLIUsageError for an unusable invocation (a
+          missing or unknown argument, a rejected combination), which exits 2,
+          and TParseError for an invalid value, which exits 1. Anything else is
+          a failure of the run itself, such as a report it could not write,
+          and exits 1. }
+        on E: TCLIUsageError do
+        begin
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := EXIT_CODE_USAGE;
+        end;
+        on E: TParseError do
+        begin
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := 1;
+        end;
+        on E: Exception do
+        begin
+          { a fault outside every case's run (a case's own is graded as its crash outcome): ADR 0201 }
+          if IsEngineFault(E) then
+            AbortOnEngineFault('GocciaTest262Runner', E);
+          WriteLn(ErrOutput, 'Error: ', E.Message);
+          ExitCode := 1;
+        end;
+      end;
+    finally
+      App.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault('GocciaTest262Runner', E);
+      raise;
+    end;
   end;
 end.

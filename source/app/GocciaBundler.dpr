@@ -34,6 +34,7 @@ uses
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
   Goccia.Embed,
+  Goccia.EngineFault,
 
   FileUtils,
   Goccia.ThreadCleanupRegistry;
@@ -91,12 +92,17 @@ type
 
 procedure TBundleThread.Execute;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0201) }
+  StopIfEngineFaultReported;
   try
     try
       FApp.EmitPlannedFile(FIndex, FQuiet);
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread (ADR 0201) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FPlan[FIndex].InputFile, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
         if E is EGocciaBundleFailure then FErrorDetail := EGocciaBundleFailure(E).Detail
@@ -105,7 +111,7 @@ begin
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FApp.FPlan[FIndex].InputFile);
   end;
 end;
 
@@ -421,6 +427,7 @@ begin
       if Running = AJobCount then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         Dec(Running);
         Inc(Oldest);
         if not Parallel and (Workers[Oldest - 1].FErrorClass <> nil) then
@@ -441,6 +448,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if Workers[I].FErrorClass <> nil then
       begin
         if Parallel then

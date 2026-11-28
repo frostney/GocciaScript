@@ -49,6 +49,7 @@ uses
 
   Goccia.Core,
   Goccia.Embed,
+  Goccia.EngineFault,
   Goccia.HostAPI,
   Goccia.VM,
   Goccia.ThreadCleanupRegistry;
@@ -164,6 +165,8 @@ procedure TGocciaTestThread.Execute;
 var
   OwnsJit: Boolean;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0201) }
+  StopIfEngineFaultReported;
   try
     OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
     try
@@ -180,13 +183,17 @@ begin
     except
       on E: Exception do
       begin
+        { the run stops here, on this file's thread: the files still running and the ones not started must not
+          report results from the state the fault calls into question (ADR 0201) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FApp.FResults[FIndex].FileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FApp.FResults[FIndex].FileName);
   end;
 end;
 
@@ -687,6 +694,8 @@ var
       except
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FileName, E);
           Verdict_ := ghvFailed;
           Detail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
         end;
@@ -856,6 +865,9 @@ begin
       raise;
     on E: Exception do
     begin
+      { an engine fault is no verdict on the file: it stops the run (ADR 0201) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FileName, E);
       { a file the host could not set up is one failed file (GocciaTestRunner RunScriptFromFile) }
       Res.ErrorMessage := E.Message;
       Res.Failed := 1;
@@ -913,6 +925,7 @@ begin
       if Running = FJobCount then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         if FExitOnFirst.Present and Failing(Oldest) then
           Stop := True;
         Dec(Running);
@@ -942,6 +955,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
       begin
         ErrorClass := Workers[I].FErrorClass;
@@ -1070,7 +1084,13 @@ begin
       FlushPendingInlineSnapshots;
     except
       on E: Exception do
+      begin
+        { a fault while writing the inline snapshots back must not be filed as one finalization failure over
+          results the run then publishes }
+        if IsEngineFault(E) then
+          AbortOnEngineFault('<inline snapshot write-back>', E);
         RecordSnapshotFinalizationFailure('Snapshot finalization failed: ' + E.Message);
+      end;
     end;
     { the files' engines ran on threads of their own: the report sums their memory }
     SetLength(FileMemory, Length(FResults));

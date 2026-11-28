@@ -23,7 +23,9 @@ uses
 
   EmbeddedResourceReader,
   Generated.TimeZoneData,
-  LazyPublishedCache;
+  LazyPublishedCache,
+
+  Goccia.EngineFault;
 
 const
   TIME_ZONE_DATA_MAGIC: TEmbeddedResourceMagic =
@@ -56,7 +58,12 @@ begin
     Stream := nil;
     Result := True;
   except
-    Stream.Free;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
+      Stream.Free;
+    end;
   end;
 end;
 

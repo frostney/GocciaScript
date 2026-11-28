@@ -42,6 +42,13 @@ procedure RegisterThreadvarCleanup(const AProc: TGocciaThreadvarCleanupProc);
   thread). Safe to call multiple times and on any thread. }
 procedure RunThreadvarCleanups;
 
+{ RunThreadvarCleanups at the end of a worker thread's Execute: an engine fault
+  in a cleanup stops the process with the engine-fault diagnostic naming ASite
+  (Goccia.EngineFault.AbortOnEngineFault), instead of ending the thread with an
+  exception nobody reads (TThread keeps it in FatalException). Any other
+  exception propagates as before. }
+procedure RunThreadvarCleanupsOrAbort(const ASite: string);
+
 { Returns True if AProc is currently registered. Intended for regression tests
   that pin a specific unit's cleanup registration (so a dropped
   RegisterThreadvarCleanup call fails loudly); not part of the teardown path. }
@@ -50,7 +57,10 @@ function IsThreadvarCleanupRegistered(const AProc: TGocciaThreadvarCleanupProc):
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION},
+  Goccia.FaultInjection{$ENDIF};
 
 const
   CLEANUPS_INITIAL_CAPACITY = 8;
@@ -85,6 +95,23 @@ begin
     GCleanups[I]();
 end;
 
+procedure RunThreadvarCleanupsOrAbort(const ASite: string);
+begin
+  try
+    {$IFDEF GOCCIA_FAULT_INJECTION}
+    InjectFaultAt('thread-cleanup');
+    {$ENDIF}
+    RunThreadvarCleanups;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(ASite, E);
+      raise;
+    end;
+  end;
+end;
+
 function CleanupProceduresEqual(const ALeft; const ARight): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := CompareMem(@ALeft, @ARight, SizeOf(TGocciaThreadvarCleanupProc));
@@ -108,6 +135,7 @@ end;
 initialization
 
 finalization
-  RunThreadvarCleanups;
+  { the main thread's, after the program: a fault here would otherwise end it with an unhandled-exception report }
+  RunThreadvarCleanupsOrAbort('<finalization>');
 
 end.

@@ -45,7 +45,7 @@ implementation
 uses
   Classes, SysUtils, Goccia.Core, Goccia.Instructions, Goccia.Compiler, Goccia.VM, Goccia.Eval, Goccia.Promise, Goccia.Atomics, Goccia.Agent,
   Goccia.Engine, Goccia.TypedArrays, Goccia.Modules, Goccia.Builtins, Goccia.ThreadCleanupRegistry, Goccia.HostEnvironment,
-  TextEncoding;
+  TextEncoding, Goccia.EngineFault;
 
 {$I Goccia.Test262Host.inc}
 
@@ -118,7 +118,11 @@ begin
       FS.Free;
     end;
   except
-    Exit;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then raise;
+      Exit;
+    end;
   end;
   if (Length(Raw) >= 3) and (Raw[1] = #$EF) and (Raw[2] = #$BB) and (Raw[3] = #$BF) then Delete(Raw, 1, 3);
   Src := UTF8DecodeKeepingNoncharacters(Raw);
@@ -399,6 +403,8 @@ begin
     RunCase(Harness, TestFile, Strict, IsModule);
   except
     on E: ET262Outcome do Result := E.O;
+    { fault-guard: the crash outcome names the exception's class, and on POSIX each case runs in a forked worker of its
+      own (docs/test262.md) }
     on E: Exception do
     begin
       Result.Kind := 'crash';

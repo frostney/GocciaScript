@@ -37,7 +37,9 @@ uses
   Goccia.TextFiles,
 
   Goccia.Core,
-  Goccia.Embed;
+  Goccia.Embed,
+  Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION},
+  Goccia.FaultInjection{$ENDIF};
 
 const
   BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
@@ -498,18 +500,30 @@ begin
     bare host's preludes compiled once and written for the embedding build }
   if GetEnvironmentVariable('GOCCIA_SNAPSHOT_OUT') <> '' then
   begin
-    SetupError := '';
-    SnapshotEngine := TGocciaEngine.Create;
-    SnapshotEngine.Bare := True;
-    if not SnapshotEngine.PrepareHost(SetupError) then
-    begin
-      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SetupError));
-      Halt(1);
+    try
+      SetupError := '';
+      SnapshotEngine := TGocciaEngine.Create;
+      SnapshotEngine.Bare := True;
+      if not SnapshotEngine.PrepareHost(SetupError) then
+      begin
+        WriteLn(ErrOutput, 'Error: ', UTF8Encode(SetupError));
+        Halt(1);
+      end;
+    except
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          AbortOnEngineFault(BARE_PROGRAM_NAME, E);
+        raise;
+      end;
     end;
     Halt(0);
   end;
   Options := Default(TBareOptions);
   try
+    {$IFDEF GOCCIA_FAULT_INJECTION}
+    InjectFaultAt('startup');
+    {$ENDIF}
     ParseOptions(Options);
     { clig.dev no-argument rule — see Goccia.CLI.Stdin.  Bare has its own
       argument parser, so the shared TGocciaCLIApplication gate does not
@@ -534,6 +548,12 @@ begin
     end;
     on E: Exception do
     begin
+      { the bare loader runs its file on the main thread: a fault in it, or outside it, lands here (ADR 0201) }
+      if IsEngineFault(E) then
+        if Options.FileName <> '' then
+          AbortOnEngineFault(Options.FileName, E)
+        else
+          AbortOnEngineFault(BARE_PROGRAM_NAME, E);
       WriteLn(ErrOutput, 'Error: ', E.Message);
       ExitCode := 1;
     end;

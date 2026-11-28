@@ -155,6 +155,7 @@ uses
   CriticalSections,
   TextEncoding,
 
+  Goccia.EngineFault,
   Goccia.Temporal.Utils,
   Goccia.Temporal.TimeZoneData,
   Goccia.ThreadCleanupRegistry,
@@ -1344,7 +1345,12 @@ begin
 
     Result := TryParseTimeZoneInformationFile(ATimeZone, Buffer, AData);
   except
-    Stream.Free;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
+      Stream.Free;
+    end;
   end;
 end;
 

@@ -379,15 +379,18 @@ or a reproducible failure list — use `--jobs=1`.
 ./build/GocciaTestRunner tests --jobs=4
 ```
 
-#### A file that crashes fails on its own
+#### A file that fails or hangs fails on its own; an engine fault stops the run
 
-A Pascal exception that escapes a file's run, an access violation included, is
-caught on the thread that ran the file: the file is recorded as one failed test
-with the exception's message, its engine is freed, and the run goes on with the
-other files. Each file runs under its own `--timeout` (30 seconds by default;
-`--timeout=0` disables it), which the VM checks at every backward jump and call
-and built-in loops poll, so a file stuck in a loop ends at its deadline as a
-failed file instead of holding up the run.
+A file whose host setup fails, such as a module that cannot be read, is
+recorded as one failed test with the error's message, and the run goes on with
+the other files. Each file runs under its own `--timeout` (30 seconds by
+default; `--timeout=0` disables it), which the VM checks at every backward jump
+and call and built-in loops poll, so a file stuck in a loop ends at its deadline
+as a failed file instead of holding up the run. An engine fault (an access
+violation, a failed internal assertion, an invalid pointer) is no verdict on the
+file: the run stops there with exit code `70` and the `Engine fault:`
+diagnostic, prints no summary or report, and starts no further file ([CLI
+conventions](contributing/cli-conventions.md#exit-codes)).
 
 ### Snapshot Testing
 
@@ -603,6 +606,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | Global injection | `--global`, `--globals` file/module injection, collision detection |
 | Stdin smoke tests | Piped input executes correctly |
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
+| Engine faults | `test-engine-faults.ts`: every application, built with the fault-injection hook (`GOCCIA_VARIANT=FaultInjection GOCCIA_FPC_FLAGS=-dGOCCIA_FAULT_INJECTION ./build.pas runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness tomlcompliancerunner yamlcompliancerunner`, `Goccia.FaultInjection`), stops on a real fault (an access violation, a failed assertion, an invalid pointer, a stack overflow, a failed engine check) in guest code, at startup, while compiling, in a worker's cleanup and as it ends: exit `70`, the two `Engine fault:` lines, no summary or JSON report, no `catch` or later job run and, in the test runner, no further file in either `--jobs` shape, not even while a blocked stderr holds up the report, with a closed or full stderr pipe too; `GocciaFuzzHarness` reports the fault as its finding with exit `1`; the shipped binaries carry no trace of the hook (see [Every application stops on an engine fault](adr/0201-every-application-stops-on-an-engine-fault.md)) |
 | Differential suites | `test-cli-differential.ts` runs each `scripts/differential/` suite under GocciaScript and the external runtimes its classification names, requiring them to agree on failed-test **name** sets and counts; vitest gates the testing-API suites (matchers, lifecycle, mocks) and bun gates the language ones, with bun advisory on matcher and lifecycle suites, skipped outright on mock suites, and `*.goccia.test.js` suites run under GocciaScript alone and must pass outright; a per-file timeout counts as a divergence. See [Differential Testing](differential-testing.md) |
 
 This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed. In [`test-cli-apps.ts`](../scripts/test-cli-apps.ts), put each new check, its fixture setup included, in a named `section()` call: `bun run scripts/test-cli-apps.ts --section=<text>` runs only the sections whose name contains the text, and `--list` prints the names. `test-cli-apps-selection.ts` fails the `cli` job when the selection logic breaks, or when code outside a section prints or throws during a selection.
@@ -705,7 +709,7 @@ supersede → build → test             → artifacts (main), release (tags)
 docs, test-structure (no build)
 ```
 
-**`build`** — Installs FPC 3.3.1 (the pinned build `FPC_VERSION`, `3.3.1-b9`) through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`build`** — Installs FPC 3.3.1 (the pinned build `FPC_VERSION`, `3.3.1-b9`) through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts`, `scripts/check-fault-guards.ts` (every catch-all exception handler in `source/engine`, `source/units` and `source/app` re-raises, tests for an engine fault, or says in a `fault-guard:` comment why it does neither) and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison. Before the Pascal unit tests, Linux and macOS add the names only the hosts file lists (`.github/scripts/add-hosts-file-fixtures.sh`), so the resolver test in `HTTPClient.Test.pas` runs; `GOCCIA_HOSTS_FILE_FIXTURE` makes it fail, rather than skip, when its name is missing.
 

@@ -46,6 +46,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Coverage,
   Goccia.Coverage.Report,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
@@ -224,6 +225,8 @@ var
   OwnsJit: Boolean;
   Start: Int64;
 begin
+  { a file that would start while another thread reports a fault does not (ADR 0201) }
+  StopIfEngineFaultReported;
   try
     if FLoadSource then
     begin
@@ -234,6 +237,8 @@ begin
       except
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(FFileName, E);
           if FApp.IsJsonOutput then
             FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start)
           else
@@ -261,13 +266,17 @@ begin
     except
       on E: Exception do
       begin
+        { the file's run stops the process here, on its own thread: other files must not go on running on the
+          state the fault calls into question (ADR 0201) }
+        if IsEngineFault(E) then
+          AbortOnEngineFault(FFileName, E);
         FErrorClass := ExceptClass(E.ClassType);
         FErrorMessage := E.Message;
       end;
     end;
   finally
     { this thread's engine state: FPC does not finalize managed threadvars }
-    RunThreadvarCleanups;
+    RunThreadvarCleanupsOrAbort(FFileName);
   end;
 end;
 
@@ -1083,7 +1092,11 @@ begin
             HandleCapabilityAudit(Effective);
           except
             on E: Exception do
+            begin
+              if IsEngineFault(E) then
+                AbortOnEngineFault(AFileName, E);
               raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+            end;
           end;
         end;
         Engine.HostEnvironment := UnicodeString(HostEnvironmentPath(FileConfig, Engine.Deterministic));
@@ -1094,6 +1107,8 @@ begin
           raise;
         on E: Exception do
         begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(AFileName, E);
           if IsJsonOutput then
             ReportLoadFailure(AReportIndex, AFileName, E, Start)
           else
@@ -1281,6 +1296,7 @@ begin
     Worker.FReportIndex := -1;
     Worker.Start;
     Worker.WaitFor;
+    StopIfEngineFaultReported;
     ErrorClass := Worker.FErrorClass;
     ErrorMessage := Worker.FErrorMessage;
   finally
@@ -1340,6 +1356,7 @@ begin
       if Running = FWorkers then
       begin
         Workers[Oldest].WaitFor;
+        StopIfEngineFaultReported;
         Dec(Running);
         Inc(Oldest);
       end;
@@ -1358,6 +1375,7 @@ begin
     begin
       if I >= Oldest then
         Workers[I].WaitFor;
+      StopIfEngineFaultReported;
       if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
       begin
         ErrorClass := Workers[I].FErrorClass;
@@ -1668,7 +1686,11 @@ begin
         HandleCapabilityAudit(Effective);
       except
         on E: Exception do
+        begin
+          if IsEngineFault(E) then
+            AbortOnEngineFault(ARun.EntryPath, E);
           raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+        end;
       end;
     end;
   end;
@@ -1820,7 +1842,11 @@ begin
   except
     { a config that does not parse cannot say; the error reports as usual }
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(Name, E);
       Result := False;
+    end;
   end;
 end;
 

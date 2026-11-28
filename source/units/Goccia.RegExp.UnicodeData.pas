@@ -40,7 +40,9 @@ uses
 
   EmbeddedResourceReader,
   Generated.UnicodeData,
-  LazyPublishedCache;
+  LazyPublishedCache,
+
+  Goccia.EngineFault;
 
 type
   TCodePointPair = record
@@ -226,7 +228,12 @@ begin
     Stream := nil;
     Result := True;
   except
-    Stream.Free;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
+      Stream.Free;
+    end;
   end;
 end;
 {$ENDIF}

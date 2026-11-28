@@ -95,7 +95,9 @@ implementation
 
 uses
   Generics.Defaults,
-  SysUtils;
+  SysUtils,
+
+  Goccia.EngineFault;
 
 const
   SNAPSHOT_HEADER =
@@ -464,8 +466,13 @@ begin
       FUncheckedKeys.AddOrSetValue(Key, True);
     end;
   except
-    FSnapshots.Clear;
-    FUncheckedKeys.Clear;
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
+      FSnapshots.Clear;
+      FUncheckedKeys.Clear;
+    end;
   end;
 end;
 

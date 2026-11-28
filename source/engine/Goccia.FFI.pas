@@ -32,7 +32,7 @@ uses
   Goccia.CapabilityAudit, Goccia.Error.Messages, Goccia.Error.Suggestions, Goccia.FFI.ABI, Goccia.FFI.Call, Goccia.FFI.LibraryGuard,
   Goccia.FFI.CallbackSlots, Goccia.FFI.Types, Goccia.FFI.UTF8String, Goccia.URI,
   Goccia.Core, Goccia.Instructions, Goccia.VM, Goccia.Eval, Goccia.Typed, Goccia.ThreadCleanupRegistry,
-  FileUtils, Goccia.ModuleResolver, Goccia.Modules.Resolver, Goccia.HostAPI;
+  FileUtils, Goccia.ModuleResolver, Goccia.Modules.Resolver, Goccia.HostAPI, Goccia.EngineFault;
 
 const
   {$IFDEF DARWIN}
@@ -963,6 +963,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineFault(E) then AbortOnEngineFault('<FFI callback>', E);
       ThrowTypeError(E.Message);
       CallbackFailed;
     end;
@@ -1466,7 +1467,11 @@ begin
     try
       D := TGocciaFFITypeDescriptor.CreateCallback(Types, Ret);
     except
-      on E: Exception do Exit(ThrowTypeError(E.Message));
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then raise;
+        Exit(ThrowTypeError(E.Message));
+      end;
     end;
     Res := NewTypeObject(D);
     Result := True;
@@ -1486,7 +1491,11 @@ begin
     try
       D := TGocciaFFITypeDescriptor.CreateNullable(E);
     except
-      on Ex: Exception do Exit(ThrowTypeError(Ex.Message));
+      on Ex: Exception do
+      begin
+        if IsEngineFault(Ex) then raise;
+        Exit(ThrowTypeError(Ex.Message));
+      end;
     end;
   finally
     E.ReleaseReference;
@@ -1510,6 +1519,7 @@ begin
   except
     on E: Exception do
     begin
+      if IsEngineFault(E) then raise;
       Sig.Free;
       Exit(ThrowTypeError(E.Message));
     end;
@@ -1537,7 +1547,11 @@ begin
   try
     Sym := Libs[Id].Guard.FindSymbol(Name);
   except
-    on E: Exception do Exit(ThrowTypeError(E.Message));
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then raise;
+      Exit(ThrowTypeError(E.Message));
+    end;
   end;
   Libs[Id].Guard.RetainDependent;
   Inc(Libs[Id].Retained);
@@ -1612,6 +1626,7 @@ var LibPath, LoadPath, URLPath, PinnedLoadPath, PinnedPath, Reported, Detail: Un
     except
       on E: Exception do
       begin
+        if IsEngineFault(E) then raise;
         if not AuditOpen(False, LibPath, UTF8Decode(E.Message)) then Exit(False);
         Exit(ThrowTypeError(UTF8Decode(E.Message)));
       end;
@@ -1702,7 +1717,11 @@ begin
     try
       LibBytes := ReadFileBytes(UTF8Encode(LoadPath));
     except
-      on E: Exception do Exit(VerifyProvider(False));
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then raise;
+        Exit(VerifyProvider(False));
+      end;
     end;
     if not VerifyProvider(True) then Exit(False);
   end;
@@ -1711,7 +1730,11 @@ begin
     try
       Guard := TGocciaFFILibraryGuard.Create(LibPath, PinnedLoadPath);
     except
-      on E: Exception do Exit(ThrowTypeError(E.Message));
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then raise;
+        Exit(ThrowTypeError(E.Message));
+      end;
     end;
   finally
     {$IFDEF LINUX}
@@ -1782,7 +1805,11 @@ begin
       if NativeData = 1 then D := TGocciaFFITypeDescriptor.CreateUnion(Fields)
       else D := TGocciaFFITypeDescriptor.CreateStruct(Fields);
     except
-      on E: Exception do Exit(ThrowTypeError(E.Message));
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then raise;
+        Exit(ThrowTypeError(E.Message));
+      end;
     end;
     Res := NewTypeObject(D);
     Result := True;
@@ -1810,7 +1837,11 @@ begin
     try
       D := TGocciaFFITypeDescriptor.CreateArray(E, Trunc(L));
     except
-      on Ex: Exception do Exit(ThrowTypeError(Ex.Message));
+      on Ex: Exception do
+      begin
+        if IsEngineFault(Ex) then raise;
+        Exit(ThrowTypeError(Ex.Message));
+      end;
     end;
   finally
     E.ReleaseReference;

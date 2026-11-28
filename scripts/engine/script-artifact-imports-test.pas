@@ -1,7 +1,7 @@
 program ScriptArtifactImportsTest;
 
 { A Script run from a bytecode file reached through a symlink, with no source beside it, resolves import() from
-  the real file's directory: during its run and from a closure a later Run on the same engine calls (ADR 0199). A
+  the real file's directory: during its run and from a closure a later Run on the same engine calls (ADR 0201). A
   later source Script with the bytecode Script's logical name resolves from its own directory.
   The fixture directory (script-artifact-imports-test.sh) holds real/sib.mjs, link/sib.mjs and
   link/standalone.gbc, a symlink to real/standalone.gbc, which this program writes. }

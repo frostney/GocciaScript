@@ -133,6 +133,7 @@ uses
   TextSemantics,
 
   Goccia.Core,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.HostAPI,
@@ -806,6 +807,8 @@ begin
         except
           on E: Exception do
           begin
+            if IsEngineFault(E) then
+              AbortOnEngineFault(FramePath, E);
             FreeAndNil(Loaded);
             Source := nil;
           end;

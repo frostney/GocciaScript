@@ -534,7 +534,9 @@ JavaScript suite under two tools that answer different questions:
 `GOCCIA_VARIANT` gives the build a unit-output directory of its own
 (`build/compiled/targets/testrunner-dev-heaptrc`, or `testrunner-heaptrc` with `--prod`), since FPC does not
 recompile a unit for new options, and `GOCCIA_FPC_FLAGS` comes after
-`build.pas`'s own options, so its flags win. `HEAPTRC=log=FILE` matters: FPC
+`build.pas`'s own options, so its flags win. It applies to the engine programs (every application under
+`source/app`) and to `tomlcompliancerunner` and `yamlcompliancerunner`; CI's fault build uses it with `-dGOCCIA_FAULT_INJECTION`
+([Testing](../testing.md#cli-behavior-tests-ci-integration)). `HEAPTRC=log=FILE` matters: FPC
 3.3.1's heaptrc leaves its report unflushed when stderr is a regular file, so
 `2> FILE` can capture nothing.
 
@@ -579,9 +581,9 @@ build: its binaries make the window certain at run time.
 | Switch | Effect |
 |---|---|
 | `--gc-stress` (`goccia` command line) | Every allocation runs a minor collection, and every eighth minor collection a major one (`GCStress` in `Goccia.Core`). The JIT's and the optimizing tier's inline allocations take the helper path, which allocates through the collector. |
-| `--gc-verify` (`goccia` command line) | After each collection, `VerifyHeap` checks that no live old cell points into the nursery or at a freed cell, and the VM checks that a nursery pointer it is about to use (a closure's upvalues, a captured register) still leads to the start of a live cell (`NurseryCellOK`). A minor collection fills the emptied nursery with `$DB`, so a pointer a collection did not update meets a header no cell has. A failure prints the cell and field and exits 9. |
+| `--gc-verify` (`goccia` command line) | After each collection, `VerifyHeap` checks that no live old cell points into the nursery or at a freed cell, and the VM checks that a nursery pointer it is about to use (a closure's upvalues, a captured register) still leads to the start of a live cell (`NurseryCellOK`). A minor collection fills the emptied nursery with `$DB`, so a pointer a collection did not update meets a header no cell has. A failure prints the cell and field, then the `Engine fault:` diagnostic, and exits 70. |
 | `GOCCIA_NURSERY_KB=<n>` (environment) | Sizes the nursery in KB, so collections run every few kilobytes. `goccia` reads it for its own engine and, with `--test`, for a test file's engine (`EngineNurseryBytes` in `Goccia.Engine`); the test262 host reads it with `GOCCIA_GC_VERIFY` (`Goccia.Test262`). |
-| `GOCCIA_ROOTCHECK=1` (environment, `goccia`) | Each native call must leave the temporary root stack as it found it; an imbalance prints the native and exits 9. |
+| `GOCCIA_ROOTCHECK=1` (environment, `goccia`) | Each native call must leave the temporary root stack as it found it; an imbalance prints the native, then the `Engine fault:` diagnostic, and exits 70. |
 | `GOCCIA_HOST=1` (environment, `goccia`) | Installs the hidden `GocciaHost` object, whose `gc()` collects at once. |
 
 ```bash

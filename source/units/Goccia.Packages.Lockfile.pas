@@ -117,6 +117,7 @@ uses
   StringBuffer,
   TextEncoding,
 
+  Goccia.EngineFault,
   Goccia.JSON.Utils;
 
 type
@@ -558,8 +559,12 @@ begin
     on E: EGocciaLockfileError do
       raise;
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
       raise EGocciaLockfileError.CreateFmt('%s is not valid JSON: %s',
         [FLocation, E.Message]);
+    end;
   end;
   Result := FLockfile;
   FLockfile := nil;
@@ -654,8 +659,12 @@ begin
     Text := ReadUTF8FileText(APath);
   except
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
       raise EGocciaLockfileError.CreateFmt('cannot read %s: %s',
         [APath, E.Message]);
+    end;
   end;
   Result := ParseLockfile(Text, APath);
 end;

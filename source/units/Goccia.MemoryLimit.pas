@@ -47,14 +47,15 @@ type
 
     The same boundary list carries a second, wider guard: where the allowlist
     above names a class, the generic arm opens with
-    `if IsEngineIntegrityFault(E) then raise;`. This ceiling is opaque because
+    `if IsEngineFault(E) then raise;`. This ceiling is opaque because
     a ceiling the guest can catch is one it can ignore; an integrity fault is
     opaque for a stronger reason still, and is the backstop for the failure
     this family cannot describe — a temporary left unrooted across a
     collecting safe point surfaces as a use-after-free, which without the guard
-    `catch (e)` absorbs. The family, its two deliberate carve-outs and the
-    reasoning live in Goccia.EngineFault.pas and
-    docs/adr/0109-engine-integrity-faults-are-uncatchable.md. }
+    `catch (e)` absorbs. The family, its deliberate exclusions and the
+    reasoning live in Goccia.EngineFault.pas,
+    docs/adr/0109-engine-integrity-faults-are-uncatchable.md and
+    docs/adr/0201-every-application-stops-on-an-engine-fault.md. }
   TGocciaMemoryLimitError = class(Exception)
   private
     FRequestedBytes: Int64;

@@ -18,7 +18,7 @@ function SymbolRegistryObject: TValue;
 implementation
 
 uses
-  SysUtils, Math, DateUtils, TimingUtils, Goccia.VM, Goccia.Builtins;
+  SysUtils, Math, DateUtils, TimingUtils, Goccia.VM, Goccia.Builtins, Goccia.EngineFault;
 
 const
   okDate = 18;
@@ -87,7 +87,11 @@ begin
       DT := EncodeDateTime(Trunc(Y), Trunc(Mo) + 1, Trunc(Dd), Trunc(H), Trunc(Mi), Trunc(Se), Trunc(Ms));
       T := DateTimeToUnix(DT, False) * 1000.0 + Trunc(Ms);
     except
-      T := NaN;
+      on E: Exception do
+      begin
+        if IsEngineFault(E) then raise;
+        T := NaN;
+      end;
     end;
   end;
   O := NewObject(RootShapeFor(DateProto), 0, okDate);

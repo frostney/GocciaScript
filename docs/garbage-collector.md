@@ -261,7 +261,7 @@ applications do not take them.
 | Setting | Effect |
 |---|---|
 | `--gc-stress` | Every nursery allocation runs a minor collection, and every eighth minor collection a major one too (`GCStress`) |
-| `--gc-verify` | Checks every root for a valid pointer as each collection scans it, that every old cell pointing into the nursery is remembered before each minor collection, and after each collection that no live cell points into the nursery or at a freed cell; after a minor collection it also fills the emptied nursery with `$DB`, so a pointer that was not updated meets a header no cell has (`GCVerify`). A failure prints the cell and field to stderr and exits with status 9 |
+| `--gc-verify` | Checks every root for a valid pointer as each collection scans it, that every old cell pointing into the nursery is remembered before each minor collection, and after each collection that no live cell points into the nursery or at a freed cell; after a minor collection it also fills the emptied nursery with `$DB`, so a pointer that was not updated meets a header no cell has (`GCVerify`). A failure prints the cell and field to stderr, then the `Engine fault:` diagnostic, and exits with status 70 |
 | `GOCCIA_NURSERY_KB=<n>` | A nursery of n KiB, so minor collections come every few kilobytes. `goccia` applies it to a script's heap and to the engine `goccia --test` makes; `GOCCIA_NURSERY_MB` sets it in MiB for a script. The test262 host (`Goccia.Test262`) reads it too, with `GOCCIA_GC_VERIFY` for `--gc-verify` |
 | `GOCCIA_HOST=1` | Installs the hidden `GocciaHost` object, whose `gc()` collects at once, for the regression scripts |
 

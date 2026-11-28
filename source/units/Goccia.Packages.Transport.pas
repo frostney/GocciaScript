@@ -66,7 +66,9 @@ type
 implementation
 
 uses
-  HTTPClient;
+  HTTPClient,
+
+  Goccia.EngineFault;
 
 const
   HTTPS_SCHEME = 'https';
@@ -105,8 +107,12 @@ begin
     Parsed := ParseHTTPURL(AURL);
   except
     on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        raise;
       raise EGocciaProviderTransportError.CreateFmt(
         'not a provider URL: %s', [AURL]);
+    end;
   end;
   if (LowerCase(Parsed.Scheme) <> HTTPS_SCHEME) or
      not SameText(Parsed.Host, AHost) or
@@ -129,7 +135,11 @@ begin
       on E: EGocciaProviderTransportError do
         raise;
       on E: Exception do
+      begin
+        if IsEngineFault(E) then
+          raise;
         raise EGocciaProviderTransportError.Create(E.Message);
+      end;
     end;
   finally
     AllowedHosts.Free;

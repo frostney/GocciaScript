@@ -582,7 +582,8 @@ function TimeOriginInit: Boolean;
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils, NativeStackBounds, Goccia.ThreadCleanupRegistry, Goccia.NumberExponentiation,
+  Goccia.EngineFault;
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
   (`call U_$...`, for the AFL build, -Aas): called through a local copy, it is called through a register }
@@ -1307,11 +1308,14 @@ end;
 { cold (its strings would give ScanCell an exception frame): an object whose Aux points nowhere valid }
 procedure ReportBadScan(O: PObj); noinline;
 begin
+  {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+  BeginEngineCheckReport;
   Write(ErrOutput, 'scan: object ', IntToHex(PtrUInt(O), 16), ' okind ', O^.OKind, ' oflags ', O^.OFlags,
     ' aux1 ', IntToHex(O^.Aux1, 16), ' aux2 ', IntToHex(O^.Aux2, 16), ' not a nursery cell');
   if (O^.OKind = 2) and Assigned(GCDescribeNative) then Write(ErrOutput, ' fn ', GCDescribeNative(O^.Native));
   WriteLn(ErrOutput, ' minor ', GCMinorCount);
-  Halt(9);
+  StopOnEngineCheck('collector scan');
+  {$POP}
 end;
 
 procedure ScanCell(C: PCell);
@@ -1665,7 +1669,9 @@ function RootAt(I: Integer): TValue; inline; begin Result := TempRoots[I]; end;
 procedure PopRoots(N: Integer); inline;
 begin
   Dec(TempTop, N);
-  if TempTop < 0 then RunError(204);   { more pops than pushes: a native's root bookkeeping is off }
+  { more pops than pushes: a native's root bookkeeping is off. EInvalidPointer, an engine fault (RunError would halt
+    the process from this thread instead, with exit status 204 and no report) }
+  if TempTop < 0 then RaiseRuntimeError(204);
 end;
 
 { open upvalues are linked through raw pointers; after a minor GC the moved ones are re-linked by the VM }
@@ -2158,11 +2164,14 @@ procedure VerifyHeap(const Phase: string);
 var I: Integer; P: PPage; Q: PByte; C: PCell; L: PLarge;
   procedure Bad(C: PCell; const Field: string; V: QWord);
   begin
+    {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+    BeginEngineCheckReport;
     Write(ErrOutput, 'heap verify (', Phase, ' minor ', GCMinorCount, ' major ', GCMajorCount, '): cell ',
       IntToHex(PtrUInt(C), 16), ' kind ', C^.Kind, ' flags ', C^.Flags);
     if C^.Kind = ckObject then Write(ErrOutput, ' okind ', PObj(C)^.OKind, ' oflags ', PObj(C)^.OFlags);
     WriteLn(ErrOutput, ' field ', Field, ' = ', IntToHex(V, 16));
-    Halt(9);
+    StopOnEngineCheck('heap verification');
+    {$POP}
   end;
   procedure CheckP(C: PCell; const Field: string; Ptr: Pointer);
   var B: PByte;
@@ -2228,8 +2237,11 @@ begin
   for I := 0 to ShapeCount - 1 do
     if ((AllShapes[I]^.Proto shr 48) = TAG_PTR_HI) and IsYoung(PtrOf(AllShapes[I]^.Proto)) then
     begin
+      {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+      BeginEngineCheckReport;
       WriteLn(ErrOutput, 'after minor ', GCMinorCount, ': shape ', I, ' still points into the nursery: ', IntToHex(AllShapes[I]^.Proto, 16));
-      Halt(9);
+      StopOnEngineCheck('shape verification');
+      {$POP}
     end;
 end;
 
@@ -2247,9 +2259,12 @@ procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 begin
   if ((V shr 48) = TAG_PTR_HI) and not ValidPtr(Pointer(PtrUInt(V and PTR_MASK))) then
   begin
+    {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+    BeginEngineCheckReport;
     WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', Where, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
       ' nursery ', IntToHex(PtrUInt(NurseryStart), 16));
-    Halt(9);
+    StopOnEngineCheck('root pointer');
+    {$POP}
   end;
 end;
 
@@ -2260,9 +2275,12 @@ begin
   begin
     if AllShapes[I]^.Proto = TAG_PTR then
     begin
+      {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+      BeginEngineCheckReport;
       WriteLn(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' has a nil prototype; count ', AllShapes[I]^.Count,
         ' minor ', GCMinorCount, ' inminor ', InMinor);
-      Halt(9);
+      StopOnEngineCheck('shape prototype');
+      {$POP}
     end;
     if GCVerify then
     begin
@@ -2271,11 +2289,14 @@ begin
       if ((V shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(V))^.Kind > 40) or (PCell(PtrOf(V))^.Size = 0) or
          (PCell(PtrOf(V))^.Size > 1 shl 30)) then
       begin
+        {$PUSH}{$I-}   { the finding is written with I/O checks off: a failed write cannot raise }
+        BeginEngineCheckReport;
         Write(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' (dict ', AllShapes[I]^.IsDict, ', count ', AllShapes[I]^.Count,
           ') has a bad prototype ', IntToHex(V, 16), ' kind ', PCell(PtrOf(V))^.Kind, ' minor ', GCMinorCount, '; keys:');
         for J := 0 to AllShapes[I]^.Count - 1 do Write(ErrOutput, ' ', StrToUnicode(AllShapes[I]^.Keys[J]));
         WriteLn(ErrOutput);
-        Halt(9);
+        StopOnEngineCheck('shape prototype');
+        {$POP}
       end;
     end;
     { a minor collection keeps every shape's prototype (it moves the young ones); a major one marks a prototype

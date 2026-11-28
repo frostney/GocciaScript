@@ -27,7 +27,7 @@ implementation
 
 uses
   Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, Goccia.Regex, Goccia.Instructions,
-  Goccia.Snapshot, Goccia.ThreadCleanupRegistry, Goccia.Error.Messages;
+  Goccia.Snapshot, Goccia.ThreadCleanupRegistry, Goccia.Error.Messages, Goccia.EngineFault;
 
 {$I Goccia.RegExpPrelude.inc}
 
@@ -81,6 +81,7 @@ begin
       on E: EHeapExternalMemoryLimit do raise;
       on E: Exception do
       begin
+        if IsEngineFault(E) then raise;
         Msg := 'Invalid regular expression: /' + Pattern + '/' + Flags + ': ' + UnicodeString(E.Message);
         Exit(False);
       end;

@@ -209,3 +209,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0197 — Engines share an instruction budget through reserves](0197-engines-share-an-instruction-budget-through-reserves.md)
 - [0199 — import.meta and Script imports follow the real path](0199-import-meta-and-script-imports-follow-the-real-path.md)
 - [0200 — YAML is parsed by a port of saphyr's scanner and event parser](0200-yaml-is-parsed-by-a-port-of-saphyrs-scanner-and-event-parser.md)
+- [0201 — Every application stops on an engine fault](0201-every-application-stops-on-an-engine-fault.md)

@@ -111,6 +111,39 @@ jobs:
             build/GocciaBenchmarkRunner
             build/GocciaRunner
 
+  # The applications built with Goccia.FaultInjection's hook, for the cli job's
+  # engine-fault checks (scripts/test-engine-faults.ts). No shipped target sets
+  # GOCCIA_FAULT_INJECTION; this job builds beside `build` rather than in it so
+  # the hook's builds do not lengthen the path every other job waits on.
+  fault-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      - name: Build the fault-injection applications
+        env:
+          GOCCIA_VARIANT: FaultInjection
+          GOCCIA_FPC_FLAGS: -dGOCCIA_FAULT_INJECTION
+        run: ./build.pas --prod runner testrunner benchmarkrunner bundler repl loaderbare test262runner fuzzharness tomlcompliancerunner yamlcompliancerunner
+
+      - name: Upload the fault-injection applications
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fault-injection-pr
+          retention-days: 1
+          path: build/Goccia*FaultInjection
+
   # ci.yml runs the same steps on pushes to main. Keep the two lists identical.
   docs:
     runs-on: ubuntu-latest
@@ -154,6 +187,11 @@ jobs:
 
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
+
+      - name: Check that catch-all handlers guard against engine faults
+        run: |
+          bun run scripts/check-fault-guards.ts --self-test
+          bun run scripts/check-fault-guards.ts
 
       - name: Check parallel CI compilation
         run: python3 .github/scripts/test-compile-programs.py
@@ -864,7 +902,7 @@ jobs:
           path: web-tooling-report.json
 
   cli:
-    needs: build
+    needs: [build, fault-build]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -900,6 +938,12 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: build-pr
+          path: build/
+
+      - name: Download the fault-injection applications
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: fault-injection-pr
           path: build/
 
       - name: Make binaries executable
@@ -963,6 +1007,9 @@ jobs:
 
       - name: Check FFI callback slot exhaustion in its own process
         run: bun run scripts/test-cli-ffi-callback-slots.ts
+
+      - name: Check that every application stops on an engine fault
+        run: bun run scripts/test-engine-faults.ts
 
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts

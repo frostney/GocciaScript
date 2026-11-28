@@ -34,7 +34,11 @@ implementation
 uses
   CLI.Options,
 
+  Goccia.EngineFault,
   Goccia.Error,
+  {$IFDEF GOCCIA_FAULT_INJECTION}
+  Goccia.FaultInjection,
+  {$ENDIF}
   Goccia.Modules.Resolver,
   Goccia.Terminal.Colors;
 
@@ -67,6 +71,9 @@ function TGocciaApplication.Run: Integer;
 begin
   Result := 0;
   try
+    {$IFDEF GOCCIA_FAULT_INJECTION}
+    InjectFaultAt('startup');
+    {$ENDIF}
     Execute;
   except
     { An unusable invocation: the command did no work (CLI conventions). }
@@ -77,6 +84,10 @@ begin
     end;
     on E: Exception do
     begin
+      { a fault the application's own handlers did not stop at: raised on the
+        main thread, outside any file (ADR 0201) }
+      if IsEngineFault(E) then
+        AbortOnEngineFault(FName, E);
       HandleError(E);
       Result := 1;
     end;
@@ -89,16 +100,30 @@ var
   App: TGocciaApplication;
 begin
   Result := 1;
-  App := AClass.Create(AName);
+  { Run stops on a fault inside Execute; this handler stops on one in the
+    application's construction, its ending and its destruction (ADR 0201) }
   try
-    Result := App.Run;
-  finally
-    if Result <> 0 then
-      AClass.ProcessEnding(Result)
-    else
-      AClass.ProcessEnding(ExitCode);
-    App.Free;
-    AClass.ProcessEnded;
+    App := AClass.Create(AName);
+    try
+      Result := App.Run;
+    finally
+      {$IFDEF GOCCIA_FAULT_INJECTION}
+      InjectFaultAt('shutdown');
+      {$ENDIF}
+      if Result <> 0 then
+        AClass.ProcessEnding(Result)
+      else
+        AClass.ProcessEnding(ExitCode);
+      App.Free;
+      AClass.ProcessEnded;
+    end;
+  except
+    on E: Exception do
+    begin
+      if IsEngineFault(E) then
+        AbortOnEngineFault(AName, E);
+      raise;
+    end;
   end;
 end;
 
