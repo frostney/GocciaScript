@@ -283,11 +283,12 @@ begin
   PushRoot(MkPtr(R));
   if IsObject(Arg(Args, Argc, 1)) then
   begin
-    Keys := OwnKeys(ObjOf(Args[1]), False);
+    if not OwnKeys(ObjOf(Args[1]), False, Keys) then begin PopRoots(1); Exit(False); end;
     PushRoot(Keys);
     N := ArrayLen(ObjOf(Keys));
     for I := 0 to N - 1 do
     begin
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
       K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
       if not DescriptorOf(Args[1], K, D) then begin PopRoots(2); Exit(False); end;
       DefineOwn(RootAt(TempTop - 2), K, D, pfDefault);
@@ -307,7 +308,7 @@ begin
   if not GetV(GlobalObj, AtomOf('Object'), DP) then Exit(False);
   if not GetV(DP, AtomOf('defineProperty'), DP) then Exit(False);
   Scratch2 := DP;
-  Keys := OwnKeys(ObjOf(Args[2]), True);
+  if not OwnKeys(ObjOf(Args[2]), True, Keys) then Exit(False);
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
@@ -362,7 +363,11 @@ begin
     if not IsObject(Args[I]) then Continue;
     for Pass := 0 to 1 do
     begin
-      if Pass = 0 then Keys := OwnKeys(ObjOf(Args[I]), True) else Keys := OwnSymbols(Args[I], True);
+      if Pass = 0 then
+      begin
+        if not OwnKeys(ObjOf(Args[I]), True, Keys) then Exit(False);
+      end
+      else Keys := OwnSymbols(Args[I], True);
       PushRoot(Keys);
       N := ArrayLen(ObjOf(Keys));
       for J := 0 to N - 1 do
@@ -707,7 +712,7 @@ function Reflect_OwnKeys(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Syms: TValue; I, N: Integer;
 begin
   if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.ownKeys called on non-object'));
-  Res := OwnKeys(ObjOf(Args[1]), False);
+  if not OwnKeys(ObjOf(Args[1]), False, Res) then Exit(False);
   if ObjOf(Args[1])^.OKind = okProxy then Exit(True);
   PushRoot(Res);
   Syms := OwnSymbols(Args[1], False);

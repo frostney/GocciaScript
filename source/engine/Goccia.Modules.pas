@@ -2367,8 +2367,7 @@ begin
     begin
       if not IsObject(W) then begin ThrowTypeError('The ''with'' option of import() must be an object'); PopRoots(1); Exit(Reject); end;
       PushRoot(W);
-      Keys := OwnKeys(ObjOf(W), True);
-      if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(2); Exit(Reject); end;
+      if not OwnKeys(ObjOf(W), True, Keys) then begin PopRoots(2); Exit(Reject); end;
       PushRoot(Keys);
       N := ArrayLen(ObjOf(Keys));
       for I := 0 to N - 1 do

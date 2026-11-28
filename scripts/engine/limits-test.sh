@@ -63,6 +63,25 @@ check typed-from-iterable-budget --max-instructions=15000 'Fatal error: Executio
   'const a = new Int32Array(10000); Int32Array.from(a); console.log(42);'
 check typed-of-budget --max-instructions=3000 'Fatal error: Execution exceeded instruction limit of 3000' \
   'const b = new Array(2000); Int32Array.of(...b); console.log(42);'
+# own-key loops: one step per key listed, and one per key a native then walks. A String's characters are its keys.
+# Single-loop cases list 100,000 keys under a cap of 200. Cases with two loops have a cap below their total but above
+# the total less either loop's keys (measured: 10,000 keys walked once more 20,013 to 20,016, the array cases 30,019
+# and 30,020 with fill's 10,000), so a loop that stopped polling would let the case finish.
+check own-keys-control "$TA_CAP" '42' 'Object.keys("x"); console.log(42);'
+check own-keys-budget "$TA_CAP" "$TA_LIMIT" 'Object.keys("x".repeat(100000)); console.log(42);'
+check own-names-budget "$TA_CAP" "$TA_LIMIT" 'Object.getOwnPropertyNames("x".repeat(100000)); console.log(42);'
+check for-in-keys-budget "$TA_CAP" "$TA_LIMIT" 'for (const k in "x".repeat(100000)) break; console.log(42);'
+K_CAP=--max-instructions=15000
+K_LIMIT='Fatal error: Execution exceeded instruction limit of 15000'
+check own-values-budget "$K_CAP" "$K_LIMIT" 'Object.values("x".repeat(10000)); console.log(42);'
+check own-entries-budget "$K_CAP" "$K_LIMIT" 'Object.entries("x".repeat(10000)); console.log(42);'
+check own-assign-budget "$K_CAP" "$K_LIMIT" 'Object.assign({}, "x".repeat(10000)); console.log(42);'
+check own-spread-budget "$K_CAP" "$K_LIMIT" '({ ..."x".repeat(10000) }); console.log(42);'
+check own-descriptors-budget "$K_CAP" "$K_LIMIT" 'Object.getOwnPropertyDescriptors("x".repeat(10000)); console.log(42);'
+check own-array-spread-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
+  'const a = new Array(10000).fill(0); ({ ...a }); console.log(42);'
+check own-freeze-budget --max-instructions=25000 'Fatal error: Execution exceeded instruction limit of 25000' \
+  'const a = new Array(10000).fill(0); Object.freeze(a); console.log(42);'
 
 T='Fatal error: file timed out after 200ms'
 check loop --timeout=200 "$T" 'while (true) {}'
@@ -106,6 +125,9 @@ check big-square --timeout=200 "$T" 'let b = 3n; for (;;) b = b * b + 1n;'
 check big-divide --timeout=200 "$T" 'const b = 3n ** 3000000n; for (;;) b / (b >> 4000000n);'
 check big-string --timeout=200 "$T" 'String(7n ** 3000000n);'
 check big-parse --timeout=200 "$T" 'BigInt("7".repeat(3000000));'
+# a native that lists millions of own keys stops at the deadline: Object.entries of a String object of 4,000,000
+# characters runs for about a second with no limit, all of it in one call
+check own-entries-timeout --timeout=200 "$T" 'Object.entries("x".repeat(4000000)); console.log("returned");'
 check under-timeout --timeout=5000 '499999500000' 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s);'
 
 I='Fatal error: Execution exceeded instruction limit of 1000'
@@ -151,6 +173,10 @@ check mem-garbage --max-memory=32MiB '1999999000000' \
   'let n = 0; for (let i = 0; i < 2e6; i++) { const o = { x: i }; n += o.x; } console.log(n);'
 check mem-reserve --max-memory=32MiB 'RangeError' \
   'try { new ArrayBuffer(64 * 1024 * 1024); } catch (e) { console.log(e.name); }'
+# the index keys of 2,000,000 characters pass the limit while Object.entries lists them: the refusal reaches the
+# script at the next key, where a native that did not poll ran a full collection for every nursery it filled
+check mem-own-entries --max-memory=32MiB 'RangeError' \
+  'try { Object.entries("x".repeat(2000000)); console.log("returned"); } catch (e) { console.log(e.name); }'
 
 check max-stack --max-stack=100 '100 true' 'let d = 0; function r() { d++; r(); } try { r(); } catch (e) { console.log(d, e instanceof RangeError); }'
 
