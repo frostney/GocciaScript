@@ -10556,8 +10556,11 @@ await section("Runner sandbox mode: nested engines created back to back get unre
         path: "/main.js",
         text: [
           'import { runScript } from "goccia";',
-          'const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(() => Number(runScript("/child.js").result));',
-          'console.log(values.join("|"));',
+          "const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(() => {",
+          '  const child = runScript("/child.js");',
+          '  return child.ok && typeof child.result === "number" ? child.result : null;',
+          "});",
+          "console.log(JSON.stringify(values));",
         ].join("\n"),
       },
       { path: "/child.js", text: "Math.random();" },
@@ -10568,10 +10571,15 @@ await section("Runner sandbox mode: nested engines created back to back get unre
       stderr: "pipe",
     });
     const output = proc.stdout.toString().trim();
-    const values = output.split("|").map(Number);
-    if (proc.exitCode !== 0 || values.length !== 10 || values.some((v) => !(v >= 0 && v < 1)))
+    let values: unknown[] = [];
+    try {
+      const parsed: unknown = JSON.parse(output);
+      if (Array.isArray(parsed)) values = parsed;
+    } catch {}
+    if (proc.exitCode !== 0 || values.length !== 10 || values.some((v) => typeof v !== "number" || !(v >= 0 && v < 1)))
       throw new Error(`Sandbox mode nested Math.random: expected ten numbers, got ${output}${proc.stderr.toString()}`);
-    const spread = Math.max(...values) - Math.min(...values);
+    const numbers = values as number[];
+    const spread = Math.max(...numbers) - Math.min(...numbers);
     if (spread <= 0.1)
       throw new Error(`Sandbox mode nested Math.random: ten engines' first values span only ${spread}: ${output}`);
   } finally {

@@ -15,10 +15,6 @@ procedure InitBuiltins;
 { Math.random's own stream from Seed (the engine's is fixed until a host seeds it: the conformance and benchmark
   host keeps runs repeatable) }
 procedure SeedMathRandom(Seed: QWord);
-{ a seed for SeedMathRandom that no other engine of any process is likely to get: a nanosecond clock, the process id,
-  Salt (the caller's, such as the engine's address) and a count of the seeds this process made, mixed with SplitMix64
-  so that seeds made a moment apart give unrelated streams }
-function MixedMathRandomSeed(Salt: QWord): QWord;
 var
   { Goccia.Intl's full Unicode case mapping (Locale '' the root's) and normalization (Form NFC, NFD, NFKC or NFKD) }
   CaseMapHook: function(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean = nil;
@@ -34,7 +30,7 @@ threadvar
 implementation
 
 uses
-  NumericText, Goccia.ObjModel, BigInteger, Goccia.BigIntV, TextSemantics, TimingUtils, UnicodeNormalization
+  NumericText, Goccia.ObjModel, BigInteger, Goccia.BigIntV, TextSemantics, UnicodeNormalization
   {$IFDEF GOCCIA_FAULT_INJECTION}, Goccia.FaultInjection{$ENDIF};
 
 { FPC 3.3.1 writes a call of a procedural threadvar as a direct call of the variable in its GNU assembler output
@@ -2377,33 +2373,6 @@ begin
   if Seed = 0 then Seed := RNG_DEFAULT_STATE;   { xorshift has no zero state }
   RngState := Seed;
 end;
-
-var
-  { the seeds MixedMathRandomSeed made in this process }
-  SeedCount: Int64 = 0;
-
-{$PUSH}{$Q-}{$R-}
-{ SplitMix64's step (Steele, Lea and Flood, "Fast splittable pseudorandom number generators", 2014): advances X and
-  returns a value in which every input bit reaches every output bit }
-function SplitMix64(var X: QWord): QWord;
-var Z: QWord;
-begin
-  X := X + QWord($9E3779B97F4A7C15);
-  Z := X;
-  Z := (Z xor (Z shr 30)) * QWord($BF58476D1CE4E5B9);
-  Z := (Z xor (Z shr 27)) * QWord($94D049BB133111EB);
-  Result := Z xor (Z shr 31);
-end;
-
-function MixedMathRandomSeed(Salt: QWord): QWord;
-var X: QWord;
-begin
-  X := QWord(GetNanoseconds) xor (QWord(GetProcessID) shl 32);
-  X := SplitMix64(X) xor Salt;
-  X := SplitMix64(X) xor QWord(InterLockedIncrement64(SeedCount));
-  Result := SplitMix64(X);
-end;
-{$POP}
 
 function M_Random(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var F: THostRandomFn; D: Double;
