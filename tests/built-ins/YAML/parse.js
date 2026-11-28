@@ -242,6 +242,7 @@ m:
 
   test("rejects a mapping that has the same key twice", () => {
     // keys are unique (3.2.1.3), and a repeated one fails the load (3.3)
+    expect(() => YAML.parse("a: 1\na: 2\n")).toThrow(SyntaxError);
     expect(() => YAML.parse("a: 1\na: 2\n")).toThrow(/duplicate mapping key "a"/);
     expect(() => YAML.parse("{a: 1, a: 2}")).toThrow(SyntaxError);
     expect(() => YAML.parse("- x: 1\n  x: 2\n")).toThrow(SyntaxError);
@@ -255,6 +256,8 @@ m:
     // equal collections, a mapping's entries in any order
     expect(() => YAML.parse("? [a, b]\n: 1\n? [a, b]\n: 2\n")).toThrow(SyntaxError);
     expect(() => YAML.parse("? {a: 1, b: 2}\n: x\n? {b: 2, a: 1}\n: y\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("? {~: a}\n: 1\n? {: a}\n: 2\n")).toThrow(SyntaxError);
+    expect(() => YAML.parse("? !t {a: 1, b: 2}\n: x\n? !t {b: 2, a: 1}\n: y\n")).toThrow(SyntaxError);
     // one node twice, through an alias
     expect(() => YAML.parse("{ &a [a, b]: 1, *a : 2 }")).toThrow(SyntaxError);
     // different keys that would be one property
@@ -273,6 +276,10 @@ m:
       '["a", "b"]': 1,
       '["b", "a"]': 2,
     });
+    // a tag is part of a key, and so is a null key's nullness
+    const tagged = YAML.parse("? !foo {a: 1, b: 2}\n: x\n? !bar {b: 2, a: 1}\n: y\n");
+    expect(Object.values(tagged)).toEqual(["x", "y"]);
+    expect(Object.values(YAML.parse("? {'': a}\n: 1\n? {~: a}\n: 2\n"))).toEqual([1, 2]);
     expect(YAML.parse("<<: {a: 1}\n<<: {b: 2}\n")).toEqual({ a: 1, b: 2 });
     // a key of the mapping's own wins over a merged one, before or after it
     expect(YAML.parse("<<: {a: 1}\na: 2\n")).toEqual({ a: 2 });

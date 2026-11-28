@@ -17,6 +17,7 @@ unit Goccia.YAML;
 interface
 
 uses
+  Generics.Collections,
   SysUtils,
 
   OrderedStringMap,
@@ -33,6 +34,9 @@ type
   TGocciaYAMLParser = class
   private
     FAnchors: TGocciaDataNodeMap;
+    { the mappings of the current stream whose "" key is a null, an empty
+      plain key, and not the string "" }
+    FNullKeyMappings: TDictionary<TGocciaDataNode, Boolean>;
     FEvents: TGocciaYAMLEventParser;
     FTree: TGocciaDataTree;
 
@@ -52,6 +56,7 @@ type
       const AMark: TGocciaYAMLMarker);
     function KeyName(const AEvent: TGocciaYAMLEvent;
       const AKey: TGocciaDataNode): string;
+    function KeyIdentity(const AKey: TGocciaDataNode): string;
     function ParseStream(const AText: string): TGocciaDataTree;
   public
     constructor Create;
@@ -67,7 +72,6 @@ type
 implementation
 
 uses
-  Generics.Collections,
   Math,
 
   NumericText,
@@ -88,6 +92,8 @@ const
   TAG_STANDARD_TIMESTAMP = TAG_PREFIX_STANDARD + 'timestamp';
   TAG_STANDARD_BINARY = TAG_PREFIX_STANDARD + 'binary';
   MERGE_KEY = '<<';
+  { the property name of a null key written as "~" or "null" }
+  NULL_KEY_NAME = 'null';
   BASE64_BLOCK_LENGTH = 4;
   DATA_DEPTH_OPERATION = 'YAML parsing';
 
@@ -385,17 +391,15 @@ begin
   Result := Result + '"';
 end;
 
-{ a key that is a collection as a stable JSON-like string; with
-  AUnordered, a mapping's entries in sorted order, so two equal mappings
-  (3.2.1.3) give the same string whatever order their keys came in }
+{ a key that is a collection as a stable JSON-like string }
 function CanonicalizeKeyValue(const AValue: TGocciaDataNode;
-  const AInComposite: Boolean = False; const AUnordered: Boolean = False): string;
+  const AInComposite: Boolean = False): string;
 var
   I: Integer;
-  Entries, KeyNames: TArray<string>;
+  KeyNames: TArray<string>;
 begin
   if AValue.Kind = dnkTagged then
-    Exit(CanonicalizeKeyValue(AValue.TaggedValue, AInComposite, AUnordered));
+    Exit(CanonicalizeKeyValue(AValue.TaggedValue, AInComposite));
 
   if AValue.IsContainer then
   begin
@@ -409,27 +413,20 @@ begin
         begin
           if I > 0 then
             Result := Result + ', ';
-          Result := Result + CanonicalizeKeyValue(AValue.Items[I], True,
-            AUnordered);
+          Result := Result + CanonicalizeKeyValue(AValue.Items[I], True);
         end;
         Result := Result + ']';
       end
       else
       begin
-        KeyNames := AValue.OwnKeys;
-        SetLength(Entries, Length(KeyNames));
-        for I := 0 to Length(KeyNames) - 1 do
-          Entries[I] := EscapeCompositeKeyString(KeyNames[I]) + ': ' +
-            CanonicalizeKeyValue(AValue.GetProperty(KeyNames[I]), True,
-              AUnordered);
-        if AUnordered then
-          TArrayHelper<string>.Sort(Entries);
         Result := '{';
-        for I := 0 to Length(Entries) - 1 do
+        KeyNames := AValue.OwnKeys;
+        for I := 0 to Length(KeyNames) - 1 do
         begin
           if I > 0 then
             Result := Result + ', ';
-          Result := Result + Entries[I];
+          Result := Result + EscapeCompositeKeyString(KeyNames[I]) + ': ' +
+            CanonicalizeKeyValue(AValue.GetProperty(KeyNames[I]), True);
         end;
         Result := Result + '}';
       end;
@@ -458,10 +455,12 @@ constructor TGocciaYAMLParser.Create;
 begin
   inherited Create;
   FAnchors := TGocciaDataNodeMap.Create;
+  FNullKeyMappings := TDictionary<TGocciaDataNode, Boolean>.Create;
 end;
 
 destructor TGocciaYAMLParser.Destroy;
 begin
+  FNullKeyMappings.Free;
   FAnchors.Free;
   inherited;
 end;
@@ -705,9 +704,13 @@ begin
       else if Mapping.HasProperty(Name) then
         RaiseDuplicateKey(KeyEvent.StartMark, Name);
       if Key.Kind = dnkNull then
-        See(SEEN_VALUE)
+      begin
+        See(SEEN_VALUE);
+        if Name = '' then
+          FNullKeyMappings.AddOrSetValue(Mapping, True);
+      end
       else if KeyIsValue then
-        See(SEEN_VALUE + CanonicalizeKeyValue(Key, False, True));
+        See(SEEN_VALUE + KeyIdentity(Key));
       Value := ComposeNode(NextEvent);
       Mapping.SetProperty(Name, Value);
     end;
@@ -785,6 +788,53 @@ begin
   Result := CanonicalizeKeyValue(AKey);
 end;
 
+{ a key's value as a string that two keys share only when they are equal
+  (3.2.1.3): tags kept, a mapping's entries in sorted order, and a null key
+  spelled one way however it was written }
+function TGocciaYAMLParser.KeyIdentity(const AKey: TGocciaDataNode): string;
+var
+  Entries, KeyNames: TArray<string>;
+  EntryName: string;
+  I: Integer;
+begin
+  case AKey.Kind of
+    dnkTagged:
+      Exit('!' + EscapeCompositeKeyString(AKey.TagName) + ' ' +
+        KeyIdentity(AKey.TaggedValue));
+    dnkArray, dnkObject:
+      ;
+  else
+    Exit(CanonicalizeKeyValue(AKey, True));
+  end;
+
+  // a key that contains itself has no identity: the depth guard stops it
+  EnterDataDepth(DATA_DEPTH_OPERATION);
+  try
+    if AKey.Kind = dnkArray then
+    begin
+      SetLength(Entries, AKey.Count);
+      for I := 0 to AKey.Count - 1 do
+        Entries[I] := KeyIdentity(AKey.Items[I]);
+      Result := '[' + string.Join(', ', Entries) + ']';
+      Exit;
+    end;
+    KeyNames := AKey.OwnKeys;
+    SetLength(Entries, Length(KeyNames));
+    for I := 0 to Length(KeyNames) - 1 do
+    begin
+      EntryName := KeyNames[I];
+      if (EntryName = '') and FNullKeyMappings.ContainsKey(AKey) then
+        EntryName := NULL_KEY_NAME;
+      Entries[I] := EscapeCompositeKeyString(EntryName) + ': ' +
+        KeyIdentity(AKey.GetProperty(KeyNames[I]));
+    end;
+    TArrayHelper<string>.Sort(Entries);
+    Result := '{' + string.Join(', ', Entries) + '}';
+  finally
+    LeaveDataDepth;
+  end;
+end;
+
 function TGocciaYAMLParser.ParseStream(const AText: string): TGocciaDataTree;
 var
   Event: TGocciaYAMLEvent;
@@ -812,6 +862,7 @@ begin
       // the last document's anchors would otherwise name nodes of a tree the
       // caller may free
       FAnchors.Clear;
+      FNullKeyMappings.Clear;
     end;
   except
     Result.Free;
