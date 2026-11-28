@@ -10555,6 +10555,52 @@ await section("Runner sandbox mode: deterministic nested engines use stable dist
   }
 });
 
+// Ten unrelated uniform numbers all fall within 0.1 of each other with probability about 1e-8; ten engines created back
+// to back from a time-based seed without mixing printed first values within 0.016 of each other (#2272).
+await section("Runner sandbox mode: nested engines created back to back get unrelated Math.random streams...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          "const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(() => {",
+          '  const child = runScript("/child.js");',
+          '  return child.ok && typeof child.result === "number" ? child.result : null;',
+          "});",
+          "console.log(JSON.stringify(values));",
+        ].join("\n"),
+      },
+      { path: "/child.js", text: "Math.random();" },
+    ]);
+
+    // a config of the fixture's own, so a goccia.json the working directory has (deterministic: true would fork
+    // seeded streams) cannot take the run off the default seeding this checks
+    const configDir = join(tmp, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "goccia.json"), JSON.stringify({ deterministic: false }));
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--config=${configDir}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const output = proc.stdout.toString().trim();
+    let values: unknown[] = [];
+    try {
+      const parsed: unknown = JSON.parse(output);
+      if (Array.isArray(parsed)) values = parsed;
+    } catch {}
+    if (proc.exitCode !== 0 || values.length !== 10 || values.some((v) => typeof v !== "number" || !(v >= 0 && v < 1)))
+      throw new Error(`Sandbox mode nested Math.random: expected ten numbers, got ${output}${proc.stderr.toString()}`);
+    const numbers = values as number[];
+    const spread = Math.max(...numbers) - Math.min(...numbers);
+    if (spread <= 0.1)
+      throw new Error(`Sandbox mode nested Math.random: ten engines' first values span only ${spread}: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a runScript child's stderr carries no host-side suggestion...", async () => {
   const tmp = makeNativeTmp();
   try {

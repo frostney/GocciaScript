@@ -46,7 +46,6 @@ type
   private
     FSeed: UInt64;
     FState: UInt64;
-    class function Mix(const AValue: UInt64): UInt64; static;
   public
     constructor Create(const ASeed: UInt64);
 
@@ -54,6 +53,14 @@ type
     function Fork(const AStreamId: UInt64): IGocciaHostRandom;
   end;
 
+{ A seed for a generator no other engine is likely to start from: a
+  nanosecond clock, the process id, ASalt (the caller's, such as the engine's
+  address) and ACount (the caller's count of the seeds it made, so that two
+  seeds made in the same nanosecond differ), each folded in through SplitMix64,
+  so that seeds made a moment apart give unrelated streams. }
+function FreshRandomSeed(const ASalt, ACount: UInt64): UInt64;
+
+type
   { Engine-owned host-controlled sources of JavaScript-observable time and
     randomness. Infrastructure timing (timeouts, profiling, and benchmarks)
     deliberately remains in TimingUtils. }
@@ -139,6 +146,36 @@ const
   SPLITMIX64_MULTIPLIER_2 = UInt64($94D049BB133111EB);
   RANDOM_DOUBLE_SCALE: Double = 1.0 / 9007199254740992.0;
 
+{$IFDEF FPC}
+  {$PUSH}
+{$ENDIF}
+{$OVERFLOWCHECKS OFF}
+{ SplitMix64's output function (Steele, Lea and Flood, "Fast splittable
+  pseudorandom number generators", 2014): every bit of AValue reaches every bit
+  of the result }
+function SplitMix64Mix(const AValue: UInt64): UInt64;
+begin
+  Result := AValue;
+  Result := (Result xor (Result shr 30)) * SPLITMIX64_MULTIPLIER_1;
+  Result := (Result xor (Result shr 27)) * SPLITMIX64_MULTIPLIER_2;
+  Result := Result xor (Result shr 31);
+end;
+
+function FreshRandomSeed(const ASalt, ACount: UInt64): UInt64;
+var
+  X: UInt64;
+begin
+  X := UInt64(GetNanoseconds) xor (UInt64(GetProcessID) shl 32);
+  X := SplitMix64Mix(X + SPLITMIX64_INCREMENT) xor ASalt;
+  X := SplitMix64Mix(X + SPLITMIX64_INCREMENT) xor ACount;
+  Result := SplitMix64Mix(X + SPLITMIX64_INCREMENT);
+end;
+{$IFDEF FPC}
+  {$POP}
+{$ELSE}
+  {$IFNDEF PRODUCTION}{$OVERFLOWCHECKS ON}{$ENDIF}
+{$ENDIF}
+
 { TGocciaSystemHostClock }
 
 function TGocciaSystemHostClock.EpochNanoseconds: Int64;
@@ -195,20 +232,12 @@ end;
   {$PUSH}
 {$ENDIF}
 {$OVERFLOWCHECKS OFF}
-class function TGocciaSeededHostRandom.Mix(const AValue: UInt64): UInt64;
-begin
-  Result := AValue;
-  Result := (Result xor (Result shr 30)) * SPLITMIX64_MULTIPLIER_1;
-  Result := (Result xor (Result shr 27)) * SPLITMIX64_MULTIPLIER_2;
-  Result := Result xor (Result shr 31);
-end;
-
 function TGocciaSeededHostRandom.NextDouble: Double;
 var
   RandomBits: Int64;
 begin
   FState := FState + SPLITMIX64_INCREMENT;
-  RandomBits := Int64(Mix(FState) shr 11);
+  RandomBits := Int64(SplitMix64Mix(FState) shr 11);
   Result := Int64ToDouble(RandomBits) * RANDOM_DOUBLE_SCALE;
 end;
 
@@ -216,7 +245,7 @@ function TGocciaSeededHostRandom.Fork(
   const AStreamId: UInt64): IGocciaHostRandom;
 begin
   Result := TGocciaSeededHostRandom.Create(
-    Mix(FSeed xor (AStreamId * SPLITMIX64_INCREMENT)));
+    SplitMix64Mix(FSeed xor (AStreamId * SPLITMIX64_INCREMENT)));
 end;
 {$IFDEF FPC}
   {$POP}

@@ -365,6 +365,10 @@ uses
   Goccia.Promise, Goccia.Builtins, Goccia.BigIntV, Goccia.ObjModel, Goccia.FFI, Goccia.Fetch, Goccia.Compiler, Goccia.Sandbox, Goccia.Profile, Goccia.Profiler.Compile, Goccia.Weak,
   Goccia.HeapSnapshot, Goccia.Bytecode.Profile, Goccia.EngineFault{$IFDEF GOCCIA_FAULT_INJECTION}, Goccia.FaultInjection{$ENDIF};
 
+var
+  { the Math.random seeds InstallHost made in this process (FreshRandomSeed's count), shared by every engine thread }
+  MathRandomSeedCount: LongInt = 0;
+
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
     report }
@@ -981,7 +985,8 @@ begin
     TimeOriginInit;
   end
   else
-    SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
+    { the count of the seeds this process made keeps two engines seeded in the same nanosecond apart }
+    SeedMathRandom(FreshRandomSeed(QWord(PtrUInt(Self)), QWord(LongWord(InterLockedIncrement(MathRandomSeedCount)))));
   { fetch() judges destinations by the capability set (none without one) }
   if FHasCapabilities then SetFetchPolicy(FCapabilities, FFetchMaxResponseBytes)
   else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);
