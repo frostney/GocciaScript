@@ -461,9 +461,9 @@ For YAML 1.2.2 checks against a prepared checkout of the official `yaml-test-sui
 ./build/GocciaYAMLComplianceRunner --suite-dir=/path/to/yaml-test-suite --output=tmp/yaml-suite-results.json
 ```
 
-Like the TOML runner below, it verifies the checkout against `tests/compliance/yaml-test-suite.pin` without fetching or cloning, and runs each case in its own worker process. A case is a directory with an `in.yaml`, at the top level or as a numbered variant one level down; the `name/` and `tags/` directories are symlink indexes of the same cases and are skipped. A valid case passes when `TGocciaYAMLParser.ParseDocuments(...)` reads it and, where the case has `in.json`, when its documents equal those JSON values: a tagged node compares as its content and an object's keys as a set. A case with an `error` file passes when the parser rejects it. The suite has no `in.json` for some valid cases, most of them with mapping keys JSON cannot hold (Goccia turns those into canonical strings); those cases are only checked to parse.
+Like the TOML runner below, it verifies the checkout against `tests/compliance/yaml-test-suite.pin` without fetching or cloning, and runs each case in its own worker process. A case is a directory with an `in.yaml`, at the top level or as a numbered variant one level down; the `name/` and `tags/` directories are symlink indexes of the same cases and are skipped. A valid case passes when `TGocciaYAMLEventParser` gives the events of its `test.event` and, where the case has `in.json`, when `TGocciaYAMLParser.ParseDocuments(...)` gives those JSON values: a tagged node compares as its content and an object's keys as a set. The suite has no `in.json` for some valid cases, most of them with mapping keys JSON cannot hold (Goccia turns those into canonical strings), so their events are what they are checked by. A case with an `error` file passes when the event parser rejects it.
 
-Cases listed in `tests/compliance/yaml-test-suite.known-failures` may fail. The runner exits non-zero for any other failing case, for a listed case that passes, and for a listed case the suite lacks, so a change that fixes a case removes it from the list. `--known-failures=PATH` names another list, and `scripts/test-yaml-compliance-runner.py` checks each of these outcomes on small prepared suites. `.github/scripts/run-yaml-compliance.sh` checks out the pinned suite and runs the runner, in `pr.yml`'s `build` job and in `ci.yml`'s `yaml-compliance` job.
+The runner exits non-zero when any case fails. `scripts/test-yaml-compliance-runner.py` checks each outcome on small prepared suites. `.github/scripts/run-yaml-compliance.sh` checks out the pinned suite and runs the runner, in `pr.yml`'s `build` job and in `ci.yml`'s `yaml-compliance` job.
 
 **Official TOML Suite**
 
@@ -619,6 +619,7 @@ Pascal unit tests are the tertiary testing layer for low-level internals that ar
 |-----------|-------|
 | `Goccia.Lexer.Test.pas` | Hashbang handling, Unicode line terminators in comments, identifier and keyword tokenization |
 | `Goccia.TOML.Test.pas` | `TGocciaTOMLParser.ParseDocument` scalar and array kinds, CRLF normalization in multiline strings, Unicode escapes and keys |
+| `Goccia.YAML.Events.Test.pas` | `TGocciaYAMLEventParser` event streams for anchors, flow pairs, explicit keys and node properties, CRLF breaks, surrogate-pair escapes, directives and error positions |
 | `Goccia.NumberConversion.Test.pas` | `ToUint32`, `ToInt32`, `ToUint16`, `ToUint8Clamp` and float32 rounding |
 | `Goccia.Coverage.Test.pas` | `TGocciaCoverageTracker.MergeFrom` summing statement, branch and function hits by location, the line count as the most among the statements starting on a line, Istanbul's ordering of sites, and report path keys |
 | `Goccia.Builtins.Testing.Snapshots.Test.pas` | Snapshot creation, comparison, update and pruning in each update mode |

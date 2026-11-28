@@ -80,8 +80,9 @@ node: !a!x value
     ).toThrow(SyntaxError);
   });
 
-  test("rejects directives after document content without a footer", () => {
-    expect(() =>
+  test("reads a directive-like line inside a document as scalar text", () => {
+    // a plain scalar continues on a line that starts with "%" (suite case XLQ9)
+    expect(
       YAML.parseDocuments(`
 ---
 scalar1
@@ -89,8 +90,10 @@ scalar1
 ---
 scalar2
 `),
-    ).toThrow(SyntaxError);
+    ).toEqual(["scalar1 %YAML 1.2", "scalar2"]);
+  });
 
+  test("rejects directives after document content without a footer", () => {
     expect(() =>
       YAML.parseDocuments(`
 !foo "bar"
