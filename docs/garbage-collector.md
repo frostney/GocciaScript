@@ -221,8 +221,12 @@ allocation.
 For storage outside the collector, `THeapExternalCharge.TryGrow` reserves and records bytes against the owning
 engine. Release the charge when freeing the storage. This includes failed construction and replacement of a buffer.
 RegExp uses preflight checks for compiler and optimizer workspace and keeps charges for the resulting program and
-matcher while the compiled pattern is cached. Matcher growth uses the non-collecting check while it reads the
-subject through a raw pointer.
+matcher while the compiled pattern is cached. A pattern stays cached while a RegExp object uses it: after each
+collection, a finalize hook drops the patterns of dead RegExps. A minor collection keeps the 64 idle patterns used
+last for the next RegExp of the same source, and a full collection frees every idle one with its charges. Native code
+that uses a pattern no RegExp holds, such as a string pattern's `search`, pins it. Matcher growth uses the
+non-collecting check while it reads the subject through a raw pointer. A refusal stops the match, and the caller
+collects for the bytes it asked for, with the subject and the RegExp rooted, then matches again.
 
 **What the ceiling does not bound.** It bounds the collected heap and the charged bytes, not resident memory.
 Function templates, bytecode, the WeakMap and WeakSet tables, the parser's AST, the native allocator's free blocks and
