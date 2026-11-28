@@ -62,16 +62,16 @@ Peak resident memory before the `RangeError`, Linux x86-64, `GocciaRunner` (abou
 | Script | Limit | Before | After |
 |---|---|---|---|
 | `Array.prototype.toSpliced.call({length: 2e8}, 0, 0)` | 16 MiB | 20 MB | 20 MB |
-| `new Array(2e8).fill(0)` | 16 / 64 / 256 MiB | 196 / 729 / 2,797 MB | 41 / 108 / 374 MB |
+| `new Array(2e8).fill(0)` | 16 / 64 / 256 MiB | 196 / 729 / 2,797 MB | 41 / 107 / 374 MB |
 | `o["k" + i] = 0` in a loop | 16 / 64 MiB | 200 / 721 MB | 46 / 115 MB |
-| `a.push(Symbol())` in a loop | 16 / 64 MiB | 155 / 564 MB | 34 / 80 MB |
-| 8 rounds of fresh sparse keys, each refusal caught | 16 MiB | 1,452 MB | 43 MB |
+| `a.push(Symbol())` in a loop | 16 / 64 MiB | 156 / 564 MB | 36 / 84 MB |
+| 8 rounds of fresh sparse keys, each refusal caught | 16 MiB | 1,453 MB | 43 MB |
 | `new Array(6e7)` | 16 / 256 MiB | 477 / 477 MB | 20 / 20 MB |
-| `"".padEnd(5e8, "ab")` | 16 MiB | 1,926 MB | 20 MB |
-| `"ab".repeat(2.5e8)` | 16 MiB | 1,927 MB | 20 MB |
+| `"".padEnd(5e8, "ab")` | 16 MiB | 1,927 MB | 19 MB |
+| `"ab".repeat(2.5e8)` | 16 MiB | 1,926 MB | 20 MB |
 | `new Array(2e8).join("ab")` | 16 MiB | killed at 3 GB | 34 MB |
 | `JSON.stringify(new Array(1e8))` | 16 MiB | killed at 3 GB | 28 MB |
-| `"a".repeat(1e6).replaceAll("a", "b".repeat(500))` | 16 MiB | 1,935 MB | 40 MB |
+| `"a".repeat(1e6).replaceAll("a", "b".repeat(500))` | 16 MiB | 1,934 MB | 40 MB |
 | `Array.prototype.toSpliced.call({length: 7e7}, 0, 0)` | 1 GiB | killed at 3 GB | 20 MB |
 
 - A refused run now peaks at about 1.3 to 1.6 times the limit above the process's own baseline, against 3 to 30
