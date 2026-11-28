@@ -470,9 +470,28 @@ begin
       end;
     end
     else FileName := ParamStr(I);
+  if FileName = '' then
+  begin
+    WriteLn(ErrOutput, 'Usage: goccia [options] <file>');
+    Halt(2);
+  end;
+  { as GocciaRunner reports it, not as an unhandled EFOpenError }
+  if not FileExists(FileName) then
+  begin
+    WriteLn(ErrOutput, 'Error: Path not found: ', FileName);
+    Halt(1);
+  end;
   T0 := GetTickCount64;
   { the file's bytes, decoded once (a string list would decode, split and join the lines again) }
-  FS := TFileStream.Create(FileName, fmOpenRead or fmShareDenyWrite);
+  try
+    FS := TFileStream.Create(FileName, fmOpenRead or fmShareDenyWrite);
+  except
+    on E: EFOpenError do
+    begin
+      WriteLn(ErrOutput, 'Error: ', E.Message);
+      Halt(1);
+    end;
+  end;
   try
     SetLength(Raw, FS.Size);
     if FS.Size > 0 then FS.ReadBuffer(Raw[1], FS.Size);
