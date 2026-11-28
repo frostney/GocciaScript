@@ -280,7 +280,9 @@ end;
 { the run ends at a host-set ceiling, past every handler }
 function SandboxCeiling(const Msg: UnicodeString): Boolean;
 begin
-  CeilingHit := True;
+  { the first cause that ended the run stays its cause: an abort already recorded (an audit that could not be
+    delivered, a stop) keeps its own classification and message }
+  if LimitAbortKind = 0 then CeilingHit := True;
   Result := HostAbort(Msg);
 end;
 
@@ -775,7 +777,7 @@ begin
   if E is ESandboxFsError then Exit(ThrowError('Error', E.Message));
   { the host's own failure (a capability audit it could not deliver) ends the run too, and stays an audit failure for
     the host that runs this one }
-  if E is EGocciaCapabilityAuditDeliveryError then AuditFailureHit := True;
+  if (E is EGocciaCapabilityAuditDeliveryError) and (LimitAbortKind = 0) then AuditFailureHit := True;
   Result := HostAbort(E.Message);
 end;
 

@@ -3,7 +3,8 @@ program SandboxHostAbortsTest;
 { How TGocciaSandboxHost reports the host aborts a run can end with: an embedder's own abort handle (a result, no
   exception), an embedder native's sandbox ceiling (sfkResourceLimit, past the script's handlers) and an audit sink
   that cannot take an event, the run's own or a nested run's (EGocciaCapabilityAuditDeliveryError, as before); and
-  that a run a request stops before it starts on an engine whose last run's sink failed reports no audit failure.
+  that the first of two causes stays the run's (a ceiling after a failed audit; an audit that fails while a
+  cancelled run's work is discarded); and that a run a request stops before it starts on an engine whose last run's sink failed reports no audit failure.
   Prints "Sandbox host aborts: passed". }
 
 {$mode delphiunicode}{$H+}
@@ -12,6 +13,7 @@ program SandboxHostAbortsTest;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  SyncObjs,
   SysUtils,
 
   Goccia.CapabilityAudit,
@@ -26,13 +28,30 @@ uses
 type
   TFixture = class
   public
-    Mode: Integer;          // 0 the abort handle, 1 the ceiling native, 2 the failing audit sink, 3 the child's sink
+    { 0 the abort handle, 1 the ceiling native, 2 the failing audit sink, 3 the child's sink, 4 a failed audit then a
+      ceiling in one native, 5 the abort handle with host work whose discard fails an audit }
+    Mode: Integer;
     Handle: IGocciaAbortHandle;
-    Ready: PRTLEvent;       // the guest is running (its console line "running")
+    Ready: TSimpleEvent;    // the guest is running (its console line "running")
     Started: Boolean;
+    WaitFailed: Boolean;    // the aborter never saw the guest's marker
+    Engine: TGocciaEngine;  // the run's engine, for the native of mode 4 and the host work of mode 5
+    Work: TGocciaEmbedderWork;
     procedure Configure(const ARun: TGocciaSandboxRun);
     procedure OnLine(const AMethod, ALine: string);
     procedure FailingSink(const AEvent: TGocciaCapabilityAuditEvent);
+  end;
+
+  { host work that is pending until its discard, which reports an audit the run's failing sink cannot take }
+  TAuditOnDiscard = class(TGocciaEmbedderWork)
+  public
+    Pending: Boolean;
+    Discarded: Boolean;
+    function HasPending: Boolean; override;
+    function Pump(TimeoutMs: Cardinal): Boolean; override;
+    procedure Discard; override;
+    function Mark: QWord; override;
+    procedure DiscardFrom(AMark: QWord); override;
   end;
 
   TAborter = class(TThread)
@@ -51,10 +70,50 @@ begin
   Inc(Failures);
 end;
 
+var
+  GFixture: TFixture;
+
 { ceiling(): the embedder's native budget is spent }
 function CeilingNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   Result := SandboxCeiling('native budget exhausted');
+end;
+
+{ auditThenCeiling(): an audit the sink cannot take ends the run first; the budget then runs out too }
+function AuditThenCeilingNative(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if not GFixture.Engine.Audit(gckNetFetch, False, 'example.com', 'the fixture') then
+  begin
+    SandboxCeiling('native budget exhausted');
+    Exit(False);
+  end;
+  Result := SandboxCeiling('native budget exhausted');
+end;
+
+function TAuditOnDiscard.HasPending: Boolean;
+begin
+  Result := Pending;
+end;
+
+function TAuditOnDiscard.Pump(TimeoutMs: Cardinal): Boolean;
+begin
+  Result := True;
+end;
+
+procedure TAuditOnDiscard.Discard;
+begin
+  Pending := False;
+  Discarded := True;
+  GFixture.Engine.Audit(gckNetFetch, False, 'example.com', 'the fixture');
+end;
+
+function TAuditOnDiscard.Mark: QWord;
+begin
+  Result := 0;
+end;
+
+procedure TAuditOnDiscard.DiscardFrom(AMark: QWord);
+begin
 end;
 
 procedure TFixture.Configure(const ARun: TGocciaSandboxRun);
@@ -62,16 +121,31 @@ var
   Err: UnicodeString;
 begin
   case Mode of
-    0:
+    0, 5:
       begin
         Handle := ARun.Engine.CaptureAbortHandle;
         ARun.LogLine := OnLine;
+        if Mode = 5 then
+        begin
+          Engine := ARun.Engine;
+          ARun.Engine.AuditSink := FailingSink;
+          TAuditOnDiscard(Work).Pending := True;
+          ARun.Engine.SetHostWork(Work);
+        end;
       end;
-    1:
+    1, 4:
       begin
+        if Mode = 4 then
+        begin
+          ARun.Engine.AuditSink := FailingSink;
+          Engine := ARun.Engine;
+        end;
         if not ARun.Engine.PrepareHost(Err) then
           Fail('PrepareHost: ' + string(Err));
-        PushRoot(NewNativeFunction(@CeilingNative, 'ceiling', 0));
+        if Mode = 1 then
+          PushRoot(NewNativeFunction(@CeilingNative, 'ceiling', 0))
+        else
+          PushRoot(NewNativeFunction(@AuditThenCeilingNative, 'ceiling', 0));
         try
           if not InjectGlobalBinding('ceiling', RootAt(TempTop - 1)) then
             Fail('inject ceiling');
@@ -93,7 +167,7 @@ begin
   if Pos('running', ALine) > 0 then
   begin
     Started := True;
-    RTLEventSetEvent(Ready);
+    Ready.SetEvent;
   end;
 end;
 
@@ -104,10 +178,11 @@ end;
 
 procedure TAborter.Execute;
 begin
-  // the guest is inside its loop before the request (bounded: a run that never starts fails the case below)
-  RTLEventWaitFor(Fixture.Ready, 10000);
-  if Fixture.Handle <> nil then
-    Fixture.Handle.Request;
+  // the guest is inside its loop before the request; without its marker the case fails rather than stop it on a timer
+  if (Fixture.Ready.WaitFor(10000) = wrSignaled) and (Fixture.Handle <> nil) then
+    Fixture.Handle.Request
+  else
+    Fixture.WaitFailed := True;
 end;
 
 function RunCase(const AFixture: TFixture; const ASource: string; out ARaised: string;
@@ -126,7 +201,7 @@ begin
       Host.Context.Fs.WriteAllText('/child.js', AChild);
     Host.TimeoutMilliseconds := 10000;
     Host.OnConfigureEngine := AFixture.Configure;
-    if AFixture.Mode = 0 then
+    if AFixture.Mode in [0, 5] then
     begin
       Aborter := TAborter.Create(True);
       Aborter.Fixture := AFixture;
@@ -186,14 +261,15 @@ var
   Raised: string;
 begin
   Fixture := TFixture.Create;
-  Fixture.Ready := RTLEventCreate;
+  GFixture := Fixture;
+  Fixture.Ready := TSimpleEvent.Create;
   try
     // an embedder's abort handle stops a busy loop: a result the embedder asked for, not an audit failure
     Fixture.Mode := 0;
     R := RunCase(Fixture, 'const forever = { [Symbol.iterator]() { return { next: () => ({ value: 1, done: false }) }; } };' +
       LineEnding + 'console.log("running");' + LineEnding + 'for (const x of forever) {}', Raised);
-    if not Fixture.Started then
-      Fail('the abort case''s guest never printed its marker: ' + Raised + ' ' + R.ErrorMessage)
+    if not Fixture.Started or Fixture.WaitFailed then
+      Fail('the abort case''s guest never signalled its marker: ' + Raised + ' ' + R.ErrorMessage)
     else if Raised <> '' then
       Fail('an embedder abort raised ' + Raised)
     else if R.Ok or (R.FailureKind <> sfkHostError) or (Pos('cancelled by the host', R.ErrorMessage) = 0) then
@@ -226,9 +302,38 @@ begin
       Fail(Format('a child''s failing audit sink raised "%s" (kind=%s "%s")', [Raised,
         SandboxFailureKindName(R.FailureKind), R.ErrorMessage]));
 
+    // an audit that fails first stays the cause when a ceiling follows in the same native
+    Fixture.Mode := 4;
+    R := RunCase(Fixture, 'try { ceiling(); } catch (e) { console.log("caught"); }', Raised);
+    if Pos('EGocciaCapabilityAuditDeliveryError', Raised) <> 1 then
+      Fail(Format('a ceiling after a failed audit raised "%s" (kind=%s "%s")', [Raised,
+        SandboxFailureKindName(R.FailureKind), R.ErrorMessage]));
+
+    // an audit that fails while a cancelled run's work is discarded leaves the cancellation its cause
+    Fixture.Mode := 5;
+    Fixture.Started := False;
+    Fixture.WaitFailed := False;
+    Fixture.Ready.ResetEvent;
+    Fixture.Work := TAuditOnDiscard.Create;
+    try
+      R := RunCase(Fixture, 'const forever = { [Symbol.iterator]() { return { next: () => ({ value: 1, done: false }) }; } };' +
+        LineEnding + 'console.log("running");' + LineEnding + 'for (const x of forever) {}', Raised);
+      if not Fixture.Started or Fixture.WaitFailed then
+        Fail('the discard case''s guest never signalled its marker: ' + Raised + ' ' + R.ErrorMessage)
+      else if not TAuditOnDiscard(Fixture.Work).Discarded then
+        Fail('the cancelled run never discarded its host work')
+      else if Raised <> '' then
+        Fail('an audit failed while a cancelled run''s work was discarded raised ' + Raised)
+      else if R.Ok or (R.FailureKind <> sfkHostError) or (Pos('cancelled by the host', R.ErrorMessage) = 0) then
+        Fail(Format('an audit failed during a cancellation''s discard reported ok=%s kind=%s "%s"', [BoolToStr(R.Ok, True),
+          SandboxFailureKindName(R.FailureKind), R.ErrorMessage]));
+    finally
+      FreeAndNil(Fixture.Work);
+    end;
+
     CheckReusedEngine;
   finally
-    RTLEventDestroy(Fixture.Ready);
+    Fixture.Ready.Free;
     Fixture.Free;
   end;
   if Failures > 0 then
