@@ -162,6 +162,16 @@ threadvar
   GLexHash: array of Integer;    { open addressing on the atom: binding index + 1, 0 empty }
   GVarHash: array of PStr;       { the global environment's [[VarNames]] }
   GVarCount: Integer;
+  { strict-types: the type code (TYPE_*) of global lexical binding I, 0 untyped; GLexSet checks every store }
+  GLexTypes: array of Byte;
+  { strict-types: the global objects' typed var properties (a Script's `var x: T`), open addressing on the atom,
+    with each one's type code (0 once the property is deleted) and the realm whose global object has it; every
+    write of the property's value is checked (GlobalTypeOK). One table for every realm of the thread, so a write
+    made while another realm runs is checked too. GTypeCount counts the entries }
+  GTypeKeys: array of PStr;
+  GTypeCodes: array of Byte;
+  GTypeRealms: array of Integer;
+  GTypeCount: Integer;
   EvalHintMode, EvalHintFrame, EvalHintPC, EvalHintDesc: Integer;
   EvalDesc: TValue;   { TakeEvalHint: a direct eval's description of its caller's bindings (an atom), else undefined }
   RealmEvalFn: TValue;   { the running realm's %eval%: a call is a direct eval only of this function (13.3.6.1) }
@@ -506,6 +516,9 @@ function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): B
 { a mapped arguments object's parameter map (10.4.4): the upvalue of index Key, nil when unmapped }
 function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
 function ArgsMapGet(U: PUpval): TValue;
+{ strict-types: a write of V to the property Key of O, checked when O is the global object and Key a typed var's
+  (a Script's `var x: T`); False with the TypeError pending when V does not have the type }
+function GlobalTypeOK(O: PObj; Key: PStr; V: TValue): Boolean;
 { a store of V into the parameter U that mapped index Idx of O aliases: checked first against the parameter's
   strict type (opMapArgTypes), False with the TypeError pending when it fails and nothing stored }
 function ArgsMapStore(O: PObj; U: PUpval; Idx: Int64; V: TValue): Boolean;
@@ -1464,6 +1477,7 @@ type
     GLexCount: Integer;
     GVarHash: array of PStr;
     GVarCount: Integer;
+    GLexTypes: array of Byte;
   end;
 
 threadvar
@@ -1531,6 +1545,7 @@ begin
   Realms[R].GLexCells := GLexCells; Realms[R].GLexNames := GLexNames; Realms[R].GLexConst := GLexConst;
   Realms[R].GLexHash := GLexHash; Realms[R].GLexCount := GLexCount;
   Realms[R].GVarHash := GVarHash; Realms[R].GVarCount := GVarCount;
+  Realms[R].GLexTypes := GLexTypes;
 end;
 
 procedure LoadRealm(R: Integer);
@@ -1545,9 +1560,11 @@ begin
   GLexCells := Realms[R].GLexCells; GLexNames := Realms[R].GLexNames; GLexConst := Realms[R].GLexConst;
   GLexHash := Realms[R].GLexHash; GLexCount := Realms[R].GLexCount;
   GVarHash := Realms[R].GVarHash; GVarCount := Realms[R].GVarCount;
+  GLexTypes := Realms[R].GLexTypes;
   { the running realm's state is in the threadvars only (a second reference would make SetLength copy) }
   Realms[R].GLexCells := nil; Realms[R].GLexNames := nil; Realms[R].GLexConst := nil;
   Realms[R].GLexHash := nil; Realms[R].GVarHash := nil;
+  Realms[R].GLexTypes := nil;
 end;
 
 procedure SwitchRealm(R: Integer);
@@ -1617,6 +1634,7 @@ begin
   for I := 0 to High(RealmIntSlots) do RealmIntSlots[I]^ := 0;
   GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
   GVarHash := nil; GVarCount := 0;
+  GLexTypes := nil;
   FunctionShape := RootShapeFor(VNull);   { as VMInit: replaced once Function.prototype exists }
   CurRealm := NewR;
   MultiRealm := True;
@@ -1834,12 +1852,163 @@ begin
   Result := -1;
 end;
 
+{ opCheckType: V has the strict type Code (types-as-comments; GocciaScript's Goccia.Types.Enforcement) }
+function XTypeOK(V: TValue; Code: QWord): Boolean; inline;
+begin
+  case Code of
+    TYPE_NUMBER: Result := IsNumber(V);
+    TYPE_BOOLEAN: Result := (V = VTrue) or (V = VFalse);
+    TYPE_STRING: Result := IsString(V);
+    TYPE_OBJECT: Result := IsObject(V);
+  else Result := True;
+  end;
+end;
+
+{ the TypeError of a value whose typeof is Got stored where strict type Code is required }
+function XThrowTypeMismatchOf(const Got: UnicodeString; Code: QWord): Boolean; noinline;
+var Want: UnicodeString;
+begin
+  case Code of
+    TYPE_NUMBER: Want := 'number';
+    TYPE_BOOLEAN: Want := 'boolean';
+    TYPE_STRING: Want := 'string';
+  else Want := 'object';
+  end;
+  Result := ThrowTypeError('Type ''' + Got + ''' is not assignable to type ''' + Want + '''');
+end;
+
+function XThrowTypeMismatch(V: TValue; Code: QWord): Boolean; noinline;
+begin
+  if V = VNull then Result := XThrowTypeMismatchOf('null', Code)
+  else Result := XThrowTypeMismatchOf(TypeOfStr(V), Code);
+end;
+
+{ strict-types: the type codes of the global objects' typed var properties. One table for the thread, keyed by the
+  atom and the realm whose global object has the property (GTypeRealms), so a write is checked whichever realm's
+  code makes it }
+function RealmGlobal(R: Integer): TValue;
+var I: Integer;
+begin
+  if R = CurRealm then Exit(GlobalObj);
+  for I := 0 to High(RealmValSlots) do
+    if RealmValSlots[I] = @GlobalObj then Exit(Realms[R].Vals[I]);
+  Result := VUndefined;
+end;
+
+{ the table slot of Key for realm R, -1 for none }
+function GTypeSlot(Key: PStr; R: Integer): Integer;
+var J: Integer;
+begin
+  Result := -1;
+  if GTypeCount = 0 then Exit;
+  J := AtomSlot(Key, High(GTypeKeys));
+  while GTypeKeys[J] <> nil do
+  begin
+    if (GTypeKeys[J] = Key) and (GTypeRealms[J] = R) then Exit(J);
+    J := (J + 1) and High(GTypeKeys);
+  end;
+end;
+
+{ the type code of the running realm's global var property Key, 0 for none }
+function GlobalVarType(Key: PStr): Byte;
+var J: Integer;
+begin
+  J := GTypeSlot(Key, CurRealm);
+  if J < 0 then Result := 0 else Result := GTypeCodes[J];
+end;
+
+{ the type code of property Key of O when O is a realm's global object, 0 for none }
+function GlobalTypeCodeOf(O: PObj; Key: PStr): Byte;
+var J: Integer; G: TValue;
+begin
+  Result := 0;
+  if GTypeCount = 0 then Exit;
+  J := AtomSlot(Key, High(GTypeKeys));
+  while GTypeKeys[J] <> nil do
+  begin
+    if (GTypeKeys[J] = Key) and (GTypeCodes[J] <> 0) then
+    begin
+      G := RealmGlobal(GTypeRealms[J]);
+      if IsObject(G) and (ObjOf(G) = O) then Exit(GTypeCodes[J]);
+    end;
+    J := (J + 1) and High(GTypeKeys);
+  end;
+end;
+
+{ a Script's typed var Key in the running realm (GlobalDeclInst): the first type a name is declared with stays, as
+  within one Script, until its property is deleted }
+procedure GlobalVarTypeAdd(Key: PStr; Code: Byte);
+var I, J, N: Integer; OldKeys: array of PStr; OldCodes: array of Byte; OldRealms: array of Integer;
+begin
+  J := GTypeSlot(Key, CurRealm);
+  if J >= 0 then
+  begin
+    if GTypeCodes[J] = 0 then GTypeCodes[J] := Code;
+    Exit;
+  end;
+  if (GTypeCount + 1) * 2 > Length(GTypeKeys) then
+  begin
+    OldKeys := GTypeKeys;
+    OldCodes := GTypeCodes;
+    OldRealms := GTypeRealms;
+    N := 16;
+    while N < (GTypeCount + 1) * 4 do N := N * 2;
+    GTypeKeys := nil;
+    GTypeCodes := nil;
+    GTypeRealms := nil;
+    SetLength(GTypeKeys, N);
+    SetLength(GTypeCodes, N);
+    SetLength(GTypeRealms, N);
+    for I := 0 to High(OldKeys) do
+      if OldKeys[I] <> nil then
+      begin
+        J := AtomSlot(OldKeys[I], High(GTypeKeys));
+        while GTypeKeys[J] <> nil do J := (J + 1) and High(GTypeKeys);
+        GTypeKeys[J] := OldKeys[I];
+        GTypeCodes[J] := OldCodes[I];
+        GTypeRealms[J] := OldRealms[I];
+      end;
+  end;
+  J := AtomSlot(Key, High(GTypeKeys));
+  while GTypeKeys[J] <> nil do J := (J + 1) and High(GTypeKeys);
+  GTypeKeys[J] := Key;
+  GTypeCodes[J] := Code;
+  GTypeRealms[J] := CurRealm;
+  Inc(GTypeCount);
+end;
+
+{ the global object O's property Key was deleted: a var of the name declared later starts with its own type }
+procedure GlobalVarTypeDrop(O: PObj; Key: PStr);
+var J: Integer; G: TValue;
+begin
+  if GTypeCount = 0 then Exit;
+  J := AtomSlot(Key, High(GTypeKeys));
+  while GTypeKeys[J] <> nil do
+  begin
+    if GTypeKeys[J] = Key then
+    begin
+      G := RealmGlobal(GTypeRealms[J]);
+      if IsObject(G) and (ObjOf(G) = O) then GTypeCodes[J] := 0;
+    end;
+    J := (J + 1) and High(GTypeKeys);
+  end;
+end;
+
+function GlobalTypeOK(O: PObj; Key: PStr; V: TValue): Boolean;
+var Code: Byte;
+begin
+  Result := True;
+  if GTypeCount = 0 then Exit;
+  Code := GlobalTypeCodeOf(O, Key);
+  if (Code <> 0) and not XTypeOK(V, Code) then Result := XThrowTypeMismatch(V, Code);
+end;
+
 function GLexIsConst(I: Integer): Boolean;
 begin
   Result := GLexConst[I];
 end;
 
-function GLexAdd(Key: PStr; IsConst: Boolean): Integer;
+function GLexAdd(Key: PStr; IsConst: Boolean; TypeCode: Byte = 0): Integer;
 var I, J: Integer;
 begin
   if GLexCount >= Length(GLexNames) then
@@ -1847,10 +2016,12 @@ begin
     SetLength(GLexNames, GLexCount * 2 + 16);
     SetLength(GLexConst, Length(GLexNames));
     SetLength(GLexCells, Length(GLexNames));
+    SetLength(GLexTypes, Length(GLexNames));
   end;
   Result := GLexCount;
   GLexNames[Result] := Key;
   GLexConst[Result] := IsConst;
+  GLexTypes[Result] := TypeCode;
   GLexCells[Result] := VUndefined;
   Inc(GLexCount);
   if GLexCount * 2 > Length(GLexHash) then
@@ -1975,7 +2146,7 @@ end;
   eval code whose variable environment is the global one (GdiKind 2). Function objects are bound afterwards by
   opDefGlobalFunc, once their closures exist; nothing in between can fail. }
 function GlobalDeclInst(T: PFuncTemplate): Boolean;
-var I: Integer; F: Byte; Fork: Boolean;
+var I, J: Integer; F, Code: Byte; Fork: Boolean;
 begin
   Result := False;
   if T^.GdiKind = 1 then
@@ -1996,13 +2167,36 @@ begin
   for I := 0 to High(T^.GdiVars) do
     if not CanDeclareGlobalVar(T^.GdiVars[I]) then
       Exit(ThrowTypeError('Cannot declare global variable ' + StrToUnicode(T^.GdiVars[I])));
+  { strict-types: binding a function declaration stores the function into a typed var of its name (an earlier
+    Script's, else this one's), so a type a function does not have is refused before anything is declared, as on
+    entry to a function body }
+  for I := 0 to High(T^.GdiFuncs) do
+  begin
+    Code := GlobalVarType(T^.GdiFuncs[I]);
+    if Code = 0 then
+      for J := 0 to High(T^.GdiTypedVars) do
+        if T^.GdiTypedVars[J] = T^.GdiFuncs[I] then
+        begin
+          Code := T^.GdiTypedVarCodes[J];
+          Break;
+        end;
+    if (Code <> 0) and (Code <> TYPE_OBJECT) then Exit(XThrowTypeMismatchOf('function', Code));
+  end;
   T^.GdiLexBase := GLexCount;
   Fork := False;
   for I := 0 to High(T^.GdiLex) do
   begin
     { a configurable global property it shadows from now on: global inline caches that found it must miss }
     if GlobalOwn(T^.GdiLex[I], F) then Fork := True;
-    GLexAdd(T^.GdiLex[I], T^.GdiLexConst[I]);
+    if I < Length(T^.GdiLexTypes) then Code := T^.GdiLexTypes[I] else Code := 0;
+    GLexAdd(T^.GdiLex[I], T^.GdiLexConst[I], Code);
+  end;
+  { strict-types: each typed var's property is tagged with its type; one that exists already may sit in a global
+    inline cache, which must miss from now on so the store is checked }
+  for I := 0 to High(T^.GdiTypedVars) do
+  begin
+    if GlobalOwn(T^.GdiTypedVars[I], F) then Fork := True;
+    GlobalVarTypeAdd(T^.GdiTypedVars[I], T^.GdiTypedVarCodes[I]);
   end;
   if Fork then ObjOf(GlobalObj)^.Shape := ShapeFork(ObjOf(GlobalObj)^.Shape);
   for I := 0 to High(T^.GdiVars) do CreateGlobalVarBinding(T^.GdiVars[I], T^.GdiKind = 2);
@@ -2436,6 +2630,8 @@ var U: PUpval;
 begin
   if GLexConst[I] then Exit(ThrowTypeError('Assignment to constant variable ''' + StrToUnicode(GLexNames[I]) + ''''));
   if GLexCells[I] = VUndefined then Exit(ThrowGLexTDZ(I));
+  { strict-types: a store from code compiled apart from the binding (another Script, a Function body) }
+  if (GLexTypes[I] <> 0) and not XTypeOK(V, GLexTypes[I]) then Exit(XThrowTypeMismatch(V, GLexTypes[I]));
   U := PUpval(PtrOf(GLexCells[I]));
   if U^.StackIndex >= 0 then VStack[U^.StackIndex] := V
   else
@@ -3141,31 +3337,6 @@ begin
   if U^.StackIndex >= 0 then Result := VStack[U^.StackIndex] else Result := U^.Value;
 end;
 
-{ opCheckType: V has the strict type Code (types-as-comments; GocciaScript's Goccia.Types.Enforcement) }
-function XTypeOK(V: TValue; Code: QWord): Boolean; inline;
-begin
-  case Code of
-    TYPE_NUMBER: Result := IsNumber(V);
-    TYPE_BOOLEAN: Result := (V = VTrue) or (V = VFalse);
-    TYPE_STRING: Result := IsString(V);
-    TYPE_OBJECT: Result := IsObject(V);
-  else Result := True;
-  end;
-end;
-
-function XThrowTypeMismatch(V: TValue; Code: QWord): Boolean; noinline;
-var Got, Want: UnicodeString;
-begin
-  if V = VNull then Got := 'null' else Got := TypeOfStr(V);
-  case Code of
-    TYPE_NUMBER: Want := 'number';
-    TYPE_BOOLEAN: Want := 'boolean';
-    TYPE_STRING: Want := 'string';
-  else Want := 'object';
-  end;
-  Result := ThrowTypeError('Type ''' + Got + ''' is not assignable to type ''' + Want + '''');
-end;
-
 { The compiler supplies one type code per index in Aux2, up to the last typed parameter. Only a live
   mapping applies the code. Keeping it on the object also covers closed and suspended parameter cells. }
 function ArgsMapCheck(O: PObj; Idx: Int64; V: TValue): Boolean;
@@ -3227,6 +3398,14 @@ function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
 var U: PUpval; Idx: Int64;
 begin
   if (Key = AtomLength) and (O^.Hdr.Extra <> 0) then TAWatchedChanged(O);
+  { strict-types: a deleted typed var property loses its type (a configurable one: a var of non-strict eval code,
+    or a property the var was declared over) }
+  if (GTypeCount <> 0) and (GlobalTypeCodeOf(O, Key) <> 0) then
+  begin
+    Result := DeleteIfConfigurable0(O, Key);
+    if Result then GlobalVarTypeDrop(O, Key);
+    Exit;
+  end;
   U := ArgsMapCell(O, Key, Idx);
   if U = nil then Exit(DeleteIfConfigurable0(O, Key));
   PushRoot(MkPtr(O));
@@ -3596,6 +3775,9 @@ begin
   O := ObjOf(Obj);
   if O^.OKind = okProxy then Exit(ProxySetHook(Obj, Key, V, Obj, Ok));
   if O^.OKind = okModuleNS then begin Ok := False; Exit(True); end;   { 10.4.6.9 [[Set]]: false }
+  { strict-types: a typed var's property of a global object, whether a data property or an accessor whose setter
+    would take the value }
+  if (GTypeCount <> 0) and not GlobalTypeOK(O, Key, V) then Exit(False);
   { 10.4.3: a String object's characters and length are non-writable own properties }
   if (O^.OKind = okStringObj) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then
   begin Ok := False; Exit(True); end;
@@ -3712,6 +3894,8 @@ begin
         begin
           Acc := PAccessor(PtrOf(GetSlot(W, S)));
           if Acc^.Setter = VUndefined then begin Ok := False; Exit(True); end;
+          { strict-types: a typed var's accessor on a global object the receiver inherits from }
+          if (GTypeCount <> 0) and not GlobalTypeOK(W, Key, V) then Exit(False);
           Exit(CallValue(Acc^.Setter, Obj, @V, 1, Dummy));
         end;
         { an inherited read-only data property: the assignment fails (10.1.9.2 step 2.a) }
@@ -6995,6 +7179,7 @@ begin
   end
   else if (O^.OFlags and 8) <> 0 then
     Exit(ThrowTypeError('Cannot define property ' + StrToUnicode(Key) + ', object is not extensible'));
+  if (GTypeCount <> 0) and not GlobalTypeOK(O, Key, V) then Exit(False);
   DefineOwn(Obj, Key, V, pfDefault);
   Result := True;
 end;
@@ -7790,7 +7975,8 @@ begin
     Exit(True);
   end;
   CI := ShapeLookup(O^.Shape, IC^.Key);
-  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and not O^.Shape^.IsDict then
+  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and not O^.Shape^.IsDict and
+     ((GTypeCount = 0) or (GlobalTypeCodeOf(O, IC^.Key) = 0)) then
   begin
     IC^.Shape := O^.Shape; IC^.Slot := CI; IC^.NewShape := nil;
     SetSlot(O, CI, V);
@@ -9396,10 +9582,12 @@ LReload:
               Continue;
             end;
             CI := ShapeLookup(O^.Shape, IC^.Key);
-            if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) then
+            if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and
+               (GlobalVarType(IC^.Key) = 0) then
             begin
               { an own writable data property: cache it (the global object's dictionary shape keeps its
-                identity while properties are added, and gets a new one when one is deleted or changed) }
+                identity while properties are added, and gets a new one when one is deleted or changed); a
+                typed var's (strict-types) is never cached, so every store reaches GlobalTypeOK }
               IC^.Shape := O^.Shape; IC^.Slot := CI;
               SetSlot(O, CI, R[A]);
               Continue;
@@ -11454,6 +11642,7 @@ begin
   RealmValSlots := nil; RealmPtrSlots := nil; RealmIntSlots := nil;
   GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
   GVarHash := nil; GVarCount := 0;
+  GLexTypes := nil; GTypeKeys := nil; GTypeCodes := nil; GTypeRealms := nil; GTypeCount := 0;
 end;
 
 procedure VMInit;
@@ -11635,6 +11824,11 @@ begin
   GLexConst := nil;
   GLexHash := nil;
   GVarHash := nil;
+  GLexTypes := nil;
+  GTypeKeys := nil;
+  GTypeCodes := nil;
+  GTypeRealms := nil;
+  GTypeCount := 0;
   HostAbortText := '';
   AuditSiteSource := '';
   Realms := nil;

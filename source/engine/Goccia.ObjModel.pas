@@ -652,6 +652,8 @@ begin
     D.Value := Cur.Value;
   end;
   if not Compatible(Ext, D, Found, Cur) then begin PopRoots(1); Exit(True); end;
+  { strict-types: a value given to a typed var's property of the global object }
+  if DIn.HasValue and not GlobalTypeOK(P, Key, D.Value) then begin PopRoots(1); Exit(False); end;
   { a value given goes to the parameter too, checked against its strict type before anything changes (nothing
     between here and the property's store runs code or fails) }
   if Mapped and DIn.HasValue and not ArgsMapStore(P, ArgsMapCell(P, Key, MappedIdx), MappedIdx, D.Value) then
@@ -1093,6 +1095,8 @@ function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Bool
 var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64; U: PUpval;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  { strict-types: a typed var's property of a global object as its own receiver, a setter's value included }
+  if (O = Receiver) and not GlobalTypeOK(ObjOf(O), Key, V) then Exit(False);
   { 10.4.4.4 a mapped arguments object as its own receiver: a mapped index's parameter too }
   if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) then
   begin
@@ -1155,6 +1159,9 @@ begin
     Exit;
   end;
   if not IsCallable(D.Set_) then begin PopRoots(3); Exit(True); end;
+  { strict-types: the setter of a typed var's accessor on a global object takes only a value of the var's type,
+    whatever the receiver (a proxy forwarding to the global object, an object inheriting from it) }
+  if not GlobalTypeOK(ObjOf(RootAt(TempTop - 3)), Key, RootAt(TempTop - 2)) then begin PopRoots(3); Exit(False); end;
   V := RootAt(TempTop - 2);
   Result := CallValue(D.Set_, RootAt(TempTop - 1), @V, 1, R);
   Ok := Result;

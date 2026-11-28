@@ -755,7 +755,8 @@ type
     procedure StmtList(L: TObjectList<TGocciaASTNode>); overload;
     procedure StmtList(L: TObjectList<TGocciaStatement>); overload;
     procedure HoistBlock(L: TList<TGocciaASTNode>);
-    procedure DeclareGlobals(T: PFuncTemplate; Nodes: TList<TGocciaASTNode>; VarNames: TStringList);
+    procedure DeclareGlobals(T: PFuncTemplate; Nodes: TList<TGocciaASTNode>; VarNames: TStringList;
+      VarTypes: TVarTypes);
     procedure HoistFunctionsIn(Nodes: array of TGocciaASTNode);
     procedure CollectVarNames(N: TGocciaASTNode; Names: TStringList; Types: TVarTypes = nil;
       Shadows: PVarShadow = nil); noinline;   { inlined, its threadvar cache trips the FPC TLS miscompile }
@@ -2763,7 +2764,7 @@ begin
         if (Outer = nil) and (Goal in [1, 2]) then
         begin
           GlobalTop := True;
-          DeclareGlobals(T, Nodes, Names);
+          DeclareGlobals(T, Nodes, Names, VarTypes);
           Names.Clear;
         end;
         for I := 0 to Names.Count - 1 do
@@ -3851,14 +3852,22 @@ end;
   var and function names are bindings of the global object; a Script's let, const and class stay registers of
   its frame, whose cells opMakeGLex publishes as global lexical bindings, so its own code keeps register
   access. Function objects are created and bound by HoistBlock (GlobalTop). }
-procedure TCompiler.DeclareGlobals(T: PFuncTemplate; Nodes: TList<TGocciaASTNode>; VarNames: TStringList);
-var I, K: Integer; N: TGocciaASTNode; Funcs: TStringList; VD: TGocciaVariableDeclaration;
-  procedure AddLex(const Name: UnicodeString; IsConst: Boolean);
+procedure TCompiler.DeclareGlobals(T: PFuncTemplate; Nodes: TList<TGocciaASTNode>; VarNames: TStringList;
+  VarTypes: TVarTypes);
+var I, K: Integer; N: TGocciaASTNode; Funcs, Typed: TStringList; VD: TGocciaVariableDeclaration; VarType: Byte;
+  procedure AddLex(const Name: UnicodeString; IsConst: Boolean; TypeCode: Integer = 0);
   begin
     SetLength(T^.GdiLex, Length(T^.GdiLex) + 1);
     T^.GdiLex[High(T^.GdiLex)] := AtomOf(Name);
     SetLength(T^.GdiLexConst, Length(T^.GdiLexConst) + 1);
     T^.GdiLexConst[High(T^.GdiLexConst)] := IsConst;
+    { strict-types: the binding's type goes with its cell, so a store from code compiled apart from it (another
+      Script, a Function body) is checked too (GLexSet) }
+    if ProfileStrictTypes then
+    begin
+      SetLength(T^.GdiLexTypes, Length(T^.GdiLex));
+      T^.GdiLexTypes[High(T^.GdiLexTypes)] := TypeCode;
+    end;
   end;
   procedure AddPatternLex(P: TGocciaDestructuringPattern; IsConst: Boolean);
   var K: Integer;
@@ -3878,6 +3887,7 @@ var I, K: Integer; N: TGocciaASTNode; Funcs: TStringList; VD: TGocciaVariableDec
   end;
 begin
   T^.GdiKind := Goal;
+  Typed := nil;
   Funcs := TStringList.Create;
   try
     Funcs.UseLocale := False;   { exact code-unit order: a locale collation equates distinct names }
@@ -3903,7 +3913,8 @@ begin
           VD := TGocciaVariableDeclaration(N);
           for K := 0 to High(VD.Variables) do
             if VD.Variables[K].IsPattern then AddPatternLex(VD.Variables[K].Pattern, VD.IsConst)
-            else AddLex(VD.Variables[K].Name, VD.IsConst);
+            else AddLex(VD.Variables[K].Name, VD.IsConst,
+              StrictTypeCode(VD.Variables[K].TypeAnnotation, VD.Variables[K].Initializer));
         end
         else if (N is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(N).IsVar then
           AddPatternLex(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
@@ -3912,6 +3923,25 @@ begin
         else if N is TGocciaEnumDeclaration then
           AddLex(TGocciaEnumDeclaration(N).Name, False);
       end;
+    end;
+    { strict-types: each typed var (one named like a function too) tags the global object's property with its
+      type, so every write of it is checked, whichever code makes it (GlobalTypeOK) }
+    if VarTypes <> nil then
+    begin
+      Typed := TStringList.Create;
+      Typed.UseLocale := False;
+      Typed.Sorted := True;
+      Typed.Duplicates := dupIgnore;
+      Typed.CaseSensitive := True;
+      for I := 0 to VarNames.Count - 1 do
+        if (Typed.IndexOf(VarNames[I]) < 0) and VarTypes.TryGetValue(VarNames[I], VarType) then
+        begin
+          Typed.Add(VarNames[I]);
+          SetLength(T^.GdiTypedVars, Length(T^.GdiTypedVars) + 1);
+          T^.GdiTypedVars[High(T^.GdiTypedVars)] := AtomOf(VarNames[I]);
+          SetLength(T^.GdiTypedVarCodes, Length(T^.GdiTypedVars));
+          T^.GdiTypedVarCodes[High(T^.GdiTypedVarCodes)] := VarType;
+        end;
     end;
     for I := 0 to VarNames.Count - 1 do
       if Funcs.IndexOf(VarNames[I]) < 0 then
@@ -3922,6 +3952,7 @@ begin
       end;
   finally
     Funcs.Free;
+    Typed.Free;
   end;
   Emit(Ins(opDeclGlobals, 0, 0, 0));
 end;
@@ -5086,6 +5117,10 @@ begin
       if not V.HasInitializer then Continue;
       T := AllocReg;
       CompileFieldValue(V.Initializer, T, V.Name);
+      { strict-types: the value is checked against the declaration's own type first; the global property's type
+        (the first declaration's) is checked by the store }
+      Own := StrictTypeCode(V.TypeAnnotation, V.Initializer);
+      if Own <> 0 then Emit(Ins(opCheckType, T, 0, Own));
       StoreIdent(V.Name, T, True);
       FreeTo(T);
       Continue;

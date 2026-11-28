@@ -9,6 +9,9 @@ holds the field's value, and runs the file with GocciaRunner. The value is an ob
 gets hot in the tier the case names, and then a number: the run must end in Execute's TypeError ("Invalid
 bytecode: ...") at that point, not a crash or a write through a number.
 
+A last case drops the name of a Script's typed global var (strict-types) from the file: the verifier must refuse
+the file rather than declare a var with no name.
+
 Prints "OK <case>" or "BAD <case>: <what>" per case and exits 1 when one is BAD.
 
 Usage: artifact-tamper-tests.py <GocciaBundler> <GocciaRunner>   (run from the repository root)"""
@@ -93,6 +96,34 @@ def run_case(tmp, name, n, program):
     return None
 
 
+TYPED_NAME = 'qzxTypedGlobal'
+TYPED_FLAGS = ['--strict-types', '--compat-var']
+
+
+def run_typed_global_case(tmp):
+    """a typed global var's entry (count u32, name as a u32 length and UTF-16 code units, type code u8) with its
+    name replaced by none (length -1)"""
+    js = os.path.join(tmp, 'typed.js')
+    gbc = os.path.join(tmp, 'typed.gbc')
+    open(js, 'w').write('var %s: number = 1;\nconsole.log(%s);\n' % (TYPED_NAME, TYPED_NAME))
+    p = subprocess.run([BUNDLER] + TYPED_FLAGS + [js, '--output=' + gbc], capture_output=True, timeout=120)
+    if p.returncode != 0:
+        return 'compile failed: ' + p.stdout.decode('utf-8', 'replace')[-200:]
+    data = open(gbc, 'rb').read()
+    # the var names (count, then the name), then the typed vars (count, then the name and its code 1: number)
+    name = struct.pack('<I', len(TYPED_NAME)) + TYPED_NAME.encode('utf-16-le')
+    entry = struct.pack('<I', 1) + name + struct.pack('<I', 1) + name + bytes([1])
+    if data.count(entry) != 1:
+        return 'found the global var tables %d times, expected once (has the encoding changed?)' % data.count(entry)
+    data = data.replace(entry, struct.pack('<I', 1) + name + struct.pack('<Ii', 1, -1) + bytes([1]))
+    open(gbc, 'wb').write(data)
+    p = subprocess.run([RUNNER] + TYPED_FLAGS + [gbc], capture_output=True, timeout=120)
+    out = p.stdout.decode('utf-8', 'replace') + p.stderr.decode('utf-8', 'replace')
+    if p.returncode == 0 or 'typed global var without a name' not in out:
+        return 'rc %d, expected the verifier to refuse the file, got %r' % (p.returncode, out[-300:])
+    return None
+
+
 bad = 0
 with tempfile.TemporaryDirectory() as tmp:
     for name, n, program in CASES:
@@ -102,4 +133,10 @@ with tempfile.TemporaryDirectory() as tmp:
             print('BAD %s: %s' % (name, why))
         else:
             print('OK %s' % name)
+    why = run_typed_global_case(tmp)
+    if why:
+        bad += 1
+        print('BAD typed global without a name: %s' % why)
+    else:
+        print('OK typed global without a name')
 sys.exit(1 if bad else 0)

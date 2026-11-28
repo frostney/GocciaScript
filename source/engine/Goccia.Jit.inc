@@ -1617,7 +1617,8 @@ begin
   CI := GLexFind(IC^.Key);
   if CI >= 0 then
   begin
-    if not GLexConst[CI] then
+    { (a const binding's store throws, and a strict-types typed one's is checked: neither is cached) }
+    if not GLexConst[CI] and (GLexTypes[CI] = 0) then
     begin
       IC^.Shape := nil;
       IC^.Depth := -2 - CI;
@@ -1625,7 +1626,9 @@ begin
     Exit(GLexSet(CI, V));
   end;
   CI := ShapeLookup(O^.Shape, IC^.Key);
-  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) then
+  { (a strict-types typed var's property is never cached: its store is checked in SetVS) }
+  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and
+     (GlobalVarType(IC^.Key) = 0) then
   begin
     IC^.Shape := O^.Shape; IC^.Slot := CI;
     SetSlot(O, CI, V);

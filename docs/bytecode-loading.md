@@ -37,7 +37,7 @@ A present companion that fails to load (a damaged file, another engine's or buil
 
 A bytecode file is untrusted input. Before reading, a file over 64 MiB (`GOCCIA_GBC_MAX_FILE_BYTES`) is refused. `LoadArtifact` then:
 
-- checks the `GBC\0` magic, format version 201, the runtime tag `goccia-engine` and the instruction-set fingerprint, so a file from the old engine or from a build with other opcodes is refused with a message telling you to recompile
+- checks the `GBC\0` magic, format version 202, the runtime tag `goccia-engine` and the instruction-set fingerprint, so a file from the old engine or from a build with other opcodes is refused with a message telling you to recompile
 - bounds every length and count against the bytes left, nesting to 256 functions, and rejects unknown flags, constant kinds, opcodes and trailing bytes
 - rebuilds constants from explicit kinds, so a file cannot forge a pointer or a hole
 - verifies every template (`Goccia.ArtifactVerify.inc`): operands, jump targets, a terminator at the end, consistent exception handler depth, the prologues, and direct-eval descriptions

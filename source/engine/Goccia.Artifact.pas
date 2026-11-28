@@ -7,7 +7,7 @@ unit Goccia.Artifact;
   verifier (VerifyTemplate) then checks the code before anything of it runs.
 
   Layout, little-endian:
-    header   magic 'GBC'#0, u16 format version (201), the runtime tag
+    header   magic 'GBC'#0, u16 format version (202), the runtime tag
              'goccia-engine', u64 engine fingerprint (the instruction set: a build whose opcodes differ rejects
              the file), source path (its extension gives the module's logical address), the compile profile
              (Goccia.Bytecode.Profile's wire fields, then the engine's unrestricted flag), u8 kind (0 Script,
@@ -31,7 +31,7 @@ uses
   SysUtils, Classes, Goccia.Core, Goccia.Instructions, Goccia.Compiler, Goccia.Bytecode.Profile;
 
 const
-  GOCCIA_GBC_VERSION = 201;
+  GOCCIA_GBC_VERSION = 202;
   GOCCIA_GBC_RUNTIME_TAG = 'goccia-engine';
   { the old engine's reader's bounds (Goccia.Bytecode.Binary) }
   GOCCIA_GBC_MAX_FILE_BYTES = 64 * 1024 * 1024;
@@ -285,8 +285,16 @@ begin
   for I := 0 to High(T^.GdiLex) do Str(T^.GdiLex[I]);
   I32(Length(T^.GdiLexConst));
   for I := 0 to High(T^.GdiLexConst) do U8(Ord(T^.GdiLexConst[I]));
+  I32(Length(T^.GdiLexTypes));
+  for I := 0 to High(T^.GdiLexTypes) do U8(T^.GdiLexTypes[I]);
   I32(Length(T^.GdiVars));
   for I := 0 to High(T^.GdiVars) do Str(T^.GdiVars[I]);
+  I32(Length(T^.GdiTypedVars));
+  for I := 0 to High(T^.GdiTypedVars) do
+  begin
+    Str(T^.GdiTypedVars[I]);
+    U8(T^.GdiTypedVarCodes[I]);
+  end;
   I32(Length(T^.GdiFuncs));
   for I := 0 to High(T^.GdiFuncs) do Str(T^.GdiFuncs[I]);
   { Function.prototype.toString: a range of one of the sources, or text of its own }
@@ -600,8 +608,17 @@ begin
   for I := 0 to High(T^.GdiLex) do T^.GdiLex[I] := R.Str;
   SetLength(T^.GdiLexConst, R.Count(1));
   for I := 0 to High(T^.GdiLexConst) do T^.GdiLexConst[I] := R.U8 <> 0;
+  SetLength(T^.GdiLexTypes, R.Count(1));
+  for I := 0 to High(T^.GdiLexTypes) do T^.GdiLexTypes[I] := R.U8;
   SetLength(T^.GdiVars, R.Count(4));
   for I := 0 to High(T^.GdiVars) do T^.GdiVars[I] := R.Str;
+  SetLength(T^.GdiTypedVars, R.Count(5));
+  SetLength(T^.GdiTypedVarCodes, Length(T^.GdiTypedVars));
+  for I := 0 to High(T^.GdiTypedVars) do
+  begin
+    T^.GdiTypedVars[I] := R.Str;
+    T^.GdiTypedVarCodes[I] := R.U8;
+  end;
   SetLength(T^.GdiFuncs, R.Count(4));
   for I := 0 to High(T^.GdiFuncs) do T^.GdiFuncs[I] := R.Str;
   case R.U8 of
@@ -731,6 +748,24 @@ begin
        ((I > 0) and (T^.CallSites[I].PC <= T^.CallSites[I - 1].PC)) then
       Reject(T, -1, 'call site table out of order or outside the code');
   if Length(T^.GdiLexConst) <> Length(T^.GdiLex) then Reject(T, -1, 'global lexical table lengths differ');
+  if (Length(T^.GdiLexTypes) <> 0) and (Length(T^.GdiLexTypes) <> Length(T^.GdiLex)) then
+    Reject(T, -1, 'global lexical type table length differs');
+  for I := 0 to High(T^.GdiLexTypes) do
+    if T^.GdiLexTypes[I] > TYPE_OBJECT then Reject(T, -1, Format('global lexical type %d invalid', [T^.GdiLexTypes[I]]));
+  for I := 0 to High(T^.GdiTypedVarCodes) do
+    if (T^.GdiTypedVarCodes[I] < TYPE_NUMBER) or (T^.GdiTypedVarCodes[I] > TYPE_OBJECT) then
+      Reject(T, -1, Format('global var type %d invalid', [T^.GdiTypedVarCodes[I]]));
+  { every global declaration names its binding (declaring one with no name would look up a nil key) }
+  for I := 0 to High(T^.GdiLex) do
+    if T^.GdiLex[I] = nil then Reject(T, -1, 'global lexical binding without a name');
+  for I := 0 to High(T^.GdiVars) do
+    if T^.GdiVars[I] = nil then Reject(T, -1, 'global var without a name');
+  for I := 0 to High(T^.GdiFuncs) do
+    if T^.GdiFuncs[I] = nil then Reject(T, -1, 'global function without a name');
+  for I := 0 to High(T^.GdiTypedVars) do
+    if T^.GdiTypedVars[I] = nil then Reject(T, -1, 'typed global var without a name');
+  if ((Length(T^.GdiLexTypes) <> 0) or (Length(T^.GdiTypedVars) <> 0)) and (T^.GdiKind = 0) then
+    Reject(T, -1, 'global declaration types without global declarations');
   if (T^.GdiKind <> 0) and not (IsTop and T^.TopLevel) then Reject(T, -1, 'global declarations outside a top level');
   if IsTop then
   begin
