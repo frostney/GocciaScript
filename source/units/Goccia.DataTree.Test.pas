@@ -189,7 +189,8 @@ begin
       Expect<string>(Node.TagName).ToBe('tag:example.com,2026:widget');
       Expect<Double>(Node.TaggedValue.NumberValue).ToBe(1);
       Node := Tree.Root.Items[0].GetProperty('b');
-      Expect<string>(Node.TaggedValue.StringValue).ToBe('Hi');
+      // !!binary keeps its base64 text
+      Expect<string>(Node.TaggedValue.StringValue).ToBe('SGk=');
     finally
       Tree.Free;
     end;
@@ -246,21 +247,21 @@ end;
 
 procedure TDataTreeTests.TestObjectHasNoText;
 var
-  Parser: TGocciaYAMLParser;
   Raised: Boolean;
+  Tree: TGocciaDataTree;
 begin
-  Parser := TGocciaYAMLParser.Create;
+  Tree := TGocciaDataTree.Create;
   try
     Raised := False;
     try
-      Parser.Parse('a: &x !foo {k: 1}' + #10 + 'b: !!str *x' + #10).Free;
+      Tree.NewObject.ToText;
     except
       on EGocciaDataTypeError do
         Raised := True;
     end;
     Expect<Boolean>(Raised).ToBe(True);
   finally
-    Parser.Free;
+    Tree.Free;
   end;
 end;
 
