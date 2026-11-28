@@ -114,6 +114,17 @@ jobs:
             echo "::error::Could not read the nightly tag: $(cat lookup.err)"
             exit 1
           fi
+          # A tag without its release is a publish that stopped between
+          # deleting the old release and creating the new one: publish again.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" --jq .id >/dev/null 2>lookup.err; then
+            if grep -q 'HTTP 404' lookup.err; then
+              echo "The nightly tag has no release: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Could not read the nightly release: $(cat lookup.err)"
+            exit 1
+          fi
           STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${LAST}...${HEAD_SHA}" --jq .status)"
           # `diverged` is main rewritten since the last nightly (a force
           # push): the tag's commit is no longer an ancestor, and would never
@@ -201,9 +212,22 @@ jobs:
             exit 1
           fi
 
-          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          # Move the `nightly` tag with git before touching the release.
+          # `gh release create --target <sha>` asks the Releases API to make
+          # the tag, and for a commit that is no branch head GitHub then
+          # wants a `workflows` permission the job token cannot have: it
+          # answered "HTTP 403: Resource not accessible by integration"
+          # after the old release was already deleted. A git push of the tag
+          # needs only `contents: write`. If GitHub refuses the push anyway,
+          # the step stops here and the published nightly stays as it was.
+          AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=${AUTH}" \
+            push --force origin "${TARGET_SHA}:refs/tags/nightly"
+
+          gh release delete nightly --yes 2>/dev/null || true
 
           gh release create nightly \
+            --verify-tag \
             --title "Nightly Build (${DATE})" \
             --notes "$(cat <<EOF
           Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
@@ -212,5 +236,4 @@ jobs:
           EOF
           )" \
             --prerelease \
-            --target "$TARGET_SHA" \
             gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
