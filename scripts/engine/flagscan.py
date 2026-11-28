@@ -13,11 +13,13 @@ compiles all of these correctly.
 
 This reads assembler listings (fpc -al) and reports each add or subtract whose destination is memory, followed by
 je/jne/jz/jnz with only labels, directives and source comments between, when the condition the jump tests has an
-`and`. It reads the first if, while or until condition from the jump's line in the source file the listing names,
-leaving out comments and strings, so the mask's spelling, its parentheses and line breaks do not matter. A correct
-`Dec(N); if N = 0` compiles to the same two instructions and has no `and` in its condition, so it is not reported; a
-logical `and` in such a condition is (rewrite it, or test N in a statement of its own). A jump whose condition cannot
-be read, such as an RTL generic's or one behind a comment left open, is reported too, as it cannot be checked.
+`and`. The listing names the jump's source line, not which condition on it the jump tests, so this reads every if,
+while or until condition that starts on that line, from the source file the listing names, leaving out comments and
+strings: the mask's spelling, its parentheses and line breaks do not matter, and the pair is reported when any of them
+has an `and`. A correct `Dec(N); if N = 0` compiles to the same two instructions and has no `and` in its condition, so
+it is not reported; a logical `and` in such a condition, or a masked test on the same line, is (rewrite it, or test N
+in a statement of its own line). A jump whose condition cannot be read, such as an RTL generic's, one behind a comment
+left open or one on a line where no condition starts, is reported too, as it cannot be checked.
 
 `./build.pas flagscan` compiles every engine program for the build's target with listings and runs this on them.
 
@@ -50,29 +52,40 @@ def source_index(root=ROOT):
     return index
 
 
-def condition(read, file, line):
-    """the words of the first if, while or until condition from the line on (lower case, comments and strings left
-    out), or None when the file is not one of ours (an RTL generic's code) or no whole condition could be read"""
+def conditions(read, file, line):
+    """the words of every if, while or until condition that starts on the line (lower case, comments and strings left
+    out), however far each runs; None when the file is not one of ours (an RTL generic's code), when no condition starts
+    on the line, or when one cannot be read whole. The listing names the jump's line, not which condition on it the
+    jump tests, so all of them count"""
     lines = read(file)
     if lines is None or not 1 <= line <= len(lines):
         return None
-    keyword, words = None, []
+    first_line_end = len(lines[line - 1])
+    found, keyword, words = [], None, []
     for m in TOKEN.finditer('\n'.join(lines[line - 1:line - 1 + CONDITION_LINES])):
         t = m.group(0)
         if t.startswith(('{', '(*', '//', "'")):
-            # a comment or a string is no word of the condition; one left open is not read further
+            # a comment or a string is no word of a condition; one left open is not read further
             if t in ('{', '(*'):
                 return None
             continue
         t = t.lower()
         if keyword is None:
             if t in CONDITION_END:
-                keyword = t
+                if m.start() > first_line_end:
+                    break
+                keyword, words = t, []
         elif t in CONDITION_END[keyword]:
-            return words
+            found.append(words)
+            keyword = None
+        elif t in CONDITION_END:
+            # a condition inside a condition is no Pascal: not read
+            return None
         else:
             words.append(t)
-    return None
+    if keyword is not None or not found:
+        return None
+    return found
 
 
 def scan(name, lines, read):
@@ -104,12 +117,14 @@ def scan(name, lines, read):
             continue
         if pending and JUMP.match(text):
             at_file, at_line = pending['at']
-            words = condition(read, at_file, at_line) if at_file and at_line else None
-            if words is None:
+            tested = conditions(read, at_file, at_line) if at_file and at_line else None
+            if tested is None:
                 found.append((name, at_file, at_line, pending['ins'], stripped,
-                              'its condition could not be read (no source in this repository, or no whole condition)'))
-            elif 'and' in words:
-                found.append((name, at_file, at_line, pending['ins'], stripped, ' '.join(words)))
+                              'its condition could not be read (no source in this repository, or no whole condition '
+                              'starting on its line)'))
+            elif any('and' in words for words in tested):
+                found.append((name, at_file, at_line, pending['ins'], stripped,
+                              ' | '.join(' '.join(words) for words in tested)))
         pending = None
     return found
 
@@ -167,6 +182,11 @@ begin
   if PollLeft = 0 then Flags := Flags and 255;
   Dec(PollLeft);
   if PollLeft = 0 then WriteLn('and');
+  if Skip then Exit; Inc(R); if (R and 255) = 0 then Poll;
+  if Ready then begin Inc(S); if (S and 255) = 0 then Poll; end;
+  Inc(T);
+  if (T
+      and 255) = 0 then Poll;
   Inc(Q);
   if (Q { never closed
 end;"""
@@ -229,10 +249,28 @@ SELF_TEST = [
 """),
     # a comment never closed: the condition cannot be read, which is reported
     ('an unclosed comment', True, """# [T.pas]
-# [27] Inc(Q);
+# [32] Inc(Q);
 \taddl\t$1,-8(%ebp)
-# [28] if (Q { never closed
+# [33] if (Q { never closed
 \tjne\t.Lj5
+"""),
+    # several conditions on the jump's line: the listing does not say which the jump tests, so each counts
+    ('a guard before it on its line', True, """# [T.pas]
+# [27] if Skip then Exit; Inc(R); if (R and 255) = 0 then Poll;
+\taddl\t$1,-8(%ebp)
+\tjne\t.Lj8
+"""),
+    ('a containing if on its line', True, """# [T.pas]
+# [28] if Ready then begin Inc(S); if (S and 255) = 0 then Poll; end;
+\taddl\t$1,-8(%ebp)
+\tjne\t.Lj9
+"""),
+    # the jump on a line where no condition starts (a condition's continuation): not readable, so reported
+    ('a continuation line', True, """# [T.pas]
+# [29] Inc(T);
+\taddl\t$1,-8(%ebp)
+# [31] and 255) = 0 then Poll;
+\tjne\t.Lj10
 """),
     # an `and` after the condition, in its statement: not the condition's
     ('and in the guarded statement', False, """# [T.pas]
