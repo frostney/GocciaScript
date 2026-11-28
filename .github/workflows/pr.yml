@@ -910,33 +910,6 @@ jobs:
       - name: Build FFI fixture library
         run: ./fixtures/ffi/build.sh
 
-      - name: Check shared CLI test assertions
-        run: bun run scripts/test-cli-assertions.ts
-
-      - name: Check test-cli-apps.ts section selection
-        run: bun run scripts/test-cli-apps-selection.ts
-
-      - name: Check CLI flags across all apps
-        run: bun run scripts/test-cli.ts
-
-      - name: Check heap snapshot round-trip CLI
-        run: bun run scripts/test-cli-heap-snapshots.ts
-
-      - name: Check lexer numeric separator rejection
-        run: bun run scripts/test-cli-lexer.ts
-
-      - name: Check parser error display
-        run: bun run scripts/test-cli-parser.ts
-
-      - name: Check config file loading and per-file config
-        run: bun run scripts/test-cli-config.ts
-
-      - name: Check app-specific CLI features
-        run: bun run scripts/test-cli-apps.ts
-
-      - name: Check sandbox filesystem search against the shared vectors
-        run: bun run scripts/test-cli-sandbox-search.ts
-
       # test-cli-permissions.ts fetches a loopback name only the hosts file
       # lists, which the runner image does not have, to show fetch resolves
       # through the system resolver; GOCCIA_HOSTS_FILE_FIXTURE makes it fail,
@@ -945,30 +918,13 @@ jobs:
       - name: Add hosts-file-only names
         run: .github/scripts/add-hosts-file-fixtures.sh
 
-      - name: Check capability flags, limits, and permission defaults
+      # The checks are independent processes, so they run three at a time;
+      # scripts/run-cli-checks.ts lists them.
+      - name: Run CLI behaviour checks
         env:
           GOCCIA_HOSTS_FILE_FIXTURE: goccia-hosts-file.test
-        run: bun run scripts/test-cli-permissions.ts
-
-      - name: Check real fetch redirects and headers
-        env:
           GOCCIA_FETCH_IPV6_HOST: goccia-hosts-ipv6.test
-        run: bash scripts/fetch-e2e.sh
-
-      - name: Check embedded resource CLI behaviour
-        run: bun run scripts/test-cli-embedded-resources.ts
-
-      - name: Check Intl taint robustness under lazy materialization
-        run: bun run scripts/test-cli-intl-taint.ts
-
-      - name: Check FFI callback slot exhaustion in its own process
-        run: bun run scripts/test-cli-ffi-callback-slots.ts
-
-      - name: Check differential suites against vitest and bun
-        run: bun run scripts/test-cli-differential.ts
-
-      - name: Check benchmark comparison logic
-        run: bun run scripts/test-benchmark-compare.ts
+        run: bun run scripts/run-cli-checks.ts
 
       - name: Check es-toolkit validation runner
         run: bun run scripts/test-es-toolkit-validation.ts
