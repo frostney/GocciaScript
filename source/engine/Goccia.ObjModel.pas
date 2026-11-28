@@ -653,6 +653,8 @@ begin
   end;
   if not Compatible(Ext, D, Found, Cur) then begin PopRoots(1); Exit(True); end;
   if Mapped and DIn.HasValue and not ArgsMapCheck(P, MappedIdx, D.Value) then begin PopRoots(1); Exit(False); end;
+  { strict-types: a value given to a typed var's property of the global object }
+  if DIn.HasValue and not GlobalTypeOK(P, Key, D.Value) then begin PopRoots(1); Exit(False); end;
   if (P^.OKind = okStringObj) and Found and not Cur.Configurable then
   begin
     { a String object's characters and length are immutable: Compatible held, nothing changes }

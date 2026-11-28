@@ -488,6 +488,39 @@ console.log("REPL top-level const across inputs...");
     throw new Error(`REPL should reject redeclaring a top-level const, got: ${output}`);
 }
 
+console.log("REPL strict-types checks writes to typed top-level bindings from later inputs...");
+{
+  const repl = Bun.spawnSync([REPL, "--strict-types", "--compat-var", "--compat-function"], {
+    stdin: new TextEncoder().encode(
+      [
+        'let text: string = "a"; var count: number = 1;',
+        'try { text = 5; } catch (e) { console.log("let:" + e.name); }',
+        'try { count = "x"; } catch (e) { console.log("var:" + e.name); }',
+        'try { globalThis.count = "x"; } catch (e) { console.log("prop:" + e.name); }',
+        'var count: string = "y";',
+        'function count() {}',
+        'globalThis.loose = 1;',
+        'var loose: number = 2;',
+        'delete globalThis.loose; globalThis.loose = "free"; console.log("loose:" + loose);',
+        'text = "b"; count = 2; console.log("kept:" + text + count);',
+        "",
+      ].join("\n"),
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+  for (const expected of ["let:TypeError", "var:TypeError", "prop:TypeError", "loose:free", "kept:b2"])
+    if (!output.includes(expected))
+      throw new Error(`REPL strict-types across inputs expected ${expected}, got: ${output}`);
+  // a later var of the name keeps the first type (its initializer is checked against it), and a function
+  // declaration that would replace a number-typed var is refused before it is bound
+  const typeErrors = output.split("\n").filter((line) => line.includes("Type 'string' is not assignable to type 'number'"));
+  const functionErrors = output.split("\n").filter((line) => line.includes("Type 'function' is not assignable to type 'number'"));
+  if (typeErrors.length < 1 || functionErrors.length !== 1)
+    throw new Error(`REPL strict-types redeclarations expected TypeErrors, got: ${output}`);
+}
+
 console.log("REPL import bindings across inputs...");
 {
   const tmp = mkdtemp("goccia-repl-import-");

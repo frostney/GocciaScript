@@ -212,7 +212,12 @@ type
     TopLevel: Boolean;   { the code of a Script, a module or eval code (no function of its own) }
     GdiLex: array of PStr;        { let, const and class names, in register order of GdiLexRegs }
     GdiLexConst: array of Boolean;
+    GdiLexTypes: array of Byte;   { strict-types: each GdiLex binding's type code (TYPE_*, 0 none); empty when none is typed }
     GdiVars: array of PStr;       { var names (functions excluded) }
+    { strict-types: the typed var names (a function's too) and their type codes, which become the global object's
+      property type tags }
+    GdiTypedVars: array of PStr;
+    GdiTypedVarCodes: array of Byte;
     GdiFuncs: array of PStr;      { function declaration names, last declaration of a name only }
     GdiLexBase: Integer;          { first global lexical binding index, set when the declarations run }
     AsyncReg: Integer;            { an async function's register holding its promise, -1 otherwise }

@@ -233,3 +233,4 @@ Do not take the highest number in your checkout plus one: another open branch ma
 - [0201 — Every application stops on an engine fault](0201-every-application-stops-on-an-engine-fault.md)
 - [0202 — The memory limit counts property keys, symbols and shapes, and refuses sized allocations before they are made](0202-the-memory-limit-counts-keys-and-shapes-and-refuses-sized-allocations-first.md)
 - [0203 — An ADR's number is reserved on the remote before its file is written](0203-adr-numbers-are-reserved-on-the-remote.md)
+- [0204 — Strict types keep a Script's top-level types on its global bindings](0204-strict-types-keep-a-scripts-top-level-types-on-its-global-bindings.md)
