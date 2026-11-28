@@ -94,6 +94,27 @@ const PROHIBITED_COMBINED_FILES = new Map<string, string>([
 // remain present; stale entries fail the check.
 const CROSS_SURFACE_CONTRACT_ALLOWLIST = new Map<string, AllowlistEntry>([
   [
+    "tests/built-ins/Goccia/gc/native-memory/dictionary-shapes.js",
+    {
+      reason:
+        "one memory-limit contract that dictionary shapes are freed with their objects, across wide objects, freeze and proxies",
+    },
+  ],
+  [
+    "tests/built-ins/Goccia/gc/native-memory/index-keys.js",
+    {
+      reason:
+        "one memory-limit contract that reading or serializing an array makes no permanent key per index, across join and JSON.stringify",
+    },
+  ],
+  [
+    "tests/built-ins/Goccia/gc/native-memory/refusals.js",
+    {
+      reason:
+        "one memory-limit contract that script-sized allocations are refused before they are made, across the builtins that make them",
+    },
+  ],
+  [
     "tests/built-ins/Temporal/removed-methods.js",
     {
       reason:

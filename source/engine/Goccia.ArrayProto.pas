@@ -21,7 +21,7 @@ procedure InitArrayProto;
 implementation
 
 uses
-  SysUtils, Math, Goccia.Core, Goccia.VM, Goccia.ObjModel, Goccia.BigIntV, Goccia.Error.Messages;
+  SysUtils, Math, Goccia.Core, Goccia.VM, Goccia.ObjModel, Goccia.BigIntV;
 
 const
   MAX_SAFE = 9007199254740991.0;   { 2^53 - 1 }
@@ -95,28 +95,6 @@ end;
 function IdxVal(K: Int64): TValue; inline;
 begin
   if K <= High(Int32) then Result := MkInt(K) else Result := MkNumber(K);
-end;
-
-{ whether no object on O's prototype chain can have the integer key K without its atom existing: each keeps its
-  keys in its shape (no dense elements, no exotic index handling), and shapes hold atoms only. A lookup of an
-  index no atom names then finds nothing, and no atom is made for it: an array-like with a huge length would
-  otherwise intern one permanent atom per index it visits }
-function IdxAbsent(O: TValue; K: Int64): Boolean;
-var P: PObj; Depth: Integer;
-begin
-  Result := False;
-  if IntAtomIfExists(K) <> nil then Exit;
-  Depth := 0;
-  while IsObject(O) do
-  begin
-    P := ObjOf(O);
-    if (P^.Elements <> nil) or not (P^.OKind in [0, okFunction, okNative, okBound, okError, okBoolean, okNumber,
-       okMap, okSet, okIterator, okGenerator]) or ((P^.Hdr.Flags and cfEmulatesUndefined) <> 0) then Exit;
-    Inc(Depth);
-    if Depth > 64 then Exit;
-    O := P^.Shape^.Proto;
-  end;
-  Result := True;
 end;
 
 { 7.3.12 HasProperty(O, ToString(K)) }
@@ -289,17 +267,21 @@ begin
     ArraySetLengthAny(ObjOf(A), Len);
     Exit(True);
   end;
+  { the elements are allocated at once: refused before they are when they do not fit under the memory limit }
+  if not ReserveHeap(ValueArrayBytes(Len)) then Exit(False);
   A := MkPtr(NewArray(Len, Len));
   Result := True;
 end;
 
-{ A copy creates an own property at every index. Even when ArrayCreate uses a sparse length, the result will
-  need at least one value slot per index. Check before any copy or dense allocation. }
+{ A copy (toSpliced, toReversed, toSorted, with, Array.from of an array-like) creates an own property at every index
+  of its result, before it reads the source: refused at once when even the least those properties cost does not fit.
+  Up to ArrayDenseMax they are elements; past it ArrayCreate gives the result no elements, and every index is a
+  property of its dictionary shape, charged as it is added (SPARSE_INDEX_BYTES each, without its atom). }
 function ReserveArrayCopy(Len: Int64): Boolean;
 begin
   if Len > 4294967295 then Exit(ThrowError('RangeError', 'Invalid array length'));
-  Result := HeapReserve(SizeOf(TValueArray) - SizeOf(TValue) + Max(Len, 1) * SizeOf(TValue));
-  if not Result then ThrowError('RangeError', SErrorMemoryLimitExceeded);
+  if Len <= ArrayDenseMax then Result := ReserveHeap(ValueArrayBytes(Len))
+  else Result := ReserveHeap(Len * SPARSE_INDEX_BYTES);
 end;
 
 { 10.4.2.3 ArraySpeciesCreate (realms not told apart) }
@@ -1343,11 +1325,36 @@ end;
   19.5.1), with a cycle joined as the empty string }
 function JoinVia(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): Boolean;
 var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; Used: Integer; LA: array[0..1] of TValue; Base: Integer;
+  Charge: THeapExternalCharge;
   function Add(S: PStr): Boolean;
+  var NewLen, Need: Integer; Ok: Boolean;
   begin
     if Int64(Used) + S^.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
     Result := True;
-    if Used + S^.Len > Length(B) then SetLength(B, Max(Length(B) * 2, Used + S^.Len + 16));
+    if Used + S^.Len > Length(B) then
+    begin
+      { B is outside the heap: its growth is charged against the memory limit, after a collection when twice B does
+        not fit (S rooted meanwhile); then half the growth, and half again, down to what this string needs, so B
+        still grows by a good part of the room left and the next strings do not all collect }
+      Need := Used + S^.Len + 16;
+      NewLen := Max(Length(B) * 2, Need);
+      PushRoot(MkPtr(S));
+      Ok := Charge.TryGrow(Int64(NewLen - Length(B)) * SizeOf(WideChar));
+      while not Ok and (NewLen > Need) do
+      begin
+        NewLen := Max(Length(B) + (NewLen - Length(B)) div 2, Need);
+        Ok := Charge.TryGrow(Int64(NewLen - Length(B)) * SizeOf(WideChar), False);
+      end;
+      S := StrOf(RootAt(TempTop - 1));
+      PopRoots(1);
+      if not Ok then
+      begin
+        B := '';
+        Charge.Clear;
+        Exit(ThrowMemoryLimit);
+      end;
+      SetLength(B, NewLen);
+    end;
     if S^.Len > 0 then Move(StrChars(S)[0], B[Used + 1], S^.Len * SizeOf(WideChar));
     Inc(Used, S^.Len);
   end;
@@ -1363,6 +1370,7 @@ begin
   ArrayPush(ObjOf(JoinStack), Args[0]);
   B := '';
   Used := 0;
+  Charge := Default(THeapExternalCharge);
   K := 0;
   Result := False;
   while K < Len do
@@ -1393,8 +1401,16 @@ begin
   if Result then
   begin
     SetLength(B, Used);
-    Res := StrFromUnicode(B);
+    { the result is a heap string as long as B: refused before it is made when it does not fit }
+    if HeapReserve(StringBytes(Used)) then Res := StrFromUnicode(B)
+    else
+    begin
+      B := '';
+      Charge.Clear;
+      Result := ThrowMemoryLimit;
+    end;
   end;
+  Charge.Clear;
 end;
 
 function AP_Join(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := JoinVia(Args, Argc, Res, False); end;

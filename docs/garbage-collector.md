@@ -8,7 +8,7 @@
 - **The nursery moves cells** — Any allocation can run a minor collection, so a `TValue` or cell pointer a native holds in a Pascal local is stale after it. Natives root what they keep with `PushRoot` and read it back from the root (`RootAt`) or from the value stack; see [Contributor Rules](#contributor-rules)
 - **A write barrier and a remembered set** — Storing a young pointer into an old cell remembers the old cell, so a minor collection scans the remembered cells instead of old space
 - **Weak references and finalization** — WeakMap and WeakSet are ephemeron tables outside the heap; WeakRef and FinalizationRegistry targets sit in fields the collector does not trace and are cleared or updated after marking (`Goccia.Weak`)
-- **The memory limit refuses at the next safe point** — A full collection that leaves the heap over `--max-memory` throws a catchable `RangeError` at the next back edge or call; eight refusals in a row that free nothing end the run ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). An explicit reservation, such as an `ArrayBuffer`'s bytes, is refused with a `RangeError` at once
+- **The memory limit refuses at the next safe point** — A full collection that leaves the heap over `--max-memory` throws a catchable `RangeError` at the next back edge or call; eight refusals in a row that free nothing end the run ([ADR 0185](adr/0185-g2-refuses-memory-at-the-next-safe-point.md)). The atoms, symbols and shapes the engine keeps outside the heap count against the limit too, and an allocation whose size the script chose, such as an `ArrayBuffer`'s bytes, an array's elements or a built string, is refused with a `RangeError` before it is made ([ADR 0202](adr/0202-the-memory-limit-counts-keys-and-shapes-and-refuses-sized-allocations-first.md))
 - **Stress tooling** — `--gc-stress` collects at every nursery allocation, `--gc-verify` checks roots, the barrier and the heap around every collection, `GOCCIA_NURSERY_KB` shrinks the nursery, and `scripts/engine/gcstress.sh` runs the benchmark bundles, the regression scripts and `tests/` that way ([GC Stress and Verification](#gc-stress-and-verification))
 
 ## Heap Layout
@@ -23,8 +23,8 @@ immediates, and only a value tagged as a pointer refers to a cell ([Engine desig
 | Nursery | Cells up to 1/16 of the nursery's size, bump-allocated (`NurseryTop` up to `NurseryLimit`) | Copied out by every minor collection, then reused from its start |
 | Old space, small | Cells of up to 16,384 bytes, rounded up to one of 22 size classes, in 256 KiB pages per class | Marked and swept by a major collection; a freed cell goes on its class's free list |
 | Old space, large | Cells over 16,384 bytes, each its own block | Marked and swept; a dead one is freed at once |
-| Permanent | Atoms (interned property keys), key atoms (symbol keys, private names, engine slots) and a few engine-owned cells (`cfPermanent`) | Never collected; freed with the heap |
-| Outside the heap | Shapes, function templates and bytecode, the atom table, WeakMap and WeakSet tables, SharedArrayBuffer blocks | Owned by their units; shapes are retired by a major collection ([below](#prototypes-and-shapes)) |
+| Permanent | Atoms (interned property keys), key atoms (symbol keys, private names, engine slots), symbols and a few engine-owned cells (`cfPermanent`) | Never collected; freed with the heap. Charged against the [memory ceiling](#memory-ceiling) |
+| Outside the heap | Shapes, function templates and bytecode, the atom table, WeakMap and WeakSet tables, SharedArrayBuffer blocks | Owned by their units; shapes are retired by a major collection ([below](#prototypes-and-shapes)) and charged against the ceiling while they live |
 
 The default nursery is 8 MiB (`EngineNurseryBytes`, used by `EngineInit` and so by `TGocciaEngine`). A cell larger than
 1/16 of the nursery is allocated directly in old space (`AllocOld`): a large temporary such as a long concatenation
@@ -87,6 +87,13 @@ equals, `GCShapeSweepHook` clears the inline caches, constructor caches and comp
 their records are freed, except those that machine code compares with. Because shape records are not heap bytes,
 old-space growth alone would not start a major collection however many dead prototypes' shapes pile up; the shape
 count trigger above covers that. [Engine design — Heap and GC](engine/design.md#heap-and-gc) has the full rules.
+
+A dictionary shape (an object past 64 properties, or a proxy) belongs to one object and is retired the same way once
+no live object has it: a major collection notes the dictionaries the objects it marks have (`TShape.LiveMajor`), and
+retires the others, those of dead objects and those an object left when its attributes changed. The dictionary made
+last is kept (`FreshDict`): its object takes it after an allocation that can collect. Every shape,
+and every in-place add to a dictionary, takes a version no earlier shape had (`TShape.Version`), so a cache that keeps
+a shape's address and version never matches a later shape at a freed shape's address.
 
 ### Weak References and Finalization
 
@@ -151,12 +158,20 @@ memory), at most 8 GB on a 64-bit build or 700 MB on a 32-bit one. Where neither
 
 What counts against the ceiling is old space (`GCOldBytes`) plus the external bytes charged to it. The shared
 counter covers SharedArrayBuffer blocks and a sandbox search's native working memory. Each engine also tracks
-its own `THeapExternalCharge` reservations, including retained RegExp programs and matcher storage.
+its own `THeapExternalCharge` reservations, including retained RegExp programs and matcher storage and the text
+buffers of `Array.prototype.join`, `JSON.stringify` and `String.prototype.replace` while they build. And it charges
+its own structures for keys and layouts (`HeapNativeCharge`): atoms, key atoms and symbols, which live as long as the
+engine (`HeapPermanentBytes`), and each shape's record and the key, flag and hash arrays it owns (`ShapeRecharge`),
+given back when the shape is freed. The engine's built-ins take about 1.5 MB of these at startup, so a ceiling
+under about 2 MiB refuses even a short script.
 
 The nursery never holds more than the ceiling leaves free: `NurseryFitCeiling` sets the nursery's bound to the room
 between old space plus external bytes and the ceiling, at least 64 KiB (`NURSERY_MIN_ROOM`) and at most the nursery's
 size. So the minor collection, and the major collection that tests the limit after it, run before the heap can pass
-the ceiling.
+the ceiling. A structure charge that takes the heap past the ceiling sets the nursery's bound to its top, so the next
+allocation runs those collections; once charges take the heap past it again by a sixteenth of the ceiling more than
+the last major collection left, they ask again. Atoms and symbols are never freed, so once they alone pass the
+ceiling the charge marks the refusal at once, without a collection.
 
 ### Refusal at the next safe point
 
@@ -186,14 +201,22 @@ refusal the run never reached a safe point for.
 ### Gated growth points
 
 The engine has no growth gate. Array elements, overflow property slots and string buffers are ordinary heap cells, counted
-and collected like any other, and the [refusal above](#refusal-at-the-next-safe-point) is what stops them.
+and collected like any other, and the [refusal above](#refusal-at-the-next-safe-point) is what stops them. Their growth
+stops doubling near the limit: when twice the capacity would not fit, an array's elements and an object's overflow
+slots grow to what they need and a sixteenth more (`GrowValueCap`).
 
 What the engine has instead are **explicit reservations**: before an allocation whose size the script chose and that the
-engine can refuse cleanly, a native calls `HeapReserve(Bytes)`. It succeeds when the bytes fit under the ceiling;
-otherwise it runs a full collection and tests again. A reservation that still does not fit is a catchable
-`RangeError` at once. The callers are `ArrayBuffer` and typed array construction (the bytes, or a resizable buffer's
-maximum), `SharedArrayBuffer` blocks (`Goccia.Atomics`), a `Response` body (`Goccia.Fetch`) and the sandbox's file reads and
-search memory (`Goccia.Sandbox`). `HeapReserve` collects, so the caller's values must be rooted, as for any allocation.
+engine can refuse cleanly, a native calls `HeapReserve(Bytes)`, or `ReserveHeap(Bytes)` (`Goccia.VM`), which throws the
+refusal itself. It succeeds when the bytes fit under the ceiling; otherwise it runs a full collection and tests again.
+A reservation that still does not fit is a catchable `RangeError` at once, with the same suggestion as a refusal at a
+safe point (`ThrowMemoryLimit`). The callers are `ArrayBuffer` and typed array construction (the bytes, or a resizable
+buffer's maximum), `SharedArrayBuffer` blocks (`Goccia.Atomics`), a `Response` body (`Goccia.Fetch`), the sandbox's file
+reads and search memory (`Goccia.Sandbox`), an array's elements allocated at once (`ArrayCreate`, `new Array(n)`, a
+longer `length`), a copy's result before it reads its source (`toSpliced`, `toReversed`, `toSorted`, `with`,
+`Array.from` of an array-like: past `ArrayDenseMax` every index of the result costs `SPARSE_INDEX_BYTES`), and the
+strings `String.prototype.repeat`, `padStart` and `padEnd` build in the heap, and `join`, `JSON.stringify` and
+`replace` copy from their buffers. `HeapReserve` collects, so the caller's values must be rooted, as for any
+allocation.
 
 For storage outside the collector, `THeapExternalCharge.TryGrow` reserves and records bytes against the owning
 engine. Release the charge when freeing the storage. This includes failed construction and replacement of a buffer.
@@ -201,11 +224,12 @@ RegExp uses preflight checks for compiler and optimizer workspace and keeps char
 matcher while the compiled pattern is cached. Matcher growth uses the non-collecting check while it reads the
 subject through a raw pointer.
 
-**What the ceiling does not bound.** It bounds the collected heap and the charged external bytes, not resident
-memory. Shapes, function templates, bytecode, atoms, the WeakMap and WeakSet tables, the parser's AST and the heap's
-free space are outside it, and old-space pages are kept until the engine ends, so a heap that shrinks after a
-collection keeps its pages for reuse. A host that needs a hard ceiling on the process imposes one outside it, with an
-operating-system limit.
+**What the ceiling does not bound.** It bounds the collected heap and the charged bytes, not resident memory.
+Function templates, bytecode, the WeakMap and WeakSet tables, the parser's AST, the native allocator's free blocks and
+the heap's free space are outside it, and old-space pages are kept until the engine ends, so a heap that shrinks after
+a collection keeps its pages for reuse. In ADR 0202's measurements a refused run peaked at 1.3 to 1.6 times the
+ceiling above the process's own baseline (near 20 MB for GocciaRunner). A host that needs a hard ceiling on the process imposes one outside it, with
+an operating-system limit.
 
 ### What `bytesAllocated` tracks
 
