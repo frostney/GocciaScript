@@ -2031,17 +2031,37 @@ begin
   end;
 end;
 
+{ the length of StringSubstitution's result, without building it }
+function SubstitutionLength(MatchedLen, StrLen, Position: Integer; const Rep: UnicodeString): Int64;
+var I: Integer;
+begin
+  Result := 0;
+  I := 1;
+  while I <= Length(Rep) do
+  begin
+    if (Rep[I] = '$') and (I < Length(Rep)) then
+      case Rep[I + 1] of
+        '$': begin Inc(Result); Inc(I, 2); Continue; end;
+        '&': begin Inc(Result, MatchedLen); Inc(I, 2); Continue; end;
+        '`': begin Inc(Result, Position); Inc(I, 2); Continue; end;
+        #39: begin Inc(Result, Max(StrLen - Position - MatchedLen, 0)); Inc(I, 2); Continue; end;
+      end;
+    Inc(Result);
+    Inc(I);
+  end;
+end;
+
 { String.prototype.replace / replaceAll with a string pattern }
 function StrProto_Replace(Args: TArgs; Argc: Integer; var Res: TValue; All: Boolean): Boolean;
 var S, Pat, Rep: PStr; T, P, R, U: UnicodeString; Positions: array of Integer; N, I, Pos_, Last, Adv: Integer;
   F, CR, M: TValue; CallArgs: array[0..2] of TValue; Functional: Boolean; Charge: THeapExternalCharge;
   Charged, Grown: Int64;
-  { before each replacement: U within MAX_STRING_LENGTH, and its growth charged against the memory limit (U is
-    outside the heap; after a collection when it does not fit: the values are rooted here) }
-  function Grow: Boolean;
+  { before U takes Extra more code units: U within MAX_STRING_LENGTH, and its growth charged against the memory limit
+    (U is outside the heap; after a collection when it does not fit: the values are rooted here) }
+  function Grow(Extra: Int64): Boolean;
   begin
-    if Length(U) > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
-    Grown := Int64(Length(U)) * SizeOf(WideChar) - Charged;
+    if Length(U) + Extra > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+    Grown := (Length(U) + Extra) * SizeOf(WideChar) - Charged;
     if Grown > 0 then
     begin
       if not Charge.TryGrow(Grown) then
@@ -2096,7 +2116,12 @@ begin
   I := 0;
   while I < N do
   begin
-    if not Grow then Break;
+    { the text before the match, and a substitution, charged before they are built (a $` or $' repeats the subject) }
+    if Functional then
+    begin
+      if not Grow(Positions[I] - Last) then Break;
+    end
+    else if not Grow(Positions[I] - Last + SubstitutionLength(Length(P), Length(T), Positions[I], R)) then Break;
     U := U + Copy(T, Last + 1, Positions[I] - Last);
     if Functional then
     begin
@@ -2104,6 +2129,10 @@ begin
       CallArgs[0] := M; CallArgs[1] := MkInt(Positions[I]); CallArgs[2] := RootAt(TempTop - 1);
       if not CallValue(RootAt(TempTop - 2), VUndefined, @CallArgs[0], 3, CR) then Break;
       if not ToStringV(CR, M) then Break;
+      PushRoot(M);
+      if not Grow(StrOf(M)^.Len) then begin PopRoots(1); Break; end;
+      M := RootAt(TempTop - 1);
+      PopRoots(1);
       U := U + StrToUnicode(StrOf(M));
     end
     else U := U + StringSubstitution(P, T, Positions[I], R);
@@ -2111,22 +2140,21 @@ begin
     Inc(I);
   end;
   PopRoots(2);
-  if I >= N then
+  if (I >= N) and Grow(Length(T) - Last) then
   begin
     U := U + Copy(T, Last + 1, MaxInt);
     { the result is a heap string as long as U: refused before it is made when it does not fit }
-    if Grow then
-      if HeapReserve(StringBytes(Length(U))) then
-      begin
-        Res := StrFromUnicode(U);
-        Result := True;
-      end
-      else
-      begin
-        U := '';
-        Charge.Clear;
-        ThrowMemoryLimit;
-      end;
+    if HeapReserve(StringBytes(Length(U))) then
+    begin
+      Res := StrFromUnicode(U);
+      Result := True;
+    end
+    else
+    begin
+      U := '';
+      Charge.Clear;
+      ThrowMemoryLimit;
+    end;
   end;
   Charge.Clear;
 end;

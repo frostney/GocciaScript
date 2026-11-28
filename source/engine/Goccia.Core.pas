@@ -338,6 +338,10 @@ const
 procedure HeapNativeCharge(Delta: Int64; Permanent: Boolean);
 function HeapNativeBytes: Int64;
 function HeapPermanentBytes: Int64;
+{ the collection a charge over HeapCeiling asked for, run now (CollectMinor, then CollectMajor when the heap stays over
+  the ceiling), for a native loop that charges without allocating a cell (an object's attributes changed one by one):
+  called where the loop's values are rooted, as for an allocation }
+procedure HeapChargeCollect;
 { the bytes of a value array of Len slots (an array's elements), and of a string of Len code units, as the heap
   allocates them }
 function ValueArrayBytes(Len: Int64): Int64; inline;
@@ -1639,6 +1643,13 @@ end;
 function HeapPermanentBytes: Int64;
 begin
   Result := PermBytes;
+end;
+
+procedure HeapChargeCollect;
+begin
+  if not ChargePending then Exit;
+  CollectMinor;
+  if OverCeiling(0) then CollectMajor;
 end;
 
 procedure HeapNativeCharge(Delta: Int64; Permanent: Boolean);

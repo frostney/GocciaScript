@@ -1943,6 +1943,8 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
     "JSON.stringify": "JSON.stringify(new Array(1e8));",
     "replaceAll": "'a'.repeat(1e6).replaceAll('a', 'b'.repeat(500));",
     "sparse copy": "Array.prototype.toSpliced.call({ length: 7e7 }, 0, 0);",
+    "repeated $' substitutions": "('a' + 'b'.repeat(1e6)).replace('a', \"$'\".repeat(50));",
+    "escaped JSON scalar": "JSON.stringify('\\0'.repeat(1e7));",
   };
   const permanent = new Set(["sparse fill", "fresh string keys", "symbols"]);
   const dir = mkdtemp("goccia-native-charge-");
@@ -1978,6 +1980,14 @@ console.log("--max-memory (memory outside the heap is charged; sized allocations
         !retry.output.includes("Allocation failed: GC heap size exceeds the configured memory limit"))
       throw new Error(`Retries with fresh sparse keys should each be refused: exit ${retry.exitCode}, ${retry.output}`);
     assertPeakRssBelow(retry, "retry with fresh sparse keys", 2 * ceiling);
+    // Freezing a wide object changes each attribute in turn, a new shape each
+    // time and no heap cell: it completes, and the shapes it drops are
+    // collected on the way instead of piling up (543 MB at 16 MiB before).
+    writeFileSync(path, "const o = {}; for (const i of Array.from({ length: 4000 }, (_, i) => i)) o['p' + i] = i; Object.freeze(o); console.log('frozen', Object.isFrozen(o));\n");
+    const freeze = await runWithPeakRss([RUNNER, `--max-memory=${ceiling}`, "--timeout=60000", path]);
+    if (freeze.exitCode !== 0 || !freeze.output.includes("frozen true"))
+      throw new Error(`Freezing a wide object should complete: exit ${freeze.exitCode}, ${freeze.output}`);
+    assertPeakRssBelow(freeze, "freezing a wide object", 2 * ceiling);
     // A refusal made before the allocation carries the suggestion the refusal
     // at a safe point does.
     writeFileSync(path, "''.padEnd(5e8, 'ab');\n");

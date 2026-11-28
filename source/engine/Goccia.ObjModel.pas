@@ -982,6 +982,9 @@ begin
   N := ArrayLen(ObjOf(Keys));
   for I := 0 to N - 1 do
   begin
+    { each attribute change on a dictionary object makes a shape and allocates no cell: the collection their charges
+      ask for runs here, where O and its keys are rooted }
+    HeapChargeCollect;
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     EmptyDesc(D);
     D.HasConfigurable := True; D.Configurable := False;
