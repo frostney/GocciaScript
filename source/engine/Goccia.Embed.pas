@@ -141,6 +141,8 @@ type
     { the module records before the run's entry: a cancellation supersedes the unfinished ones after it }
     FRunModuleMark: Integer;
     FAuditSink: TGocciaCapabilityAuditSink;
+    { the audit sink failed during the current run, which then ended with HostAbort (Audit) }
+    FAuditDeliveryFailed: Boolean;
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
     FHasCapabilities: Boolean;
@@ -296,6 +298,9 @@ type
       constructor's, a ShadowRealm's, an eval's, and what the host reports through Audit, each at the script's call
       site. A sink that raises ends the run past every handler (gaHostAbort). Set before Run }
     property AuditSink: TGocciaCapabilityAuditSink read FAuditSink write FAuditSink;
+    { the last run ended because the audit sink could not take an event (its HostAbort, Aborted = gaHostAbort), not
+      because a host aborted it: the hosts that raise EGocciaCapabilityAuditDeliveryError tell the two apart by it }
+    property AuditDeliveryFailed: Boolean read FAuditDeliveryFailed;
     { the run's capability set (ADR 0122): with the ffi capability the FFI global is installed, and FFI.open judges
       each library by its scopes. Set before the host is prepared; without it there is no FFI }
     property Capabilities: TGocciaCapabilities read FCapabilities write SetCapabilities;
@@ -842,7 +847,8 @@ begin
     on E: Exception do
     begin
       if IsEngineFault(E) then raise;
-        Exit(HostAbort('capability audit delivery failed: ' + E.Message));
+      FAuditDeliveryFailed := True;
+      Exit(HostAbort('capability audit delivery failed: ' + E.Message));
     end;
   end;
   Result := True;
@@ -1333,6 +1339,7 @@ var Kind, Phase, I, ScriptId: Integer; T: PFuncTemplate;
   Compiled, HasErrorLocation, FailedToLoad: Boolean; EnvAbort, EnvMark: Integer; EnvAbortName, EnvAbortMessage: UnicodeString;
 begin
   Result := Default(TGocciaRunResult);
+  FAuditDeliveryFailed := False;
   EntryKey := EntryKeyOf(FileName);
   Err := '';
   if not PrepareHost(Err) then

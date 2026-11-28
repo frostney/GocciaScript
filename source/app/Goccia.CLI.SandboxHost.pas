@@ -427,12 +427,20 @@ begin
                   Result.ErrorMessage := R.ErrorText;
                   Result.FailureKind := sfkResourceLimit;
                 end
-                else
+                else if Run.Engine.AuditDeliveryFailed then
                 begin
                   { a capability audit the sink could not take: the host's
                     failure, raised in the caller }
                   AuditFailed := True;
                   AuditFailure := R.ErrorText;
+                end
+                else
+                begin
+                  { the embedder's own abort (an abort handle it captured
+                    in OnConfigureEngine): the run ends, as the embedder
+                    asked, and the embedder knows why }
+                  Result.ErrorMessage := R.ErrorText;
+                  Result.FailureKind := sfkHostError;
                 end;
             else
               if (R.ErrorSuggestion = SSuggestMemoryLimitExceeded) or

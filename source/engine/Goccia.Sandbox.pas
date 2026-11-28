@@ -36,6 +36,10 @@ function DecodeSandboxValue(const Text: UnicodeString): TValue;
 { whether the run ended at a ceiling the sandbox host set (runScript nesting depth, the child's inherited quota):
   the natives end the run with HostAbort; taken }
 function TakeSandboxCeiling: Boolean;
+{ An embedder's native ends the run at a ceiling of the host's own (its native memory budget, say), past every handler,
+  as the sandbox's own natives do: False with the abort pending, which the native returns; TGocciaSandboxHost reports
+  the run as sfkResourceLimit with Msg. }
+function SandboxCeiling(const Msg: UnicodeString): Boolean;
 
 implementation
 
@@ -265,6 +269,11 @@ function Ceiling(const Msg: UnicodeString): Boolean;
 begin
   CeilingHit := True;
   Result := HostAbort(Msg);
+end;
+
+function SandboxCeiling(const Msg: UnicodeString): Boolean;
+begin
+  Result := Ceiling(Msg);
 end;
 
 { an ArrayBuffer holding Bytes (the memory limit refuses one too large, with a RangeError) }

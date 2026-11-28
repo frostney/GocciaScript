@@ -236,6 +236,13 @@ jobs:
             -obuild/embedder-host-work-test scripts/engine/embedder-host-work-test.pas
           python3 scripts/engine/embedder-host-work-test.py build/embedder-host-work-test
 
+      - name: The sandbox host reports an embedder's abort and an embedder native's ceiling as results
+        run: |
+          fixture=$(mktemp -d build/sandbox-host-aborts.XXXXXX)
+          fpc -vw-n-h-i-l-d-u-t-p-c-x- -Fubuild/compiled/targets/runner -FU"$fixture" \
+            -o"$fixture/sandbox-host-aborts-test" scripts/engine/sandbox-host-aborts-test.pas
+          timeout 60 "$fixture/sandbox-host-aborts-test"
+
       - name: Source and artifacts report the failing declaration's location
         run: |
           fixture=$(mktemp -d build/link-diagnostics.XXXXXX)
