@@ -40,6 +40,10 @@ function TakeSandboxCeiling: Boolean;
   as the sandbox's own natives do: False with the abort pending, which the native returns; TGocciaSandboxHost reports
   the run as sfkResourceLimit with Msg. }
 function SandboxCeiling(const Msg: UnicodeString): Boolean;
+{ whether the run ended because a nested run's capability audit could not be delivered (the child raised
+  EGocciaCapabilityAuditDeliveryError into this run's runScript or shell call, which ended it with HostAbort): the
+  host raises the audit failure for this run too; taken }
+function TakeSandboxAuditFailure: Boolean;
 
 implementation
 
@@ -47,7 +51,7 @@ uses
   SysUtils, Math, SandboxVirtualFileSystem, SandboxGlob, SandboxFuzzy, SandboxShell, Goccia.Base64,
   Goccia.NativeLimits, Goccia.RegExp.VM, Goccia.Sandbox.FileSystemErrors, Goccia.Sandbox.Search, Goccia.VM, Goccia.Typed,
   Goccia.ObjModel,
-  Goccia.Modules, Goccia.EngineFault;
+  Goccia.Modules, Goccia.EngineFault, Goccia.CapabilityAudit;
 
 const
   { the largest integer a Number holds exactly }
@@ -58,6 +62,8 @@ const
 threadvar
   Box: TGocciaSandboxContext;
   CeilingHit: Boolean;
+  { a nested run's audit delivery failure ended this run (NestedFailure) }
+  AuditFailureHit: Boolean;
 
 { ---- the virtual file system as the thread's files ---- }
 
@@ -117,6 +123,7 @@ procedure SetSandbox(Ctx: TGocciaSandboxContext);
 begin
   Box := Ctx;
   CeilingHit := False;
+  AuditFailureHit := False;
   if Ctx <> nil then
   begin
     SetFileReadHook(ReadVirtualFile);
@@ -162,6 +169,12 @@ function TakeSandboxCeiling: Boolean;
 begin
   Result := CeilingHit;
   CeilingHit := False;
+end;
+
+function TakeSandboxAuditFailure: Boolean;
+begin
+  Result := AuditFailureHit;
+  AuditFailureHit := False;
 end;
 
 { ---- arguments and results ---- }
@@ -265,16 +278,12 @@ begin
 end;
 
 { the run ends at a host-set ceiling, past every handler }
-function Ceiling(const Msg: UnicodeString): Boolean;
+function SandboxCeiling(const Msg: UnicodeString): Boolean;
 begin
   CeilingHit := True;
   Result := HostAbort(Msg);
 end;
 
-function SandboxCeiling(const Msg: UnicodeString): Boolean;
-begin
-  Result := Ceiling(Msg);
-end;
 
 { an ArrayBuffer holding Bytes (the memory limit refuses one too large, with a RangeError) }
 function BufferOf(const Bytes: TBytes; var Res: TValue): Boolean;
@@ -762,9 +771,11 @@ end;
 { a nested run the sandbox host refused before it began: a ceiling ends the calling run }
 function NestedFailure(E: Exception): Boolean;
 begin
-  if (E is EGocciaSandboxNestingLimitExceeded) or (E is ESandboxFsQuotaExceeded) then Exit(Ceiling(E.Message));
+  if (E is EGocciaSandboxNestingLimitExceeded) or (E is ESandboxFsQuotaExceeded) then Exit(SandboxCeiling(E.Message));
   if E is ESandboxFsError then Exit(ThrowError('Error', E.Message));
-  { the host's own failure (a capability audit it could not deliver) ends the run too }
+  { the host's own failure (a capability audit it could not deliver) ends the run too, and stays an audit failure for
+    the host that runs this one }
+  if E is EGocciaCapabilityAuditDeliveryError then AuditFailureHit := True;
   Result := HostAbort(E.Message);
 end;
 

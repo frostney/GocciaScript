@@ -1284,6 +1284,8 @@ end;
 function TGocciaEngine.Run(const FileName: string; const Source: UnicodeString): TGocciaRunResult;
 var Signal: IRunAbortSignal; Requested, Started: Boolean; Err: UnicodeString; WeakMark: Int64;
 begin
+  { a run that never starts (a request before it, a host that cannot be set up) has had no audit failure either }
+  FAuditDeliveryFailed := False;
   Signal := FNextRunAbort;
   if Signal = nil then Exit(RunEntry(FileName, Source));
   FNextRunAbort := nil;

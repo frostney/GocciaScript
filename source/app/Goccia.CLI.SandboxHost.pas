@@ -422,12 +422,14 @@ begin
                   Result.FailureKind := sfkResourceLimit;
                 end;
               gaHostAbort:
+                { a ceiling of the sandbox's or the embedder's natives, a capability audit (this run's or a nested
+                  run's) that could not be delivered, or else the embedder's own abort }
                 if TakeSandboxCeiling then
                 begin
                   Result.ErrorMessage := R.ErrorText;
                   Result.FailureKind := sfkResourceLimit;
                 end
-                else if Run.Engine.AuditDeliveryFailed then
+                else if TakeSandboxAuditFailure or Run.Engine.AuditDeliveryFailed then
                 begin
                   { a capability audit the sink could not take: the host's
                     failure, raised in the caller }
